@@ -100,6 +100,31 @@ class World:
         given = {"key_hash": H, "platform": "zoom", "model": "large-v3-turbo", **params}
         return self.calls.open(token or self.laptop(), room or self.build, given)
 
+    def member(
+        self,
+        room: Room,
+        name: str,
+        *,
+        device: str = "alice-laptop",
+        session: str = "s-1",
+        harness: str = "claude",
+    ) -> Any:
+        """An agent session of ``harness`` on ``device``, in ``room`` as ``name``: the machine's member."""
+        p = self.store.upsert_participant(harness, session_key(harness, device, session), host=device)
+        return self.store.create_membership(room.id, p.id, name)
+
+    def register(
+        self,
+        token: AgentTokenRow | None = None,
+        room: str = "#build",
+        *,
+        session: str | None = None,
+        harness: str | None = None,
+        **params: Any,
+    ) -> dict[str, Any]:
+        given = {"room": room, "key_hash": H, "platform": "zoom", **params}
+        return self.calls.register(token or self.laptop(), given, session=session, harness=harness)
+
     def row(self, room: Room | None = None) -> Any:
         return self.store.meeting_by_key(H) if room is None else self.store.open_meeting(room.id)
 
@@ -189,6 +214,124 @@ def test_a_claim_that_is_not_one_of_the_known_values_is_refused_and_nothing_is_k
     assert e.value.code == "bad_request" and says in e.value.message
     assert KEY not in e.value.message and "webex" not in e.value.message
     assert w.store.open_hosted_meetings() == [] and w.service.notices == []
+
+
+# ------------------------------------------------------------------------------ registering a call
+def test_a_machine_with_an_agent_in_the_room_may_host_a_call_there_and_no_other_machine_may(w: World) -> None:
+    """The room needs a member on the machine the token belongs to. Alice's desktop has claude-1 in #build, so
+    her laptop's token is refused for it (the same person, another machine), and so is a stranger's; the
+    desktop's own is let in and the answer is the five things it may say. Fails if any machine will do, or the
+    refusal leaves a call behind."""
+    w.member(w.build, "claude-1", device="alice-desktop")
+    for token in (w.laptop(), w.token("bobs-laptop")):
+        with pytest.raises(ServiceError) as e:
+            w.register(token)
+        assert e.value.code == "not_member" and "#build" in e.value.message
+    assert w.store.open_hosted_meetings() == []
+    got = w.register(w.token("alice-desktop"))
+    assert got == {
+        "room": "#build",
+        "state": "joining",
+        "platform": "zoom",
+        "host": "alice-desktop",
+        "fingerprint": keys.fingerprint(H),
+    }
+
+
+def test_a_named_session_has_to_be_a_member_of_that_room_on_that_machine_and_of_that_harness(
+    w: World,
+) -> None:
+    """With a session named (a listener key's own, or what a token's script says) the room needs a member of
+    that session on the token's machine: another session of the machine, the same id on another machine and
+    the same id of another harness all fail. Fails if the session is ignored or its machine or harness is."""
+    w.member(w.build, "claude-1", session="s-1")
+    w.member(w.uploads, "claude-2", session="s-2")
+    w.member(w.uploads, "claude-3", device="alice-desktop", session="s-1")  # the same id, another machine
+    for room, session, harness in (
+        ("#build", "s-2", None),  # the machine's other session
+        ("#uploads", "s-1", None),  # this session is not in #uploads on this machine
+        ("#build", "s-1", "codex"),  # a codex session with that id is not claude's
+        ("#build", "nobody", None),
+    ):
+        with pytest.raises(ServiceError) as e:
+            w.register(room=room, session=session, harness=harness)
+        assert e.value.code == "not_member", (room, session, harness)
+    assert w.store.open_hosted_meetings() == []
+    assert w.register(session="s-1", harness="claude")["room"] == "#build"
+
+
+def test_a_member_that_left_or_whose_session_ended_no_longer_counts(w: World) -> None:
+    """Only a live session with a live membership is a member on the machine. Fails if a left or ended one
+    still lets its machine host a call into the room."""
+    gone = w.member(w.build, "claude-1", session="s-1")
+    ended = w.member(w.build, "claude-2", session="s-2")
+    w.store.end_membership(gone.id, "left")
+    w.store.end_participant(ended.participant_id)
+    for session in (None, "s-1", "s-2"):
+        with pytest.raises(ServiceError, match="no agent on this machine"):
+            w.register(session=session)
+    w.member(w.build, "claude-3", session="s-3")
+    assert w.register()["room"] == "#build"
+
+
+def test_a_room_may_be_asked_for_by_a_name_it_had_and_a_wrong_room_is_the_same_refusal(
+    w: World, clock: FakeClock
+) -> None:
+    """A renamed room is still found by its old name (as the agent tools find it, #316); a room that does not
+    exist is refused exactly like one the machine has no member in, so the answer tells nothing about which
+    rooms there are; a name that is not a room name, or none, is a bad request. Fails if the old name stops
+    working, or a missing room is told from a room the machine is not in."""
+    w.member(w.build, "claude-1")
+    w.store.rename_open_room(w.build.id, "#ship", expect="#build")
+    assert w.register(room="#build")["room"] == "#ship"
+    w.store.end_meeting(w.store.open_meeting(w.build.id).id, None)  # type: ignore[union-attr]
+    clock.advance(hosted.HOST_WINDOW_S)  # (five tries a minute, below)
+    said = set()
+    for room in ("#uploads", "#nowhere"):
+        with pytest.raises(ServiceError) as e:
+            w.register(room=room, key_hash="cd" * 32)
+        said.add((e.value.code, e.value.message.replace(room, "#r")))
+    assert len(said) == 1
+    clock.advance(hosted.HOST_WINDOW_S)
+    for room in (None, "", "   ", "not a room!", 7):
+        with pytest.raises(ServiceError) as e:
+            w.register(room=room, key_hash="cd" * 32)  # type: ignore[arg-type]
+        assert e.value.code == "bad_request"
+
+
+def test_a_token_may_try_to_register_five_times_a_minute_by_the_clock_and_every_try_counts(
+    w: World, clock: FakeClock
+) -> None:
+    """Five tries within a minute, whatever their outcome (a refused one counts), then 429 with the seconds
+    until the oldest try is a minute old; the window slides, so that try leaving gives one back. Another token
+    has its own, and a token that was quiet for the window starts again. Fails if the limit is not per token,
+    is not by the broker's clock, a refused try is free, or the memory of quiet tokens is kept for ever."""
+    w.member(w.build, "claude-1")
+    w.member(w.uploads, "claude-2", device="alice-desktop")
+    desktop = w.token("alice-desktop")
+    for _ in range(hosted.HOST_PER_WINDOW):
+        with pytest.raises(ServiceError):
+            w.register(key_hash="no")
+        clock.advance(1.0)  # the tries are at 0, 1, 2, 3 and 4 seconds
+    with pytest.raises(Refused) as e:
+        w.register(key_hash="no")
+    assert (e.value.status, e.value.code) == (429, "rate_limited")
+    assert e.value.retry_after == pytest.approx(hosted.HOST_WINDOW_S - 5.0)
+    with pytest.raises(ServiceError):
+        w.register(desktop, "#uploads", key_hash="no")  # the other token's own allowance
+    clock.advance(hosted.HOST_WINDOW_S - 5.0)  # a minute since the first try
+    assert w.register()["room"] == "#build"
+    with pytest.raises(
+        Refused
+    ):  # four of the earlier tries are still inside the window, and this one is a fifth
+        for _ in range(hosted.HOST_PER_WINDOW):
+            w.register(key_hash="no")
+    clock.advance(hosted.HOST_WINDOW_S)
+    with pytest.raises(ServiceError):
+        w.register(
+            desktop, "#uploads", key_hash="no"
+        )  # asking for another token drops the quiet one's record
+    assert set(w.calls._asked) == {desktop.id}
 
 
 def test_a_room_with_a_call_open_cannot_have_a_second_whatever_the_source(w: World) -> None:

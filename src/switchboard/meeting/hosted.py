@@ -3,9 +3,11 @@
 The meeting bot can run on a person's own machine, for one call in one room, and push what it hears to
 the broker instead of the broker pulling it from a bot beside it (§52). The broker's side is here:
 
-- **Opening** (``open``): an agent, under its own token and only when its person asks, registers the
-  sha256 of a key its machine made for this call. The call is the person's: its owner and its machine's
-  label come from the token, not from anything the agent says.
+- **Opening** (``register``, then ``open``): the host script on the person's machine, with the credential
+  the plugin's other scripts hold (an agent token, or a listener key for its one session, §49.11), registers
+  the sha256 of a key it made for this call, at ``POST /mcp/meeting/host``. It is no agent tool: the model
+  never handles the key or even its hash. The call is the person's: its owner and its machine's label come
+  from the token, not from anything the script says, and the room must have a member on that machine.
 - **The key** is a bearer for two routes (``broker/call_http.py``) and nothing else: pushing segments
   (``push``) and waiting for what is to be spoken (``speech``). ``check`` is what both ask first. It ends
   with the call, and it is refused at once when the call is over or its machine's sign-in is revoked.
@@ -40,7 +42,7 @@ from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.speech import QUEUE_MAX as SPEAK_QUEUE_MAX
 from switchboard.meeting.speech import call_text, speakable
-from switchboard.models import Meeting, Room
+from switchboard.models import InvalidName, Meeting, Room, normalize_room, split_session_key
 from switchboard.store import Conflict
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -66,6 +68,9 @@ JOIN_WINDOW_S = 600.0
 # twice the 130 s a wait nobody answers is given (``rules.WAIT_DROP_GRACE_S``), so a poll that ran long or
 # a laptop that slept a moment does not end it, and a host that is gone does.
 QUIET_S = 300.0
+# Registering a call is rare: a few tries a minute for a token is plenty, and a guesser or a loop is stopped.
+HOST_PER_WINDOW = 5
+HOST_WINDOW_S = 60.0
 TICK_S = 0.5  # how often ``run`` ticks: half the gap between two lines, so a gap is never two
 
 # why a call ended -> (the phrase kept in its row, or None; the notice the room reads, or None)
@@ -188,11 +193,76 @@ class HostedCalls:
         self.state = state
         self._calls: dict[int, _Call] = {}  # meeting id -> what it holds
         self._rooms: dict[int, int] = {}  # room id -> its hosted call's meeting id
+        self._asked: dict[int, deque[float]] = {}  # token id -> when it last tried to register a call
 
-    # ------------------------------------------------------------------ opening (the agent's tool)
+    # ------------------------------------------------------------------ opening (the host script)
+    def register(
+        self,
+        token: "AgentTokenRow",
+        params: dict[str, Any],
+        *,
+        session: str | None,
+        harness: str | None = None,
+    ) -> dict[str, Any]:
+        """What ``POST /mcp/meeting/host`` does once the caller is known (§54): count the attempt against the
+        token's allowance, find the room (it must have a member on this token's machine, in ``session`` when
+        one is named), then ``open`` the call. ``session`` is the listener key's own session or what a token's
+        script names, never what a key's body says. Never returns, logs or stores a key."""
+        self._admit(token.id)
+        given = params.get("room")
+        if not isinstance(given, str) or not given.strip():
+            raise ServiceError("bad_request", "room is required, e.g. #build")
+        try:
+            name = normalize_room(given)
+        except InvalidName as e:
+            raise ServiceError("bad_request", str(e)) from None
+        room = self.room_for(token, name, session, harness)
+        return self.open(token, room, params)
+
+    def _admit(self, token_id: int) -> None:
+        """Count one attempt, whatever its outcome, or refuse with 429 once ``HOST_PER_WINDOW`` were made in
+        the last ``HOST_WINDOW_S`` by the broker's clock. The memory is a few numbers a token."""
+        now = self.state.clock.now()
+        for tid in [t for t, q in self._asked.items() if not q or now - q[-1] >= HOST_WINDOW_S]:
+            del self._asked[tid]  # a token that has been quiet for the window starts again
+        q = self._asked.setdefault(token_id, deque())
+        while q and now - q[0] >= HOST_WINDOW_S:
+            q.popleft()
+        if len(q) >= HOST_PER_WINDOW:
+            raise Refused(
+                429,
+                "rate_limited",
+                f"too many tries: at most {HOST_PER_WINDOW} a minute",
+                retry_after=HOST_WINDOW_S - (now - q[0]),
+            )
+        q.append(now)
+
+    def room_for(
+        self, token: "AgentTokenRow", name: str, session: str | None = None, harness: str | None = None
+    ) -> Room:
+        """The room ``name`` (or the one renamed from it) when the machine behind ``token`` has a member in
+        it: a member of ``session`` when one is named (a listener key's own session, or the one a token's
+        script says), else any member on that machine. A member is on a machine when its session is on the
+        token's device, which is unique among live tokens, so a member of another token's machine never
+        counts. A room that does not exist, one the machine has no member in and one the machine's agent
+        left are the same refusal, so a script learns nothing of rooms it is not in."""
+        store = self.state.store
+        room = store.get_room(name) or store.room_by_alias(name)
+        if room is not None:
+            for m in store.room_memberships(room.id):
+                p = store.get_participant(m.participant_id)
+                if p is None or not p.active or p.host != token.device:
+                    continue
+                if session is not None:
+                    parts = split_session_key(p.session_key)
+                    if parts is None or parts[2] != session or (harness is not None and parts[0] != harness):
+                        continue
+                return room
+        raise ServiceError("not_member", f"no agent on this machine is in {name}")
+
     def open(self, token: "AgentTokenRow", room: Room, params: dict[str, Any]) -> dict[str, Any]:
         """Open a hosted call in ``room`` for the machine behind ``token`` (the caller checked that the
-        agent is a member of ``room``). ``params`` hold the sha256 of the call's key, the platform and the
+        machine has a member in ``room``). ``params`` hold the sha256 of the call's key, the platform and the
         model. Never returns, logs or stores a key. Refused when the room has a call, the person already
         hosts one, the broker follows as many calls as it may, or the key was registered before."""
         store, svc, cfg = self.state.store, self.state.service, self.state.cfg
@@ -250,12 +320,9 @@ class HostedCalls:
         return {
             "room": room.name,
             "state": row.state,
-            "voice": False,
             "platform": platform,
             "host": token.device,
             "fingerprint": fp,
-            "text": f"Hosting {_a_call(platform)} in {room.name} from {token.device}, key {fp}."
-            " The call goes live at its first push.",
         }
 
     # ------------------------------------------------------------------ the key

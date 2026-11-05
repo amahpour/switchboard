@@ -2,8 +2,8 @@
 
 A person's machine can run the meeting bot for one call and push what it hears into a room. What lets it
 is a key made for that one call, on that machine, like a listener key (§49.11): the host script makes
-``sbc_`` and 64 hex in a file only its owner reads and never shows it to a model. The agent tells the
-server only its sha256, over the agent's own sign-in, and the server keeps only that. The key is a bearer
+``sbc_`` and 64 hex in a file only its owner reads and never shows it to a model. The script registers
+only its sha256, at ``POST /mcp/meeting/host``, and the server keeps only that. The key is a bearer
 for the call's two routes and nothing else, and ends with the call.
 
 Everything here is pure: the shapes, the hash, the fingerprint a person can check by eye (the relay prints

@@ -1,11 +1,12 @@
 """A call hosted on a person's machine, pushed into a room by a scripted relay (#623, DESIGN.md §54).
 
 The broker is the real one. The relay is a plain HTTP client holding a call key, as the host script's relay
-will be: it pushes segments and polls for what is to be spoken, and nothing else. The agent that opens the
-call is a scripted MCP client of ``/mcp`` (``FakeAgent``), calling the ``host_call`` tool with the sha256 of
-the key its "machine" made. The broker's clock is a ``FakeClock``: a line closes and is posted when a test
-advances it and ticks the hosted calls, the timeouts the same, and no test sleeps. A long poll is waited on
-by the event that answers it.
+will be: it pushes segments and polls for what is to be spoken, and nothing else. The call is registered the
+way the host script will register it: a POST to ``/mcp/meeting/host`` with the sha256 of the key its
+"machine" made, under what the plugin's other scripts present, an agent token or a listener key (``Host`` is
+a Claude Code session on that machine, joined to the room). There is no tool for it. The broker's clock is a
+``FakeClock``: a line closes and is posted when a test advances it and ticks the hosted calls, the timeouts
+the same, and no test sleeps. A long poll is waited on by the event that answers it.
 """
 
 from __future__ import annotations
@@ -24,18 +25,23 @@ import httpx
 import pytest
 from conftest import FakeClock, InProcBroker, make_tmp_home
 from fakes.fake_agent import FakeAgent
+from test_agents_http import make_token
+from test_agents_http_claude import SESSION_1, SESSION_2, Claude
+from test_listener_keys import SignedIn
 from test_passkeys import HOST, PUBLIC, Browser, stop
 from test_people import join_as_bob, set_up
 
+from switchboard.broker import agent_tokens, listener_keys
 from switchboard.broker.auth import WebOrigin
 from switchboard.config import Config, MeetingCfg
 from switchboard.meeting import hosted, keys
 from switchboard.meeting.speech import VOICE_HINT
 
 KEY = "sbc_" + secrets.token_hex(32)
+LKEY = "sbl_" + secrets.token_hex(32)  # a listener key, as a browser-signed-in Claude Code's helper makes one
 H = keys.key_hash(KEY)
 FP = keys.fingerprint(H)
-PUSH, SPEECH = "/mcp/meeting/push", "/mcp/meeting/speech"
+ENROLL, PUSH, SPEECH = "/mcp/meeting/host", "/mcp/meeting/push", "/mcp/meeting/speech"
 
 
 def seg(text: str, start: float, end: float, speaker: str = "bob") -> dict[str, Any]:
@@ -152,13 +158,87 @@ def poll_waiting(w: World) -> bool:
     return bool(w.b.on_loop(lambda: any(c.polling for c in w.b.state.hosted_calls._calls.values())))
 
 
-async def host(agent: FakeAgent, room: str = "#build", key_hash: str = H, **kw: Any) -> dict[str, Any]:
-    return await agent.call("host_call", room=room, key_hash=key_hash, **{"platform": "zoom", **kw})
+class Host:
+    """The person's agent on their machine: a Claude Code session of the machine ``device``, joined to rooms
+    like any agent (a real harness's session, so the broker knows which machine it is on). ``cred`` is what
+    the host script presents to register a call: the machine's agent token, or, when the session signed in
+    through the browser (``listener_key``), the key its helper made, for this one session. Its calls are
+    blocking HTTP, which is fine here: the broker runs on its own thread."""
+
+    def __init__(
+        self,
+        b: InProcBroker,
+        device: str = "alice-laptop",
+        *,
+        person: int | None = None,
+        session: str = SESSION_1,
+        listener_key: str | None = None,
+        base: str | None = None,
+    ) -> None:
+        self.b, self.device, self.session = b, device, session
+        self.token = make_token(b, device, person)
+        self.claude = (
+            SignedIn(b, self.token, session, listener_key) if listener_key else Claude(b, self.token, session)
+        )
+        self.base, self.extra = base, {"host": HOST} if base else {}
+        if (
+            base is not None
+        ):  # a hosted broker answers to its public name: connect to the loopback, say the name
+            self.claude.c = httpx.Client(base_url=base, timeout=30.0, headers=self.extra)
+        self.cred = listener_key or self.token
+
+    async def start(self) -> "Host":
+        return self
+
+    async def join(self, room: str, name: str) -> dict[str, Any]:
+        return self.claude.call("join", room=room, screen_name=name)
+
+    async def say(self, room: str, text: str) -> dict[str, Any]:
+        return self.claude.call("say", room=room, text=text)
+
+    def wait_task(self, room: str, timeout_s: int = 30) -> "asyncio.Future[dict[str, Any]]":
+        return asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.claude.call("wait", room=room, timeout_s=timeout_s)
+        )
+
+    async def close(self) -> None:
+        self.claude.c.close()
 
 
-async def hosted_call(w: World) -> tuple[FakeAgent, FakeAgent]:
-    """claude-1 (which hosts) and codex-1, both in #build, and the call opened and live."""
-    claude, codex = await FakeAgent(w.b.home, "k1").start(), await FakeAgent(w.b.home, "k2").start()
+def enroll(
+    b: InProcBroker,
+    cred: str | None,
+    room: str = "#build",
+    key_hash: Any = H,
+    *,
+    base: str | None = None,
+    headers: dict[str, str] | None = None,
+    **body: Any,
+) -> httpx.Response:
+    """What the host script does to register a call: ``POST /mcp/meeting/host`` with a credential in
+    ``Authorization`` (none when ``cred`` is None) and the room, the key's hash, the platform and the
+    model."""
+    h = {"authorization": f"Bearer {cred}"} if cred else {}
+    payload = {"room": room, "key_hash": key_hash, "platform": "zoom", **body}
+    payload = {k: v for k, v in payload.items() if v is not None}
+    with httpx.Client(base_url=base or b.base, timeout=30.0) as c:
+        return c.post(ENROLL, json=payload, headers={**h, **(headers or {})})
+
+
+async def host(agent: Host, room: str = "#build", key_hash: str = H, **kw: Any) -> dict[str, Any]:
+    """Register a call as the host script does, with the agent's credential. The answer is the route's
+    JSON with ``ok`` said first: true for a 200, else false with the refusal's ``code`` and ``error`` (its
+    sentence)."""
+    r = enroll(agent.b, agent.cred, room, key_hash, base=agent.base, headers=agent.extra, **kw)
+    out = r.json()
+    if r.status_code == 200:
+        return {"ok": True, **out}
+    return {"ok": False, "status": r.status_code, "code": out["error"], "error": out["message"]}
+
+
+async def hosted_call(w: World) -> tuple[Host, FakeAgent]:
+    """claude-1 (which hosts, on alice-laptop) and codex-1, both in #build, and the call opened and live."""
+    claude, codex = Host(w.b), await FakeAgent(w.b.home, "k2").start()
     assert (await claude.join("#build", "claude-1"))["ok"] and (await codex.join("#build", "codex-1"))["ok"]
     assert (await host(claude, model="large-v3-turbo"))["ok"]
     assert w.relay.push([]).status_code == 200  # the relay is in the call
@@ -175,15 +255,19 @@ async def test_a_hosted_call_is_pushed_into_the_room_and_a_spoken_name_wakes_onl
     named, with the line in its batch. Nothing per line costs a model turn: the agents only wait. Fails if the
     call is not hosted, the line has no machine, or an agent that was not named is woken."""
     w = world
-    claude, codex = await FakeAgent(w.b.home, "k1").start(), await FakeAgent(w.b.home, "k2").start()
+    claude, codex = Host(w.b), await FakeAgent(w.b.home, "k2").start()
     try:
         assert (await claude.join("#build", "claude-1"))["ok"] and (await codex.join("#build", "codex-1"))[
             "ok"
         ]
-        opened = await host(claude, model="large-v3-turbo")
+        # a script that names another machine or person in its body is not believed: both come from the token
+        opened = await host(
+            claude, model="large-v3-turbo", host="mallory-pc", device="mallory-pc", owner="bob"
+        )
         device = w.hosted_row()["host"]
         assert opened["ok"] and opened["fingerprint"] == FP and opened["state"] == "joining"
-        assert opened["host"] == device and opened["platform"] == "zoom"
+        assert device == "alice-laptop" and opened["host"] == device and opened["platform"] == "zoom"
+        assert w.hosted_row()["owner_person_id"] is None  # the owner's token
         assert w.settings()["meeting"] == {
             "state": "joining",
             "platform": "zoom",
@@ -207,7 +291,8 @@ async def test_a_hosted_call_is_pushed_into_the_room_and_a_spoken_name_wakes_onl
         assert got["ok"] and "to_you=yes" in got["text"] and "kind=meeting" in got["text"]
         assert "gas in Los Angeles" in got["text"] and "from=bob" in got["text"]
         assert not claude_waiting.done()  # claude-1 was not named
-        claude_waiting.cancel()
+        w.b.call("human.say", {"room": "#build", "text": "@claude-1 that is all"})
+        assert "that is all" in (await asyncio.wait_for(claude_waiting, 10))["text"]  # and it ends cleanly
 
         lines = w.call_lines()
         assert [m["text"] for m in lines] == ["hello everyone", "Codex, how much is gas in Los Angeles?"]
@@ -417,7 +502,7 @@ async def test_a_call_that_never_goes_live_or_goes_quiet_ends_by_the_clock(world
     request from the host (a poll) keeps a live call alive. Fails if either call is kept for ever, ends early,
     or ends without saying why."""
     w = world
-    claude = await FakeAgent(w.b.home, "k1").start()
+    claude = Host(w.b)
     try:
         assert (await claude.join("#build", "claude-1"))["ok"]
         assert (await host(claude))["ok"]
@@ -553,31 +638,34 @@ async def test_a_call_key_opens_nothing_else_and_a_token_opens_neither_of_its_ro
         await codex.close()
 
 
-# ----------------------------------------------------------------------------------------- the tool
-async def test_the_tool_refuses_what_it_must_and_never_returns_a_secret(world: World) -> None:
-    """``host_call`` is refused for a room the agent is not in, a key that is not a hash (the key itself,
-    the likeliest mistake), an unknown platform, a room with a call, a second call by the same person, and
-    a key used before; each with a sentence and a code, none repeating the value, and the answers hold
-    neither the key nor its hash. Fails if a refusal is accepted, or any answer carries a secret."""
+# ------------------------------------------------------------------------------- registering a call
+async def test_the_route_refuses_what_it_must_and_never_returns_a_secret(world: World) -> None:
+    """Registering is refused for a room the machine has no member in, a key that is not a hash (the key
+    itself, the likeliest mistake), an unknown platform, a room with a call, a second call by the same
+    person, and a key used before; each with a sentence and a word, none repeating the value, and the answers
+    hold neither the key nor its hash. Fails if a refusal is accepted, or any answer carries a secret."""
     w = world
-    a = await FakeAgent(w.b.home, "k1").start()
+    a = Host(w.b)
     try:
         assert (await a.join("#build", "claude-1"))["ok"]
         answers = [
-            await host(a, "#uploads"),  # not a member
+            await host(a, "#uploads"),  # no member of the machine is there
+            await host(a, "#nowhere"),  # no such room: the same refusal, so a room's existence is not told
             await host(a, "#build", KEY),  # the key, not its hash
             await host(a, "#build", H.upper()),
             await host(a, "#build", platform="webex"),
         ]
-        assert [x["ok"] for x in answers] == [False] * 4
-        assert answers[0]["code"] == "not_member"
-        assert [x["code"] for x in answers[1:]] == ["bad_request"] * 3
+        assert [x["ok"] for x in answers] == [False] * 5
+        assert [(x["status"], x["code"]) for x in answers[:2]] == [(403, "not_member")] * 2
+        assert answers[0]["error"].replace("#uploads", "#r") == answers[1]["error"].replace("#nowhere", "#r")
+        assert [(x["status"], x["code"]) for x in answers[2:]] == [(400, "bad_request")] * 3
+        w.clock.advance(hosted.HOST_WINDOW_S)  # five tries a minute: a refused one counts too (below)
         good = await host(a)
         assert good["ok"] and good["fingerprint"] == FP
+        assert set(good) == {"ok", "room", "state", "platform", "host", "fingerprint"}  # nothing else is said
         second = await host(a, key_hash="cd" * 32)
-        assert (
-            second["ok"] is False and second["code"] == "conflict" and "already has a call" in second["error"]
-        )
+        assert second["ok"] is False and (second["status"], second["code"]) == (409, "conflict")
+        assert "already has a call" in second["error"]
         w.command("/meeting leave")
         reused = await host(a)
         assert reused["ok"] is False and "used for a call before" in reused["error"]
@@ -587,6 +675,233 @@ async def test_the_tool_refuses_what_it_must_and_never_returns_a_secret(world: W
         assert len([r for r in w.rows() if r["source"] == "hosted"]) == 1
     finally:
         await a.close()
+
+
+async def test_a_token_that_names_a_session_needs_a_member_of_that_session_on_its_machine(
+    world: World,
+) -> None:
+    """A token may say which session is asking (the script knows its agent's session id): the room must then
+    have a member of that session, on the token's machine, so a second session of the machine that is in
+    another room is not enough. With none named, any member on the machine is. Fails if a named session is
+    ignored, or a session id of another harness's or machine's stands in for it."""
+    w = world
+    one = Host(w.b, session=SESSION_1)
+    other = Claude(w.b, one.token, SESSION_2)  # a second session, same machine
+    try:
+        assert (await one.join("#build", "claude-1"))["ok"]
+        assert other.call("join", room="#uploads", screen_name="claude-2")["ok"]
+        for room, session in (("#build", other.session), ("#uploads", SESSION_1), ("#build", "nobody")):
+            r = enroll(w.b, one.token, room, session=session)
+            assert (r.status_code, r.json()["error"]) == (403, "not_member"), (room, session)
+        assert w.rows() == []
+        r = enroll(w.b, one.token, "#build", session=SESSION_1)
+        assert r.status_code == 200 and r.json()["host"] == "alice-laptop", r.text
+        assert w.hosted_row()["room_id"] == w.b.on_loop(w.b.state.store.get_room, "#build").id
+    finally:
+        await one.close()
+        other.c.close()
+
+
+async def test_a_listener_key_registers_only_for_its_own_session_and_never_a_body_s(world: World) -> None:
+    """A browser-signed-in Claude Code has no token the script can read, only the key its helper made, which
+    is for one session: the one a hook of its connection named. The call is registered for that session: a
+    room the machine's other session is in is refused, a body that names that other session is refused as at
+    the listener (403 ``wrong_session``), and the key's own session is the one that counts. Fails if the key
+    can act for a session it is not for, or the body can choose the session."""
+    w = world
+    signed_in = Host(w.b, session=SESSION_1, listener_key=LKEY)
+    other = Claude(w.b, signed_in.token, SESSION_2)  # the same machine's other session, in another room
+    try:
+        assert (await signed_in.join("#build", "claude-1"))["ok"]
+        assert other.call("join", room="#uploads", screen_name="claude-2")["ok"]
+        # claude-2's room: the machine has a member there, but not of the key's session
+        r = enroll(w.b, LKEY, "#uploads")
+        assert (r.status_code, r.json()["error"]) == (403, "not_member"), r.text
+        r = enroll(w.b, LKEY, "#build", session=SESSION_2)  # the other session is not the key's to name
+        assert (r.status_code, r.json()["error"]) == (403, "wrong_session"), r.text
+        assert w.rows() == []
+        r = enroll(w.b, LKEY, "#build", session=SESSION_1)  # its own, said or not
+        assert r.status_code == 200, r.text
+        assert w.hosted_row()["token_id"] == token_row(w, signed_in.token).id  # the sign-in's, and its device
+    finally:
+        await signed_in.close()
+        other.c.close()
+
+
+def token_row(w: World, token: str) -> Any:
+    """The store's row for an agent token, as the broker keeps it (its hash)."""
+    return w.b.on_loop(w.b.state.store.agent_token_by_hash, agent_tokens.token_hash(token))
+
+
+async def test_a_listener_key_with_no_session_yet_is_refused_and_a_body_cannot_give_it_one(
+    world: World,
+) -> None:
+    """A key no hook has named, and that has not presented itself anywhere, is for no session yet: registering
+    with it is refused (409 ``no_session``), even with a body that names a session, and the key is left
+    unpinned. A session taken from the body would let anything that holds the key choose whose it is. Fails
+    if the key is pinned by this route, or acts without a session."""
+    w = world
+    signed_in = Host(w.b, session=SESSION_1, listener_key=LKEY)
+    try:
+        assert signed_in.claude.discover().status_code == 200  # claimed by the connection, no hook yet
+        row = key_row(w, LKEY)
+        assert row is not None and row[0].session_id is None
+        for body in ({}, {"session": SESSION_1}):
+            r = enroll(w.b, LKEY, "#build", **body)
+            assert (r.status_code, r.json()["error"]) == (409, "no_session"), r.text
+        assert key_row(w, LKEY)[0].session_id is None  # and it was not pinned by asking
+        assert w.rows() == []
+    finally:
+        await signed_in.close()
+
+
+def key_row(w: World, key: str) -> Any:
+    """The store's row for a listener key and its token, as the broker keeps them (its hash), or None."""
+    return w.b.on_loop(w.b.state.store.listener_key, listener_keys.key_hash(key))
+
+
+async def test_a_member_of_another_machine_does_not_count(world: World) -> None:
+    """The room has to have a member on the machine the credential belongs to. Alice's desktop is in #build,
+    so her laptop's token is refused for it, and so is its signed-in key, and so is someone else's token: a
+    machine cannot host a call into a room it has no agent in. Fails if any machine will do."""
+    w = world
+    desktop = Host(w.b, "alice-desktop")
+    laptop = Host(w.b, "alice-laptop", session=SESSION_2, listener_key=LKEY)
+    try:
+        assert (await desktop.join("#build", "claude-1"))["ok"]
+        assert (await laptop.join("#uploads", "claude-2"))["ok"]
+        for cred in (laptop.token, LKEY):
+            r = enroll(w.b, cred, "#build")
+            assert (r.status_code, r.json()["error"]) == (403, "not_member"), cred[:5]
+        assert w.rows() == []
+        assert enroll(w.b, desktop.token, "#build").status_code == 200  # and the desktop's own is not
+    finally:
+        await desktop.close()
+        await laptop.close()
+
+
+async def test_only_a_token_or_a_listener_key_opens_the_route_and_a_browser_never_does(world: World) -> None:
+    """The route answers what the plugin's other scripts present and nothing else: no credential, a token that
+    was never made or was revoked, a listener key that was never claimed or whose sign-in was revoked, a
+    call key (a key's one job is its two routes), a session cookie, and a request with an Origin (a browser's)
+    are all refused, as are the wrong methods and a body that is too big or is not an object. Fails if any of
+    them registers a call."""
+    w = world
+    a = Host(w.b, listener_key=LKEY)
+    try:
+        assert (await a.join("#build", "claude-1"))["ok"]
+        made = w.b.on_loop(agent_tokens.make, w.b.state, None, "alice-phone", "alice")
+        w.b.on_loop(agent_tokens.revoke, w.b.state, None, made["id"], "alice")
+        for cred, status, word in (
+            (None, 401, "unauthorized"),
+            ("sbat_" + "x" * 43, 401, "unauthorized"),
+            (made["token"], 401, "unauthorized"),  # revoked
+            ("sbl_" + secrets.token_hex(32), 401, "unknown_key"),
+            (KEY, 401, "unauthorized"),  # a call key opens the call's two routes only
+            ("sbc_" + "0" * 63, 401, "unauthorized"),
+        ):
+            r = enroll(w.b, cred)
+            assert (r.status_code, r.json()["error"]) == (status, word), cred
+        # a signed-in sign-in that is revoked takes its key with it
+        w.b.on_loop(agent_tokens.revoke, w.b.state, None, token_row(w, a.token).id, "alice")
+        r = enroll(w.b, LKEY)
+        assert (r.status_code, r.json()["error"]) == (401, "revoked")
+
+        live = Host(w.b, "alice-desktop")
+        assert (await live.join("#uploads", "claude-3"))["ok"]
+        browser = enroll(w.b, live.token, "#uploads", headers={"origin": w.b.origin, "x-switchboard": "1"})
+        assert browser.status_code == 403
+        cookie = w.web.post(ENROLL, json={"room": "#uploads", "key_hash": H}, headers={"x-switchboard": "1"})
+        assert (cookie.status_code, cookie.json()["error"]) == (
+            401,
+            "unauthorized",
+        )  # the owner's own session
+        both = w.web.post(ENROLL, json={"room": "#uploads", "key_hash": H}, headers=w.b.write_headers())
+        assert both.status_code == 403
+        c = httpx.Client(base_url=w.b.base, timeout=10.0)
+        auth = {"authorization": f"Bearer {live.token}"}
+        assert c.get(ENROLL, headers=auth).status_code == 405
+        assert c.put(ENROLL, json={}, headers=auth).status_code == 405
+        assert c.post(ENROLL, content=b"x" * 5000, headers=auth).status_code == 413
+        for body in (
+            b"{not json",
+            b"[]",
+            b'"room"',
+            json.dumps({"room": "#uploads", "session": 7}).encode(),
+            json.dumps({"room": "#uploads", "session": "s" * 200}).encode(),
+        ):
+            r = c.post(ENROLL, content=body, headers={**auth, "content-type": "application/json"})
+            assert (r.status_code, r.json()["error"]) == (400, "bad_request"), body
+        c.close()
+        assert w.rows() == []
+        await live.close()
+    finally:
+        await a.close()
+
+
+async def test_a_token_may_try_to_register_only_a_few_times_a_minute(world: World) -> None:
+    """Registering a call is rare, so a token that keeps trying (a script in a loop, a guesser) is stopped:
+    five tries a minute, refused ones too, then 429 with the seconds to wait, by the broker's clock (the test
+    advances it). Another token has its own allowance. Fails if the tries are unlimited, are counted per
+    machine instead of per token, or never start again."""
+    w = world
+    a, b = Host(w.b), Host(w.b, "alice-desktop")
+    try:
+        assert (await a.join("#build", "claude-1"))["ok"] and (await b.join("#uploads", "claude-2"))["ok"]
+        bad = {"key_hash": "not a hash"}
+        for _ in range(hosted.HOST_PER_WINDOW):
+            assert enroll(w.b, a.token, "#build", **bad).status_code == 400
+        r = enroll(w.b, a.token, "#build", **bad)
+        assert (r.status_code, r.json()["error"]) == (429, "rate_limited")
+        assert 1 <= int(r.headers["retry-after"]) <= hosted.HOST_WINDOW_S
+        assert enroll(w.b, a.token, "#build").status_code == 429  # a good try is no exception
+        assert enroll(w.b, b.token, "#uploads", **bad).status_code == 400  # the other machine's allowance
+        w.clock.advance(hosted.HOST_WINDOW_S)
+        assert enroll(w.b, a.token, "#build").status_code == 200
+    finally:
+        await a.close()
+        await b.close()
+
+
+async def test_a_listener_key_and_its_own_token_share_one_allowance(world: World) -> None:
+    """A key is its sign-in's token for this purpose, so alternating between the two does not double the
+    tries. Fails if the allowance is counted by the credential instead of by the token behind it."""
+    w = world
+    a = Host(w.b, listener_key=LKEY)
+    try:
+        assert (await a.join("#build", "claude-1"))["ok"]
+        bad = {"key_hash": "no"}
+        for i in range(hosted.HOST_PER_WINDOW):
+            assert enroll(w.b, (a.token, LKEY)[i % 2], "#build", **bad).status_code == 400
+        assert enroll(w.b, a.token, "#build", **bad).status_code == 429
+        assert enroll(w.b, LKEY, "#build", **bad).status_code == 429
+    finally:
+        await a.close()
+
+
+async def test_the_tools_a_broker_serves_have_none_for_hosting_a_call(world: World) -> None:
+    """A call is registered by the host script's POST, not by a tool: every agent turn carries the tool list,
+    hosting is rare, and the model must not handle the key or even its hash (the maintainer, 2026-11-05).
+    Fails if a tool with that job is served, called or listed."""
+    from switchboard.mcp.server import TOOL_NAMES
+
+    w = world
+    agent = await FakeAgent(w.b.home, "k1").start()
+    try:
+        listed = await agent.list_tools()
+        assert {t.name for t in listed} == set(TOOL_NAMES)
+        blob = json.dumps([t.model_dump(mode="json") for t in listed])
+        assert "host_call" not in blob and "key_hash" not in blob
+        assert (await agent.join("#build", "claude-1"))["ok"]
+        res = None
+        try:
+            res = await agent.raw("host_call", {"room": "#build", "key_hash": H})
+        except Exception:  # the library may raise for a tool it does not have
+            pass
+        assert res is None or res.is_error
+        assert w.rows() == []
+    finally:
+        await agent.close()
 
 
 def bots_call(w: World, room: str, platform: str = "zoom") -> Any:
@@ -603,7 +918,7 @@ async def test_a_room_has_one_source_for_its_call(world: World) -> None:
     a room that has a hosted one; and the commands that need the bot (a picture of the screen) say a hosted
     call has none yet. Fails if a room can have two sources."""
     w = world
-    a = await FakeAgent(w.b.home, "k1").start()
+    a = Host(w.b)
     try:
         for room in ("#build", "#uploads"):
             assert (await a.join(room, "claude-1"))["ok"]
@@ -630,7 +945,7 @@ async def test_hosted_calls_count_toward_max_calls_with_the_bots_own(world: Worl
     bot's own fill it and a hosted call is refused, with the number and no room's name; one fewer and it is
     let in. Fails if hosted calls go past the limit."""
     w = world
-    a = await FakeAgent(w.b.home, "k1").start()
+    a = Host(w.b)
     try:
         assert (await a.join("#build", "claude-1"))["ok"]
         first, _second = bots_call(w, "#uploads"), bots_call(w, "#third", "meet")
@@ -746,8 +1061,9 @@ async def test_only_the_person_whose_call_it_is_or_an_admin_can_end_it(
     names who can. The notice says who. Fails if another person can end it, or the person who hosts it
     cannot."""
     b, admin, bob, bob_id = hosted_broker_world
-    mine = await FakeAgent(b.home, "k1").start()  # alice's (the owner's) agent
-    his = await FakeAgent(b.home, "k2", person_id=bob_id).start()
+    base = f"http://127.0.0.1:{b.port}"  # the loopback; a hosted broker answers to its public name (Host)
+    mine = Host(b, "alice-laptop", base=base)  # alice's (the owner's) agent, on her machine
+    his = Host(b, "bobs-laptop", person=bob_id, session="00000000-0000-4000-8000-0000000000e2", base=base)
     try:
         assert (await mine.join("#build", "claude-1"))["ok"] and (await his.join("#uploads", "codex-1"))["ok"]
         ours, theirs = "sbc_" + secrets.token_hex(32), "sbc_" + secrets.token_hex(32)
@@ -757,7 +1073,6 @@ async def test_only_the_person_whose_call_it_is_or_an_admin_can_end_it(
         assert sorted(v for v in rows.values() if v is not None) == [bob_id]
 
         # each key reaches its own call and room, and the lines carry the machine of the person who hosts
-        base = f"http://127.0.0.1:{b.port}"
         mine_relay, his_relay = Relay(b, ours, base=base, host=HOST), Relay(b, theirs, base=base, host=HOST)
         for relay, text in ((mine_relay, "alice's call"), (his_relay, "bob's call")):
             assert relay.push([seg(text, 0, 1), seg("x", 10, 11)]).status_code == 200

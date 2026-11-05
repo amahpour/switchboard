@@ -1,7 +1,7 @@
 """switchboard's agent tools (DESIGN.md §6, §49.2): the one interface every agent has.
 
 ``build_server`` builds the MCP server whose tools (join, leave, who, say, read, wait, pass, away,
-review, claim, status, host_call) the broker serves at ``/mcp`` to an agent with an agent token
+review, claim, status) the broker serves at ``/mcp`` to an agent with an agent token
 (``broker/agent_http.py``). It is a thin relay: every decision is made in the broker, through a
 ``ToolBackend``. Every broker error becomes a normal tool result (``{"ok": false, ...}``, never
 ``isError``: Codex skips PostToolUse on ``isError``, FINDINGS §4b), and the server declares no
@@ -46,9 +46,6 @@ CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 RO = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 RW = ToolAnnotations(destructive_hint=False, open_world_hint=False)
 RW_IDEM = ToolAnnotations(destructive_hint=False, open_world_hint=False, idempotent_hint=True)
-# host_call opens a way into a room from a machine outside it (§54), so unlike every other tool it is open
-# world: a harness that skips its approval prompt for the others (Codex, §6.1) asks its person first
-OPEN = ToolAnnotations(destructive_hint=False, open_world_hint=True)
 EMPTY_OPTIONS: Any = Field(default_factory=list)
 
 
@@ -168,20 +165,7 @@ def pass_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # Every tool build_server registers; a test pins the two equal.
-TOOL_NAMES = (
-    "join",
-    "leave",
-    "who",
-    "claim",
-    "say",
-    "read",
-    "wait",
-    "pass",
-    "away",
-    "review",
-    "status",
-    "host_call",
-)
+TOOL_NAMES = ("join", "leave", "who", "claim", "say", "read", "wait", "pass", "away", "review", "status")
 
 
 def build_server(st: ToolBackend) -> FastMCP:
@@ -425,22 +409,6 @@ def build_server(st: ToolBackend) -> FastMCP:
             params["message"] = message[:200]
         return dumps(await st.call("agent.away", params))
 
-    @mcp.tool(
-        annotations=OPEN,
-        description=(
-            "Host a call's bot for a room, only when your user asks. key_hash: the sha256 its script made."
-        ),
-    )
-    async def host_call(room: str, key_hash: str, ctx: Context, platform: str = "", model: str = "") -> str:
-        await st.prime(ctx)
-        tid = st.thread_id(ctx)
-        got = await st.find_cred(room, tid)
-        if isinstance(got, str):
-            return got
-        name, cred = got
-        params = {**st.base(cred, tid), "key_hash": key_hash, "platform": platform, "model": model}
-        return dumps(await st.call("agent.host_call", params))
-
     @mcp.tool(annotations=RW_IDEM)
     async def status(text: str, ctx: Context) -> str:
         """Set a one-line status; empty clears it."""
@@ -466,7 +434,6 @@ def build_server(st: ToolBackend) -> FastMCP:
             "away": away,
             "review": review,
             "status": status,
-            "host_call": host_call,
         }
         for name, fn in aliases.items():
             mcp.tool(name=f"switchboard_{name}")(fn)

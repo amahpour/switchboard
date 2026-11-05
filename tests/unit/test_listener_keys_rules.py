@@ -87,6 +87,28 @@ def test_a_hook_of_the_connection_moves_the_pin_and_another_tokens_hook_does_not
     assert keys.check(key(1), SESSION_A).why == "wrong_session"
 
 
+def test_a_key_says_which_session_it_is_for_only_once_a_hook_or_its_first_request_named_one(
+    store: Store, keys: ListenerKeys
+) -> None:
+    """The route that registers a hosted call (§54) takes the session from the key and never from its request,
+    so ``session_of`` reads what the server already knows: nothing for an unclaimed, malformed or unnamed key,
+    the named session after a hook of the connection (which moves with a /clear), and a pinned one after
+    the key's first request. Fails if a key is given a session it was never named for."""
+    t = token(store)
+    h = listener_keys.key_hash(key(1))
+    assert keys.session_of(key(1)) is None  # nobody claimed it
+    keys.claim(t, h)
+    assert keys.session_of(key(1)) is None  # claimed, and no hook has named a session
+    assert keys.session_of("sbl_" + "0" * 63) is None and keys.session_of("sbat_" + "x" * 43) is None
+    keys.name_session(t, h, SESSION_A)
+    assert keys.session_of(key(1)) == SESSION_A
+    keys.name_session(t, h, SESSION_B)
+    assert keys.session_of(key(1)) == SESSION_B
+    keys.claim(t, listener_keys.key_hash(key(2)))
+    assert keys.check(key(2), SESSION_A).token == t  # pinned by its own first request
+    assert keys.session_of(key(2)) == SESSION_A
+
+
 def test_a_key_is_refused_when_unknown_malformed_or_its_token_was_revoked(
     store: Store, keys: ListenerKeys
 ) -> None:

@@ -39,7 +39,9 @@ AGENT_PATHS = frozenset(
         "/mcp/pretool",
         "/mcp/event",
         "/mcp/status",
-        # the two routes only a call's key opens (§54, #623); the maintainer's yes, 2026-11-05
+        # a hosted call (§54, #623; the maintainer's yes, 2026-11-05): the script registers it with what the
+        # plugin's scripts already present, and its relay pushes and polls with a key of its own
+        "/mcp/meeting/host",
         "/mcp/meeting/push",
         "/mcp/meeting/speech",
     }

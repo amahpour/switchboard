@@ -73,7 +73,6 @@ def test_cursor_input_hook_routes_two_conversations_and_rejects_unmatched_calls(
             "away",
             "review",
             "status",
-            "host_call",
         )
     )
 

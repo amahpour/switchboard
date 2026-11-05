@@ -98,6 +98,8 @@ class BrokerState:
     signin: SignInLimiter = None  # type: ignore[assignment]
     # the MCP app behind /mcp, for agents over HTTPS (§49.2): its lifespan runs inside ours
     agent_http: Any = None
+    # AgentAuth, the door the agent routes share: a token or a listener key. The host route uses it (§54)
+    agent_auth: Any = None
     # the codes of agents signing in through the browser (§49.9), in memory only
     oauth: oauth.OAuthState = None  # type: ignore[assignment]
     # the listener keys Claude Code's helper scripts claim and present (§49.11), over the store
