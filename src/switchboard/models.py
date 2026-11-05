@@ -196,7 +196,9 @@ class Message:
     text: str
     reply_to: int | None
     mentions: list[str] = field(default_factory=list)
-    sender_host: str | None = None  # the device host of an agent sender (schema v2); None on this machine
+    # the device host of an agent sender (schema v2); None on this machine. A call line pushed by a hosted
+    # call (§54) has the host that heard it, so the page can say "via <host>".
+    sender_host: str | None = None
     sender_person_id: int | None = None  # a human sender other than the owner (schema v4, §32.2)
 
     @classmethod
@@ -226,7 +228,14 @@ class Message:
 @dataclass(frozen=True)
 class Meeting:
     """One call transcribed into a room (DESIGN.md §52). The link itself is not a column:
-    only the platform is kept. ``error`` is a short fixed phrase, never a URL."""
+    only the platform is kept. ``error`` is a short fixed phrase, never a URL.
+
+    A hosted call (§54, #623) is one whose lines a person's machine pushes in: ``source`` says so,
+    ``token_id``, ``owner_person_id`` (None: the owner) and ``host`` (the token's device name when it
+    began) say whose machine, ``key_hash`` is the sha256 of its key (never the key), ``model`` is
+    what the host claimed it transcribes with, and ``lines_pushed`` counts the lines it has posted
+    (``started_at`` is when its key was registered). A call the broker's own bot follows has
+    ``source`` ``server`` and none of the rest."""
 
     id: int
     room_id: int
@@ -234,8 +243,19 @@ class Meeting:
     started_at: float
     ended_at: float | None
     started_by: str
-    platform: str  # zoom, meet, teams
+    platform: str  # zoom, meet, teams, or unknown (a hosted call that did not say)
     error: str | None
+    source: str = "server"  # server, hosted
+    key_hash: str | None = None
+    token_id: int | None = None
+    owner_person_id: int | None = None
+    host: str | None = None
+    model: str | None = None
+    lines_pushed: int = 0
+
+    @property
+    def hosted(self) -> bool:
+        return self.source == "hosted"
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Meeting":
@@ -248,6 +268,13 @@ class Meeting:
             started_by=r["started_by"],
             platform=r["platform"],
             error=r["error"],
+            source=r["source"],
+            key_hash=r["key_hash"],
+            token_id=r["token_id"],
+            owner_person_id=r["owner_person_id"],
+            host=r["host"],
+            model=r["model"],
+            lines_pushed=r["lines_pushed"],
         )
 
 

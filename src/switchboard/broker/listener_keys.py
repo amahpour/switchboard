@@ -13,10 +13,11 @@ model):
 - ``claim``: a request that carries a live agent token (the sign-in) and that header records the hash
   against the token. Only a request with a live token can claim one, so there is no unauthenticated route
   and nobody can claim ahead of the real connection; a hash another token holds is never taken over.
-- **Scope.** The key is a bearer for ``POST /mcp/listen`` and ``POST /mcp/session`` and nothing else: the
-  tools, the hook tool and every other route answer only an agent token. It is for **one session**: the one
-  the connection's own hooks last named (``name_session``), or, before any hook has run, the first one the
-  key itself presents (pinned). Another session gets ``wrong_session``.
+- **Scope.** The key is a bearer for ``POST /mcp/listen``, ``POST /mcp/session`` and ``POST
+  /mcp/meeting/host`` (§54: the script that hosts a call registers it) and nothing else: the tools, the
+  hook tool and every other route answer only an agent token. It is for **one session**: the one the
+  connection's own hooks last named (``name_session``), or, before any hook has run, the first one the key
+  itself presents (pinned). Another session gets ``wrong_session``.
 - **Revoked with its sign-in**: the key is only as live as its token (``revoked``), and it ages out
   after ``IDLE_S`` without use, or past ``MAX_PER_TOKEN`` newer keys on the same token.
 """
@@ -92,6 +93,13 @@ class ListenerKeys:
             return
         self.store.listener_key_name_session(token.id, h, session_id)
         self._remember(self._named, mark, session_id)
+
+    def session_of(self, key: str) -> str | None:
+        """The session ``key`` is for, as the server already knows it (named by a hook of the connection,
+        or pinned by the key's first request), or None when it is for none yet. The route that registers a
+        hosted call (§54) takes the session from here and never from its request."""
+        got = self.store.listener_key(key_hash(key)) if KEY_RE.fullmatch(key) else None
+        return got[0].session_id if got is not None else None
 
     def check(self, key: str, session_id: str | None) -> Checked:
         """Whether ``key`` may act for ``session_id`` now. Nothing is said of why a key is unknown: a

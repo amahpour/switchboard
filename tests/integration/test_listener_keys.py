@@ -173,9 +173,11 @@ def test_the_key_reports_the_end_of_its_session(build: InProcBroker) -> None:
 
 
 def test_the_key_can_call_no_tool_and_reach_nothing_else(build: InProcBroker) -> None:
-    """The key is for two routes. Every other door answers an agent token only: the tools (and the hook
-    tool, which is how a call is made for a session), the command hooks of the other harnesses, the web.
-    Its form can't be smuggled into the token's header either. Fails if any of them lets a key in."""
+    """The key is for three routes: the listener, the session report and, since §54, the one that registers a
+    hosted call (``tests/integration/test_meeting_hosted.py``). Every other door answers an agent token only:
+    the tools (and the hook tool, which is how a call is made for a session), the command hooks of the other
+    harnesses, the call's own two routes, the web. Its form can't be smuggled into the token's header either.
+    Fails if any of them lets a key in."""
     signed_in_member(build)
     assert (
         session_hook(build, KEY, {"event": "SessionStart", "session_id": SESSION_1}).status_code == 200
@@ -188,6 +190,9 @@ def test_the_key_can_call_no_tool_and_reach_nothing_else(build: InProcBroker) ->
     for path in (agent_http.PRETOOL_PATH, agent_http.EVENT_PATH):
         body = {"harness": "codex", "session_id": SESSION_1, "event": "PermissionRequest"}
         assert httpx.post(f"{build.base}{path}", json=body, headers=key).status_code == 401, path
+    for path in ("/mcp/meeting/push", "/mcp/meeting/speech"):  # a call's own routes want a call key
+        r = httpx.post(f"{build.base}{path}", json={"segments": []}, headers=key)
+        assert (r.status_code, r.json()["error"]) == (401, "unauthorized"), path
     smuggled = {**DISCOVER["headers"], "x-switchboard-token": KEY}
     assert httpx.post(f"{build.base}/mcp", json=DISCOVER["body"], headers=smuggled).status_code == 401
     web = {"Origin": build.origin, "X-Switchboard": "1", **key}

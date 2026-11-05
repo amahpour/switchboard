@@ -900,6 +900,9 @@ class AgentService:
             # an "@call" line is spoken in the room's live call while a person has voice on (§52);
             # otherwise this does nothing. It never waits: a task in the bridge does the speaking.
             self.state.meetings.speak(room.id, msg.text)
+        if self.state.hosted_calls is not None:
+            # the same for a call hosted on a person's machine (§54): the line waits for its relay's poll
+            self.state.hosted_calls.speak(room.id, msg.text)
         return msg
 
     def read(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:

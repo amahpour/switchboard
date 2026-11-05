@@ -32,6 +32,7 @@ from switchboard.delivery.rules import (
     parse_mentions,
 )
 from switchboard.envelope import clean
+from switchboard.meeting.keys import PLATFORMS, fingerprint
 from switchboard.models import (
     CONTINUE_PATHS,
     HOOK_PATHS,
@@ -280,6 +281,7 @@ class RoomService:
         self.delivery: DeliveryHooks | None = None
         self.boards: Any = None  # the review boards (broker/reviews.py Boards), for /review (§37.8)
         self.meetings: Any = None  # the call bridge (meeting/bridge.py), for /meeting (§52)
+        self.hosted_calls: Any = None  # the calls hosted on people's machines (meeting/hosted.py, §54)
         self.attachments: Any = None  # files a room holds (files.py, §53)
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
@@ -894,7 +896,10 @@ class RoomService:
                 },
             )
             self.store.rename_room(room.id, new, expect=room.name)
-        if self.meetings is not None:
+        # a call hosted on a person's machine is ended here (its key refused from then on, and the room told);
+        # when there is none, the broker's own bot is asked, as before
+        ended_hosted = self.hosted_calls is not None and self.hosted_calls.stop(room.id, "the room closed")
+        if not ended_hosted and self.meetings is not None:
             self.meetings.stop(room.id, "the room closed")
         for msg in posted:
             self.hub.message(room.name, message_dict(msg))
@@ -1169,14 +1174,26 @@ class RoomService:
 
     def meeting_state(self, room: Room) -> dict[str, str | bool] | None:
         """What the page shows while a call is open: ``joining`` or ``live``, the platform, and
-        whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link."""
+        whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link.
+        A call hosted on a person's machine (§54) also says so, whose machine it is on and the
+        short fingerprint of its key, never the key or its hash."""
         row = self.store.open_meeting(room.id)
-        if (
-            row is None
-            or row.state not in ("joining", "live")
-            or row.platform not in ("zoom", "meet", "teams")
-        ):
+        if row is None or row.state not in ("joining", "live"):
             return None
+        if row.hosted:
+            if row.platform not in PLATFORMS or not row.host or not row.key_hash:
+                return None  # a hosted call that does not say whose it is has nothing to show
+            voice = self.hosted_calls is not None and self.hosted_calls.voice(room.id)
+            return {
+                "state": row.state,
+                "platform": row.platform,
+                "voice": voice,
+                "source": "hosted",
+                "host": row.host,
+                "fingerprint": fingerprint(row.key_hash),
+            }
+        if row.platform not in ("zoom", "meet", "teams"):
+            return None  # the broker's own bot never joins an unknown platform
         voice = self.meetings is not None and self.meetings.voice(room.id)
         return {"state": row.state, "platform": row.platform, "voice": voice}
 
@@ -1191,10 +1208,18 @@ class RoomService:
             self.post_notice(room, text)
 
     def post_meeting_line(
-        self, room_id: int, *, sender_name: str, text: str, mentions: list[str]
+        self,
+        room_id: int,
+        *,
+        sender_name: str,
+        text: str,
+        mentions: list[str],
+        meeting_id: int | None = None,
+        sender_host: str | None = None,
     ) -> Message | None:
         """One finished transcript line. Cleaned and cut like any text from outside.
-        ``mentions`` is the one member the line addressed, or none."""
+        ``mentions`` is the one member the line addressed, or none. A line a hosted call pushed
+        (§54) is stored with that call and the host that heard it."""
         room = self.store.room_by_id(room_id)
         if room is None:
             return None
@@ -1209,6 +1234,8 @@ class RoomService:
             via="meeting",
             text=body,
             mentions=mentions,
+            meeting_id=meeting_id,
+            sender_host=sender_host,
         )
 
     def post_notice(self, room: Room, text: str, level: str | None = None) -> Message:

@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from switchboard import db
 from switchboard.adapters import build_adapters
 from switchboard.adapters.base import waits_over_client_limit
-from switchboard.broker import agent_http, listener_keys, oauth, oidc, web
+from switchboard.broker import agent_http, call_http, listener_keys, oauth, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.hub import Hub, WsSubscriber
@@ -75,6 +75,8 @@ class BrokerState:
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
     meetings: Any = None  # the call bridge (meeting/bridge.py, §52); None until the lifespan wires it
+    # calls hosted on people's machines (meeting/hosted.py, §54); None until the lifespan wires it
+    hosted_calls: Any = None
     attachments: Any = None  # files a room holds (files.py, §53)
     files_swept: float = 0.0  # when the retention sweep last ran (broker clock)
     shutdown_cb: Callable[[], None] | None = None
@@ -96,6 +98,8 @@ class BrokerState:
     signin: SignInLimiter = None  # type: ignore[assignment]
     # the MCP app behind /mcp, for agents over HTTPS (§49.2): its lifespan runs inside ours
     agent_http: Any = None
+    # AgentAuth, the door the agent routes share: a token or a listener key. The host route uses it (§54)
+    agent_auth: Any = None
     # the codes of agents signing in through the browser (§49.9), in memory only
     oauth: oauth.OAuthState = None  # type: ignore[assignment]
     # the listener keys Claude Code's helper scripts claim and present (§49.11), over the store
@@ -246,10 +250,15 @@ def create_app(
         state.boards = Boards(state)
         state.service.boards = state.boards
         from switchboard.meeting.bridge import MeetingBridge
+        from switchboard.meeting.hosted import HostedCalls
 
         state.meetings = MeetingBridge(state)
         state.service.meetings = state.meetings
-        state.engine.voice_on = state.meetings.voice
+        state.hosted_calls = HostedCalls(state)
+        state.service.hosted_calls = state.hosted_calls
+        state.engine.voice_on = lambda room_id: (
+            state.meetings.voice(room_id) or state.hosted_calls.voice(room_id)
+        )
         state.meetings.recover()
         state.hub.set_board_source(state.boards.boards_named)
         from switchboard.files import Attachments, FolderStore
@@ -276,6 +285,7 @@ def create_app(
             state.tasks.append(asyncio.create_task(_claim_loop(state)))
         state.tasks.append(asyncio.create_task(_maintenance(state)))
         state.tasks.append(asyncio.create_task(state.runner.run()))
+        state.tasks.append(asyncio.create_task(state.hosted_calls.run()))
         # agents over HTTPS (§49.2): the MCP session manager, once everything it calls is up
         mcp_http = contextlib.AsyncExitStack()
         if state.agent_http is not None:
@@ -285,6 +295,9 @@ def create_app(
             yield
         finally:
             # a live call leaves the meeting before anything else is torn down (§52)
+            if state.hosted_calls is not None:
+                with contextlib.suppress(Exception):
+                    state.hosted_calls.shutdown()
             if state.meetings is not None:
                 with contextlib.suppress(Exception):
                     await state.meetings.shutdown()
@@ -318,6 +331,7 @@ def create_app(
     app.state.broker = state
     web.install(app, state)
     state.agent_http = agent_http.install(app, state)
+    call_http.install(app, state)
     # Added last = outermost: SecurityHeaders wraps the guard's own 421/403 replies.
     app.add_middleware(HostOriginGuard, origin=web_origin)
     app.add_middleware(SecurityHeaders, origin=web_origin)

@@ -1367,6 +1367,7 @@ def install(app: "FastAPI", state: "BrokerState") -> Any:
     inner = next(r.endpoint for r in mcp_app.routes if isinstance(r, Route) and r.path == PATH)
     auth = AgentAuth(inner, state, tools)
     tools.session_auth = auth
+    state.agent_auth = auth
     app.router.routes.append(Route(PATH, endpoint=auth))
     app.router.routes.append(Route(LISTEN_PATH, endpoint=Listener(auth, tools)))
     app.router.routes.append(Route(SESSION_PATH, endpoint=SessionHook(auth, tools)))

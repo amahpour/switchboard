@@ -131,6 +131,8 @@ class Actor:
     # every CLI caller, whose name is ``human_name``)
     name: str | None = None
     person_id: int | None = None
+    # an admin (the owner, or a person whose row says so, §51): who may end a call that is not theirs (§54)
+    admin: bool = False
 
     def who(self, human_name: str) -> str:
         return self.name or human_name
@@ -643,6 +645,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         if row is None:
             return Result(True, f"{room.name}: no call is being transcribed")
         label = PLATFORM_LABEL.get(row.platform, "call")
+        if row.hosted:
+            return Result(True, f"{room.name}: transcribing a {label} call, hosted on {row.host}")
         if row.state == "joining":
             return Result(True, f"{room.name}: joining a {label} call")
         return Result(True, f"{room.name}: transcribing a {label} call")
@@ -651,7 +655,14 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         if row is None:
             return Result(True, f"{room.name}: no call is being transcribed")
         label = PLATFORM_LABEL.get(row.platform, "call")
-        if svc.meetings is not None:
+        if row.hosted:
+            # a call hosted on a person's machine: only that person, or an admin, may end its key (§54)
+            if svc.hosted_calls is None or not svc.hosted_calls.may_end(row, actor.person_id, actor.admin):
+                raise CommandError(
+                    "forbidden", f"Only {row.started_by}, who hosts it, or an admin can end this call."
+                )
+            svc.hosted_calls.stop(room.id, "leave")
+        elif svc.meetings is not None:
             svc.meetings.stop(room.id, "leave")
         else:
             svc.store.end_meeting(row.id, None)
@@ -714,12 +725,14 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
 
 def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
     """Let agents speak in the room's call, or stop them (§52). In memory for this call only."""
-    if svc.store.open_meeting(room.id) is None:
+    row = svc.store.open_meeting(room.id)
+    if row is None:
         return Result(True, f"{room.name}: no call is being transcribed")
-    if svc.meetings is None:
+    voices = svc.hosted_calls if row.hosted else svc.meetings  # whoever follows this call holds its voice
+    if voices is None:
         return Result(True, "No meeting server is running. See DEPLOY.md.")
     word = "on" if on else "off"
-    if not svc.meetings.set_voice(room.id, on):
+    if not voices.set_voice(room.id, on):
         return Result(True, f"{room.name}: voice is already {word}")
     if on:
         notice = (
@@ -740,8 +753,13 @@ def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
 def _meeting_snapshot(room: Room, actor: Actor, svc: "RoomService") -> Result:
     """Post a picture of the call's shared screen as this person's message (§52). It arrives a
     moment later; a refusal (the bot is not in yet, or one was taken lately) is the reply."""
-    if svc.store.open_meeting(room.id) is None:
+    row = svc.store.open_meeting(room.id)
+    if row is None:
         return Result(True, f"{room.name}: no call is being transcribed")
+    if row.hosted:
+        raise CommandError(
+            "conflict", "A snapshot isn't available yet for a call hosted on a person's machine."
+        )
     if svc.meetings is None:
         return Result(True, "No meeting server is running. See DEPLOY.md.")
     asker = Asker(actor.who(svc.cfg.human_name), actor.person_id, actor.via)

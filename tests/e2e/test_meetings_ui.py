@@ -8,10 +8,12 @@ error, a page error or a CSP violation fails the test, through the watcher in ``
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 from conftest import InProcBroker, make_tmp_home, sanitize_env
 from fakes.fake_joinly import FakeJoinly
@@ -19,6 +21,7 @@ from playwright.sync_api import Browser, Page, expect
 from test_web_ui import PHASE_REPORTS, PHONE, UI
 
 from switchboard.config import Config, MeetingCfg
+from switchboard.meeting import keys
 
 pytestmark = pytest.mark.e2e
 
@@ -53,6 +56,25 @@ def voice_call(
         finally:
             broker.stop()
             joinly.stop()
+            shutil.rmtree(home, ignore_errors=True)
+
+
+KEY = "sbc_" + hashlib.sha256(b"an example key").hexdigest()  # only the hash of it is ever kept
+HASH = keys.key_hash(KEY)
+
+
+@pytest.fixture(scope="module")
+def hosting(playwright: Any, tmp_path_factory: pytest.TempPathFactory) -> Iterator[InProcBroker]:
+    """A desktop broker for the calls hosted on a person's machine (#623). Its own, so ending the call here
+    does not touch the other tests' calls."""
+    with pytest.MonkeyPatch.context() as mp:
+        sanitize_env(mp, tmp_path_factory)
+        home = make_tmp_home()
+        broker = InProcBroker(home).start()
+        try:
+            yield broker
+        finally:
+            broker.stop()
             shutil.rmtree(home, ignore_errors=True)
 
 
@@ -245,3 +267,100 @@ def test_the_call_bar_has_a_voice_switch_and_a_snapshot_button(
     expect(page.locator("#log .md-artifact a.md-file")).to_be_visible()
     expect(page.locator("#log .md-artifact .md-artifact-name")).to_contain_text("screen-")
     assert joinly.snapshots == 1
+
+
+def _seed_hosted(broker: InProcBroker) -> None:
+    """A room with a live call hosted on alice's laptop and one line that machine pushed: the rows the
+    broker keeps for a call whose relay is in it, planted as the other tests plant theirs."""
+    headers = broker.write_headers()
+    client = broker.web_client()
+    try:
+        made = client.post("/api/rooms", json={"name": "#hosted"}, headers=headers)
+        assert made.status_code == 200, made.text
+    finally:
+        client.close()
+
+    def plant() -> None:
+        store = broker.state.store
+        room = store.get_room("#hosted")
+        assert room is not None
+        token = store.agent_token_add(None, "alice-laptop", hashlib.sha256(b"a token").hexdigest())
+        assert token is not None
+        row = store.insert_hosted_meeting(
+            room.id,
+            started_by="alice",
+            platform="zoom",
+            key_hash=HASH,
+            token_id=token.id,
+            owner_person_id=None,
+            host="alice-laptop",
+            model="large-v3-turbo",
+        )
+        store.set_meeting_live(row.id)
+        store.insert_message(
+            room.id,
+            sender_name="bob",
+            sender_kind="meeting",
+            via="meeting",
+            text="Claude one, can you check the upload limit?",
+            sender_host="alice-laptop",
+            meeting_id=row.id,
+        )
+
+    broker.on_loop(plant)
+
+
+def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_next_push(
+    ui: UI, hosting: InProcBroker
+) -> None:
+    """The bar for a call hosted on a person's machine says whose machine and the key's fingerprint, and its
+    button is End call (a hosted call's key ends with it). A line the machine pushed says "via" that machine
+    beside the speaker. Light, dark and a phone all show both, with nothing cut off or scrolling sideways.
+    End call ends the call, and the next push with its key is refused. Fails if the host or the fingerprint
+    is not in the bar, the line has no machine, the snapshot button is on for a bot that sends none, a phone
+    scrolls sideways, or the key still works after End call."""
+    _seed_hosted(hosting)
+    fingerprint = keys.fingerprint(HASH)
+    page = _open(ui, hosting, room="hosted")
+    bar = page.locator("#banner-meeting")
+    expect(bar).to_be_visible()
+    expect(page.locator("#banner-meeting-text")).to_have_text(
+        f"Transcribing a call (Zoom) · on alice-laptop · key {fingerprint}"
+    )
+    end = page.locator("#meeting-leave")
+    expect(end).to_have_text("End call")
+    expect(page.locator("#meeting-snapshot")).to_be_disabled()
+    expect(page.locator("#meeting-voice")).to_have_attribute("aria-checked", "false")
+
+    line = page.locator("#log .line.k-meeting")
+    expect(line.locator(".nick-meeting")).to_have_text("bob")
+    expect(line.locator(".via-host")).to_have_text("via alice-laptop")
+    expect(line).to_contain_text("upload limit")
+    colour = line.locator(".via-host").evaluate("el => getComputedStyle(el).color")
+    page.emulate_media(color_scheme="dark")
+    expect(bar).to_contain_text(f"key {fingerprint}")
+    expect(line.locator(".via-host")).to_be_visible()
+    assert line.locator(".via-host").evaluate("el => getComputedStyle(el).color") != colour
+
+    phone = _open(ui, hosting, room="hosted", **PHONE)
+    expect(phone.locator("#banner-meeting")).to_contain_text(f"on alice-laptop · key {fingerprint}")
+    expect(phone.locator("#log .line.k-meeting .via-host")).to_have_text("via alice-laptop")
+    inside = phone.evaluate(
+        """() => ['meeting-voice', 'meeting-snapshot', 'meeting-leave'].every(id => {
+          const r = document.getElementById(id).getBoundingClientRect();
+          return r.left >= 0 && r.right <= document.documentElement.clientWidth;
+        }) && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"""
+    )
+    assert inside
+
+    relay = httpx.Client(base_url=hosting.base, headers={"authorization": f"Bearer {KEY}"})
+    try:
+        assert relay.post("/mcp/meeting/push", json={"segments": []}).status_code == 200
+        end.click()
+        expect(page.locator("#input")).to_be_focused()
+        expect(bar).to_be_hidden()
+        refused = relay.post("/mcp/meeting/push", json={"segments": []})
+        assert (refused.status_code, refused.json()["error"]) == (410, "ended")
+    finally:
+        relay.close()
+    expect(line.locator(".via-host")).to_have_text("via alice-laptop")  # what it pushed keeps its label

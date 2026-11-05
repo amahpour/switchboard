@@ -19,7 +19,8 @@ Code's helper scripts (§49.11); 34 (#513) admits OpenCode in participants (§49
 so a person the owner chooses is an admin too (§51); 39 (#573) adds a meeting line and the
 ``meetings`` table, a live call transcribed into a room (§52); 40 (#544) adds the files a room
 holds, the one-time grants that upload or download them, and a broker setting for how long
-files are kept (§53).
+files are kept (§53); 41 (#593) lets a call be a file's uploader; 42 (#623) lets a call be hosted on a
+person's machine, with a key per call, and stores each line it pushes with that call (§54).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -40,7 +41,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -103,8 +104,10 @@ CREATE TABLE messages(
   kind TEXT NOT NULL DEFAULT 'chat' CHECK(kind IN ('chat','join','leave','notice')),
   text TEXT NOT NULL, reply_to INTEGER, mentions TEXT NOT NULL DEFAULT '[]',
   sender_host TEXT,
-  sender_person_id INTEGER);
+  sender_person_id INTEGER,
+  meeting_id INTEGER REFERENCES meetings(id));
 CREATE INDEX messages_room_id ON messages(room_id, id);
+CREATE INDEX messages_meeting ON messages(meeting_id) WHERE meeting_id IS NOT NULL;
 
 CREATE TABLE batches(
   id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id),
@@ -259,9 +262,17 @@ CREATE TABLE meetings(
   started_at REAL NOT NULL,
   ended_at REAL,
   started_by TEXT NOT NULL CHECK(length(started_by) BETWEEN 1 AND 80),
-  platform TEXT NOT NULL CHECK(platform IN ('zoom','meet','teams')),
-  error TEXT CHECK(error IS NULL OR length(error) <= 500));
+  platform TEXT NOT NULL CHECK(platform IN ('zoom','meet','teams','unknown')),
+  error TEXT CHECK(error IS NULL OR length(error) <= 500),
+  source TEXT NOT NULL DEFAULT 'server' CHECK(source IN ('server','hosted')),
+  key_hash TEXT CHECK(key_hash IS NULL OR length(key_hash) = 64),
+  token_id INTEGER REFERENCES agent_tokens(id),
+  owner_person_id INTEGER,
+  host TEXT CHECK(host IS NULL OR length(host) BETWEEN 1 AND 24),
+  model TEXT CHECK(model IS NULL OR length(model) <= 80),
+  lines_pushed INTEGER NOT NULL DEFAULT 0 CHECK(lines_pushed >= 0));
 CREATE UNIQUE INDEX meetings_one_open ON meetings(room_id) WHERE state!='ended';
+CREATE UNIQUE INDEX meetings_key ON meetings(key_hash) WHERE key_hash IS NOT NULL;
 
 CREATE TABLE broker_settings(
   key TEXT PRIMARY KEY CHECK(length(key) BETWEEN 1 AND 64),
@@ -863,6 +874,34 @@ V40_TO_V41 = (
 )
 
 
+# v41 -> v42 (#623, DESIGN.md §54): a call can be hosted on a person's machine, which pushes its lines in
+# with a key made for that one call. Every existing call is the server's own (``source`` 'server'), with no
+# key, token or host. The columns are added the usual way (rows are untouched, the new ones read their
+# default). ``platform`` also admits 'unknown', for a hosted call that doesn't say which platform it is on:
+# the same schema-text edit as v38 -> v39, on the one table, which _migrate brackets with schema editing and
+# fails closed (rolls back) if the new CHECK is not in the table's text. The key's sha256 is unique, so a
+# key cannot be registered for two calls, and a line pushed by a hosted call is stored with its call
+# (``messages.meeting_id``): who pushed what stays on record after the call ends.
+V41_TO_V42 = (
+    "ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'server'"
+    " CHECK(source IN ('server','hosted'))",
+    "ALTER TABLE meetings ADD COLUMN key_hash TEXT CHECK(key_hash IS NULL OR length(key_hash) = 64)",
+    "ALTER TABLE meetings ADD COLUMN token_id INTEGER REFERENCES agent_tokens(id)",
+    "ALTER TABLE meetings ADD COLUMN owner_person_id INTEGER",
+    "ALTER TABLE meetings ADD COLUMN host TEXT CHECK(host IS NULL OR length(host) BETWEEN 1 AND 24)",
+    "ALTER TABLE meetings ADD COLUMN model TEXT CHECK(model IS NULL OR length(model) <= 80)",
+    "ALTER TABLE meetings ADD COLUMN lines_pushed INTEGER NOT NULL DEFAULT 0 CHECK(lines_pushed >= 0)",
+    "ALTER TABLE messages ADD COLUMN meeting_id INTEGER REFERENCES meetings(id)",
+    "CREATE UNIQUE INDEX meetings_key ON meetings(key_hash) WHERE key_hash IS NOT NULL",
+    "CREATE INDEX messages_meeting ON messages(meeting_id) WHERE meeting_id IS NOT NULL",
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''zoom'',''meet'',''teams'')',"
+    " '''zoom'',''meet'',''teams'',''unknown'')')"
+    " WHERE type='table' AND name='meetings'",
+    "UPDATE meta SET value='42' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -922,6 +961,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         ),
         39: MigrationStep(40, V39_TO_V40, ("broker_settings", "files", "file_grants")),
         40: MigrationStep(41, V40_TO_V41, (), (("files", "'human','agent','meeting')"),)),
+        41: MigrationStep(42, V41_TO_V42, (), (("meetings", "'zoom','meet','teams','unknown')"),)),
     }
     out = []
     v = frm
