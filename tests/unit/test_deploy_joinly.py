@@ -101,6 +101,21 @@ def test_every_mount_has_a_volume_and_chromium_gets_room() -> None:
     assert "cpu" not in resources["limits"], "throttling makes the transcript fall behind"
 
 
+def test_the_patch_gives_joinly_the_memory_for_the_calls_the_broker_will_follow() -> None:
+    """One live call takes about 2.7 GiB in joinly (measured, #604), so the sidecar's memory limit
+    has to be at least 2.7 GiB x max_calls + 0.5 GiB. The patch leaves the broker's ``max_calls`` at
+    the default and sets no variable, so the limit must fit that default; if someone sets
+    SWITCHBOARD_MEETING_MAX_CALLS in the patch, the limit must grow with it. Fails if the limit is
+    cut below what the default needs, or the variable is raised without the memory (#607)."""
+    pod = _pod(PATCH)
+    broker_env = {e["name"]: e["value"] for e in _container(pod, "switchboard")["env"]}
+    calls = int(broker_env.get("SWITCHBOARD_MEETING_MAX_CALLS", MeetingCfg().max_calls))
+    limit = _container(pod, "joinly")["resources"]["limits"]["memory"]
+    assert limit.endswith("Gi"), "the sizing below reads the limit in Gi"
+    assert float(limit.removesuffix("Gi")) >= 2.7 * calls + 0.5, f"{limit} cannot hold {calls} live call(s)"
+    assert MeetingCfg().max_calls == 1, "the default must stay what the 4Gi limit holds"
+
+
 def test_the_zoom_fix_is_a_patch_of_its_own_over_the_files_docs_name() -> None:
     """The Zoom file is mounted from a ConfigMap with subPath, over the one file; `optional: true`
     does not let the pod start without it (kubelet makes the subPath a directory and the mount
