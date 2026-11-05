@@ -267,7 +267,11 @@ def test_a_member_that_left_or_whose_session_ended_no_longer_counts(w: World) ->
     ended = w.member(w.build, "claude-2", session="s-2")
     w.store.end_membership(gone.id, "left")
     w.store.end_participant(ended.participant_id)
-    for session in (None, "s-1", "s-2"):
+    # a session that ended with a membership left behind cannot happen (ending one leaves its rooms), and
+    # if it ever did the room would not count it
+    stale = w.member(w.build, "claude-4", session="s-4")
+    w.store.con.execute("UPDATE participants SET ended_at=? WHERE id=?", (w.clock.now(), stale.participant_id))
+    for session in (None, "s-1", "s-2", "s-4"):
         with pytest.raises(ServiceError, match="no agent on this machine"):
             w.register(session=session)
     w.member(w.build, "claude-3", session="s-3")
