@@ -16,6 +16,15 @@
 #   SWITCHBOARD_JOINLY_URL=http://joinly:8000/mcp/
 #
 # Each live call takes about 2.7 GiB and 1 CPU on this machine.
+#
+# Meetings on an NVIDIA GPU: the `meetings-gpu` profile instead of `meetings`, a second service (joinly-gpu)
+# for the same bot on joinly's CUDA image. Needs the NVIDIA driver and the NVIDIA Container Toolkit on the
+# host. The model worth a GPU is large-v3-turbo; the first call downloads it (about 1.6 GB), so fetch it
+# before (docs/DEPLOY.md, "The speech model, and a GPU"). The `.env` file:
+#
+#   COMPOSE_PROFILES=meetings-gpu
+#   SWITCHBOARD_JOINLY_URL=http://joinly-gpu:8000/mcp/
+#   SWITCHBOARD_MEETING_STT_MODEL=large-v3-turbo
 name: switchboard
 
 services:
@@ -29,6 +38,9 @@ services:
       SWITCHBOARD_HUMAN_NAME: ${SWITCHBOARD_HUMAN_NAME:-}
       # where the meeting bot listens (the `meetings` profile below); unset, /meeting says how to set it up
       SWITCHBOARD_JOINLY_URL: ${SWITCHBOARD_JOINLY_URL:-}
+      # the speech-to-text model: base, small, distil-large-v3 or large-v3-turbo (anything else stops the broker
+      # at start). Unset, joinly uses the model its image holds. A name is downloaded on the first call.
+      SWITCHBOARD_MEETING_STT_MODEL: ${SWITCHBOARD_MEETING_STT_MODEL:-}
     volumes:
       - switchboard-data:/data
     # no `ports:`: only Caddy reaches it, over this project's network
@@ -46,6 +58,34 @@ services:
     # beside this one as DEPLOY.md says, then uncomment these two lines (a missing file would stop the bot):
     # volumes:
     #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
+    # A model you name in SWITCHBOARD_MEETING_STT_MODEL is downloaded into the container, and gone when the
+    # container is made again. To keep it, mount a volume at joinly's cache under `volumes:` (and declare
+    # `joinly-models:` in the top-level `volumes:` below), only for a model you name: it hides the model the
+    # image holds. DEPLOY.md, "The speech model, and a GPU", has the command that fetches it first.
+    #   - joinly-models:/home/app/.cache/huggingface
+
+  # The same bot on one NVIDIA GPU, only with the `meetings-gpu` profile: joinly's CUDA build of the same
+  # release (about 6 GB). It sets its own device (JOINLY_DEVICE=cuda in the image), so nothing else is needed
+  # here. It is a service of its own, so the broker's address is http://joinly-gpu:8000/mcp/. Turn on one of the
+  # two profiles, not both. As for the CPU bot, it publishes no port: only the broker reaches it.
+  joinly-gpu:
+    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the `meetings` release with CUDA; move both together
+    profiles: [meetings-gpu]
+    restart: unless-stopped
+    shm_size: "1gb"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # The same two optional mounts as above (the Zoom fix, and a volume to keep a model you name), written
+    # out for this service the same way. For the cache use a volume of its own (`joinly-gpu-models`): the
+    # CUDA image holds a different default model than the CPU one.
+    # volumes:
+    #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
+    #   - joinly-gpu-models:/home/app/.cache/huggingface
 
   caddy:
     image: caddy:2.10-alpine

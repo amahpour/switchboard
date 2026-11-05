@@ -241,10 +241,15 @@ class MeetingBridge:
         names = self.state.store.active_names(room_id)
         words = [w[:40] for w in hotwords(names)[:100]]
         cfg = self.state.cfg.meeting
+        stt_args: dict[str, Any] = {"hotwords": words}
+        if cfg.stt_model:
+            # Only when the operator named one: a ``model_name`` that is given at all, even an empty one,
+            # makes joinly look for the model on the network, where leaving it out keeps its own files (§52).
+            stt_args["model_name"] = cfg.stt_model
         header = json.dumps(
             {
                 "name": PARTICIPANT,
-                "stt_args": {"hotwords": words},
+                "stt_args": stt_args,
                 "tts_args": {"voice": cfg.tts_voice},  # the Kokoro voice (joinly's settings, §52)
                 # a frame whose text can be read
                 "meeting_provider_args": {"snapshot_size": list(SNAPSHOT_SIZE)},

@@ -54,7 +54,8 @@ SNIFF_BYTES = 8192  # a NUL byte in here means binary
 
 # Example or placeholder user names allowed after /Users/, /home/ and -Users- (compared lowercased).
 # "dev" is the sandbox containers' user (sandbox/Dockerfile); "switchboard" is the published image's
-# user (deploy/image/Dockerfile).
+# user (deploy/image/Dockerfile); "app" is joinly's image user (ghcr.io/joinly-ai/joinly), whose Hugging
+# Face cache the deploy examples mount a volume at (#617). Added with the maintainer's yes, 2026-11-05.
 FAKE_NAMES = frozenset(
     {
         "someone",
@@ -72,6 +73,7 @@ FAKE_NAMES = frozenset(
         "dev",
         "linuxbrew",
         "switchboard",
+        "app",
     }
 )
 
@@ -284,7 +286,7 @@ PLACEHOLDERS = [
     "HOME=/Users/someone and /Users/x/.local and unix:///Users/me/.codex/x.sock and /Users/Shared/y",
     "/Users/ and /Users/$USER/.local and /Users/<user>/code and /Users/.../x",
     "--home /opt/yk/home/hooks and $SWITCHBOARD_HOME/home/x and /home/dev/switchboard"
-    " and /home/linuxbrew/.linuxbrew",
+    " and /home/linuxbrew/.linuxbrew and /home/app/.cache/huggingface",
     "~/.claude/projects/-Users-someone-code-app and <scratch>/m0/claude-inbox and"
     " tmux-<uid> and /tmp/claude-<uid>",
     "<session-id>/scratchpad and 00000000-0000-0000-0000-000000000000/scratchpad and " + UUID + " alone",

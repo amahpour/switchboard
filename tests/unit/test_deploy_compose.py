@@ -30,3 +30,33 @@ def test_the_broker_finds_the_bot_only_when_it_is_told_to() -> None:
     profile `/meeting` says how to set it up instead of failing to reach a bot that isn't there."""
     env = COMPOSE["services"]["switchboard"]["environment"]
     assert env["SWITCHBOARD_JOINLY_URL"] == "${SWITCHBOARD_JOINLY_URL:-}"
+
+
+def test_the_broker_passes_the_stt_model_on_and_it_is_empty_by_default() -> None:
+    """``SWITCHBOARD_MEETING_STT_MODEL`` (#617) reaches the broker from the ``.env`` file, and unset it is
+    empty, which the broker reads as unset: joinly keeps the model its image was built with. Fails if the
+    example names a model for everyone (a first call would then download 1.6 GB), or the variable is not
+    passed on and a `.env` line does nothing."""
+    env = COMPOSE["services"]["switchboard"]["environment"]
+    assert env["SWITCHBOARD_MEETING_STT_MODEL"] == "${SWITCHBOARD_MEETING_STT_MODEL:-}"
+
+
+def test_the_gpu_bot_is_the_same_release_with_cuda_on_a_profile_of_its_own() -> None:
+    """``meetings-gpu`` (#617) is the ``meetings`` profile on one NVIDIA GPU: joinly's ``-cuda`` build of
+    the same release, with one device reserved the way Compose says (``deploy.resources.reservations``). It
+    is as private as the CPU one (no port, no host network) and has the shared memory Chromium needs. The
+    two profiles are separate services, so turning on both is a choice, and a CPU install has no ``deploy``
+    block that would stop it starting on a machine with no GPU. Fails if the tag drifts from the CPU
+    image's, if the device reservation is lost or asks for more, or if the bot is published."""
+    cpu = COMPOSE["services"]["joinly"]
+    gpu = COMPOSE["services"]["joinly-gpu"]
+    assert cpu["profiles"] == ["meetings"] and gpu["profiles"] == ["meetings-gpu"]
+    assert "deploy" not in cpu, "a machine with no GPU must still start the CPU bot"
+    assert gpu["image"] == cpu["image"] + "-cuda", "the same release, built for CUDA"
+    assert gpu["image"].startswith("ghcr.io/joinly-ai/joinly:v") and gpu["image"].endswith("-cuda")
+    assert "ports" not in gpu and "expose" not in gpu and "network_mode" not in gpu
+    assert gpu["shm_size"] == "1gb"
+    assert gpu["deploy"]["resources"]["reservations"]["devices"] == [
+        {"driver": "nvidia", "count": 1, "capabilities": ["gpu"]}
+    ]
+    assert "JOINLY_DEVICE" not in str(gpu.get("environment")), "the cuda image sets its own device"

@@ -45,9 +45,10 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_OIDC_CLIENT_SECRET` | (unset) | That client's secret, from your platform's secrets (a Kubernetes Secret, Render's secret environment). Or `SWITCHBOARD_OIDC_CLIENT_SECRET_FILE`, a file holding it. |
 | `SWITCHBOARD_JOINLY_URL` | (unset) | The meeting bot's address, for example `http://127.0.0.1:8000/mcp/` ([A meeting bot](#a-meeting-bot), [Meetings on Kubernetes](#meetings-on-kubernetes)). It sets `[meeting] joinly_url` over `config.toml`, and an empty value leaves the file's. An `http` or `https` address, up to 300 characters, with no user name or password; a bad one stops the broker at start with a message that names the variable. |
 | `SWITCHBOARD_MEETING_MAX_CALLS` | (unset: 1) | How many calls the broker follows at once, in all rooms together: a whole number from 1 to 50. It sets `[meeting] max_calls` over `config.toml`, and an empty value leaves the file's. Each live call takes about 2.7 GiB in the meeting bot, so size the bot first ([A meeting bot](#a-meeting-bot), [Meetings on Kubernetes](#meetings-on-kubernetes)). A bad value stops the broker at start with a message that names the variable. |
+| `SWITCHBOARD_MEETING_STT_MODEL` | (unset: joinly's own) | The speech-to-text model the meeting bot transcribes with: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. It sets `[meeting] stt_model` over `config.toml`, and an empty value leaves the file's. Unset, joinly keeps the model inside its image. A name makes joinly download the model on the first call ([The speech model, and a GPU](#the-speech-model-and-a-gpu)). Anything else stops the broker at start, with a message that names the variable and the four models. |
 | `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the admin, everyone else, and every password, passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
-`SWITCHBOARD_PUBLIC_URL`, `SWITCHBOARD_LISTEN` and `SWITCHBOARD_PORT` are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. `SWITCHBOARD_JOINLY_URL` and `SWITCHBOARD_MEETING_MAX_CALLS` are the environment versions of `[meeting] joinly_url` and `[meeting] max_calls`, for a manifest that has no file on the volume to write; they win over the file too. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
+`SWITCHBOARD_PUBLIC_URL`, `SWITCHBOARD_LISTEN` and `SWITCHBOARD_PORT` are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. `SWITCHBOARD_JOINLY_URL`, `SWITCHBOARD_MEETING_MAX_CALLS` and `SWITCHBOARD_MEETING_STT_MODEL` are the environment versions of `[meeting] joinly_url`, `[meeting] max_calls` and `[meeting] stt_model`, for a manifest that has no file on the volume to write; they win over the file too. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
 The admin's name in the rooms is `me` unless you set it. The easiest way is **Settings > Profile** in the web UI, which renames you at once and keeps it across restarts. `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it) fixes the name instead, and Settings can't change it while it's set; leave it out to rename from Settings. Or set `human_name` in `config.toml` in the home, then restart the container:
 
@@ -129,6 +130,9 @@ kubectl -n switchboard logs switchboard-0    # the admin's one-time password
 | `meetings.maxCalls` | `1` | How many calls may run at once, 1 to 50. It sizes joinly. |
 | `meetings.image.tag` | `v0.5.4` | joinly's release. |
 | `meetings.zoomFix.configMap` | (none) | A ConfigMap with the fixed `zoom.py`, mounted over joinly's copy. |
+| `meetings.sttModel` | (unset) | `SWITCHBOARD_MEETING_STT_MODEL`: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Anything else fails at `helm template`. A name also gives joinly a folder to download into ([below](#meetings-with-helm)). |
+| `meetings.gpu.enabled` | `false` | joinly on one NVIDIA GPU: its `-cuda` image and `nvidia.com/gpu: 1` ([below](#meetings-with-helm)). |
+| `meetings.gpu.nodeSelector`, `meetings.gpu.tolerations` | `{}`, `[]` | Written into the pod while the GPU is on. |
 
 There is no replica count: one broker, one volume, as the manifest has it ([How it fits together](#how-it-fits-together)). The pods are selected by `app.kubernetes.io/name`, `instance` and `component: broker`. The component is there so that a second kind of pod can be added later without taking over the broker's selector, which a StatefulSet can't change once it exists.
 
@@ -138,7 +142,7 @@ There is no replica count: one broker, one volume, as the manifest has it ([How 
 - **The pull policy is written out** (`IfNotPresent`, Kubernetes' own default for a release tag), so a private mirror can set it.
 - **The claim template states its `apiVersion` and `kind`.** The API server writes them into the stored object anyway, and a tool that compares the chart's output with it (Argo CD) would otherwise see a difference.
 - **The Ingress host is taken from `publicUrl`** unless `ingress.host` says otherwise. It must be the same host: the broker answers `421` to any other.
-- **With the meeting bot on,** joinly's memory and CPU come from `meetings.maxCalls` instead of the patch's fixed 1 CPU, 2 GiB requested and 4 GiB limit ([below](#meetings-with-helm)), the broker also gets `SWITCHBOARD_MEETING_MAX_CALLS`, and the broker's container is listed first (kustomize puts joinly first).
+- **With the meeting bot on,** joinly's memory and CPU come from `meetings.maxCalls` instead of the patch's fixed 1 CPU, 2 GiB requested and 4 GiB limit ([below](#meetings-with-helm)), the broker also gets `SWITCHBOARD_MEETING_MAX_CALLS`, and the broker's container is listed first (kustomize puts joinly first). `meetings.sttModel` and `meetings.gpu` add what [the GPU patch](#meetings-on-kubernetes) describes, and nothing when they are unset.
 - **Everything else is the manifest's:** `enableServiceLinks: false` ([#595](https://github.com/amahpour/switchboard/issues/595)), uid 10001 from the start with a read-only root and no capabilities, the probes, the stop-then-start replacement, and the Ingress annotations. [What the manifest relies on](#kubernetes-eks-gke-aks) applies to the chart as it is.
 
 **cert-manager.** Values you give are merged into the defaults, so adding an annotation keeps the three ingress-nginx ones:
@@ -210,6 +214,28 @@ meetings:
 ```
 
 Remove `zoomFix` once a joinly release has the fix, and move `meetings.image.tag` to that release.
+
+**A GPU and a better model.** `meetings.gpu.enabled` runs joinly on one NVIDIA GPU, and `meetings.sttModel` names the model ([why `large-v3-turbo`](#the-speech-model-and-a-gpu)):
+
+```yaml
+# switchboard-values.yaml, then helm upgrade
+meetings:
+  enabled: true
+  sttModel: large-v3-turbo
+  gpu:
+    enabled: true
+    nodeSelector:
+      nvidia.com/gpu.present: "true"
+    tolerations:
+      - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+```
+
+- **The image is the CUDA build of the same release.** `v0.5.4` becomes `v0.5.4-cuda`, so moving `meetings.image.tag` to a newer release moves the GPU image with it. A tag that already ends in `-cuda` is kept as it is.
+- **joinly asks for one GPU, in its limits.** The count is fixed at one: one joinly serves every call. Memory and CPU are what `maxCalls` works out, as without a GPU. The cluster needs the NVIDIA device plugin (or the GPU Operator), or the pod stays `Pending`.
+- **The pod goes where the GPU is.** The broker shares the pod, so `nodeSelector` and `tolerations` are written into it as you give them, and only while `gpu.enabled` is true. Quote a label value that looks like a boolean (`"true"`), as above, or Kubernetes refuses it.
+- **A model you name gets a folder to be downloaded into:** a 4 GiB `emptyDir` at `/home/app/.cache/huggingface`, because joinly's root is read-only. It is gone when the pod is replaced, which every `helm upgrade` that changes the pod does, so the next pod downloads the model again and the first call waits for it (about 1.6 GB for `large-v3-turbo`). With `sttModel` unset, nothing is mounted, joinly uses the model in its image, and nothing is downloaded. A cache that outlives the pod is not in the chart: the claims of a StatefulSet are fixed once it exists, and the broker's volume is the broker's. The chart needs the bot on (`meetings.enabled`) for either value to render anything.
+- **The sizes are for `base`.** The table above was measured with it, and a bigger model adds to each call ([Memory](#the-speech-model-and-a-gpu)). The chart does not add it for you.
+- **Checked by tests that render the chart,** not on a GPU node: the image, the limit, the selector, the tolerations, the variable and the folder, and the schema refusing a model the broker would refuse.
 
 **Check that it works** with the commands under [Meetings on Kubernetes](#meetings-on-kubernetes): `kubectl -n switchboard get pod switchboard-0` says `2/2`, the broker's container reaches `http://127.0.0.1:8000/health`, and a throwaway pod gets `Connection refused` at the pod's IP on port 8000.
 
@@ -385,7 +411,7 @@ COMPOSE_PROFILES=meetings
 SWITCHBOARD_JOINLY_URL=http://joinly:8000/mcp/
 ```
 
-Without those two lines the bot doesn't start, and `/meeting` says how to set it up. Each live call takes about 2.7 GiB and 1 CPU on that machine. For Zoom speaker names, download the fix below to `deploy/compose/zoom.py`, then uncomment the two `volumes` lines under `joinly` in `compose.yaml` (a missing file would stop the bot).
+Without those two lines the bot doesn't start, and `/meeting` says how to set it up. For a GPU, the `meetings-gpu` profile does the same with a CUDA build ([below](#the-speech-model-and-a-gpu)). Each live call takes about 2.7 GiB and 1 CPU on that machine. For Zoom speaker names, download the fix below to `deploy/compose/zoom.py`, then uncomment the two `volumes` lines under `joinly` in `compose.yaml` (a missing file would stop the bot).
 
 **Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image. Its `zoom.py` differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only:
 
@@ -397,6 +423,81 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
 ```
 
 Drop the mount once a joinly release has the fix, and move to that release.
+
+### The speech model, and a GPU
+
+joinly turns the call's speech into text with Whisper. Out of the box it runs `base`, a small model, on the CPU. That is quick, and it sometimes mishears a name. You can choose a bigger model, and run joinly on a GPU so that the bigger model keeps up with the call.
+
+**What the numbers say** ([#617](https://github.com/amahpour/switchboard/issues/617)). Twenty-four lines were spoken into a real Zoom call and recorded as the bot heard them. Seventeen of them called an agent by name. The same recordings went through each model with joinly's own settings. The CPU runs were capped at 4 CPUs. The GPU was a GTX 1660 Super, an older card with 6 GB. A line is a few seconds of speech.
+
+| Model | Where | Words wrong | Time to transcribe a line (median) |
+|---|---|---|---|
+| `base` (the default) | CPU | 4.3% | 0.44 s |
+| `distil-large-v3` | CPU | 4.3% | 4.8 s |
+| `large-v3-turbo` | CPU | 2.4% | 4.5 s |
+| `base` | GPU | 4.3% | 0.30 s |
+| `distil-large-v3` | GPU | 4.8% | 1.3 s |
+| `large-v3-turbo` | GPU | 2.4% | 1.3 s |
+
+- **`large-v3-turbo` made the fewest word errors:** 2.4%, against 4.3% for `base`.
+- **On a CPU the large models are too slow for a live call.** They ran at 0.83 to 0.90 of real time, so a backlog builds as soon as two people talk. They need a GPU.
+- **`distil-large-v3`, which joinly picks by itself on a GPU, was no better than `base`** on these lines. If you run a GPU, name `large-v3-turbo`.
+- **Every model woke the right agent for every call-out in the recordings.** In a live call, `base` missed two of the seventeen and woke an agent once for nothing. Those came from how joinly cuts speech into pieces before it transcribes, not from the model, so a bigger model is not a cure for them.
+- **Take it as a guide.** The voices were synthetic, clean and one at a time. Real people with accents, noise and crosstalk will differ. One older card was measured: turbo took about 1.3 s a line on it, three times what `base` takes on a CPU. A newer card should be faster, and nobody has measured one. The delay in a live call on a GPU was not measured either.
+
+**Choose a model.** The default stays `base` on a CPU. To use another, set it in the broker's `config.toml`, then restart the broker:
+
+```toml
+[meeting]
+joinly_url = "http://127.0.0.1:8010/mcp/"
+stt_model = "large-v3-turbo"
+```
+
+`stt_model` is one of `base`, `small`, `distil-large-v3` and `large-v3-turbo`. Unset or empty, it leaves the choice to joinly: `base` on a CPU, `distil-large-v3` on a GPU. Anything else stops the broker at start, and the message names the four. The environment variable `SWITCHBOARD_MEETING_STT_MODEL` sets the same thing where there is no file to edit; when both are set, the variable wins, and a bad value stops the broker the same way. It is sent to joinly each time a call starts, so a change needs a broker restart and a new call. Only the file or the variable sets it: a message in a room never can. The list is short on purpose. joinly's Whisper library would also take the name of any repository on Hugging Face, or a path, and switchboard does not leave what gets downloaded to a typo.
+
+**The model is downloaded on the first call.** With no model named, joinly loads the one inside its image and does not look for it on the network. Once a model is named, joinly 0.5.4 turns that off (`local_files_only` is false in its `whisper.py`) and fetches the model from Hugging Face. `large-v3-turbo` is about 1.6 GB. joinly loads the model when a call's session opens, before the bot joins, so the first call waits for the download. Fetch it first, and keep it:
+
+- **The cache is `/home/app/.cache/huggingface` in the container.** Put a volume there, so that the download survives a new container. A folder you mount yourself has to belong to uid 1001, the user joinly runs as; a volume Docker makes does.
+- **Fetch it ahead** with joinly's own library. This only downloads: it does not load the model, so it needs no GPU and little memory.
+
+  ```bash
+  docker run --rm -v joinly-models:/home/app/.cache/huggingface \
+    --entrypoint /app/.venv/bin/python ghcr.io/joinly-ai/joinly:v0.5.4 \
+    -c "from faster_whisper.utils import download_model; print(download_model('large-v3-turbo'))"
+  ```
+
+- **Then start joinly with the same volume**, and the first call finds the model there:
+
+  ```bash
+  docker run -d --name joinly -p 127.0.0.1:8010:8000 \
+    -v joinly-models:/home/app/.cache/huggingface \
+    ghcr.io/joinly-ai/joinly:v0.5.4
+  ```
+
+- **Mount a cache only for a model you name.** A volume at that path takes the place of the image's own copy of its model, and with no model named joinly uses local files only.
+- **Naming `base` goes to the network too.** What counts is that a name is given, not which one. With `stt_model = "base"`, joinly looks at Hugging Face for the model on every call, because it loads the model for each call. With the files already in the image, nothing is downloaded, and if Hugging Face can't be reached it uses the copy it has (checked with the network off). To stop the look once the model is in place, set `HF_HUB_OFFLINE=1` on joinly.
+
+**Memory.** Every size on this page was measured with `base`. joinly loads a model for each call, so each live call holds its own copy. In the proof of concept a process holding `large-v3-turbo` peaked at about 1.7 GB, against 0.5 GB for `base`. A live call with a big model was not measured, so give joinly more than the tables say, and watch the first call. On a GPU the weights sit in the card's memory, one copy for each live call, and that was not measured at all.
+
+**A GPU.** joinly publishes a build for NVIDIA GPUs, `ghcr.io/joinly-ai/joinly:v0.5.4-cuda`. It is about 6 GB to pull, and for `amd64` only. It sets `JOINLY_DEVICE=cuda` itself, so nothing else is needed, and its own model is `distil-large-v3`, so name `large-v3-turbo`. The host needs an NVIDIA GPU, a driver recent enough for CUDA 12.6 (which the image is built on), and the NVIDIA Container Toolkit.
+
+```bash
+docker run -d --name joinly --gpus 1 -p 127.0.0.1:8010:8000 \
+  -v joinly-gpu-models:/home/app/.cache/huggingface \
+  ghcr.io/joinly-ai/joinly:v0.5.4-cuda
+```
+
+Fetch the model first as above, with the `-cuda` image and this volume (that needs no `--gpus`). Give this image a volume of its own: it holds a different model than the CPU one.
+
+**With the Compose example,** the `meetings-gpu` profile is the same bot on a GPU. It is a second service, `joinly-gpu`, so its address is different, and you turn on one profile, not both. It reserves one NVIDIA GPU (`deploy.resources.reservations.devices`) and publishes no port, like the CPU bot. In the `.env` file:
+
+```bash
+COMPOSE_PROFILES=meetings-gpu
+SWITCHBOARD_JOINLY_URL=http://joinly-gpu:8000/mcp/
+SWITCHBOARD_MEETING_STT_MODEL=large-v3-turbo
+```
+
+To keep the model between containers, or for the Zoom fix, uncomment the `volumes` lines under `joinly-gpu`. [Kubernetes](#meetings-on-kubernetes) and [Helm](#meetings-with-helm) have their own way.
 
 ### Meetings on Kubernetes
 
@@ -464,6 +565,41 @@ configMapGenerator:
 ```
 
 Drop the patch once a joinly release has the fix. To take the whole sidecar out, apply the manifest again without the patch (`kubectl patch` can't remove a container it added).
+
+**A GPU and a better model.** The patch is the CPU bot with `base`, and asks for no GPU, so that it applies on a cluster that has none. For [a GPU and `large-v3-turbo`](#the-speech-model-and-a-gpu), apply a second patch after it. The same lines are in a comment at the top of `joinly.yaml`:
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: switchboard
+spec:
+  template:
+    spec:
+      nodeSelector: {nvidia.com/gpu.present: "true"}   # your GPU nodes' label
+      tolerations:                                     # and their taint, if they have one
+        - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+      containers:
+        - name: switchboard
+          env:
+            - name: SWITCHBOARD_MEETING_STT_MODEL
+              value: large-v3-turbo
+        - name: joinly
+          image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release, built for CUDA
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - {name: joinly-models, mountPath: /home/app/.cache/huggingface}
+      volumes:
+        - name: joinly-models
+          emptyDir: {sizeLimit: 4Gi}
+```
+
+- **The cluster needs the NVIDIA device plugin** (or the GPU Operator), so that a node offers `nvidia.com/gpu`. Without one the pod stays `Pending`. An extended resource like this is asked for in the limits only, and the scheduler takes the request from it. The broker shares the pod, so the pod goes where the GPU is: the label and the taint are your nodes', and the patch writes them as you give them. The image is about 6 GB, so the first pull on a GPU node takes minutes.
+- **The model gets a folder to be downloaded into.** The root is read-only, and joinly's cache is in the image user's home, so a model you name has nowhere to go without it. The folder is an `emptyDir`: it is gone when the pod is replaced, and the next pod downloads the model again, with the first call waiting for it. Leave the volume out, and the variable too, for the model inside the image, which needs no download. A cache that outlives the pod is not in the patch: a StatefulSet's claims are fixed once it exists ([Helm's upgrade notes](#helm) say how that bites), and the broker's volume is the broker's.
+- **The memory and CPU are the ones above.** The sizes were measured with `base`. A bigger model adds to each call ([Memory](#the-speech-model-and-a-gpu)), so raise the limit.
+- **Checked:** the YAML above was applied after `joinly.yaml` with `kubectl patch --local` and gave the CUDA image, the GPU limit, the unchanged 4 GiB memory limit, the broker's variable and the cache folder. It has not run on a GPU node.
 
 **Check that it works.**
 
