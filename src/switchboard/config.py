@@ -164,28 +164,43 @@ def _joinly_url_ok(url: str) -> bool:
 # 50 is already far past one machine, and a typo like 500 is refused rather than believed
 MAX_CALLS_CEILING = 50
 
+# the Whisper models ``[meeting] stt_model`` may name (#617, DESIGN.md §52): names faster-whisper 1.1 (joinly
+# 0.5.4's) knows, the three the proof of concept measured and ``small``, which sits between. It is a short
+# list and not "anything faster-whisper takes" because that also takes a Hugging Face repository id or a
+# path, and what joinly downloads onto the machine that follows your calls is not left to a typo.
+# Empty is "joinly's own choice" (``base`` on a CPU, ``distil-large-v3`` on CUDA).
+STT_MODELS = ("base", "small", "distil-large-v3", "large-v3-turbo")
+
 
 @dataclass(frozen=True)
 class MeetingCfg:
-    """Where joinly listens, the voice it speaks with, and how many calls it follows at once
-    (DESIGN.md §52). Empty ``joinly_url``: ``/meeting`` says how to set it. All are the operator's,
-    from this file (the URL and the limit also from ``SWITCHBOARD_JOINLY_URL`` and
-    ``SWITCHBOARD_MEETING_MAX_CALLS``), never from a room.
+    """Where joinly listens, the voice it speaks with, the model it transcribes with, and how many calls it
+    follows at once (DESIGN.md §52). Empty ``joinly_url``: ``/meeting`` says how to set it. All are the
+    operator's, from this file (the URL, the limit and the model also from ``SWITCHBOARD_JOINLY_URL``,
+    ``SWITCHBOARD_MEETING_MAX_CALLS`` and ``SWITCHBOARD_MEETING_STT_MODEL``), never from a room.
 
     ``tts_voice`` is a Kokoro voice name (``bm_george``, ``af_bella``): a short word of
     lowercase letters, digits and underscores, passed to joinly as it connects.
 
     ``max_calls`` is how many calls may be joining or live across all rooms, 1 to 50. It is the guard
     on the bot's memory: one joinly takes about 2.7 GiB for each live call, so a broker with a
-    4 GiB bot follows one."""
+    4 GiB bot follows one.
+
+    ``stt_model`` (``SWITCHBOARD_MEETING_STT_MODEL``) is the Whisper model joinly transcribes with, one of
+    ``STT_MODELS``. Empty is unset: the bridge then leaves ``model_name`` out of joinly's settings and
+    joinly keeps the model its image was built with, without a lookup on the network. A name sends joinly to
+    Hugging Face for it on the first call (§52)."""
 
     joinly_url: str = ""
     tts_voice: str = "bm_george"
     max_calls: int = 1
+    stt_model: str = ""
 
     def __post_init__(self) -> None:
         if not VOICE_RE.fullmatch(self.tts_voice):
             raise ConfigError("[meeting] tts_voice must be a short word of a-z, 0-9 and _, like bm_george")
+        if self.stt_model not in ("", *STT_MODELS):  # a wrong type is not in the tuple either
+            raise ConfigError(f"[meeting] stt_model must be one of {', '.join(STT_MODELS)}, or empty")
         if (
             isinstance(self.max_calls, bool)
             or not isinstance(self.max_calls, int)
@@ -330,13 +345,16 @@ HUMAN_NAME_ENV = "SWITCHBOARD_HUMAN_NAME"
 JOINLY_URL_ENV = "SWITCHBOARD_JOINLY_URL"
 # how many calls the broker follows at once, from the environment for the same reason (§52)
 MAX_CALLS_ENV = "SWITCHBOARD_MEETING_MAX_CALLS"
+# the speech-to-text model, from the environment for the same reason (§52, #617)
+STT_MODEL_ENV = "SWITCHBOARD_MEETING_STT_MODEL"
 
 
 def load(paths: Paths) -> Config:
     """Read ``$SWITCHBOARD_HOME/config.toml`` if it exists; defaults otherwise. A non-empty
     ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both, a non-empty
-    ``SWITCHBOARD_JOINLY_URL`` sets ``[meeting] joinly_url`` over the file, and a non-empty
-    ``SWITCHBOARD_MEETING_MAX_CALLS`` sets ``[meeting] max_calls`` over it."""
+    ``SWITCHBOARD_JOINLY_URL`` sets ``[meeting] joinly_url`` over the file, a non-empty
+    ``SWITCHBOARD_MEETING_MAX_CALLS`` sets ``[meeting] max_calls`` over it, and a non-empty
+    ``SWITCHBOARD_MEETING_STT_MODEL`` sets ``[meeting] stt_model`` over it."""
     try:
         raw = paths.config.read_bytes()
     except FileNotFoundError:
@@ -366,4 +384,11 @@ def load(paths: Paths) -> Config:
         if not re.fullmatch(r"[0-9]{1,3}", env) or not 1 <= int(env) <= MAX_CALLS_CEILING:
             raise ConfigError(f"{MAX_CALLS_ENV} must be a whole number from 1 to {MAX_CALLS_CEILING}")
         cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, max_calls=int(env)))
+    env = os.environ.get(STT_MODEL_ENV, "").strip()
+    if env:
+        # Never ignored: a typo would leave the model at the file's, or at joinly's own, and the operator
+        # would believe the one they named was running. The value is not repeated, as for the other two.
+        if env not in STT_MODELS:
+            raise ConfigError(f"{STT_MODEL_ENV} must be one of {', '.join(STT_MODELS)}")
+        cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, stt_model=env))
     return cfg

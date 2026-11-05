@@ -39,8 +39,11 @@ def joinly() -> Iterator[FakeJoinly]:
     server.stop()
 
 
-def _broker(tmp_home: Path, joinly: FakeJoinly, max_calls: int) -> Iterator[InProcBroker]:
-    cfg = Config(human_name="alice").replace(meeting=MeetingCfg(joinly_url=joinly.url, max_calls=max_calls))
+def _broker(
+    tmp_home: Path, joinly: FakeJoinly, max_calls: int, stt_model: str = ""
+) -> Iterator[InProcBroker]:
+    meeting = MeetingCfg(joinly_url=joinly.url, max_calls=max_calls, stt_model=stt_model)
+    cfg = Config(human_name="alice").replace(meeting=meeting)
     cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0)
     b = InProcBroker(tmp_home, cfg).start()
     web = b.web_client()
@@ -61,6 +64,14 @@ def broker(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
 def broker_two_calls(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
     """The same, with ``[meeting] max_calls = 2``."""
     yield from _broker(tmp_home, joinly, 2)
+
+
+@pytest.fixture
+def broker_with_model(
+    request: pytest.FixtureRequest, tmp_home: Path, joinly: FakeJoinly
+) -> Iterator[InProcBroker]:
+    """A broker with ``[meeting] stt_model`` set to the test's parameter (an empty string is unset)."""
+    yield from _broker(tmp_home, joinly, 1, request.param)
 
 
 def command(b: InProcBroker, text: str, room: str = "build") -> dict:
@@ -121,6 +132,39 @@ def try_meeting(b: InProcBroker, link: str, room: str):
 
 def seg(text: str, start: float, end: float, speaker: str | None = None, role: str = "participant") -> dict:
     return {"text": text, "start": start, "end": end, "speaker": speaker, "role": role}
+
+
+@pytest.mark.parametrize(
+    ("broker_with_model", "expected"),
+    [("", None), ("base", "base"), ("large-v3-turbo", "large-v3-turbo")],
+    indirect=["broker_with_model"],
+    ids=["unset", "base", "turbo"],
+)
+async def test_the_stt_model_reaches_joinly_as_stt_args_model_name_and_unset_leaves_it_out(
+    broker_with_model: InProcBroker, joinly: FakeJoinly, expected: str | None
+) -> None:
+    """``[meeting] stt_model`` (#617) goes to joinly in the ``joinly-settings`` header as
+    ``stt_args.model_name``, next to the hotwords, on every connection of the call. Unset, the key is
+    absent altogether, and not an empty string: joinly turns on its Hugging Face lookups for any
+    ``model_name`` that is not ``None`` (v0.5.4's whisper.py: ``local_files_only`` is off once the
+    argument is given), so even an empty one would make a default install reach out to the network.
+    Fails if the model is left out when set, sent when it is not, sent as an empty string, or sent in
+    place of the hotwords."""
+    b = broker_with_model
+    async with FakeAgent(b.home, "k1") as claude:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        command(b, f"/meeting {ZOOM}")
+        await wait_until(lambda: len(joinly.joins) == 1)
+    sent = [json.loads(s) for s in joinly.settings]
+    assert sent, "joinly was never sent a header"
+    for header in sent:
+        stt = header["stt_args"]
+        assert "claude one" in [w.lower() for w in stt["hotwords"]], "the hotwords stay"
+        if expected is None:
+            assert "model_name" not in stt, stt
+        else:
+            assert stt["model_name"] == expected, stt
+        assert set(stt) <= {"hotwords", "model_name"}, "nothing else rides along in stt_args"
 
 
 async def test_a_link_joins_with_hotwords_and_a_call_out_wakes_only_that_agent(

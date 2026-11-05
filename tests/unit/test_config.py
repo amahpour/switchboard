@@ -435,3 +435,149 @@ def test_start_stops_on_a_bad_max_calls_variable(
     monkeypatch.setenv(MAX_CALLS_ENV, "many")
     assert cli.main(["start", "--foreground", "--home", str(tmp_path)]) == cli.EXIT_ERR
     assert f"config error: {MAX_CALLS_ENV} must be a whole number from 1 to 50" in capsys.readouterr().err
+
+
+# The speech-to-text model (#617, DESIGN.md §52). The names are spelled out here, and not read from the code,
+# so that a model added to the allowlist, or a renamed variable, fails here and gets a decision.
+STT_MODEL_ENV = "SWITCHBOARD_MEETING_STT_MODEL"
+STT_MODELS = ("base", "small", "distil-large-v3", "large-v3-turbo")
+
+
+def test_the_stt_model_is_unset_by_default_and_takes_only_the_four_names() -> None:
+    """``[meeting] stt_model`` names the Whisper model joinly transcribes with. Unset, or empty, it is
+    the empty string, which leaves the choice to joinly (``base`` on a CPU, ``distil-large-v3`` on CUDA).
+    The allowlist is exactly ``base``, ``small``, ``distil-large-v3`` and ``large-v3-turbo``. Fails if a
+    default model is chosen for the operator, if one of the four is refused, or if the list grows
+    without this test being changed."""
+    assert Config().meeting.stt_model == "" and from_dict({}).meeting.stt_model == ""
+    assert from_dict({"meeting": {"stt_model": ""}}).meeting.stt_model == ""
+    for name in STT_MODELS:
+        assert from_dict({"meeting": {"stt_model": name}}).meeting.stt_model == name
+    assert switchboard.config.STT_MODELS == STT_MODELS
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "large-v3",  # a real faster-whisper name, and not one this proof of concept measured
+        "turbo",  # an alias faster-whisper has: the allowlist is the names the docs give
+        "tiny",
+        "Base",
+        "LARGE-V3-TURBO",
+        " base",
+        "base ",
+        "base\n",
+        "  ",
+        "Systran/faster-whisper-base",  # a Hugging Face repository: faster-whisper would fetch any of them
+        "someone/their-model",
+        "../models/mine",
+        "/models/mine",
+        "base;rm",
+        5,
+        True,
+        None,
+    ],
+)
+def test_an_unknown_stt_model_in_the_file_is_a_config_error_that_lists_the_names(bad: object) -> None:
+    """The name goes to joinly, and faster-whisper takes a path or a repository id as readily as a size:
+    anything else could fetch someone else's weights onto the machine that follows your calls. So an
+    unknown value stops the broker at start, and the message says which values are allowed. Fails if any
+    of these loads, or if the message does not name all four."""
+    with pytest.raises(ConfigError, match="stt_model") as e:
+        from_dict({"meeting": {"stt_model": bad}})
+    if isinstance(bad, str):  # a wrong type has its own message
+        for name in STT_MODELS:
+            assert name in str(e.value)
+    with pytest.raises(ConfigError, match="stt_model"):
+        switchboard.config.MeetingCfg(stt_model=bad)  # type: ignore[arg-type]
+
+
+def test_the_stt_model_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Kubernetes manifest or a Helm chart sets the model with no config.toml: the variable sets
+    ``[meeting] stt_model`` alone, wins over the file when both are set, and is trimmed. Empty or blank it
+    is unset and the file's value stays, as for SWITCHBOARD_MEETING_MAX_CALLS. Fails if ``load`` reads only
+    the file, if the file wins, if a blank variable resets the file's model, or if the other meeting keys
+    are touched."""
+    paths = Paths.from_home(tmp_path)
+    assert load(paths).meeting.stt_model == ""
+    monkeypatch.setenv(STT_MODEL_ENV, "large-v3-turbo")
+    assert load(paths).meeting.stt_model == "large-v3-turbo"  # no file at all
+    paths.config.write_text('[meeting]\nstt_model = "small"\n')
+    assert load(paths).meeting.stt_model == "large-v3-turbo"  # the variable wins
+    monkeypatch.setenv(STT_MODEL_ENV, " distil-large-v3\n")
+    assert load(paths).meeting.stt_model == "distil-large-v3"  # padding is cut
+    for blank in ("", "   "):
+        monkeypatch.setenv(STT_MODEL_ENV, blank)
+        assert load(paths).meeting.stt_model == "small"  # the file's again
+    monkeypatch.delenv(STT_MODEL_ENV)
+    assert load(paths).meeting.stt_model == "small"
+    paths.config.unlink()
+    assert load(paths).meeting.stt_model == ""
+    monkeypatch.setenv(STT_MODEL_ENV, "base")
+    paths.config.write_text(
+        '[meeting]\njoinly_url = "http://127.0.0.1:8010/mcp/"\ntts_voice = "af_bella"\nmax_calls = 3\n'
+    )
+    got = load(paths).meeting
+    assert (got.joinly_url, got.tts_voice, got.max_calls, got.stt_model) == (
+        "http://127.0.0.1:8010/mcp/",
+        "af_bella",
+        3,
+        "base",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "large-v3",
+        "turbo",
+        "Base",
+        "LARGE-V3-TURBO",
+        "tiny",
+        "Systran/faster-whisper-base",
+        "../x",
+        "base turbo",
+    ],
+)
+def test_a_bad_stt_model_variable_is_a_startup_error_that_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """The variable is checked against the same four names as the key, and a bad one stops the broker with
+    a message that names the variable and lists the names. It is never ignored, even with a good file under
+    it: a typo would otherwise leave the model at the file's, or at joinly's own, and the operator would
+    believe the better one was running. Fails if a bad value is dropped silently, if the error names the
+    file's key instead, or if it does not say what is allowed."""
+    paths = Paths.from_home(tmp_path)
+    paths.config.write_text('[meeting]\nstt_model = "base"\n')  # a good file: no help
+    monkeypatch.setenv(STT_MODEL_ENV, value)
+    with pytest.raises(ConfigError, match=STT_MODEL_ENV) as e:
+        load(paths)
+    assert "[meeting]" not in str(e.value) and all(name in str(e.value) for name in STT_MODELS)
+
+
+def test_a_bad_stt_model_variable_is_not_repeated_in_the_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Like the other meeting variables, the error says what is allowed and not what was given: an
+    operator who pasted the wrong thing into this variable (a token, a path) would otherwise see it
+    in the broker's log. Fails if the value is echoed."""
+    monkeypatch.setenv(STT_MODEL_ENV, "sbat_not-a-model-name")
+    with pytest.raises(ConfigError) as e:
+        load(Paths.from_home(tmp_path))
+    assert "sbat_not-a-model-name" not in str(e.value)
+
+
+def test_start_stops_on_a_bad_stt_model_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``switchboard start --foreground`` (a container's command) prints ``config error:`` with the
+    variable's name and the allowed names, and exits 1 before it opens anything. Fails if the broker starts
+    with a model the operator did not choose."""
+    from switchboard import cli
+    from switchboard.broker import daemon
+
+    monkeypatch.setattr(daemon, "run_foreground", lambda *a, **k: pytest.fail("the broker started"))
+    monkeypatch.setenv(STT_MODEL_ENV, "large-v3")
+    assert cli.main(["start", "--foreground", "--home", str(tmp_path)]) == cli.EXIT_ERR
+    err = capsys.readouterr().err
+    assert f"config error: {STT_MODEL_ENV} must be one of base, small, distil-large-v3, large-v3-turbo" in err
