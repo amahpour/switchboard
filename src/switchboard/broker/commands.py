@@ -679,6 +679,16 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         )
     if svc.store.open_meeting(room.id) is not None:
         raise CommandError("conflict", f"{room.name} is already transcribing a call. /meeting leave ends it.")
+    # the guard on the bot's memory (§52): one joinly holds about 2.7 GiB a live call, so past the limit
+    # the call is refused here, before a row is written or the link goes anywhere. The count is across
+    # every room, and the message gives only the numbers: the person may not see the rooms that hold them.
+    limit = svc.cfg.meeting.max_calls
+    if svc.store.count_open_meetings() >= limit:
+        raise CommandError(
+            "conflict",
+            f"This broker follows at most {limit} {'call' if limit == 1 else 'calls'} at once, and that many"
+            " are open. Leave one first (/meeting leave in its room).",
+        )
     label = PLATFORM_LABEL[link.platform]
     try:
         row = svc.store.insert_meeting(

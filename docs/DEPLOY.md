@@ -44,9 +44,10 @@ The image sets everything but the public URL.
 | `SWITCHBOARD_OIDC_CLIENT_ID` | (unset) | Sign in with Google: your OAuth client's ID ([Sign in with Google](#sign-in-with-google)). Nothing changes until it and the secret are both set. |
 | `SWITCHBOARD_OIDC_CLIENT_SECRET` | (unset) | That client's secret, from your platform's secrets (a Kubernetes Secret, Render's secret environment). Or `SWITCHBOARD_OIDC_CLIENT_SECRET_FILE`, a file holding it. |
 | `SWITCHBOARD_JOINLY_URL` | (unset) | The meeting bot's address, for example `http://127.0.0.1:8000/mcp/` ([A meeting bot](#a-meeting-bot), [Meetings on Kubernetes](#meetings-on-kubernetes)). It sets `[meeting] joinly_url` over `config.toml`, and an empty value leaves the file's. An `http` or `https` address, up to 300 characters, with no user name or password; a bad one stops the broker at start with a message that names the variable. |
+| `SWITCHBOARD_MEETING_MAX_CALLS` | (unset: 1) | How many calls the broker follows at once, in all rooms together: a whole number from 1 to 50. It sets `[meeting] max_calls` over `config.toml`, and an empty value leaves the file's. Each live call takes about 2.7 GiB in the meeting bot, so size the bot first ([A meeting bot](#a-meeting-bot), [Meetings on Kubernetes](#meetings-on-kubernetes)). A bad value stops the broker at start with a message that names the variable. |
 | `SWITCHBOARD_RESET_OWNER` | (unset) | Recovery: set it to a new value and restart to forget the admin, everyone else, and every password, passkey and session ([Signing in](#signing-in)). It acts once per value. |
 
-`SWITCHBOARD_PUBLIC_URL`, `SWITCHBOARD_LISTEN` and `SWITCHBOARD_PORT` are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. `SWITCHBOARD_JOINLY_URL` is the environment version of `[meeting] joinly_url`, for a manifest that has no file on the volume to write; it wins over the file too. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
+`SWITCHBOARD_PUBLIC_URL`, `SWITCHBOARD_LISTEN` and `SWITCHBOARD_PORT` are the environment versions of `switchboard start --public-url`, `--listen` and `--port`. `config.toml` can also set `public_url` and `listen`, and a flag or variable wins over it. `SWITCHBOARD_JOINLY_URL` and `SWITCHBOARD_MEETING_MAX_CALLS` are the environment versions of `[meeting] joinly_url` and `[meeting] max_calls`, for a manifest that has no file on the volume to write; they win over the file too. The container runs `switchboard start --foreground --log-stdout`: logs go to stdout, where the platform collects them, instead of `logs/broker.log`.
 
 The admin's name in the rooms is `me` unless you set it. The easiest way is **Settings > Profile** in the web UI, which renames you at once and keeps it across restarts. `SWITCHBOARD_HUMAN_NAME` in the deployment (the Kubernetes and Compose files have it) fixes the name instead, and Settings can't change it while it's set; leave it out to rename from Settings. Or set `human_name` in `config.toml` in the home, then restart the container:
 
@@ -186,6 +187,25 @@ joinly_url = "http://127.0.0.1:8010/mcp/"
 
 Restart the broker. Or set the environment variable `SWITCHBOARD_JOINLY_URL` to the same address, which is easier where there is no file to edit (a Kubernetes manifest); when both are set, the variable wins. `/meeting <link>` with no server set names this page. `/meeting` alone only says whether a call is live: it does not look for the server.
 
+**How many calls at once.** One joinly follows several calls at the same time, a session and a browser for each, but it has no limit of its own and a call is heavy. Measured with two real Zoom calls open at once: about 2.7 GiB of memory and one CPU for each live call (5.5 GiB and about 2 CPUs for the two), and more while people talk. So the broker follows **one** call at a time unless you say more, and refuses a start past the limit before anything reaches joinly. The limit is `max_calls` under `[meeting]`, from 1 to 50, or the environment variable `SWITCHBOARD_MEETING_MAX_CALLS`, which wins over the file:
+
+```toml
+[meeting]
+joinly_url = "http://127.0.0.1:8010/mcp/"
+max_calls = 2
+```
+
+Give joinly `memory ≈ 2.7 GiB × max_calls + 0.5 GiB`, and a CPU for each call. A broker told to follow more calls than the bot's memory holds would have joinly killed for going over it, and every call on it would end.
+
+| `max_calls` | Memory for joinly | CPU |
+|---|---|---|
+| 1 (the default) | 3.2 GiB, so `docker run --memory 4g` | 1 |
+| 2 | 5.9 GiB, so `--memory 6g` | 2 |
+| 3 | 8.6 GiB, so `--memory 9g` | 3 |
+| 5 | 14 GiB, so `--memory 14g` | 5 |
+
+The count is over every room and includes a call that is still joining. A call ended by `/meeting leave` stops counting once the bot has left it. A refused start says `This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).` and writes nothing. It names no room, because the person who asked may not be able to see it.
+
 **The voice.** When a person lets agents speak in a call (`/meeting voice on`), joinly says their lines with Kokoro, its text-to-speech model. The voice is a setting in the same table:
 
 ```toml
@@ -239,7 +259,28 @@ patches: [{path: joinly.yaml}]
 What the patch does, and why:
 
 - **joinly listens on the pod's localhost, and nothing else can reach it.** It has no sign-in and takes its settings from whoever connects. The containers of a pod share one network, so joinly's `127.0.0.1:8000` is the broker's too. There is no Service for it and no port is declared. The image listens on `0.0.0.0` by default, which would give every pod in the cluster its port at the pod's IP, with or without a Service, so the patch sets `JOINLY_SERVER_HOST=127.0.0.1`. No NetworkPolicy is needed (EKS enforces one only when its network policy agent is on). The broker is told where joinly is by `SWITCHBOARD_JOINLY_URL=http://127.0.0.1:8000/mcp/`.
-- **Resources: requests of 1 CPU and 2 GiB, and a 4 GiB memory limit.** That is a starting point for the default Whisper model (`base`) and one call. Measured: about 350 MiB with no call, 1.4 GiB once a call's session is open with the browser on its page, and more while people talk. Each call opens its own session with its own browser, so size it for the most calls you expect at once. There is no CPU limit, because throttling an audio pipeline makes the transcript fall behind.
+- **Resources: requests of 1 CPU and 2 GiB, and a 4 GiB memory limit, which fits one call at a time.** That is a starting point for the default Whisper model (`base`) and the broker's default, `[meeting] max_calls = 1`. Measured: about 350 MiB with no call, 1.4 GiB once a call's session is open with the browser on its page, and about 2.7 GiB and one CPU for each call that is live, more while people talk (two real calls at once took 5.5 GiB). Each call opens its own session with its own browser, so the limit has to be `memory ≈ 2.7Gi × max_calls + 0.5Gi`: `4Gi` for one call, about `6Gi` for two, `9Gi` for three. The patch leaves `max_calls` at its default of 1, so a second room's call is refused and the limit is never reached. To follow more calls, raise both together in a second patch, which `kubectl patch` or your kustomization applies after `joinly.yaml`: the variable on the broker's container, and the memory and CPU on joinly's. Raising the variable alone would let a second call run joinly out of memory, and every call on it would end. For three calls:
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    name: switchboard
+  spec:
+    template:
+      spec:
+        containers:
+          - name: switchboard
+            env:
+              - name: SWITCHBOARD_MEETING_MAX_CALLS
+                value: "3"            # a string, as every environment value is
+          - name: joinly
+            resources:
+              requests: {cpu: "3", memory: 8Gi}
+              limits: {memory: 9Gi}   # 2.7Gi × 3 + 0.5Gi, rounded up
+  ```
+
+  The node has to have the room: the pod's requests are what the scheduler reserves. There is no CPU limit, because throttling an audio pipeline makes the transcript fall behind.
 - **`/dev/shm` is a 1 GiB memory-backed volume.** Chromium is known to crash in a container's default 64 MB. joinly starts it with `--disable-dev-shm-usage`, which keeps that memory in `/tmp` instead, and a join attempt ran with a 1 MB `/dev/shm`, so joinly 0.5.4 may not need the volume. It is cheap insurance for a long call with video tiles, and counts against the memory limit only when used. `/tmp` (2 GiB) is a volume too, since the root filesystem is read-only.
 - **joinly runs as the image's own user, uid 1001, not the broker's 10001.** Its home is mode 0700 and holds the speech models (Whisper, Silero, Kokoro). As 10001, joinly starts, and every call then fails with `Silero VAD cache directory /.cache/silero does not exist`. Everything else is as tight as the broker's: a read-only root, no capabilities, no privilege escalation, the runtime's default seccomp profile. Chromium runs with `--no-sandbox`, which joinly passes itself, so it needs no capabilities. `/tmp` is the one place it writes, found by taking each candidate away in turn. PulseAudio would also write in the user's home, so the patch sets `XDG_CONFIG_HOME=/tmp`; without a writable place for it, joinly logs `PulseAudio server did not start in time` and no session opens.
 - **The probes run inside the container.** joinly answers `GET /health` with `{"status":"healthy"}`, but it listens on localhost, and a kubelet's HTTP and TCP probes go to the pod's IP. So each probe is one line of the image's own Python. A startup probe keeps the pod from being Ready until joinly has answered once. There is no readiness probe, on purpose: a pod is Ready only when every container is, so a joinly that failed one would take the broker out of its Service, and every browser and agent would get a 503. The liveness probe restarts only joinly, after three minutes of silence. A restart ends the call in progress.

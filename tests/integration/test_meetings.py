@@ -39,9 +39,8 @@ def joinly() -> Iterator[FakeJoinly]:
     server.stop()
 
 
-@pytest.fixture
-def broker(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
-    cfg = Config(human_name="alice").replace(meeting=MeetingCfg(joinly_url=joinly.url))
+def _broker(tmp_home: Path, joinly: FakeJoinly, max_calls: int) -> Iterator[InProcBroker]:
+    cfg = Config(human_name="alice").replace(meeting=MeetingCfg(joinly_url=joinly.url, max_calls=max_calls))
     cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0)
     b = InProcBroker(tmp_home, cfg).start()
     web = b.web_client()
@@ -50,6 +49,18 @@ def broker(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
     yield b
     web.close()
     b.stop()
+
+
+@pytest.fixture
+def broker(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
+    """A broker that follows one call at a time, as a default install does."""
+    yield from _broker(tmp_home, joinly, 1)
+
+
+@pytest.fixture
+def broker_two_calls(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
+    """The same, with ``[meeting] max_calls = 2``."""
+    yield from _broker(tmp_home, joinly, 2)
 
 
 def command(b: InProcBroker, text: str, room: str = "build") -> dict:
@@ -77,6 +88,35 @@ def open_calls(b: InProcBroker) -> int:
     n = con.execute("SELECT COUNT(*) FROM meetings WHERE state!='ended'").fetchone()[0]
     con.close()
     return int(n)
+
+
+def call_states(b: InProcBroker) -> list[str]:
+    """The state of every call that is not over, in the order they began."""
+    con = sqlite3.connect(b.paths.db)
+    rows = con.execute("SELECT state FROM meetings WHERE state!='ended' ORDER BY id").fetchall()
+    con.close()
+    return [r[0] for r in rows]
+
+
+def meeting_rows(b: InProcBroker) -> int:
+    """Every call ever started, over or not: a refused start must not add one."""
+    con = sqlite3.connect(b.paths.db)
+    n = con.execute("SELECT COUNT(*) FROM meetings").fetchone()[0]
+    con.close()
+    return int(n)
+
+
+def make_room(b: InProcBroker, name: str) -> str:
+    r = b.web.post("/api/rooms", json={"name": f"#{name}"}, headers=b.write_headers())  # type: ignore[attr-defined]
+    assert r.status_code == 200, r.text
+    return name
+
+
+def try_meeting(b: InProcBroker, link: str, room: str):
+    """``/meeting <link>`` in ``room``, whatever the answer is."""
+    return b.web.post(  # type: ignore[attr-defined]
+        f"/api/rooms/{room}/command", json={"text": f"/meeting {link}"}, headers=b.write_headers()
+    )
 
 
 def seg(text: str, start: float, end: float, speaker: str | None = None, role: str = "participant") -> dict:
@@ -262,3 +302,100 @@ async def test_a_join_failure_ends_the_call_and_still_leaves(
     row = con.execute("SELECT state, error FROM meetings").fetchone()
     con.close()
     assert row[0] == "ended" and row[1]
+
+
+LAYOFFS = "https://us02web.zoom.us/j/246813579?pwd=HOLDER77"
+NEXT = "https://zoom.us/j/777000111?pwd=SECOND88"
+REFUSAL = (
+    "This broker follows at most 1 call at once, and that many are open."
+    " Leave one first (/meeting leave in its room)."
+)
+
+
+async def test_past_the_limit_a_call_is_refused_and_nothing_reaches_joinly(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """With ``max_calls = 1`` (the default), a second room's ``/meeting`` is refused (409) with the
+    limit's message, before a row is written or the link goes to joinly: the bot's memory holds
+    one call (#607, DESIGN.md §52). The message is only the number: the room that holds the call
+    and both links stay out of it, because the person asking may not see that room. The first
+    call keeps going. Fails if the second call starts, a row is written for it, the refusal names
+    a room or a link, or the limit check runs before the room's own ("already transcribing") one."""
+    holder = make_room(broker, "layoffs-plan")
+    command(broker, f"/meeting {LAYOFFS}", room=holder)
+    await wait_until(lambda: len(joinly.joins) == 1 and call_states(broker) == ["live"])  # live counts
+
+    refused = try_meeting(broker, NEXT, "build")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["message"] == REFUSAL  # the whole answer: the limit, no room, no link
+    for private in ("layoffs", holder, "246813579", "HOLDER77", "777000111", "SECOND88", "zoom"):
+        assert private not in refused.text, private
+    assert meeting_rows(broker) == 1 and call_states(broker) == ["live"]  # no row for the refused one
+    assert "joining" not in notices(broker).lower()  # and nothing was announced in #build
+
+    # the room that holds the call is told "already", not the limit: its own check comes first
+    again = try_meeting(broker, NEXT, holder)
+    assert again.status_code == 409 and "already transcribing" in again.text and "at most" not in again.text
+
+    # nothing was sent to joinly for the refused links: the only join is the first call's
+    assert joinly.join_attempts == 1
+    assert [j["meeting_url"] for j in joinly.joins] == [LAYOFFS]
+
+
+async def test_leaving_the_call_frees_the_slot_for_another_room(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """``/meeting leave`` in the first room ends its call, and then the second room can start its own
+    (#607): the limit counts calls that are joining or live, not calls ever started. Fails if the count
+    never goes down (a leave leaves the slot taken) or the refused room stays refused."""
+    holder = make_room(broker, "layoffs-plan")
+    command(broker, f"/meeting {LAYOFFS}", room=holder)
+    await wait_until(lambda: len(joinly.joins) == 1)
+    assert try_meeting(broker, NEXT, "build").status_code == 409  # the slot is taken, so this test can fail
+
+    command(broker, "/meeting leave", room=holder)
+    await wait_until(lambda: joinly.leaves >= 1 and open_calls(broker) == 0)
+    out = try_meeting(broker, NEXT, "build")
+    assert out.status_code == 200, out.text
+    await wait_until(lambda: len(joinly.joins) == 2)
+    assert [j["meeting_url"] for j in joinly.joins] == [LAYOFFS, NEXT]  # the refused try never joined
+    assert open_calls(broker) == 1
+
+
+async def test_a_higher_limit_lets_that_many_rooms_start_and_refuses_the_next(
+    broker_two_calls: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """``max_calls = 2``: two rooms both start and a third is refused, in words that say 2 (#607).
+    Fails if the limit is fixed at one, or if it is not enforced past the second."""
+    b = broker_two_calls
+    plan, ops = make_room(b, "plan"), make_room(b, "ops")
+    assert try_meeting(b, LAYOFFS, "build").status_code == 200
+    assert try_meeting(b, NEXT, plan).status_code == 200
+    await wait_until(lambda: len(joinly.joins) == 2)
+    third = try_meeting(b, "https://meet.google.com/abc-defg-hij", ops)
+    assert third.status_code == 409, third.text
+    assert "at most 2 calls at once, and that many are open" in third.text
+    assert meeting_rows(b) == 2 and joinly.join_attempts == 2
+
+
+async def test_a_call_that_is_joining_counts_and_one_that_failed_to_join_stops_counting(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """A call counts from the moment it is joining, before joinly has answered (the bot's browser is
+    already starting), so a second room is refused while the first is held at the door; and when joinly
+    then refuses the join, the call is over and the slot is free again (#607). Fails if only live calls
+    count (the second room gets through while the first is joining), or if a failed join keeps its slot."""
+    other = make_room(broker, "plan")
+    joinly.hold_join = joinly.fail_join = True
+    command(broker, f"/meeting {LAYOFFS}", room="build")
+    await wait_until(lambda: joinly.join_attempts == 1 and call_states(broker) == ["joining"])
+    assert try_meeting(broker, NEXT, other).status_code == 409  # a joining call holds the slot
+
+    joinly.release_join()
+    await wait_until(lambda: open_calls(broker) == 0)  # joinly said no: the call is over
+    assert "couldn't join" in notices(broker).lower() or "could not" in notices(broker).lower()
+    joinly.fail_join = False
+    out = try_meeting(broker, NEXT, other)
+    assert out.status_code == 200, out.text
+    await wait_until(lambda: [j["meeting_url"] for j in joinly.joins] == [NEXT])
+    assert call_states(broker) and open_calls(broker) == 1

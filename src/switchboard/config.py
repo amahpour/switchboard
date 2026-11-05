@@ -160,21 +160,38 @@ def _joinly_url_ok(url: str) -> bool:
     )
 
 
+# the most calls ``[meeting] max_calls`` may allow: one joinly holds about 2.7 GiB a live call (#604), so
+# 50 is already far past one machine, and a typo like 500 is refused rather than believed
+MAX_CALLS_CEILING = 50
+
+
 @dataclass(frozen=True)
 class MeetingCfg:
-    """Where joinly listens, and the voice it speaks with (DESIGN.md §52). Empty ``joinly_url``:
-    ``/meeting`` says how to set it. Both are the operator's, from this file (the URL also from
-    ``SWITCHBOARD_JOINLY_URL``), never from a room.
+    """Where joinly listens, the voice it speaks with, and how many calls it follows at once
+    (DESIGN.md §52). Empty ``joinly_url``: ``/meeting`` says how to set it. All are the operator's,
+    from this file (the URL and the limit also from ``SWITCHBOARD_JOINLY_URL`` and
+    ``SWITCHBOARD_MEETING_MAX_CALLS``), never from a room.
 
     ``tts_voice`` is a Kokoro voice name (``bm_george``, ``af_bella``): a short word of
-    lowercase letters, digits and underscores, passed to joinly as it connects."""
+    lowercase letters, digits and underscores, passed to joinly as it connects.
+
+    ``max_calls`` is how many calls may be joining or live across all rooms, 1 to 50. It is the guard
+    on the bot's memory: one joinly takes about 2.7 GiB for each live call, so a broker with a
+    4 GiB bot follows one."""
 
     joinly_url: str = ""
     tts_voice: str = "bm_george"
+    max_calls: int = 1
 
     def __post_init__(self) -> None:
         if not VOICE_RE.fullmatch(self.tts_voice):
             raise ConfigError("[meeting] tts_voice must be a short word of a-z, 0-9 and _, like bm_george")
+        if (
+            isinstance(self.max_calls, bool)
+            or not isinstance(self.max_calls, int)
+            or not 1 <= self.max_calls <= MAX_CALLS_CEILING
+        ):
+            raise ConfigError(f"[meeting] max_calls must be an integer from 1 to {MAX_CALLS_CEILING}")
         url = self.joinly_url.strip()
         if url != self.joinly_url:
             object.__setattr__(self, "joinly_url", url)
@@ -311,12 +328,15 @@ HUMAN_NAME_ENV = "SWITCHBOARD_HUMAN_NAME"
 # broker at joinly beside it in the pod, where config.toml sits on the volume and a manifest can't
 # write it (§52, docs/DEPLOY.md). As for the human's name, a non-empty value wins over the file.
 JOINLY_URL_ENV = "SWITCHBOARD_JOINLY_URL"
+# how many calls the broker follows at once, from the environment for the same reason (§52)
+MAX_CALLS_ENV = "SWITCHBOARD_MEETING_MAX_CALLS"
 
 
 def load(paths: Paths) -> Config:
     """Read ``$SWITCHBOARD_HOME/config.toml`` if it exists; defaults otherwise. A non-empty
-    ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both, and a non-empty
-    ``SWITCHBOARD_JOINLY_URL`` sets ``[meeting] joinly_url`` over the file."""
+    ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both, a non-empty
+    ``SWITCHBOARD_JOINLY_URL`` sets ``[meeting] joinly_url`` over the file, and a non-empty
+    ``SWITCHBOARD_MEETING_MAX_CALLS`` sets ``[meeting] max_calls`` over it."""
     try:
         raw = paths.config.read_bytes()
     except FileNotFoundError:
@@ -339,4 +359,11 @@ def load(paths: Paths) -> Config:
                 f"{JOINLY_URL_ENV} must be an http(s) URL (300 characters at most, no user name or password)"
             )
         cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, joinly_url=env))
+    env = os.environ.get(MAX_CALLS_ENV, "").strip()
+    if env:
+        # ASCII digits only: "+2", "2.0", "0x2" and other scripts' digits are typos, not a count.
+        # Never ignored: a bad value would leave the limit at 1 (or the file's) with no word of why.
+        if not re.fullmatch(r"[0-9]{1,3}", env) or not 1 <= int(env) <= MAX_CALLS_CEILING:
+            raise ConfigError(f"{MAX_CALLS_ENV} must be a whole number from 1 to {MAX_CALLS_CEILING}")
+        cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, max_calls=int(env)))
     return cfg

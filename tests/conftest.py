@@ -95,8 +95,10 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     # `start`'s container settings (issue #34): a broker listens on loopback unless a test says so
     for k in ("SWITCHBOARD_PORT", "SWITCHBOARD_LISTEN", "SWITCHBOARD_PUBLIC_URL"):
         monkeypatch.delenv(k, raising=False)
-    # the meeting bot's address (#591): a machine that has it set must not give a test a meeting server
-    monkeypatch.delenv("SWITCHBOARD_JOINLY_URL", raising=False)
+    # the meeting bot's address (#591) and how many calls it follows (#607): a machine that has either set
+    # must not give a test a meeting server, or a limit the test did not choose
+    for k in ("SWITCHBOARD_JOINLY_URL", "SWITCHBOARD_MEETING_MAX_CALLS"):
+        monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SWITCHBOARD_TEST", "1")
     # Only switchboard.config's view of the login name: getpass itself stays real.
     monkeypatch.setattr(switchboard.config, "getpass", types.SimpleNamespace(getuser=lambda: TEST_HUMAN))

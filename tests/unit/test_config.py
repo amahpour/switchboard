@@ -349,3 +349,89 @@ def test_start_stops_on_a_bad_meeting_bot_variable(
     monkeypatch.setenv(JOINLY_ENV, "joinly:8000")
     assert cli.main(["start", "--foreground", "--home", str(tmp_path)]) == cli.EXIT_ERR
     assert "config error: SWITCHBOARD_JOINLY_URL must be an http(s) URL" in capsys.readouterr().err
+
+
+# the names docs/DEPLOY.md and the Kubernetes patch use, spelled out so a rename in the code fails here
+MAX_CALLS_ENV = "SWITCHBOARD_MEETING_MAX_CALLS"
+
+
+def test_max_calls_defaults_to_one_and_takes_one_to_fifty() -> None:
+    """``[meeting] max_calls`` (#607, DESIGN.md §52) guards the meeting bot's memory, which holds one
+    live call at the default size: it is 1 unless the operator says more, and 1 through 50 are all
+    accepted. Fails if the default is higher (a second call would then reach a bot sized for one)."""
+    assert Config().meeting.max_calls == 1
+    assert from_dict({}).meeting.max_calls == 1
+    for ok in (1, 2, 3, 50):
+        assert from_dict({"meeting": {"max_calls": ok}}).meeting.max_calls == ok
+
+
+@pytest.mark.parametrize("bad", [0, -1, 51, 500, True, False, 1.5, 2.0, "2", None])
+def test_a_bad_max_calls_key_is_a_config_error(bad: object) -> None:
+    """The key is an integer from 1 to 50, as ``[files] max_mb`` is checked: 0 would turn /meeting off
+    by refusing every call, a huge number defeats the guard, and a bool or a string is a typo that must
+    not be believed (``True`` is an ``int`` in Python). Fails if any of these loads."""
+    with pytest.raises(ConfigError, match="max_calls"):
+        from_dict({"meeting": {"max_calls": bad}})
+    with pytest.raises(ConfigError, match="max_calls"):
+        switchboard.config.MeetingCfg(max_calls=bad)  # type: ignore[arg-type]
+
+
+def test_max_calls_from_the_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Kubernetes manifest or a Helm chart sets the limit with no config.toml (#607): the variable
+    sets ``[meeting] max_calls`` alone, wins over the file when both are set, and is trimmed. Empty or
+    blank it is unset and the file's value stays, as for SWITCHBOARD_JOINLY_URL. Fails if ``load``
+    reads only the file, if the file wins, or if a blank variable resets the limit to 1."""
+    paths = Paths.from_home(tmp_path)
+    assert load(paths).meeting.max_calls == 1
+    monkeypatch.setenv(MAX_CALLS_ENV, "3")
+    assert load(paths).meeting.max_calls == 3  # no file at all
+    paths.config.write_text("[meeting]\nmax_calls = 2\n")
+    assert load(paths).meeting.max_calls == 3  # the variable wins
+    monkeypatch.setenv(MAX_CALLS_ENV, " 50\n")
+    assert load(paths).meeting.max_calls == 50  # padding is cut
+    for blank in ("", "   "):
+        monkeypatch.setenv(MAX_CALLS_ENV, blank)
+        assert load(paths).meeting.max_calls == 2  # the file's again
+    monkeypatch.delenv(MAX_CALLS_ENV)
+    assert load(paths).meeting.max_calls == 2
+    paths.config.unlink()
+    assert load(paths).meeting.max_calls == 1
+    # the other two meeting keys are left alone by it
+    monkeypatch.setenv(MAX_CALLS_ENV, "4")
+    paths.config.write_text('[meeting]\njoinly_url = "http://127.0.0.1:8010/mcp/"\ntts_voice = "af_bella"\n')
+    got = load(paths).meeting
+    assert (got.joinly_url, got.tts_voice, got.max_calls) == ("http://127.0.0.1:8010/mcp/", "af_bella", 4)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["0", "51", "-1", "100", "1000", "abc", "2.5", "1e1", "+2", "0x2", "1 2", "two", "٢"],
+)
+def test_a_bad_max_calls_variable_is_a_startup_error_that_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """The variable is checked as the key is (a whole number, 1 to 50) and a bad one stops the broker
+    with a message that names the variable. It is never ignored, even with a good file under it: a typo
+    would otherwise leave the limit at the file's or at 1 with no word of why. Fails if a bad value
+    is dropped silently, if "0" or "51" loads, or if the error names the file's key instead."""
+    paths = Paths.from_home(tmp_path)
+    paths.config.write_text("[meeting]\nmax_calls = 2\n")  # a good file: no help
+    monkeypatch.setenv(MAX_CALLS_ENV, value)
+    with pytest.raises(ConfigError, match=MAX_CALLS_ENV) as e:
+        load(paths)
+    assert "[meeting]" not in str(e.value)
+
+
+def test_start_stops_on_a_bad_max_calls_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``switchboard start --foreground`` (a container's command) prints ``config error:`` with the
+    variable's name and exits 1, before it opens anything. Fails if the broker starts with a limit
+    the operator did not ask for."""
+    from switchboard import cli
+    from switchboard.broker import daemon
+
+    monkeypatch.setattr(daemon, "run_foreground", lambda *a, **k: pytest.fail("the broker started"))
+    monkeypatch.setenv(MAX_CALLS_ENV, "many")
+    assert cli.main(["start", "--foreground", "--home", str(tmp_path)]) == cli.EXIT_ERR
+    assert f"config error: {MAX_CALLS_ENV} must be a whole number from 1 to 50" in capsys.readouterr().err
