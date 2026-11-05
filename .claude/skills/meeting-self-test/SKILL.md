@@ -56,7 +56,7 @@ Asking for the self-test is the person's yes to **one** Zoom meeting, made and t
 | # | Step | Passes when |
 |---|---|---|
 | 1 | `/meeting <link>` from a person | the room's call bar goes live |
-| 2 | the speaker joins and says a known sentence | a call line with at least 60% of its words reaches the room |
+| 2 | the speaker joins, says a warm-up line, then a known sentence | a call line with at least 60% of the sentence's words reaches the room (the report also says whether the warm-up was heard: on Zoom a bot's first words after it unmutes can be lost) |
 | 3 | the speaker says "Claude one, can you hear me?" | the scripted agent `claude-1` is woken by that line, addressed to it |
 | 4 | `/meeting voice on`, and `claude-1` says `@call I can hear you loud and clear` | the speaker's own transcript has at least 60% of those words |
 | 5 | `/meeting snapshot` | a stored file whose bytes are a JPEG, and its card in the room |
@@ -74,7 +74,7 @@ The report's **Seen** column is what the test saw. It never holds the link.
 | Step 2: "the speaker could not join" | the second bot could not join | the same causes, or the machine ran out of memory for two Chromiums |
 | Step 2: "no call line reached the room" | both are in the call, but the bot heard nothing | audio not joined, or guests muted on entry; check `mute_upon_entry` |
 | Step 2: a line with other words | speech-to-text got it wrong; the match is shown | a ratio just under 60% is noise; far under is a real problem |
-| Step 3: "claude-1 was not woken" | the line arrived, but did not name the agent | see what step 2 heard; the spoken-name rules are in `src/switchboard/meeting/names.py` |
+| Step 3: "claude-1 was not woken; call lines heard instead: ..." | the line arrived without the name: the start of the sentence was cut ("Can you hear me?"), or the name was misheard | the call lines shown say which; a cut start is #602, joinly's speech detection |
 | Step 4: "the speaker heard nothing from the bot" | `speak_text` ran, but nothing reached the other bot | the bot is muted or its audio is blocked in the call |
 | Step 5: "no card reached the room" or "not a JPEG" | joinly gave no picture, or a different format | the notice text beside it says which |
 | Step 6: "the bot is still listed" | the bar ended, but the bot did not leave the call | joinly's `leave_meeting` failed; look at its log by running it by hand |

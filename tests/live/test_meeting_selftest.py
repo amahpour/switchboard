@@ -99,6 +99,11 @@ LABEL = "switchboard-selftest"  # on both containers, so `docker ps --filter lab
 # What is said, and what the agent answers. None of them says "screen": a call line that addresses an agent
 # and says it takes a snapshot of its own (§52), and step 5 asks for the only one.
 SENTENCE = "The purple elephant is reading the morning newspaper"
+# Said first, and not measured. On Zoom a bot's first sentence, begun the moment it unmutes, was lost in 2
+# of 3 runs (its log: "unmute" and the speech in the same second; nothing reached the other bot), while every
+# later one arrived. A person has been unmuted a moment before they speak; this line is that moment. Whether
+# it was heard is in step 2's report, so the first-speech loss stays visible.
+WARMUP = "Testing, testing, the microphone is on."
 CALL_OUT = "Claude one, can you hear me?"
 REPLY = "I can hear you loud and clear"
 
@@ -113,6 +118,8 @@ SNAPSHOT_S = 30.0
 LEAVE_S = 30.0
 POLL_S = 1.0
 SLOW_POLL_S = 3.0  # a call to the speaker (its transcript, its participants) is not cheap
+WARMUP_HEARD_S = 20.0  # the warm-up line arrives, or the speaker goes on without it
+TAIL_S = 4.0  # after a pass, one more transcript batch (they come every ~3 s), only for what the report shows
 
 DOCKER_ENV = {
     **{
@@ -430,6 +437,13 @@ class World:
 
         # a wait for the bot to show in the list, so the sentence is not said before the audio is up
         self.bot_seen = bool(await until(listed, SEE_BOT_S, SLOW_POLL_S))
+        before = self.last_id()
+        await self.speaker.say(WARMUP)
+
+        def warm() -> bool:
+            return any(m.get("sender_kind") == "meeting" for m in self.messages(before))
+
+        warmed = bool(await until(warm, WARMUP_HEARD_S))
         cursor = self.last_id()
         said = await self.speaker.say(SENTENCE)
         seen = ""
@@ -441,6 +455,7 @@ class World:
 
         ok = await until(arrived, HEARD_S)
         note = " (the speaker was talked over)" if said.startswith("Interrupted") else ""
+        note += " (the warm-up line was heard)" if warmed else " (the warm-up line was lost)"
         if not self.bot_seen:
             note += (
                 " (the speaker never saw the bot in its participant list, so it may have spoken too early)"
@@ -453,6 +468,7 @@ class World:
     async def wake(self) -> Outcome:
         seen = ""
         spoken_at: list[float] = []  # when the speaker finished saying it
+        cursor = self.last_id()
 
         async def woken() -> bool:
             nonlocal seen
@@ -477,9 +493,19 @@ class World:
             if not waiting.done():
                 waiting.cancel()
                 await asyncio.gather(waiting, return_exceptions=True)
-        return Outcome(
-            ok, seen or "claude-1 was not woken by a call line", selftest.match_ratio(CALL_OUT, seen)
-        )
+        if not ok:
+            # What did arrive, so a miss can be told apart: a misheard name (a call line that addresses
+            # nobody), or nothing heard at all.
+            heard = " / ".join(m["text"] for m in self.messages(cursor) if m.get("sender_kind") == "meeting")
+            why = (
+                f"claude-1 was not woken; call lines heard instead: {heard}"
+                if heard
+                else ("claude-1 was not woken, and no call line reached the room")
+            )
+            return Outcome(
+                False, (seen + " | " if seen else "") + why[:400], selftest.match_ratio(CALL_OUT, seen)
+            )
+        return Outcome(ok, seen, selftest.match_ratio(CALL_OUT, seen))
 
     # -- 4: an @call line is heard by the other bot
     async def hear(self) -> Outcome:
@@ -505,6 +531,11 @@ class World:
             return selftest.matches(REPLY, heard)
 
         ok = await until(arrived, HEARD_S, SLOW_POLL_S)
+        if ok:
+            # The rest of the sentence comes in the next transcript batch (~3 s): wait for it, so the report
+            # shows what was heard, not the part that was enough to pass (which read as a clipped line).
+            await asyncio.sleep(TAIL_S)
+            heard = selftest.heard_since(await self.speaker.segments(), began)
         return Outcome(
             bool(ok), heard or "the speaker heard nothing from the bot", selftest.match_ratio(REPLY, heard)
         )
