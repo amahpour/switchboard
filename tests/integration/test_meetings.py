@@ -164,7 +164,33 @@ async def test_the_stt_model_reaches_joinly_as_stt_args_model_name_and_unset_lea
             assert "model_name" not in stt, stt
         else:
             assert stt["model_name"] == expected, stt
-        assert set(stt) <= {"hotwords", "model_name"}, "nothing else rides along in stt_args"
+        assert set(stt) <= {"hotwords", "model_name", "min_silence", "min_audio"}, "nothing else in stt_args"
+
+
+# What joinly v0.5.4's WhisperSTT.__init__ takes, read from its image. A key outside this set is refused by a
+# joinly that does not have our files, and the call fails.
+JOINLY_0_5_4_STT_ARGS = {"model_name", "compute_type", "min_audio", "min_silence", "hotwords"}
+
+
+async def test_the_header_asks_whisper_for_longer_pieces_with_keys_stock_joinly_takes(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """Every connection of a call (#620) asks joinly's Whisper to cut a piece after 0.35 s of quiet and
+    only once it holds a second of audio: its defaults (0.2 s, 0.4 s) cut a name off from the request
+    after it, and "Hi Codex," alone is misheard. And everything in ``stt_args`` is a key that joinly
+    v0.5.4's WhisperSTT takes: a joinly without our fixes would refuse any other and the call would fail,
+    which is why the pre-roll fix is a default in joinly and not a setting here. Fails if either number is
+    left out or changed, or a key stock joinly does not know is added."""
+    async with FakeAgent(broker.home, "k1") as claude:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        command(broker, f"/meeting {ZOOM}")
+        await wait_until(lambda: len(joinly.joins) == 1)
+    sent = [json.loads(s) for s in joinly.settings]
+    assert sent, "joinly was never sent a header"
+    for header in sent:
+        stt = header["stt_args"]
+        assert stt["min_silence"] == 0.35 and stt["min_audio"] == 1.0, stt
+        assert set(stt) <= JOINLY_0_5_4_STT_ARGS, set(stt) - JOINLY_0_5_4_STT_ARGS
 
 
 async def test_a_link_joins_with_hotwords_and_a_call_out_wakes_only_that_agent(

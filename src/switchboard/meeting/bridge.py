@@ -45,6 +45,14 @@ PARTICIPANT = "switchboard (transcribing)"
 # the trimmed page's own width, as a JPEG of a few hundred KB (checked against joinly v0.5.4, which takes
 # it as a BrowserMeetingProvider argument through meeting_provider_args).
 SNAPSHOT_SIZE = (1024, 576)
+# joinly's Whisper cuts the call into pieces: after `min_silence` seconds of quiet, once a piece holds
+# `min_audio` seconds. Its defaults (0.2 s and 0.4 s) cut "Hi Codex," off from the request after it, and
+# a piece that short is misheard ("High Codex"). Longer ones (#620): on the recorded call of #617, with the
+# pre-roll fix, every call-out woke the right agent (17 of 17, against 16), for about 0.14 s more delay.
+# Both are arguments of joinly v0.5.4's WhisperSTT, so a joinly without our fixes takes them (a key it did
+# not have would break every call).
+STT_MIN_SILENCE_S = 0.35
+STT_MIN_AUDIO_S = 1.0
 RESOURCE = "transcript://live/segments"
 JOIN_TIMEOUT_S = 45.0
 LEAVE_TIMEOUT_S = 5.0
@@ -241,7 +249,11 @@ class MeetingBridge:
         names = self.state.store.active_names(room_id)
         words = [w[:40] for w in hotwords(names)[:100]]
         cfg = self.state.cfg.meeting
-        stt_args: dict[str, Any] = {"hotwords": words}
+        stt_args: dict[str, Any] = {
+            "hotwords": words,
+            "min_silence": STT_MIN_SILENCE_S,
+            "min_audio": STT_MIN_AUDIO_S,
+        }
         if cfg.stt_model:
             # Only when the operator named one: a ``model_name`` that is given at all, even an empty one,
             # makes joinly look for the model on the network, where leaving it out keeps its own files (§52).
