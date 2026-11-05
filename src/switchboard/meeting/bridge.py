@@ -354,6 +354,9 @@ class MeetingBridge:
             return
         members = self.state.store.active_names(room_id)
         found = match(text, members)
+        if found.echo:
+            return  # the transcriber writing out its hint list: nobody said it (#616)
+        text = found.text  # an echoed lead-in is taken off, and only the real words are posted (#602)
         mentions = [found.name] if found.outcome == "one" and found.name else []
         if mentions and says_screen(text) and not ending:
             # "Claude, look at my screen": the picture is posted first, so the agent this line wakes

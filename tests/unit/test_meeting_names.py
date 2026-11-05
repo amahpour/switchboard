@@ -8,7 +8,7 @@ member's name starts with it, and asks which one when two do.
 
 from __future__ import annotations
 
-from switchboard.meeting.names import hotwords, match, spoken_forms
+from switchboard.meeting.names import hotwords, is_echo, match, spoken_forms
 
 
 def test_spoken_forms_of_a_numbered_name() -> None:
@@ -107,3 +107,88 @@ def test_an_echo_that_ends_in_no_name_or_ends_the_line_still_wakes_nobody() -> N
     assert match("Codex Cursor switchboard can you hear me", room).outcome == "none"
     assert match("Claude Claude one Codex Cursor switchboard", room).outcome == "none"
     assert match("Claude-1 Claude switchboard Claude one", ["claude-1"]).outcome == "none"
+
+
+def test_a_line_of_only_hint_words_with_the_bots_own_word_is_an_echo_at_any_length() -> None:
+    """#616, from a real call: Whisper wrote "Claude switchboard", an agent's name and the bot's own.
+    Two hint words are under the run of three, so "Claude" at the start counted as an address and the
+    line woke claude-1 with nothing to act on. A line made only of hint words, with the bot's word
+    (switchboard, transcribing) and a member's name in it, is an echo whatever its length. Fails if
+    that line addresses anyone, or if it is not flagged as echo (the bridge does not post it)."""
+    room = ["claude-1", "codex-1"]
+    for heard in (
+        "Claude switchboard",
+        "switchboard Claude",
+        "Claude, switchboard.",
+        "Codex transcribing",
+        "Claude one switchboard",
+        "claude-1 Switchboard",
+    ):
+        assert is_echo(heard, room), heard
+        got = match(heard, room)
+        assert got.outcome == "none" and got.echo and got.text == "", heard
+    assert match("Claude switchboard", ["claude-1"]).outcome == "none"  # a single member too
+
+
+def test_a_longer_echo_is_still_an_echo_and_says_so() -> None:
+    """The three-word rule already addressed nobody; now such a line is flagged too, so it is not
+    posted (#616: "Claude Claude one switchboard" was still posted in the room as a call line). The
+    hint list in full, a run of names that names two members, and the bot's word with one name.
+    Fails if a line that wakes nobody is still shown."""
+    room = ["claude-1", "codex-1", "cursor-1", "devin-1"]
+    for heard in (
+        "Claude Claude one switchboard",
+        "Claude Claude one Codex Cursor Devin switchboard",
+        "One Codex Claude",
+        "Codex switchboard transcribing",
+        "Claude Codex Cursor",
+    ):
+        assert is_echo(heard, room), heard
+        got = match(heard, room)
+        assert got.outcome == "none" and got.echo and got.text == "", heard
+
+
+def test_names_alone_and_real_speech_that_says_the_bots_word_are_not_echo() -> None:
+    """The new rule is narrow. A name with no bot word is a call-out ("Claude one" wakes claude-1,
+    alone or with a request), and the bot's word on its own, or inside a sentence, is speech.
+    Fails if "Claude one" is dropped, or a sentence that mentions switchboard is."""
+    room = ["claude-1", "codex-1"]
+    for heard, who in (
+        ("Claude one", "claude-1"),
+        ("Claude one, can you hear me?", "claude-1"),
+        ("Claude", "claude-1"),
+        ("hey Codex", "codex-1"),
+        ("Claude, did switchboard write that down?", "claude-1"),
+    ):
+        got = match(heard, room)
+        assert not got.echo and got.name == who and got.text == heard, heard
+        assert not is_echo(heard, room), heard
+    for heard in ("switchboard", "Switchboard transcribing", "we use switchboard for this", "okay"):
+        got = match(heard, room)
+        assert not got.echo and got.outcome == "none" and got.text == heard, heard
+
+
+def test_an_echoed_lead_in_is_taken_out_of_the_line_and_the_real_words_are_kept() -> None:
+    """#602 woke the agent behind an echoed lead-in; the room should also read only what was said.
+    "Claude-1 Claude switchboard Claude one can you hear me?" is shown as "Claude one can you hear
+    me?": the name that is the address stays, as said, and the rest of the run goes. A run that ends
+    in no name leaves just the real words. Real words before the run stay, and are not an address.
+    Fails if the echoed words are still in the text, or the line is dropped, or loses its agent."""
+    got = match("Claude-1 Claude switchboard Claude one can you hear me?", ["claude-1", "codex-1"])
+    assert got.name == "claude-1" and not got.echo
+    assert got.text == "Claude one can you hear me?"
+    assert match("Claude-1 Claude switchboard Claude one, can you hear me?", ["claude-1"]).text == (
+        "Claude one, can you hear me?"
+    )
+    room = ["claude-1", "codex-1", "cursor-1"]
+    nameless = match("Codex Cursor switchboard, can you hear me", room)
+    assert nameless.outcome == "none" and not nameless.echo and nameless.text == "can you hear me"
+    greeting = match("Okay Claude-1 Claude switchboard Claude one can you hear me", room)
+    assert greeting.name == "claude-1" and greeting.text == "Okay Claude one can you hear me"
+    trailing = match("Hey Claude, what time is it? Claude Claude one Codex switchboard", room)
+    assert (
+        trailing.outcome == "none" and not trailing.echo and trailing.text == "Hey Claude, what time is it?"
+    )
+    # two Claudes: the name right before the words decides, as it did
+    two = match("Claude-1 switchboard Claude can you hear me?", ["claude-1", "claude-2"])
+    assert two.outcome == "ambiguous" and two.heard == "Claude" and two.text == "Claude can you hear me?"
