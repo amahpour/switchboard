@@ -72,7 +72,7 @@ docker compose -f deploy/compose/compose.yaml logs switchboard    # the admin's 
 
 ### Kubernetes (EKS, GKE, AKS)
 
-[deploy/kubernetes/switchboard.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/switchboard.yaml) is a Service, a one-replica StatefulSet with a 20 GiB volume claim, and an Ingress. Edit `sb.example.com` (the Ingress host, its TLS secret and `SWITCHBOARD_PUBLIC_URL`) first. The claim is 20 GiB because a room's files sit on the same volume as the database. The Ingress sets `nginx.ingress.kubernetes.io/proxy-body-size: "26m"`, one megabyte over the default 25 MB file cap, so an upload is not cut off by the proxy. A proxy in front of the broker needs a body limit at least `[files] max_mb`. Caddy, in the Compose example, has no default body limit.
+[deploy/kubernetes/switchboard.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/switchboard.yaml) is a Service, a one-replica StatefulSet with a 20 GiB volume claim, and an Ingress. Edit `sb.example.com` (the Ingress host, its TLS secret and `SWITCHBOARD_PUBLIC_URL`) first. Where you deploy with Helm or Argo CD, use [the Helm chart](#helm) instead: it renders the same objects from values. The claim is 20 GiB because a room's files sit on the same volume as the database. The Ingress sets `nginx.ingress.kubernetes.io/proxy-body-size: "26m"`, one megabyte over the default 25 MB file cap, so an upload is not cut off by the proxy. A proxy in front of the broker needs a body limit at least `[files] max_mb`. Caddy, in the Compose example, has no default body limit.
 
 ```bash
 kubectl create namespace switchboard
@@ -89,8 +89,168 @@ What the manifest relies on:
 - **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. A proxy that cuts the wait sooner doesn't lose a message: the listener just starts its next wait at once. Another controller has its own setting for this, such as a load balancer's idle timeout.
 - **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 600 seconds for Claude Code with its current plugin and 280 for Codex (`wait_cap_s` in `config.toml` changes that, but never past what each harness's own client allows, [USAGE.md](USAGE.md) has the limits, and a route's timeout has to stay above whatever it is set to), and a route that cuts sooner fails it with `upstream request timeout`. A cut listener round is harmless (the listener posts again at once), but a short limit makes every round a cut. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
-- **Following live calls adds a second container to the pod:** a patch of this StatefulSet in [deploy/kubernetes/meetings/](https://github.com/amahpour/switchboard/tree/main/deploy/kubernetes/meetings/), which leaves this manifest as it is. See [Meetings on Kubernetes](#meetings-on-kubernetes).
+- **Following live calls adds a second container to the pod:** a patch of this StatefulSet in [deploy/kubernetes/meetings/](https://github.com/amahpour/switchboard/tree/main/deploy/kubernetes/meetings/), which leaves this manifest as it is. See [Meetings on Kubernetes](#meetings-on-kubernetes), or `meetings.enabled` in [the Helm chart](#helm).
 
+### Helm
+
+[deploy/helm/switchboard/](https://github.com/amahpour/switchboard/tree/main/deploy/helm/switchboard/) is a chart that renders what [the Kubernetes manifest](#kubernetes-eks-gke-aks) and [the meeting bot's patches](#meetings-on-kubernetes) do: a Service, a StatefulSet with one replica and a ReadWriteOnce claim, and an Ingress, with the meeting bot as an option. It is the same hardening, with the numbers as values. CI renders it with Helm 4.3.1 and compares the result with the manifests, so the two can't drift.
+
+There is no chart repository yet. Install from a checkout of the release you want (its tag carries the chart, and the chart installs the image of that release), or let Argo CD read it from git ([below](#helm-and-argo-cd)).
+
+Keep your values in a file, so an upgrade can read the same one:
+
+```yaml
+# switchboard-values.yaml
+publicUrl: https://sb.example.com
+humanName: alice
+```
+
+```bash
+git clone --depth 1 --branch vX.Y.Z https://github.com/amahpour/switchboard.git    # X.Y.Z: the release (CHANGELOG)
+helm install switchboard switchboard/deploy/helm/switchboard \
+  --namespace switchboard --create-namespace -f switchboard-values.yaml
+kubectl -n switchboard logs switchboard-0    # the admin's one-time password
+```
+
+`helm install` prints the same two steps as notes. The release is called `switchboard` so that the pod is `switchboard-0`, as every command on this page has it; another release name `foo` gives `foo-switchboard-0` (`nameOverride` and `fullnameOverride` change that). `publicUrl` is required: the chart does not render without it, and says what to set. It must be an origin, with no path.
+
+**The values that matter** (all of them are in [values.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/helm/switchboard/values.yaml), with comments; a key the chart doesn't know is refused, so a typo fails instead of being ignored):
+
+| Value | Default | What it does |
+|---|---|---|
+| `publicUrl` | (required) | `SWITCHBOARD_PUBLIC_URL`: the `https://` address browsers use. |
+| `humanName` | (unset) | `SWITCHBOARD_HUMAN_NAME`: the admin's name in the rooms. Unset, Settings can rename the admin. |
+| `image.repository`, `image.tag`, `image.pullPolicy` | the published image, the chart's `appVersion`, `IfNotPresent` | The broker's image. An empty tag is the release the chart belongs to, never `latest`. |
+| `persistence.size`, `persistence.storageClass` | `20Gi`, the cluster's default | The claim. Use block storage (EBS, a persistent disk, Azure Disk), never NFS or EFS. |
+| `ingress.enabled`, `ingress.className`, `ingress.host`, `ingress.tls.enabled`, `ingress.tls.secretName` | on, `nginx`, `publicUrl`'s host, on, `switchboard-tls` | The Ingress. The broker answers to the public URL's host alone, so that is the default host. |
+| `ingress.annotations` | the three ingress-nginx ones | `proxy-read-timeout` and `proxy-send-timeout` of 960 s, which keep an agent's 15-minute wait open, and `proxy-body-size` of `26m`, one megabyte over `[files] max_mb` ([why](#kubernetes-eks-gke-aks)). |
+| `resources` | 100m and 192Mi requested, 512Mi limit | The broker container's. |
+| `meetings.enabled` | `false` | Adds joinly beside the broker ([below](#meetings-with-helm)). |
+| `meetings.maxCalls` | `1` | How many calls may run at once, 1 to 50. It sizes joinly. |
+| `meetings.image.tag` | `v0.5.4` | joinly's release. |
+| `meetings.zoomFix.configMap` | (none) | A ConfigMap with the fixed `zoom.py`, mounted over joinly's copy. |
+
+There is no replica count: one broker, one volume, as the manifest has it ([How it fits together](#how-it-fits-together)). The pods are selected by `app.kubernetes.io/name`, `instance` and `component: broker`. The component is there so that a second kind of pod can be added later without taking over the broker's selector, which a StatefulSet can't change once it exists.
+
+**What the chart changes from the manifest**, and nothing else (a test compares the two):
+
+- **Labels.** Helm's standard set on every object (`helm.sh/chart`, `app.kubernetes.io/instance`, `version`, `managed-by`) and the `component: broker` label. The manifest has only `app.kubernetes.io/name`.
+- **The pull policy is written out** (`IfNotPresent`, Kubernetes' own default for a release tag), so a private mirror can set it.
+- **The claim template states its `apiVersion` and `kind`.** The API server writes them into the stored object anyway, and a tool that compares the chart's output with it (Argo CD) would otherwise see a difference.
+- **The Ingress host is taken from `publicUrl`** unless `ingress.host` says otherwise. It must be the same host: the broker answers `421` to any other.
+- **With the meeting bot on,** joinly's memory and CPU come from `meetings.maxCalls` instead of the patch's fixed 1 CPU, 2 GiB requested and 4 GiB limit ([below](#meetings-with-helm)), the broker also gets `SWITCHBOARD_MEETING_MAX_CALLS`, and the broker's container is listed first (kustomize puts joinly first).
+- **Everything else is the manifest's:** `enableServiceLinks: false` ([#595](https://github.com/amahpour/switchboard/issues/595)), uid 10001 from the start with a read-only root and no capabilities, the probes, the stop-then-start replacement, and the Ingress annotations. [What the manifest relies on](#kubernetes-eks-gke-aks) applies to the chart as it is.
+
+**cert-manager.** Values you give are merged into the defaults, so adding an annotation keeps the three ingress-nginx ones:
+
+```yaml
+publicUrl: https://sb.example.com
+ingress:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+```
+
+**Another ingress controller.** A value set to `null` is dropped, so move to your controller by nulling the ingress-nginx annotations and adding its own settings. Its idle or request timeout must outlast 15 minutes, as [the Kubernetes section](#kubernetes-eks-gke-aks) says, and its body limit must be at least `[files] max_mb`.
+
+```yaml
+ingress:
+  className: my-controller
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: null
+    nginx.ingress.kubernetes.io/proxy-send-timeout: null
+    nginx.ingress.kubernetes.io/proxy-body-size: null
+    # your controller's own, for the timeout and the body size
+```
+
+With a Gateway API route, set `ingress.enabled: false` and write the `HTTPRoute` yourself, with the timeouts that section gives. It sends to the Service named like the pod without its `-0` (`switchboard` for the release above), port 7419.
+
+**Upgrading.** Clone the new release's tag the same way and run `helm upgrade` with the same values file, or point Argo CD at the new tag. The image follows the chart, so there is nothing to edit; set `image.tag` only to stay on another release ([Upgrading](#upgrading) has what a release can change). The pod is replaced stop-then-start, and the broker migrates its database on start.
+
+```bash
+git clone --depth 1 --branch vX.Y.Z https://github.com/amahpour/switchboard.git switchboard-vX.Y.Z
+helm upgrade switchboard switchboard-vX.Y.Z/deploy/helm/switchboard --namespace switchboard -f switchboard-values.yaml
+```
+
+Two things to know:
+
+- **The volume's size and class are fixed at install.** A StatefulSet's `volumeClaimTemplates` can't change once it exists, so `helm upgrade --set persistence.size=50Gi` fails with `spec.volumeClaimTemplates: Invalid value` (seen on a test cluster). To grow the volume, edit the claim (`kubectl -n switchboard edit pvc data-switchboard-0`, if the storage class allows expansion) and leave the value as it was.
+- **`helm uninstall` keeps the volume.** The StatefulSet makes the claim, not the chart, and Kubernetes leaves it when the StatefulSet goes. That protects your rooms, and it means a reinstall under the same name finds the old data. Delete the claim yourself to remove them (`kubectl -n switchboard delete pvc data-switchboard-0`).
+
+#### Meetings with Helm
+
+`meetings.enabled: true` (or `--set meetings.enabled=true`) adds joinly as a second container of the broker's pod, with what [Meetings on Kubernetes](#meetings-on-kubernetes) describes: it listens on the pod's `127.0.0.1` only with no Service and no declared port, runs as uid 1001 with a read-only root and no capabilities, is probed from inside, has no readiness probe (so it can't take the broker out of its Service), and the pod's `default-container` is the broker, so `kubectl logs switchboard-0` still reads the broker's log. The chart renders all of that unchanged. The first start pulls a 3.7 GB image, so the pod waits in `ContainerCreating` for a few minutes, and the node needs a way out to the internet.
+
+`meetings.maxCalls` is how many calls may be joining or live at once, and it sets two things from one number. The broker gets `SWITCHBOARD_MEETING_MAX_CALLS`, its `[meeting] max_calls`, which refuses a call past it (a broker release without that setting ignores the variable). And joinly's resources are worked out from it, because one joinly follows every call, each call holds about 2.7 GiB and 1 CPU while it is live (measured, [#604](https://github.com/amahpour/switchboard/issues/604)), and a joinly past its memory limit is killed:
+
+> request = 2.7 GiB × `maxCalls` + 0.5 GiB, rounded up to a multiple of 0.5 GiB. Limit = request + 0.5 GiB. CPU request = `maxCalls`. No CPU limit, because throttling an audio pipeline makes the transcript fall behind.
+
+| `maxCalls` | joinly memory requested | memory limit | CPU requested |
+|---|---|---|---|
+| 1 | 3.5 GiB | 4 GiB | 1 |
+| 2 | 6 GiB | 6.5 GiB | 2 |
+| 3 | 9 GiB | 9.5 GiB | 3 |
+| 5 | 14 GiB | 14.5 GiB | 5 |
+| 10 | 27.5 GiB | 28 GiB | 10 |
+
+That is on top of the broker's. The pod must fit on one node, so the table is also a node-size guide. Changing `maxCalls` replaces the pod, which ends any call in progress: do it when no call is on. The chart refuses a value outside 1 to 50, as the broker would at start.
+
+**Speaker names on Zoom.** Make the ConfigMap first, from the pinned file ([the commands](#meetings-on-kubernetes)), then name it in your values. The pod can't start until the ConfigMap exists, so with Argo CD create it outside the chart or in an earlier sync wave.
+
+```bash
+kubectl -n switchboard create configmap joinly-zoom-fix --from-file=zoom.py=./zoom.py
+```
+
+```yaml
+# switchboard-values.yaml, then helm upgrade
+meetings:
+  enabled: true
+  maxCalls: 2
+  zoomFix:
+    configMap: joinly-zoom-fix
+```
+
+Remove `zoomFix` once a joinly release has the fix, and move `meetings.image.tag` to that release.
+
+**Check that it works** with the commands under [Meetings on Kubernetes](#meetings-on-kubernetes): `kubectl -n switchboard get pod switchboard-0` says `2/2`, the broker's container reaches `http://127.0.0.1:8000/health`, and a throwaway pod gets `Connection refused` at the pod's IP on port 8000.
+
+#### Helm and Argo CD
+
+An Argo CD `Application` can read the chart straight from this repository. Pin `targetRevision` to a release tag, so that an upgrade happens when you change it: the tag carries the chart, and the chart installs that release's image.
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: switchboard
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/amahpour/switchboard.git
+    targetRevision: vX.Y.Z              # the release's tag (CHANGELOG)
+    path: deploy/helm/switchboard
+    helm:
+      releaseName: switchboard          # makes the pod switchboard-0
+      values: |
+        publicUrl: https://sb.example.com
+        humanName: alice
+        meetings:
+          enabled: true
+          maxCalls: 2
+          zoomFix:
+            configMap: joinly-zoom-fix  # made beforehand; drop these two lines to skip the Zoom fix
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: switchboard
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+```
+
+- **Keep a hand-made patch out of it.** A `kubectl patch` of the StatefulSet is reverted at the next sync. The chart is the way to add the meeting bot under Argo CD, and a plain-manifest user uses kustomize ([Meetings on Kubernetes](#meetings-on-kubernetes)).
+- **The sync is stop-then-start.** The StatefulSet replaces its one pod by stopping it first, so a sync that changes the pod is a short outage, and a call in progress ends.
+- **The volume is the StatefulSet's, not the chart's.** The claim holds your rooms and is made by the StatefulSet, so it is not in the chart's output. Take a snapshot ([Backups](#backups)) before you delete an `Application` or turn on pruning for the first time, and check afterward that `kubectl -n switchboard get pvc` still lists the claim.
+- **The admin's one-time password** is in the pod's log, as above (`kubectl -n switchboard logs switchboard-0`), or in the log view of Argo CD's UI.
 ### Render
 
 [deploy/render/render.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/render/render.yaml) is a Blueprint: a web service from the published image, with a 20 GB disk at `/data`. Put it in a repository of yours as `render.yaml` (or point the Blueprint at its path), then choose **New > Blueprint**. Render asks for `SWITCHBOARD_PUBLIC_URL`: the service's `https://<name>.onrender.com` address, or your custom domain. The admin's one-time password is in the service's **Logs** tab. Files a room holds count against that disk, and against its snapshots.
@@ -146,7 +306,7 @@ The broker reaches out to Google (`accounts.google.com`, `oauth2.googleapis.com`
 
 ## Upgrading
 
-1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md) lists them), and deploy.
+1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md) lists them), and deploy. With [the Helm chart](#helm), move to the new release's tag and run `helm upgrade`: the chart installs the image of its own release.
 2. The platform stops the old container and starts the new one. The broker shuts down cleanly on SIGTERM (`docker stop`) and exits 0.
 3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, `switchboard.db.v3.bak` for the people release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md), [§32.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The admin, people, passwords and passkeys are in the database, so an upgrade keeps them. The email sign-in release (schema 12, [DESIGN.md §39](DESIGN.md#39-identity-by-email-192)) keeps everyone signing in as before until you set their email in **Admin > People**; then they sign in with the email instead of their name, so tell them first.
 
@@ -240,7 +400,7 @@ Drop the mount once a joinly release has the fix, and move to that release.
 
 ### Meetings on Kubernetes
 
-[deploy/kubernetes/meetings/joinly.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly.yaml) adds joinly as a second container in the broker's pod. It is a patch of the StatefulSet, in a folder of its own, so that [the manifest above](#kubernetes-eks-gke-aks) stays as it is for anyone who doesn't follow calls, and so that `kubectl apply -f deploy/kubernetes/` never takes it for a second StatefulSet. Apply it once, after the manifest:
+[deploy/kubernetes/meetings/joinly.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly.yaml) adds joinly as a second container in the broker's pod. It is a patch of the StatefulSet, in a folder of its own, so that [the manifest above](#kubernetes-eks-gke-aks) stays as it is for anyone who doesn't follow calls, and so that `kubectl apply -f deploy/kubernetes/` never takes it for a second StatefulSet. Apply it once, after the manifest (with [the Helm chart](#meetings-with-helm), `meetings.enabled=true` does all of this, and sizes joinly by the number of calls):
 
 ```bash
 kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly.yaml

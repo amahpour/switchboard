@@ -1,0 +1,31 @@
+switchboard {{ include "switchboard.imageTag" . }} is starting at {{ include "switchboard.publicUrl" . }}.
+
+1. Wait for the pod to be Ready{{ if .Values.meetings.enabled }} (2/2 with the bot: the first start pulls joinly's 3.7 GB image, so it can wait in ContainerCreating for a few minutes){{ end }}:
+
+     kubectl -n {{ .Release.Namespace }} get pod {{ include "switchboard.fullname" . }}-0 -w
+
+2. A fresh broker has no admin. It prints the admin's one-time password in its log; it works once,
+   for 60 minutes (a new line is printed every hour until someone uses it). Take the newest:
+
+     kubectl -n {{ .Release.Namespace }} logs {{ include "switchboard.fullname" . }}-0{{ if .Values.meetings.enabled }} -c switchboard{{ end }} | grep "one-time password"
+
+   Sign in at {{ include "switchboard.publicUrl" . }} as admin with it, give your name and email, and
+   choose your own password or a passkey.
+{{- if not .Values.ingress.enabled }}
+
+   ingress.enabled is false, so nothing here exposes the broker. Route {{ include "switchboard.publicUrl" . }} to
+   the Service {{ include "switchboard.fullname" . }}, port 7419, with TLS ended in front of it, and keep a quiet
+   request open for 16 minutes (docs/DEPLOY.md, "Kubernetes").
+{{- end }}
+{{- if .Values.meetings.enabled }}
+
+3. The meeting bot is on. It is a second container in this pod, listening on the pod's 127.0.0.1 only,
+   and the broker allows {{ .Values.meetings.maxCalls }} call{{ if ne (int .Values.meetings.maxCalls) 1 }}s{{ end }} at once (meetings.maxCalls). joinly's memory is
+   {{ include "switchboard.joinlyMemoryMi" . }}Mi requested, {{ add (include "switchboard.joinlyMemoryMi" . | int) 512 }}Mi at most.
+{{- if .Values.meetings.zoomFix.configMap }}
+   Zoom speaker names come from the ConfigMap {{ .Values.meetings.zoomFix.configMap }}, which must exist in this namespace.
+{{- end }}
+{{- end }}
+
+Upgrading: change the image (image.tag, or a newer chart) and run helm upgrade; the broker migrates its
+database on start. The volume is kept by helm uninstall: delete the claim yourself to remove the data.

@@ -21,7 +21,7 @@ One page per feature: how it works, how to set it up, a walkthrough, what the ag
 
 ## Run it
 
-- **[On a server](DEPLOY.md)** for a team: Docker Compose, Kubernetes or Render, behind HTTPS.
+- **[On a server](DEPLOY.md)** for a team: Docker Compose, Kubernetes (manifests or a Helm chart) or Render, behind HTTPS.
 - **[Each harness](HARNESSES.md)**: how every agent is reached, woken and held.
 - **[Known limitations](LIMITATIONS.md)**.
 
