@@ -159,7 +159,6 @@ def test_the_patch_tells_how_to_use_a_gpu_in_comments_and_asks_for_none_itself()
         "nodeSelector",
         "tolerations",
         "SWITCHBOARD_MEETING_STT_MODEL",
-        "HF_HOME",
     ):
         assert needle in text, f"the GPU comment lost {needle}"
     for line in text.splitlines():
@@ -189,7 +188,7 @@ def test_the_deploy_guide_and_the_meetings_guide_name_the_model_the_gpu_and_the_
         "meetings.sttModel",
         "nvidia.com/gpu",
         f"{image}-cuda",
-        "HF_HOME=/models",
+        "/home/app/.cache/huggingface",
         *STT_MODELS,
     )
     for needle in needles:

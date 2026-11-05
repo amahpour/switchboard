@@ -135,14 +135,6 @@ spec:
             # and no session opens. /tmp is writable, and is the only folder joinly needs besides it.
             - name: XDG_CONFIG_HOME
               value: /tmp
-            {{- if .Values.meetings.sttModel }}
-            # Where Hugging Face's library keeps what it downloads (HF_HOME/hub). By default that is the image
-            # user's home, which a read-only root leaves unwritable, so a model that is named goes into the
-            # folder below instead. Set only then: with it set, joinly looks for its models there alone,
-            # and not in the copy its image holds.
-            - name: HF_HOME
-              value: /models
-            {{- end }}
           # No `ports`: joinly is not offered to the cluster, not even by name.
           securityContext:
             # The image runs as `app` (uid 1001). Its home is mode 0700 and holds the speech models
@@ -168,11 +160,12 @@ spec:
             - name: joinly-shm
               mountPath: /dev/shm
             {{- if .Values.meetings.sttModel }}
-            # A model that is named is downloaded on the first call, into HF_HOME (above), which has to be
-            # writable on a read-only root. It is an emptyDir, so it is gone with the pod and the next pod
-            # downloads the model again.
+            # A model that is named is downloaded on the first call, into the Hugging Face cache in the image
+            # user's home, which a read-only root leaves unwritable. This folder is that cache, and it hides
+            # the image's own copy of its default model: only a model that is named is then used. It is gone
+            # with the pod (an emptyDir), so the next pod downloads it again.
             - name: joinly-models
-              mountPath: /models
+              mountPath: /home/app/.cache/huggingface
             {{- end }}
             {{- with .Values.meetings.zoomFix.configMap }}
             # joinly 0.5.4 gives no speaker name on Zoom (joinly-ai/joinly#187): the fixed file goes over the

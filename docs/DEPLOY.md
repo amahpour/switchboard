@@ -233,7 +233,7 @@ meetings:
 - **The image is the CUDA build of the same release.** `v0.5.4` becomes `v0.5.4-cuda`, so moving `meetings.image.tag` to a newer release moves the GPU image with it. A tag that already ends in `-cuda` is kept as it is.
 - **joinly asks for one GPU, in its limits.** The count is fixed at one: one joinly serves every call. Memory and CPU are what `maxCalls` works out, as without a GPU. The cluster needs the NVIDIA device plugin (or the GPU Operator), or the pod stays `Pending`.
 - **The pod goes where the GPU is.** The broker shares the pod, so `nodeSelector` and `tolerations` are written into it as you give them, and only while `gpu.enabled` is true. Quote a label value that looks like a boolean (`"true"`), as above, or Kubernetes refuses it.
-- **A model you name gets a folder to be downloaded into:** a 4 GiB `emptyDir` at `/models`, with `HF_HOME=/models` on joinly, because joinly's root is read-only and its own cache is in the image user's home. It is gone when the pod is replaced, which every `helm upgrade` that changes the pod does, so the next pod downloads the model again and the first call waits for it (about 1.6 GB for `large-v3-turbo`). With `sttModel` unset, nothing is mounted and `HF_HOME` is not set, joinly uses the model in its image, and nothing is downloaded. A cache that outlives the pod is not in the chart: the claims of a StatefulSet are fixed once it exists, and the broker's volume is the broker's. The chart needs the bot on (`meetings.enabled`) for either value to render anything.
+- **A model you name gets a folder to be downloaded into:** a 4 GiB `emptyDir` at `/home/app/.cache/huggingface`, because joinly's root is read-only. It is gone when the pod is replaced, which every `helm upgrade` that changes the pod does, so the next pod downloads the model again and the first call waits for it (about 1.6 GB for `large-v3-turbo`). With `sttModel` unset, nothing is mounted, joinly uses the model in its image, and nothing is downloaded. A cache that outlives the pod is not in the chart: the claims of a StatefulSet are fixed once it exists, and the broker's volume is the broker's. The chart needs the bot on (`meetings.enabled`) for either value to render anything.
 - **The sizes are for `base`.** The table above was measured with it, and a bigger model adds to each call ([Memory](#the-speech-model-and-a-gpu)). The chart does not add it for you.
 - **Checked by tests that render the chart,** not on a GPU node: the image, the limit, the selector, the tolerations, the variable and the folder, and the schema refusing a model the broker would refuse.
 
@@ -457,24 +457,24 @@ stt_model = "large-v3-turbo"
 
 **The model is downloaded on the first call.** With no model named, joinly loads the one inside its image and does not look for it on the network. Once a model is named, joinly 0.5.4 turns that off (`local_files_only` is false in its `whisper.py`) and fetches the model from Hugging Face. `large-v3-turbo` is about 1.6 GB. joinly loads the model when a call's session opens, before the bot joins, so the first call waits for the download. Fetch it first, and keep it:
 
-- **`HF_HOME` says where the cache is.** Hugging Face's library keeps what it downloads in `HF_HOME`, which in joinly's image is a folder in the image user's home, beside the model the image was built with. Point `HF_HOME` at a volume (`/models` below) and the download survives a new container.
-- **Fetch it ahead** with joinly's own library. This only downloads: it does not load the model, so it needs no GPU and little memory. It runs as root, because a new volume belongs to root and joinly runs as uid 1001. joinly then only reads the model, which is all it needs once the files are there.
+- **The cache is `/home/app/.cache/huggingface` in the container.** Put a volume there, so that the download survives a new container. A folder you mount yourself has to belong to uid 1001, the user joinly runs as; a volume Docker makes does.
+- **Fetch it ahead** with joinly's own library. This only downloads: it does not load the model, so it needs no GPU and little memory.
 
   ```bash
-  docker run --rm --user root -e HF_HOME=/models -v joinly-models:/models \
+  docker run --rm -v joinly-models:/home/app/.cache/huggingface \
     --entrypoint /app/.venv/bin/python ghcr.io/joinly-ai/joinly:v0.5.4 \
     -c "from faster_whisper.utils import download_model; print(download_model('large-v3-turbo'))"
   ```
 
-- **Then start joinly with the same variable and volume**, and the first call finds the model there:
+- **Then start joinly with the same volume**, and the first call finds the model there:
 
   ```bash
   docker run -d --name joinly -p 127.0.0.1:8010:8000 \
-    -e HF_HOME=/models -v joinly-models:/models \
+    -v joinly-models:/home/app/.cache/huggingface \
     ghcr.io/joinly-ai/joinly:v0.5.4
   ```
 
-- **Set `HF_HOME` only for a model you name.** With it set, joinly looks for its models there alone, so with no model named it would not find the one inside its image. A model you name but did not fetch is downloaded on the first call, and that fails to write into a volume that belongs to root. (A folder you mount yourself has to be readable by uid 1001, and writable if joinly is to download into it.)
+- **Mount a cache only for a model you name.** A volume at that path takes the place of the image's own copy of its model, and with no model named joinly uses local files only.
 - **Naming `base` goes to the network too.** What counts is that a name is given, not which one. With `stt_model = "base"`, joinly looks at Hugging Face for the model on every call, because it loads the model for each call. With the files already in the image, nothing is downloaded, and if Hugging Face can't be reached it uses the copy it has (checked with the network off). To stop the look once the model is in place, set `HF_HUB_OFFLINE=1` on joinly.
 
 **Memory.** Every size on this page was measured with `base`. joinly loads a model for each call, so each live call holds its own copy. In the proof of concept a process holding `large-v3-turbo` peaked at about 1.7 GB, against 0.5 GB for `base`. A live call with a big model was not measured, so give joinly more than the tables say, and watch the first call. On a GPU the weights sit in the card's memory, one copy for each live call, and that was not measured at all.
@@ -483,11 +483,11 @@ stt_model = "large-v3-turbo"
 
 ```bash
 docker run -d --name joinly --gpus 1 -p 127.0.0.1:8010:8000 \
-  -e HF_HOME=/models -v joinly-models:/models \
+  -v joinly-gpu-models:/home/app/.cache/huggingface \
   ghcr.io/joinly-ai/joinly:v0.5.4-cuda
 ```
 
-Fetch the model first, as above. The files are the same for both images, so the same volume does for either (the fetch needs no GPU).
+Fetch the model first as above, with the `-cuda` image and this volume (that needs no `--gpus`). Give this image a volume of its own: it holds a different model than the CPU one.
 
 **With the Compose example,** the `meetings-gpu` profile is the same bot on a GPU. It is a second service, `joinly-gpu`, so its address is different, and you turn on one profile, not both. It reserves one NVIDIA GPU (`deploy.resources.reservations.devices`) and publishes no port, like the CPU bot. In the `.env` file:
 
@@ -497,7 +497,7 @@ SWITCHBOARD_JOINLY_URL=http://joinly-gpu:8000/mcp/
 SWITCHBOARD_MEETING_STT_MODEL=large-v3-turbo
 ```
 
-To keep the model between containers, or for the Zoom fix, uncomment the lines under `joinly-gpu` (`environment` and `volumes`), declare `joinly-models:` under the top-level `volumes:`, and fetch the model into that volume first: Compose names it `switchboard_joinly-models`, so use that name in the fetch command above. [Kubernetes](#meetings-on-kubernetes) and [Helm](#meetings-with-helm) have their own way.
+To keep the model between containers, or for the Zoom fix, uncomment the `volumes` lines under `joinly-gpu`. [Kubernetes](#meetings-on-kubernetes) and [Helm](#meetings-with-helm) have their own way.
 
 ### Meetings on Kubernetes
 
@@ -586,21 +586,18 @@ spec:
               value: large-v3-turbo
         - name: joinly
           image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release, built for CUDA
-          env:
-            - name: HF_HOME          # where the model is downloaded; only with a model you name
-              value: /models
           resources:
             limits:
               nvidia.com/gpu: 1
           volumeMounts:
-            - {name: joinly-models, mountPath: /models}
+            - {name: joinly-models, mountPath: /home/app/.cache/huggingface}
       volumes:
         - name: joinly-models
           emptyDir: {sizeLimit: 4Gi}
 ```
 
 - **The cluster needs the NVIDIA device plugin** (or the GPU Operator), so that a node offers `nvidia.com/gpu`. Without one the pod stays `Pending`. An extended resource like this is asked for in the limits only, and the scheduler takes the request from it. The broker shares the pod, so the pod goes where the GPU is: the label and the taint are your nodes', and the patch writes them as you give them. The image is about 6 GB, so the first pull on a GPU node takes minutes.
-- **The model gets a folder to be downloaded into.** The root is read-only, and joinly's cache is in the image user's home, so a model you name has nowhere to go without it: the folder is `HF_HOME`. The folder is an `emptyDir`: it is gone when the pod is replaced, and the next pod downloads the model again, with the first call waiting for it. Leave the model name, `HF_HOME` and the volume all out for the model inside the image, which needs no download. A cache that outlives the pod is not in the patch: a StatefulSet's claims are fixed once it exists ([Helm's upgrade notes](#helm) say how that bites), and the broker's volume is the broker's.
+- **The model gets a folder to be downloaded into.** The root is read-only, and joinly's cache is in the image user's home, so a model you name has nowhere to go without it. The folder is an `emptyDir`: it is gone when the pod is replaced, and the next pod downloads the model again, with the first call waiting for it. Leave the volume out, and the variable too, for the model inside the image, which needs no download. A cache that outlives the pod is not in the patch: a StatefulSet's claims are fixed once it exists ([Helm's upgrade notes](#helm) say how that bites), and the broker's volume is the broker's.
 - **The memory and CPU are the ones above.** The sizes were measured with `base`. A bigger model adds to each call ([Memory](#the-speech-model-and-a-gpu)), so raise the limit.
 - **Checked:** the YAML above was applied after `joinly.yaml` with `kubectl patch --local` and gave the CUDA image, the GPU limit, the unchanged 4 GiB memory limit, the broker's variable and the cache folder. It has not run on a GPU node.
 
