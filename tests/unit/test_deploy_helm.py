@@ -131,6 +131,32 @@ def test_max_calls_is_bounded_as_the_broker_bounds_it() -> None:
     assert f"name: {env or 'SWITCHBOARD_MEETING_MAX_CALLS'}\n" in template
 
 
+def test_the_model_value_is_bounded_as_the_broker_bounds_it() -> None:
+    """The schema refuses a ``meetings.sttModel`` the broker would refuse at start (``[meeting]
+    stt_model``, #617), so a bad name fails ``helm template`` and not a crash-looping pod. Its names are the
+    broker's own, and the chart hands the value to the broker as the variable that sets it. Fails if the
+    schema's list drifts from ``config.STT_MODELS`` (the empty string, "joinly's own choice", aside), or the
+    variable is renamed on one side."""
+    from switchboard import config
+
+    bound = _yaml(CHART / "values.schema.json")["properties"]["meetings"]["properties"]["sttModel"]
+    assert bound["enum"] == ["", *config.STT_MODELS]
+    template = (CHART / "templates" / "statefulset.yaml").read_text()
+    assert f"name: {config.STT_MODEL_ENV}\n" in template
+    assert _yaml(CHART / "values.yaml")["meetings"]["sttModel"] == "", "unset leaves the model to joinly"
+
+
+def test_the_gpu_values_default_to_off_and_to_no_scheduling_rules() -> None:
+    """The bot runs on a CPU, anywhere, unless ``meetings.gpu.enabled`` says otherwise: the defaults ask for
+    no GPU and set no node selector and no tolerations, and the schema knows exactly those three keys (the
+    count is fixed at one GPU). Fails if the GPU becomes the default or a key is added without the schema."""
+    gpu = _yaml(CHART / "values.yaml")["meetings"]["gpu"]
+    assert gpu == {"enabled": False, "nodeSelector": {}, "tolerations": []}
+    schema = _yaml(CHART / "values.schema.json")["properties"]["meetings"]["properties"]["gpu"]
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"enabled", "nodeSelector", "tolerations"}
+
+
 # ------------------------------------------------------------------ rendering
 class Rendered:
     """A ``helm template`` run: the documents by kind, or why it failed."""
@@ -345,6 +371,150 @@ def test_max_calls_sizes_joinly_and_tells_the_broker(render: Callable[..., Rende
     anchors = {1: (3584, 4096), 3: (9216, 9728)}
     if calls in anchors:
         assert (_mi(resources["requests"]["memory"]), _mi(resources["limits"]["memory"])) == anchors[calls]
+
+
+CACHE = "/home/app/.cache/huggingface"  # joinly's image user's Hugging Face cache, as docs/DEPLOY.md names it
+
+
+@needs_helm
+def test_the_gpu_variant_asks_for_the_cuda_image_and_one_gpu(render: Callable[..., Rendered]) -> None:
+    """``meetings.gpu.enabled`` (#617) is the same bot on a GPU: joinly's ``-cuda`` build of the same release,
+    and one ``nvidia.com/gpu`` in its limits (an extended resource goes in the limits, and the scheduler
+    takes the request from it). The memory and CPU are the ones ``maxCalls`` works out, as they are with no
+    GPU, and the broker's container asks for none. Fails if the image stays the CPU one, the GPU is asked
+    for by the wrong container or in the wrong place, or the GPU changes the sizes."""
+    values = _yaml(CHART / "values.yaml")["meetings"]["image"]
+    cpu = render(*SET_BASE, "meetings.enabled=true", "meetings.maxCalls=2")
+    gpu = render(*SET_BASE, "meetings.enabled=true", "meetings.maxCalls=2", "meetings.gpu.enabled=true")
+    assert gpu.returncode == 0, gpu.stderr
+    assert cpu.container("joinly")["image"] == f"{values['repository']}:{values['tag']}"
+    assert gpu.container("joinly")["image"] == f"{values['repository']}:{values['tag']}-cuda"
+    limits = gpu.container("joinly")["resources"]["limits"]
+    assert limits["nvidia.com/gpu"] == 1
+    assert "nvidia.com/gpu" not in gpu.container("joinly")["resources"]["requests"]
+    assert {k: v for k, v in limits.items() if k != "nvidia.com/gpu"} == cpu.container("joinly")["resources"][
+        "limits"
+    ]
+    assert (
+        gpu.container("joinly")["resources"]["requests"] == cpu.container("joinly")["resources"]["requests"]
+    )
+    assert "nvidia.com/gpu" not in json.dumps(gpu.container("switchboard")), "the broker needs no GPU"
+    assert "nvidia.com/gpu" not in json.dumps(cpu.docs), "a CPU install asks for no GPU"
+    # the cuda image sets JOINLY_DEVICE itself (verified on the image's config), so the chart adds nothing
+    assert {e["name"] for e in gpu.container("joinly")["env"]} == {
+        e["name"] for e in cpu.container("joinly")["env"]
+    }
+    assert "nodeSelector" not in gpu.pod and "tolerations" not in gpu.pod, "no rule unless one is given"
+
+
+@needs_helm
+def test_gpu_node_selector_and_tolerations_reach_the_pod_only_with_the_gpu_on(
+    render: Callable[..., Rendered],
+) -> None:
+    """A GPU node usually carries a taint and a label, so ``meetings.gpu.nodeSelector`` and ``tolerations``
+    are written into the pod as given (the broker shares that pod, so it goes where the GPU is). With the GPU
+    off they are not rendered: they are not the CPU install's rules. Fails if either is dropped, changed,
+    or applied to a pod that has no GPU."""
+    selector = {"nvidia.com/gpu.present": "true"}
+    tolerations = [{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}]
+    gpu = {"enabled": True, "nodeSelector": selector, "tolerations": tolerations}
+    on = render(values={"publicUrl": PUBLIC_URL, "meetings": {"enabled": True, "gpu": gpu}})
+    assert on.returncode == 0, on.stderr
+    assert on.pod["nodeSelector"] == selector and on.pod["tolerations"] == tolerations
+    off = render(
+        values={"publicUrl": PUBLIC_URL, "meetings": {"enabled": True, "gpu": {**gpu, "enabled": False}}}
+    )
+    assert off.returncode == 0, off.stderr
+    assert "nodeSelector" not in off.pod and "tolerations" not in off.pod
+    assert "nvidia.com/gpu" not in json.dumps(off.docs)
+    no_bot = render(values={"publicUrl": PUBLIC_URL, "meetings": {"gpu": gpu}})
+    assert no_bot.returncode == 0, no_bot.stderr
+    assert "nodeSelector" not in no_bot.pod and "nvidia.com/gpu" not in json.dumps(no_bot.docs)
+
+
+@needs_helm
+def test_the_cuda_tag_is_not_added_twice_and_the_gpu_needs_the_bot(render: Callable[..., Rendered]) -> None:
+    """``meetings.image.tag`` follows joinly's releases, and the GPU image is that tag with ``-cuda``, so a
+    newer release is one value. A tag that already says ``-cuda`` is left alone, GPU on or off. Without the
+    bot the GPU value renders nothing. Fails if a tag becomes ``v0.5.4-cuda-cuda``."""
+    named = render(*SET_BASE, "meetings.enabled=true", "meetings.image.tag=v0.5.4-cuda")
+    assert named.container("joinly")["image"].endswith(":v0.5.4-cuda")
+    both = render(
+        *SET_BASE, "meetings.enabled=true", "meetings.image.tag=v0.5.4-cuda", "meetings.gpu.enabled=true"
+    )
+    assert both.container("joinly")["image"].endswith(":v0.5.4-cuda")
+    later = render(
+        *SET_BASE, "meetings.enabled=true", "meetings.image.tag=v0.6.0", "meetings.gpu.enabled=true"
+    )
+    assert later.container("joinly")["image"].endswith(":v0.6.0-cuda")
+    off = render(*SET_BASE, "meetings.gpu.enabled=true")
+    assert off.returncode == 0, off.stderr
+    assert "joinly" not in json.dumps(off.docs) and "nvidia.com/gpu" not in json.dumps(off.docs)
+
+
+@needs_helm
+@pytest.mark.parametrize("model", ["base", "small", "distil-large-v3", "large-v3-turbo"])
+def test_the_model_reaches_the_broker_and_gets_joinly_a_place_to_keep_it(
+    render: Callable[..., Rendered], model: str
+) -> None:
+    """``meetings.sttModel`` (#617) is the broker's ``SWITCHBOARD_MEETING_STT_MODEL``, and joinly then
+    downloads the model on the first call. joinly's root is read-only and its image keeps its models in the
+    user's home, so the chart gives it a writable folder at the Hugging Face cache (an emptyDir, sized for the
+    largest model with room, gone when the pod is). Fails if the broker is not told, if the download has
+    nowhere to go, or if the folder is mounted into the broker or made read-only."""
+    chart = render(*SET_BASE, "meetings.enabled=true", f"meetings.sttModel={model}")
+    assert chart.returncode == 0, chart.stderr
+    env = {e["name"]: e["value"] for e in chart.container("switchboard")["env"]}
+    assert env["SWITCHBOARD_MEETING_STT_MODEL"] == model
+    (mount,) = [m for m in chart.container("joinly")["volumeMounts"] if m["mountPath"] == CACHE]
+    assert "readOnly" not in mount and "subPath" not in mount
+    (volume,) = [v for v in chart.pod["volumes"] if v["name"] == mount["name"]]
+    assert volume["emptyDir"]["sizeLimit"] == "4Gi" and "medium" not in volume["emptyDir"]
+    assert all(m["mountPath"] != CACHE for m in chart.container("switchboard")["volumeMounts"])
+    assert chart.container("joinly")["securityContext"]["readOnlyRootFilesystem"] is True, (
+        "the root stays read-only"
+    )
+
+
+@needs_helm
+def test_no_model_leaves_the_bot_as_it_was_and_the_model_needs_the_bot(
+    render: Callable[..., Rendered],
+) -> None:
+    """Unset (the default, or an empty string), joinly keeps its own model from its image: no variable on
+    the broker and no cache folder, so a default install is the one the patch describes. A model with the
+    bot off renders nothing. Fails if an empty value is rendered as ``SWITCHBOARD_MEETING_STT_MODEL=`` or
+    mounts a folder that would hide the image's own copy of its model."""
+    for chart in (
+        render(*SET_BASE, "meetings.enabled=true"),
+        render(*SET_BASE, "meetings.enabled=true", "meetings.sttModel="),
+        render(*SET_BASE, "meetings.enabled=true", "meetings.gpu.enabled=true"),
+    ):
+        assert chart.returncode == 0, chart.stderr  # a refused render has no documents to find nothing in
+        assert "SWITCHBOARD_MEETING_STT_MODEL" not in json.dumps(chart.docs)
+        assert CACHE not in json.dumps(chart.docs)
+    off = render(*SET_BASE, "meetings.sttModel=large-v3-turbo")
+    assert off.returncode == 0, off.stderr
+    assert "SWITCHBOARD_MEETING_STT_MODEL" not in json.dumps(off.docs) and CACHE not in json.dumps(off.docs)
+
+
+@needs_helm
+def test_a_gpu_value_or_model_the_chart_does_not_know_is_refused(render: Callable[..., Rendered]) -> None:
+    """A model outside the broker's list, a second GPU (the count is fixed at one), a flag that is not a
+    boolean and tolerations that are not a list fail at ``helm template``, naming the key. Fails if the
+    schema lets any of them through to a pod that would crash-loop or sit Pending."""
+    on = (*SET_BASE, "meetings.enabled=true")
+    for bad in (
+        "meetings.sttModel=large-v3",
+        "meetings.sttModel=turbo",
+        "meetings.sttModel=Systran/faster-whisper-base",
+        "meetings.gpu.count=2",
+        "meetings.gpu.enabled=maybe",
+        "meetings.gpu.tolerations=gpu",
+        "meetings.gpu.nodeSelector=gpu",
+    ):
+        refused = render(*on, bad)
+        key = bad.split("=")[0].rsplit(".", 1)[-1]
+        assert refused.returncode != 0 and key in refused.stderr, bad
 
 
 @needs_helm

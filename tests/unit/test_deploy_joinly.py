@@ -143,3 +143,55 @@ def test_the_patch_pins_the_image_the_docs_run_and_the_base_has_no_joinly() -> N
     lines = (DEPLOY / "switchboard.yaml").read_text().splitlines()
     code = [line for line in lines if not line.lstrip().startswith("#")]  # a comment may point to the patch
     assert "joinly" not in "\n".join(code).lower()
+
+
+def test_the_patch_tells_how_to_use_a_gpu_in_comments_and_asks_for_none_itself() -> None:
+    """The patch is the CPU bot, and a GPU is a few lines an operator adds (#617, the Helm chart's
+    ``meetings.gpu`` and Compose's ``meetings-gpu`` are the same). They sit in the file as comments, so the
+    patch applies on a cluster with no GPU node: nothing in it may ask for one. And the comment names the
+    ``-cuda`` build of the release the patch pins, so a bump of the pin makes this fail until the comment
+    follows. Fails if a GPU request, a selector or a toleration becomes live, or the comment drifts."""
+    text = PATCH.read_text()
+    image = _container(_pod(PATCH), "joinly")["image"]
+    for needle in (
+        f"{image}-cuda",
+        "nvidia.com/gpu",
+        "nodeSelector",
+        "tolerations",
+        "SWITCHBOARD_MEETING_STT_MODEL",
+    ):
+        assert needle in text, f"the GPU comment lost {needle}"
+    for line in text.splitlines():
+        if "-cuda" in line or "nvidia.com/gpu" in line:
+            assert line.lstrip().startswith("#"), f"live GPU line: {line}"
+    pod = _pod(PATCH)
+    assert "nodeSelector" not in pod and "tolerations" not in pod
+    live = yaml.safe_dump(_container(pod, "joinly"))
+    assert "nvidia" not in live and "-cuda" not in live
+    assert "SWITCHBOARD_MEETING_STT_MODEL" not in {e["name"] for e in _container(pod, "switchboard")["env"]}
+
+
+def test_the_deploy_guide_and_the_meetings_guide_name_the_model_the_gpu_and_the_cache() -> None:
+    """A setting nobody can find is not one: DEPLOY.md has to give the variable, the four models, the GPU
+    profile and value, the ``-cuda`` image and the cache folder the download goes to, and the meetings
+    guide's setup has to name the setting and send the reader there (#617). Fails if the guide stops
+    naming one of them, or the guide's folder drifts from the chart's."""
+    from switchboard.config import STT_MODEL_ENV, STT_MODELS
+
+    deploy = (ROOT / "docs" / "DEPLOY.md").read_text()
+    image = _container(_pod(PATCH), "joinly")["image"]
+    needles = (
+        STT_MODEL_ENV,
+        "[meeting]\nstt_model",
+        "meetings-gpu",
+        "meetings.gpu.enabled",
+        "meetings.sttModel",
+        "nvidia.com/gpu",
+        f"{image}-cuda",
+        "/home/app/.cache/huggingface",
+        *STT_MODELS,
+    )
+    for needle in needles:
+        assert needle in deploy, f"DEPLOY.md does not mention {needle}"
+    guide = (ROOT / "docs" / "guide" / "meetings.md").read_text()
+    assert "stt_model" in guide and STT_MODEL_ENV in guide and "large-v3-turbo" in guide

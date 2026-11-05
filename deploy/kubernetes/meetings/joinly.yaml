@@ -36,6 +36,40 @@
 # The pod needs about 1 CPU and 2 GiB more than the broker alone, and the node needs a way out to
 # the internet: Zoom, Meet and Teams are reached from joinly's browser. The image is 3.7 GB, so its
 # first pull on a node takes minutes, and the pod waits in ContainerCreating until it is done.
+#
+# On an NVIDIA GPU, and with a better speech model (#617; the Helm chart's meetings.gpu.enabled and
+# meetings.sttModel do all of this). This patch is the CPU bot, with Whisper's `base`, and asks for no GPU,
+# so that it applies on a cluster that has none. For a GPU, apply a second patch after this one. The cluster
+# needs the NVIDIA device plugin, so that a node offers `nvidia.com/gpu`. The CUDA image is about 6 GB.
+# large-v3-turbo is the model worth a GPU; the broker is told with SWITCHBOARD_MEETING_STT_MODEL, and joinly
+# downloads it (about 1.6 GB) on the first call, into a folder the patch adds, because the root is read-only.
+# That folder is gone with the pod. docs/DEPLOY.md, "Meetings on Kubernetes", has the reasons and the numbers.
+#
+#   apiVersion: apps/v1
+#   kind: StatefulSet
+#   metadata:
+#     name: switchboard
+#   spec:
+#     template:
+#       spec:
+#         nodeSelector: {nvidia.com/gpu.present: "true"}   # your GPU nodes' label
+#         tolerations:                                     # and their taint, if they have one
+#           - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
+#         containers:
+#           - name: switchboard
+#             env:
+#               - name: SWITCHBOARD_MEETING_STT_MODEL
+#                 value: large-v3-turbo
+#           - name: joinly
+#             image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release, built for CUDA
+#             resources:
+#               limits:
+#                 nvidia.com/gpu: 1
+#             volumeMounts:
+#               - {name: joinly-models, mountPath: /home/app/.cache/huggingface}
+#         volumes:
+#           - name: joinly-models
+#             emptyDir: {sizeLimit: 4Gi}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:

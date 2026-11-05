@@ -67,10 +67,25 @@ meetings:
   # 0.5 GiB (its limit is 0.5 GiB above that), and its CPU request is maxCalls. No CPU limit:
   # throttling an audio pipeline makes the transcript fall behind.
   maxCalls: 1
+  # The speech-to-text model, the broker's [meeting] stt_model (SWITCHBOARD_MEETING_STT_MODEL): base, small,
+  # distil-large-v3 or large-v3-turbo; anything else fails at helm template, as it would stop the broker.
+  # Empty leaves it to joinly: base on a CPU, distil-large-v3 on a GPU, both inside the image. A name makes
+  # joinly download the model on the first call (large-v3-turbo is about 1.6 GB), into a folder the chart
+  # adds for it, which is gone with the pod: the next pod downloads again. DEPLOY.md, "Meetings with Helm".
+  sttModel: ""
   image:
     repository: ghcr.io/joinly-ai/joinly
     tag: v0.5.4          # a release, not :latest; the tag DEPLOY.md's `docker run` uses
     pullPolicy: IfNotPresent
+  # Run joinly on one NVIDIA GPU: the image becomes tag + "-cuda" (a tag that already ends so is kept), and
+  # joinly's limits get nvidia.com/gpu: 1. The cluster needs the NVIDIA device plugin, so that a node offers
+  # that resource. The broker shares the pod, so the pod goes where the GPU is: nodeSelector and tolerations
+  # are written into it as given, and only while this is on. The count is fixed at one: one joinly serves
+  # every call. Large-v3-turbo is the model worth a GPU (DEPLOY.md, "Meetings with Helm").
+  gpu:
+    enabled: false
+    nodeSelector: {}     # for example {nvidia.com/gpu.present: "true"}
+    tolerations: []      # for example [{key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}]
   # joinly 0.5.4 gives no speaker name on Zoom (joinly-ai/joinly#187). Name a ConfigMap that holds
   # the fixed zoom.py as the key `zoom.py`, and it is mounted read-only over the image's copy.
   # Make it first: the pod can't start without it. DEPLOY.md, "Speaker names on Zoom". Empty mounts nothing.

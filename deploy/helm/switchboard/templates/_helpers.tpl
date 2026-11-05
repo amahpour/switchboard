@@ -72,3 +72,17 @@ multiple of 0.5 GiB. Whole numbers only, in tenths of a Mi: 2.7 GiB is 27648 of 
 {{- $tenths := add (mul 27648 (int .Values.meetings.maxCalls)) 5120 -}}
 {{- mul (div (add $tenths 5119) 5120) 512 -}}
 {{- end }}
+
+{{/*
+joinly's image tag. With the GPU on it is the release's -cuda build (v0.5.4 becomes v0.5.4-cuda, as joinly
+publishes it), and a tag that already says -cuda is left as it is, so a values file that names the cuda tag
+outright keeps working with the GPU on or off.
+*/}}
+{{- define "switchboard.joinlyTag" -}}
+{{- $tag := .Values.meetings.image.tag -}}
+{{- if and .Values.meetings.gpu.enabled (not (hasSuffix "-cuda" $tag)) -}}
+{{- printf "%s-cuda" $tag -}}
+{{- else -}}
+{{- $tag -}}
+{{- end -}}
+{{- end }}
