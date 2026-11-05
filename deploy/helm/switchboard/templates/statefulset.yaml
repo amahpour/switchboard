@@ -176,6 +176,14 @@ spec:
               subPath: zoom.py
               readOnly: true
             {{- end }}
+            {{- with .Values.meetings.prerollFix.configMap }}
+            # joinly 0.5.4 starts each piece of speech partway into its first word (#620): the fixed
+            # transcription controller goes over the image's copy, read-only, the same way.
+            - name: joinly-preroll-fix
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py
+              subPath: transcription.py
+              readOnly: true
+            {{- end }}
           # joinly has GET /health ({"status":"healthy"}). It listens on 127.0.0.1 only, and a kubelet's
           # httpGet and tcpSocket probes go to the pod's IP, so the probe runs inside the container, with
           # the image's Python (there is no curl).
@@ -227,6 +235,11 @@ spec:
         {{- end }}
         {{- with .Values.meetings.zoomFix.configMap }}
         - name: joinly-zoom-fix
+          configMap:
+            name: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.meetings.prerollFix.configMap }}
+        - name: joinly-preroll-fix
           configMap:
             name: {{ . | quote }}
         {{- end }}

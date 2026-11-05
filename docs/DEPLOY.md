@@ -130,6 +130,7 @@ kubectl -n switchboard logs switchboard-0    # the admin's one-time password
 | `meetings.maxCalls` | `1` | How many calls may run at once, 1 to 50. It sizes joinly. |
 | `meetings.image.tag` | `v0.5.4` | joinly's release. |
 | `meetings.zoomFix.configMap` | (none) | A ConfigMap with the fixed `zoom.py`, mounted over joinly's copy. |
+| `meetings.prerollFix.configMap` | (none) | A ConfigMap with the fixed `transcription.py`, mounted over joinly's copy ([why](#a-meeting-bot)). |
 | `meetings.sttModel` | (unset) | `SWITCHBOARD_MEETING_STT_MODEL`: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Anything else fails at `helm template`. A name also gives joinly a folder to download into ([below](#meetings-with-helm)). |
 | `meetings.gpu.enabled` | `false` | joinly on one NVIDIA GPU: its `-cuda` image and `nvidia.com/gpu: 1` ([below](#meetings-with-helm)). |
 | `meetings.gpu.nodeSelector`, `meetings.gpu.tolerations` | `{}`, `[]` | Written into the pod while the GPU is on. |
@@ -215,6 +216,18 @@ meetings:
 
 Remove `zoomFix` once a joinly release has the fix, and move `meetings.image.tag` to that release.
 
+**First words of a call line.** joinly 0.5.4 clips the first word of what it hears, and the fix is a second file ([why, and what it did](#a-meeting-bot)). Make its ConfigMap first, from the pinned file ([the commands](#meetings-on-kubernetes)), then name it. The pod can't start until it exists. joinly needs no setting for it, and the broker sends none, so a chart without `prerollFix` works as before.
+
+```yaml
+# switchboard-values.yaml, then helm upgrade
+meetings:
+  enabled: true
+  prerollFix:
+    configMap: joinly-preroll-fix
+```
+
+Remove `prerollFix` once a joinly release has the fix too. It is independent of `zoomFix`: use either or both.
+
 **A GPU and a better model.** `meetings.gpu.enabled` runs joinly on one NVIDIA GPU, and `meetings.sttModel` names the model ([why `large-v3-turbo`](#the-speech-model-and-a-gpu)):
 
 ```yaml
@@ -265,6 +278,8 @@ spec:
           maxCalls: 2
           zoomFix:
             configMap: joinly-zoom-fix  # made beforehand; drop these two lines to skip the Zoom fix
+          prerollFix:
+            configMap: joinly-preroll-fix  # made beforehand too; drop these two lines to skip the first-word fix
   destination:
     server: https://kubernetes.default.svc
     namespace: switchboard
@@ -411,7 +426,7 @@ COMPOSE_PROFILES=meetings
 SWITCHBOARD_JOINLY_URL=http://joinly:8000/mcp/
 ```
 
-Without those two lines the bot doesn't start, and `/meeting` says how to set it up. For a GPU, the `meetings-gpu` profile does the same with a CUDA build ([below](#the-speech-model-and-a-gpu)). Each live call takes about 2.7 GiB and 1 CPU on that machine. For Zoom speaker names, download the fix below to `deploy/compose/zoom.py`, then uncomment the two `volumes` lines under `joinly` in `compose.yaml` (a missing file would stop the bot).
+Without those two lines the bot doesn't start, and `/meeting` says how to set it up. For a GPU, the `meetings-gpu` profile does the same with a CUDA build ([below](#the-speech-model-and-a-gpu)). Each live call takes about 2.7 GiB and 1 CPU on that machine. For Zoom speaker names, download the Zoom fix below to `deploy/compose/zoom.py`, and for the first-word fix download that one to `deploy/compose/transcription.py`. Then uncomment the line of each under `volumes:` in `joinly` in `compose.yaml` (a missing file would stop the bot).
 
 **Speaker names on Zoom.** joinly 0.5.4 gives no speaker name on Zoom, so every line there shows as `call`; Meet and Teams are unaffected. Its browser has no graphics acceleration, so Zoom shows one tile that follows whoever is talking, and joinly's lookup doesn't know that tile. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187); until a joinly release has it, the names come through only with that file patched into the image. Its `zoom.py` differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only:
 
@@ -423,6 +438,17 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
 ```
 
 Drop the mount once a joinly release has the fix, and move to that release.
+
+**First words of a call line.** joinly 0.5.4 starts each piece of speech partway into its first word. Its voice detection flags speech late (a median of 73 ms after it begins in a recorded call, and up to 378 ms) and keeps only 32 ms from before that, so the speech-to-text model gets the first word cut off. The room's agent names are its hotwords, and a clipped "Our" or "Hey" can come out as "Claude". A line then wakes Claude for nothing, or the name that opens a call-out is lost ([#620](https://github.com/amahpour/switchboard/issues/620)). The fix keeps 0.3 s of the audio from before each utterance and passes it on with it. It adds no waiting, since that audio has already arrived. It is a change to joinly's transcription controller, on [our fork](https://github.com/amahpour/joinly/commit/1fe384d9deba32f38fabd5bfc77fc5975adef6a7), and we are offering it to joinly. On the recorded call of [#617](https://github.com/amahpour/switchboard/issues/617) (24 lines, 17 of them call-outs, `base` on four CPUs, joinly's own code run over the recording), it took the right agent from 14.8 of 17 call-outs to 16, the false wakes from 1 to 0, and the words wrong from 8.8% to 3.5%, for about 0.01 s more delay. Its file differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only, in the same `docker run` as the Zoom file (use either or both):
+
+```bash
+curl -fsSLo transcription.py https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py
+docker run -d --name joinly -p 127.0.0.1:8010:8000 \
+  -v "$PWD/transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro" \
+  ghcr.io/joinly-ai/joinly:v0.5.4
+```
+
+switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` argument has the fix as its default (0 turns it off), and a setting that stock joinly doesn't know would break every call for anyone who hasn't mounted the file. So a joinly without the file works as before, and with it the fix is on. As with the Zoom fix, drop the mount once a joinly release has it, and move to that release.
 
 ### The speech model, and a GPU
 
@@ -566,6 +592,27 @@ configMapGenerator:
 
 Drop the patch once a joinly release has the fix. To take the whole sidecar out, apply the manifest again without the patch (`kubectl patch` can't remove a container it added).
 
+**First words of a call line.** The fix for the clipped first word ([#620](https://github.com/amahpour/switchboard/issues/620), described [above](#a-meeting-bot)) is a third patch, [joinly-preroll-fix.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-preroll-fix.yaml), for the same reason as the Zoom one: the pod can't start without its ConfigMap. It is independent of the Zoom fix, and needs no setting. Make the ConfigMap from the pinned file, then patch:
+
+```bash
+curl -fsSLo transcription.py https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py
+kubectl -n switchboard create configmap joinly-preroll-fix --from-file=transcription.py=./transcription.py
+kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-preroll-fix.yaml
+```
+
+With kustomize, add its patch and its generator beside the Zoom ones:
+
+```yaml
+patches: [{path: joinly.yaml}, {path: joinly-zoom-fix.yaml}, {path: joinly-preroll-fix.yaml}]
+configMapGenerator:
+  - name: joinly-zoom-fix
+    files: [zoom.py]
+  - name: joinly-preroll-fix
+    files: [transcription.py]
+```
+
+Drop this patch once a joinly release has the fix too, and move the image to that release.
+
 **A GPU and a better model.** The patch is the CPU bot with `base`, and asks for no GPU, so that it applies on a cluster that has none. For [a GPU and `large-v3-turbo`](#the-speech-model-and-a-gpu), apply a second patch after it. The same lines are in a comment at the top of `joinly.yaml`:
 
 ```yaml
@@ -609,6 +656,8 @@ kubectl -n switchboard exec switchboard-0 -c switchboard -- \
   python3 -c 'import urllib.request; print(urllib.request.urlopen("http://127.0.0.1:8000/health").read())'
 kubectl -n switchboard exec switchboard-0 -c joinly -- \
   grep -c single-main-container__video-frame /app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py    # 1 with the Zoom fix
+kubectl -n switchboard exec switchboard-0 -c joinly -- \
+  grep -c utterance_preroll_seconds /app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py    # more than 0 with the first-word fix
 ```
 
 The second command runs in the broker's container and reaches joinly on the pod's localhost. Then, in a room, `/meeting <a test meeting's link>`: the room says it is joining. `/meeting` with no link only says whether a call is live, so it doesn't tell you the broker found joinly. To see that nothing else can reach joinly, run a throwaway pod and fetch the broker pod's IP on port 8000, which must be refused:

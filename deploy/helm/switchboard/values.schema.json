@@ -77,6 +77,13 @@
           "properties": {
             "configMap": {"type": "string"}
           }
+        },
+        "prerollFix": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {"type": "string"}
+          }
         }
       }
     }

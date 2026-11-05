@@ -91,3 +91,10 @@ meetings:
   # Make it first: the pod can't start without it. DEPLOY.md, "Speaker names on Zoom". Empty mounts nothing.
   zoomFix:
     configMap: ""
+  # joinly 0.5.4 starts each piece of speech partway into its first word, and the room's agent names
+  # (its hotwords) can turn the clipped word into "Claude" (#620). Name a ConfigMap that holds the fixed
+  # transcription controller as the key `transcription.py`, and it is mounted read-only over the image's
+  # copy. Make it first: the pod can't start without it. DEPLOY.md, "First words of a call line".
+  # Empty mounts nothing. joinly needs no setting for it: the fix is its default.
+  prerollFix:
+    configMap: ""

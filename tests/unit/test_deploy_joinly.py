@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy" / "kubernetes"
 PATCH = DEPLOY / "meetings" / "joinly.yaml"
 ZOOM_PATCH = DEPLOY / "meetings" / "joinly-zoom-fix.yaml"
+PREROLL_PATCH = DEPLOY / "meetings" / "joinly-preroll-fix.yaml"
 
 
 def _pod(path: Path) -> dict[str, Any]:
@@ -130,6 +131,40 @@ def test_the_zoom_fix_is_a_patch_of_its_own_over_the_files_docs_name() -> None:
     deploy_md = (ROOT / "docs" / "DEPLOY.md").read_text()
     assert f"{mount['mountPath']}:ro" in deploy_md, "DEPLOY.md's docker run mounts the same file"
     assert "joinly-zoom-fix" not in PATCH.read_text().replace("joinly-zoom-fix.yaml", "")
+
+
+def test_the_preroll_fix_is_a_patch_of_its_own_over_the_files_docs_name() -> None:
+    """The first-word fix (#620) is one file over joinly's transcription controller, mounted from a
+    ConfigMap with subPath, so it is a patch of its own for the same reason as the Zoom fix (a pod can't
+    start without a ConfigMap its subPath names). Fails if the mount path drifts from DEPLOY.md's
+    `docker run`, if the mount becomes writable, if its volume reaches the sidecar patch or the Zoom
+    patch, or if the controller is mounted as the whole folder (which holds other files)."""
+    pod = _pod(PREROLL_PATCH)
+    (mount,) = _container(pod, "joinly")["volumeMounts"]
+    assert mount["readOnly"] is True and mount["subPath"] == "transcription.py"
+    assert mount["mountPath"].endswith("/joinly/controllers/transcription/default.py")
+    (volume,) = pod["volumes"]
+    assert mount["name"] == volume["name"] and volume["configMap"]["name"] == "joinly-preroll-fix"
+    deploy_md = (ROOT / "docs" / "DEPLOY.md").read_text()
+    assert f"{mount['mountPath']}:ro" in deploy_md, "DEPLOY.md's docker run mounts the same file"
+    assert "joinly-preroll-fix" not in PATCH.read_text().replace("joinly-preroll-fix.yaml", "")
+    assert "joinly-preroll-fix" not in ZOOM_PATCH.read_text()
+
+
+def test_the_preroll_fix_is_pinned_to_one_commit_everywhere_it_is_named() -> None:
+    """The fixed controller (#620) is named in DEPLOY.md's download commands, in the Kubernetes patch's
+    comment and in the self-test, which also pins its sha256. They must name one commit of the fork:
+    otherwise the self-test would try one file while operators run another. Fails if one of them is moved
+    and the others are not, or if one of them stops naming a commit at all (a branch moves)."""
+    url = re.compile(
+        r"raw\.githubusercontent\.com/amahpour/joinly/([0-9a-f]{40})/joinly/controllers/transcription/default\.py"
+    )
+    docs = url.findall((ROOT / "docs" / "DEPLOY.md").read_text())
+    patch = url.findall(PREROLL_PATCH.read_text())
+    selftest = (ROOT / "tests" / "live" / "test_meeting_selftest.py").read_text()
+    pinned = re.findall(r'PREROLL_FIX_COMMIT = "([0-9a-f]{40})"', selftest)
+    assert len(docs) >= 2 and len(patch) == 1 and len(pinned) == 1, "each place names it by a full commit"
+    assert set(docs) == set(patch) == set(pinned), "one commit, in the docs, the patch and the self-test"
 
 
 def test_the_patch_pins_the_image_the_docs_run_and_the_base_has_no_joinly() -> None:

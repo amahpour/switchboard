@@ -1,0 +1,38 @@
+# The first-word fix for the joinly sidecar (docs/DEPLOY.md, "Meetings on Kubernetes"; #620).
+# Apply it after joinly.yaml. Without it a call line sometimes loses its first word.
+#
+# joinly 0.5.4 starts each piece of speech partway into its first word: its voice detection flags
+# speech late (a median of 73 ms in a recorded call, up to 378 ms), and the speech-to-text model gets
+# audio from there. The room's agent names are its hotwords, and a clipped "Our" or "Hey" can come out
+# as "Claude": a line then wakes the wrong agent, or the name that opens a call-out is lost. The fix
+# keeps 0.3 s of the audio before an utterance and passes it on with it. It is a change to joinly's
+# transcription controller, offered upstream. Until a joinly release has it, the fixed file goes over
+# the image's copy, read-only, from a ConfigMap made from the pinned commit (the same file DEPLOY.md's
+# `docker run` mounts). Create the ConfigMap first, because the pod can't start without it
+# (`kubectl describe pod` says the ConfigMap is not found):
+#
+#   curl -fsSLo transcription.py https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py
+#   kubectl -n switchboard create configmap joinly-preroll-fix --from-file=transcription.py=./transcription.py
+#   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-preroll-fix.yaml
+#
+# It needs no setting: the new `utterance_preroll_seconds` has the fix as its default, and the broker
+# sends nothing about it, so a joinly without the file works as before. Drop this patch once joinly has a
+# release with the fix, and move the image in joinly.yaml to it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: switchboard
+spec:
+  template:
+    spec:
+      containers:
+        - name: joinly
+          volumeMounts:
+            - name: joinly-preroll-fix
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py
+              subPath: transcription.py   # one file over the image's copy, not the folder
+              readOnly: true
+      volumes:
+        - name: joinly-preroll-fix
+          configMap:
+            name: joinly-preroll-fix
