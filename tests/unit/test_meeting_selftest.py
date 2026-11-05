@@ -444,7 +444,7 @@ def test_a_long_string_is_cut_in_the_table_but_whole_in_the_json(tmp_path: Path)
 
 
 def test_a_pinned_file_runs_only_with_its_own_bytes() -> None:
-    """The Zoom fix the self-test mounts into joinly is fetched, then checked against its pinned sha256:
+    """A fix the self-test mounts into joinly is fetched, then checked against its pinned sha256:
     a changed or truncated download is refused, not mounted. Fails if the check is skipped or compares
     the wrong thing."""
     import hashlib

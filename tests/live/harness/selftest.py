@@ -65,8 +65,9 @@ class PinnedFileError(Exception):
 
 
 def check_pinned(data: bytes, sha256: str) -> bytes:
-    """``data`` if its sha256 is ``sha256``, else ``PinnedFileError``. The Zoom fix the self-test mounts
-    into joinly is fetched from a pinned commit, and only the exact file checked here runs (§52)."""
+    """``data`` if its sha256 is ``sha256``, else ``PinnedFileError``. The fixes the self-test mounts
+    into joinly (the Zoom one and the first-word one) are fetched from pinned commits, and only the exact
+    file checked here runs (§52)."""
     got = hashlib.sha256(data).hexdigest()
     if got != sha256.lower():
         raise PinnedFileError(f"the pinned file's sha256 is {got}, not {sha256.lower()}")

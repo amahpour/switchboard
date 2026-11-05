@@ -27,7 +27,7 @@ ESLINT = ROOT / "scripts" / "eslint"
 PYTHON_DIRS = ("src", "tests", "scripts", "docs/media")
 CHART = ROOT / "deploy" / "helm" / "switchboard"
 # The value sets the chart is linted with (a chart renders only with a publicUrl): the defaults, then
-# the meeting bot, then the bot with the Zoom fix mounted, then on a GPU with a named model.
+# the meeting bot, then the bot with both fixes mounted, then on a GPU with a named model.
 # tests/unit/test_deploy_helm.py checks what each renders.
 CHART_VALUES = (
     ("publicUrl=https://sb.example.com",),
@@ -37,6 +37,7 @@ CHART_VALUES = (
         "meetings.enabled=true",
         "meetings.maxCalls=3",
         "meetings.zoomFix.configMap=joinly-zoom-fix",
+        "meetings.prerollFix.configMap=joinly-preroll-fix",
     ),
     (  # the GPU and a named model (#617)
         "publicUrl=https://sb.example.com",

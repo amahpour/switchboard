@@ -80,13 +80,22 @@ IMAGE = "ghcr.io/joinly-ai/joinly:v0.5.4"  # the tag DEPLOY.md and the Kubernete
 # On Zoom, both bots run with our speaker-name fix (joinly-ai/joinly#187), as DEPLOY.md says to: stock 0.5.4
 # can't open Zoom's participant list, so the speaker could neither see the bot arrive (and spoke before its
 # audio was up) nor see it leave. The file is the one DEPLOY.md pins, checked by its sha256.
-# SWITCHBOARD_SELFTEST_STOCK_JOINLY=1 runs stock joinly instead.
+# On any platform both bots also run with the first-word fix (#620), the same way: joinly's voice detection
+# flags speech late, and the hotwords turn a clipped first word into "Claude". That file is pinned too.
+# SWITCHBOARD_SELFTEST_STOCK_JOINLY=1 runs stock joinly instead, without either fix.
 ZOOM_FIX_URL = (
     "https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5"
     "/joinly/providers/browser/platforms/zoom.py"
 )
 ZOOM_FIX_SHA256 = "9bf581c20a9a7911afb9f2ac1447a5d0800cdca24485dd215099d5d82afad6ff"
 ZOOM_PY = "/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py"
+PREROLL_FIX_COMMIT = "1fe384d9deba32f38fabd5bfc77fc5975adef6a7"
+PREROLL_FIX_URL = (
+    f"https://raw.githubusercontent.com/amahpour/joinly/{PREROLL_FIX_COMMIT}"
+    "/joinly/controllers/transcription/default.py"
+)
+PREROLL_FIX_SHA256 = "6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97"
+CONTROLLER_PY = "/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py"
 STOCK_ENV = "SWITCHBOARD_SELFTEST_STOCK_JOINLY"
 # SWITCHBOARD_SELFTEST_LOGS=1 keeps each container's log, scrubbed of the link, in the output folder (0600),
 # for a failure that needs joinly's side of the story. Off by default: a log holds the call's participants.
@@ -183,14 +192,14 @@ class Joinly:
         self.label = label
         self.name = f"sb-selftest-{secrets.token_hex(4)}-{label}"
         self.port = 0
-        self.mount: Path | None = None  # a file mounted read-only over the image's zoom.py
+        self.mounts: list[tuple[Path, str]] = []  # files mounted read-only over the image's own copies
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}/mcp/"
 
     def start(self) -> None:
-        mount = ["-v", f"{self.mount}:{ZOOM_PY}:ro"] if self.mount else []
+        mount = [arg for path, target in self.mounts for arg in ("-v", f"{path}:{target}:ro")]
         run = docker(
             "run",
             "-d",
@@ -753,21 +762,25 @@ async def test_every_meetings_feature_against_a_real_call(
         containers["observer"] = Joinly("observer")
     steps: list[StepResult] = []
     problems: list[str] = []
-    zoom_fix = link.platform == "zoom" and os.environ.get(STOCK_ENV, "") != "1"
+    stock = os.environ.get(STOCK_ENV, "") == "1"
+    zoom_fix = link.platform == "zoom" and not stock
+    preroll_fix = not stock
+    fixes: list[tuple[str, str, str, str, str]] = []  # url, sha256, file name, where it goes, what it is
     if zoom_fix:
-        fix = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / "zoom.py"
+        fixes.append((ZOOM_FIX_URL, ZOOM_FIX_SHA256, "zoom.py", ZOOM_PY, "the Zoom fix"))
+    if preroll_fix:
+        fixes.append(
+            (PREROLL_FIX_URL, PREROLL_FIX_SHA256, "transcription.py", CONTROLLER_PY, "the first-word fix")
+        )
+    for fix_url, fix_sha256, name, target, what in fixes:
+        fix = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / name
         try:
-            fix.write_bytes(
-                selftest.check_pinned(httpx.get(ZOOM_FIX_URL, timeout=30.0).content, ZOOM_FIX_SHA256)
-            )
+            fix.write_bytes(selftest.check_pinned(httpx.get(fix_url, timeout=30.0).content, fix_sha256))
         except (httpx.HTTPError, selftest.PinnedFileError) as e:
-            refuse(
-                f"the Zoom fix could not be fetched ({type(e).__name__}: {e});"
-                f" {STOCK_ENV}=1 runs stock joinly"
-            )
+            refuse(f"{what} could not be fetched ({type(e).__name__}: {e}); {STOCK_ENV}=1 runs stock joinly")
         fix.chmod(0o644)  # the image's user (uid 1001) reads it through the mount
         for box in containers.values():
-            box.mount = fix
+            box.mounts.append((fix, target))
     try:
         with sigterm_is_an_interrupt():
             try:
@@ -799,6 +812,7 @@ async def test_every_meetings_feature_against_a_real_call(
         "platform": link.platform,
         "joinly_image": IMAGE,
         "zoom_fix": "mounted (joinly-ai/joinly#187)" if zoom_fix else "none",
+        "preroll_fix": f"mounted (#620, {PREROLL_FIX_COMMIT[:7]})" if preroll_fix else "none",
         "callouts": CALLOUTS,
         "bot_name": BOT_NAME,
         "speaker_name": SPEAKER_NAME,

@@ -278,18 +278,23 @@ def test_the_defaults_render_the_manifest(render: Callable[..., Rendered]) -> No
 
 
 @needs_helm
-@pytest.mark.parametrize("zoom", [False, True], ids=["bot", "bot-and-zoom-fix"])
-def test_the_meeting_bot_renders_the_patch(render: Callable[..., Rendered], zoom: bool) -> None:
+@pytest.mark.parametrize(
+    "fixes",
+    [(), ("zoom",), ("preroll",), ("zoom", "preroll")],
+    ids=["bot", "bot-and-zoom-fix", "bot-and-preroll-fix", "bot-and-both-fixes"],
+)
+def test_the_meeting_bot_renders_the_patch(render: Callable[..., Rendered], fixes: tuple[str, ...]) -> None:
     """``meetings.enabled`` is deploy/kubernetes/meetings/joinly.yaml applied to the manifest, and
-    ``meetings.zoomFix.configMap`` is joinly-zoom-fix.yaml: joinly beside the broker on the pod's
-    loopback with no port, the exec probes and no readiness probe, uid 1001, the same volumes, the
-    default-container annotation. What differs is named: the broker is told how many calls (the
-    variable), and joinly's memory comes from ``maxCalls`` (the next test). Fails on any other line."""
+    ``meetings.zoomFix.configMap`` and ``meetings.prerollFix.configMap`` are joinly-zoom-fix.yaml and
+    joinly-preroll-fix.yaml: joinly beside the broker on the pod's loopback with no port, the exec probes
+    and no readiness probe, uid 1001, the same volumes, the default-container annotation. What differs is
+    named: the broker is told how many calls (the variable), and joinly's memory comes from ``maxCalls``
+    (the next test). Fails on any other line."""
     sets = [*SET_BASE, "meetings.enabled=true"]
     patches = [_patch("joinly.yaml")]
-    if zoom:
-        sets.append("meetings.zoomFix.configMap=joinly-zoom-fix")  # the name the zoom patch uses
-        patches.append(_patch("joinly-zoom-fix.yaml"))
+    for fix in fixes:  # the ConfigMap names the patches use
+        sets.append(f"meetings.{fix}Fix.configMap=joinly-{fix}-fix")
+        patches.append(_patch(f"joinly-{fix}-fix.yaml"))
     chart = render(*sets)
     assert chart.returncode == 0, chart.stderr
     expected = _manifest()
@@ -349,6 +354,37 @@ def test_the_zoom_fix_is_mounted_only_when_its_config_map_is_named(render: Calla
     # the bot off: a named ConfigMap with no bot mounts nothing
     off = render(*SET_BASE, "meetings.zoomFix.configMap=zoom-mine")
     assert "zoom-mine" not in json.dumps(off.docs)
+
+
+@needs_helm
+def test_the_preroll_fix_is_mounted_only_when_its_config_map_is_named(
+    render: Callable[..., Rendered],
+) -> None:
+    """The first-word fix (#620) is one file over joinly's transcription controller, from the ConfigMap
+    ``meetings.prerollFix.configMap`` names. Unnamed, there is no mount and no volume: a pod must not wait
+    for a ConfigMap nobody made. Named, it is read-only, subPath of the one file, the same path the
+    Kubernetes patch mounts and DEPLOY.md's ``docker run`` mounts, and it never reaches the broker or the
+    Zoom fix's volume. Fails if the volume is always added, the mount becomes writable, or the paths drift."""
+    plain = render(*SET_BASE, "meetings.enabled=true")
+    assert "joinly-preroll-fix" not in json.dumps(plain.docs)
+    named = render(*SET_BASE, "meetings.enabled=true", "meetings.prerollFix.configMap=preroll-mine")
+    (volume,) = [v for v in named.pod["volumes"] if v["name"] == "joinly-preroll-fix"]
+    assert volume["configMap"] == {"name": "preroll-mine"}
+    (mount,) = [m for m in named.container("joinly")["volumeMounts"] if m["name"] == "joinly-preroll-fix"]
+    assert mount["readOnly"] is True and mount["subPath"] == "transcription.py"
+    assert (
+        mount["mountPath"]
+        == (
+            _patch("joinly-preroll-fix.yaml")["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0][
+                "mountPath"
+            ]
+        )
+    )
+    assert all(m["name"] != "joinly-preroll-fix" for m in named.container("switchboard")["volumeMounts"])
+    assert "joinly-zoom-fix" not in json.dumps(named.docs), "the two fixes are named separately"
+    # the bot off: a named ConfigMap with no bot mounts nothing
+    off = render(*SET_BASE, "meetings.prerollFix.configMap=preroll-mine")
+    assert "preroll-mine" not in json.dumps(off.docs)
 
 
 @needs_helm

@@ -54,10 +54,13 @@ services:
     profiles: [meetings]
     restart: unless-stopped
     shm_size: "1gb"   # Chromium's shared memory; Docker's default 64 MB is known to crash it
-    # Zoom shows no speaker names without our fix (joinly-ai/joinly#187). To use it, download the pinned file
-    # beside this one as DEPLOY.md says, then uncomment these two lines (a missing file would stop the bot):
+    # Two fixes to joinly 0.5.4 are not in a release yet. Zoom shows no speaker names without the first
+    # (joinly-ai/joinly#187), and a call line sometimes loses its first word without the second (#620). For
+    # either, download its pinned file beside this one as DEPLOY.md says, then uncomment its line (a missing
+    # file would stop the bot):
     # volumes:
     #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
+    #   - ./transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
     # A model you name in SWITCHBOARD_MEETING_STT_MODEL is downloaded into the container, and gone when the
     # container is made again. To keep it, mount a volume at joinly's cache under `volumes:` (and declare
     # `joinly-models:` in the top-level `volumes:` below), only for a model you name: it hides the model the
@@ -80,11 +83,12 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    # The same two optional mounts as above (the Zoom fix, and a volume to keep a model you name), written
+    # The same optional mounts as above (the two fixes, and a volume to keep a model you name), written
     # out for this service the same way. For the cache use a volume of its own (`joinly-gpu-models`): the
     # CUDA image holds a different default model than the CPU one.
     # volumes:
     #   - ./zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
+    #   - ./transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
     #   - joinly-gpu-models:/home/app/.cache/huggingface
 
   caddy:

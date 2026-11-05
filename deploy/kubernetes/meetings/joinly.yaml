@@ -20,7 +20,9 @@
 #
 # Zoom shows no speaker names without a fix to joinly's zoom.py (joinly-ai/joinly#187):
 # joinly-zoom-fix.yaml, beside this file, is a second patch that mounts it. It is a file of its own
-# because that mount needs its ConfigMap to exist when the pod starts.
+# because that mount needs its ConfigMap to exist when the pod starts. A call line also sometimes
+# loses its first word to joinly's voice detection (#620): joinly-preroll-fix.yaml, the same way, is
+# the third patch, for that fix.
 #
 # To take the sidecar out again, apply the base without the patch (kustomize: drop it);
 # `kubectl patch` can't remove a container it added.
