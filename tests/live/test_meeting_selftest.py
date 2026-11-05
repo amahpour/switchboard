@@ -118,6 +118,10 @@ SNAPSHOT_S = 30.0
 LEAVE_S = 30.0
 POLL_S = 1.0
 SLOW_POLL_S = 3.0  # a call to the speaker (its transcript, its participants) is not cheap
+# SWITCHBOARD_SELFTEST_CALLOUTS=N says step 3's call-out N times (1 to 30; 1 by default), each waiting
+# REPEAT_HEARD_S, so one call measures how often a call-out is missed (#602).
+CALLOUTS = max(1, min(30, int(os.environ.get("SWITCHBOARD_SELFTEST_CALLOUTS") or "1")))
+REPEAT_HEARD_S = 20.0
 WARMUP_HEARD_S = 20.0  # the warm-up line arrives, or the speaker goes on without it
 TAIL_S = 4.0  # after a pass, one more transcript batch (they come every ~3 s), only for what the report shows
 
@@ -466,6 +470,31 @@ class World:
 
     # -- 3: a name wakes claude-1
     async def wake(self) -> Outcome:
+        """Step 3, said ``CALLOUTS`` times (one by default): each must wake claude-1. Several make one call
+        measure how often a call-out is missed (#602), with each miss's heard text in the report."""
+        hits, misses, last_seen = 0, [], ""
+        for _ in range(CALLOUTS):
+            ok, seen, heard = await self.one_wake(HEARD_S if CALLOUTS == 1 else REPEAT_HEARD_S)
+            if ok:
+                hits, last_seen = hits + 1, seen
+            else:
+                misses.append(heard or "nothing")
+        if CALLOUTS == 1:
+            if hits:
+                return Outcome(True, last_seen, selftest.match_ratio(CALL_OUT, last_seen))
+            why = (
+                f"claude-1 was not woken; call lines heard instead: {misses[0]}"
+                if misses[0] != "nothing"
+                else ("claude-1 was not woken, and no call line reached the room")
+            )
+            return Outcome(False, why[:400], 0.0)
+        shown = f"{hits} of {CALLOUTS} call-outs woke claude-1"
+        if misses:
+            shown += "; missed ones heard as: " + " / ".join(misses)
+        return Outcome(hits == CALLOUTS, shown[:600], hits / CALLOUTS)
+
+    async def one_wake(self, heard_s: float) -> tuple[bool, str, str]:
+        """Say the call-out once. ``(woken, the line that woke it, the call lines heard)``."""
         seen = ""
         spoken_at: list[float] = []  # when the speaker finished saying it
         cursor = self.last_id()
@@ -474,7 +503,7 @@ class World:
             nonlocal seen
             began = time.monotonic()
             while True:
-                limit = (spoken_at[0] if spoken_at else began + SPEAK_S) + HEARD_S
+                limit = (spoken_at[0] if spoken_at else began + SPEAK_S) + heard_s
                 remaining = limit - time.monotonic()
                 if remaining <= 0:
                     return False
@@ -493,19 +522,10 @@ class World:
             if not waiting.done():
                 waiting.cancel()
                 await asyncio.gather(waiting, return_exceptions=True)
-        if not ok:
-            # What did arrive, so a miss can be told apart: a misheard name (a call line that addresses
-            # nobody), or nothing heard at all.
-            heard = " / ".join(m["text"] for m in self.messages(cursor) if m.get("sender_kind") == "meeting")
-            why = (
-                f"claude-1 was not woken; call lines heard instead: {heard}"
-                if heard
-                else ("claude-1 was not woken, and no call line reached the room")
-            )
-            return Outcome(
-                False, (seen + " | " if seen else "") + why[:400], selftest.match_ratio(CALL_OUT, seen)
-            )
-        return Outcome(ok, seen, selftest.match_ratio(CALL_OUT, seen))
+        # What did arrive, so a miss can be told apart: a misheard name (a call line that addresses nobody),
+        # or nothing heard at all.
+        heard = " / ".join(m["text"] for m in self.messages(cursor) if m.get("sender_kind") == "meeting")
+        return ok, seen, heard
 
     # -- 4: an @call line is heard by the other bot
     async def hear(self) -> Outcome:
@@ -747,6 +767,7 @@ async def test_every_meetings_feature_against_a_real_call(
         "platform": link.platform,
         "joinly_image": IMAGE,
         "zoom_fix": "mounted (joinly-ai/joinly#187)" if zoom_fix else "none",
+        "callouts": CALLOUTS,
         "bot_name": BOT_NAME,
         "speaker_name": SPEAKER_NAME,
         "containers_removed": not any(removed),
