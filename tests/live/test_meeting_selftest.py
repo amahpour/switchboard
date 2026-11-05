@@ -92,6 +92,11 @@ STOCK_ENV = "SWITCHBOARD_SELFTEST_STOCK_JOINLY"
 # for a failure that needs joinly's side of the story. Off by default: a log holds the call's participants.
 LOGS_ENV = "SWITCHBOARD_SELFTEST_LOGS"
 SPEAKER_NAME = "switchboard self-test speaker"
+# SWITCHBOARD_SELFTEST_OBSERVER=1 adds a third joinly that only listens (#602). When a call-out doesn't wake
+# claude-1, the report says what this independent listener heard at the same moment: if it heard "Claude
+# one" and the bot didn't, the loss is in the bot's session; if neither did, the audio lost it.
+OBSERVER = os.environ.get("SWITCHBOARD_SELFTEST_OBSERVER", "") == "1"
+OBSERVER_NAME = "switchboard self-test observer"
 ROOM = "#build"
 SLUG = "build"
 LABEL = "switchboard-selftest"  # on both containers, so `docker ps --filter label=...` finds a leftover
@@ -104,7 +109,11 @@ SENTENCE = "The purple elephant is reading the morning newspaper"
 # later one arrived. A person has been unmuted a moment before they speak; this line is that moment. Whether
 # it was heard is in step 2's report, so the first-speech loss stays visible.
 WARMUP = "Testing, testing, the microphone is on."
-CALL_OUT = "Claude one, can you hear me?"
+# A lead word first (#602): on Zoom the first half-second after a silence can be cut before anyone hears
+# it. With "Claude one, can you hear me?" both switchboard's bot and an independent observer heard only
+# "can you hear me?", so the name never reached the transcript. "Okay" is an address switchboard already
+# takes ("ok", "okay", "hey", "hi" before a name), and if it is the part cut, the name survives.
+CALL_OUT = "Okay, Claude one, can you hear me?"
 REPLY = "I can hear you loud and clear"
 
 # Every wait is a poll with a deadline, in seconds.
@@ -252,8 +261,9 @@ class Speaker:
     """The test speaker: the second joinly, driven over MCP the way the broker drives its own. It takes its
     name in the ``joinly-settings`` header at connect (§52) and says what it is asked with ``speak_text``."""
 
-    def __init__(self, url: str):
-        header = json.dumps({"name": SPEAKER_NAME}, ensure_ascii=True)
+    def __init__(self, url: str, name: str = SPEAKER_NAME):
+        self.name = name
+        header = json.dumps({"name": name}, ensure_ascii=True)
         self.client = Client(StreamableHttpTransport(url, headers={"joinly-settings": header}), mode="legacy")
         self.joined = False
 
@@ -270,7 +280,7 @@ class Speaker:
     async def join(self, link: SecretLink) -> None:
         await self.call(
             "join_meeting",
-            {"meeting_url": link.reveal(), "participant_name": SPEAKER_NAME},
+            {"meeting_url": link.reveal(), "participant_name": self.name},
             timeout=SPEAKER_JOIN_S,
         )
         self.joined = True
@@ -324,8 +334,10 @@ class World:
         speaker: Speaker,
         link: SecretLink,
         steps: list[StepResult],
+        observer: Speaker | None = None,
     ):
         self.broker, self.web, self.agent, self.speaker, self.link = broker, web, agent, speaker, link
+        self.observer = observer  # an independent listener (#602), or None
         self.pieces = link.parts()
         self.steps = steps  # the test's own list, so a step that finished is kept if a later one blows up
         self.bot_live = False
@@ -433,6 +445,12 @@ class World:
             await self.speaker.join(self.link)
         except Exception as e:
             return Outcome(False, f"the speaker could not join: {self.describe(e)}")
+        if self.observer is not None:
+            try:
+                await self.observer.join(self.link)
+            except Exception as e:  # the observer only adds evidence: its failure fails no step
+                self.observer = None
+                print(f"the observer could not join, and is left out: {self.describe(e)}")
         if not self.bot_live:
             return Outcome(False, "the speaker joined, but the bot is not in the call (step 1)")
 
@@ -513,6 +531,7 @@ class World:
                 if selftest.matches(CALL_OUT, seen):
                     return True
 
+        observed_from = selftest.last_end(await self.observer.segments()) if self.observer else 0.0
         waiting = asyncio.ensure_future(woken())
         try:
             await self.speaker.say(CALL_OUT)
@@ -525,6 +544,9 @@ class World:
         # What did arrive, so a miss can be told apart: a misheard name (a call line that addresses nobody),
         # or nothing heard at all.
         heard = " / ".join(m["text"] for m in self.messages(cursor) if m.get("sender_kind") == "meeting")
+        if not ok and self.observer is not None:
+            observed = selftest.heard_since(await self.observer.segments(), observed_from)
+            heard = f"{heard or 'nothing'} (the observer heard: {observed or 'nothing'})"
         return ok, seen, heard
 
     # -- 4: an @call line is heard by the other bot
@@ -645,6 +667,9 @@ class World:
         await self.step(4, self.hear, [self.needs_bot, self.needs_speaker])
         await self.step(5, self.snapshot, [self.needs_bot])
         await self.step(6, self.leave, [self.needs_bot, self.needs_speaker])
+        if self.observer is not None:
+            with contextlib.suppress(Exception):
+                await self.observer.leave()
 
     async def leave_everything(self, problems: list[str]) -> None:
         """Whatever the steps did: the bar's call ends, and the speaker leaves. Each is tried alone."""
@@ -658,6 +683,11 @@ class World:
             await self.speaker.leave()
         except Exception as e:
             problems.append(f"the speaker could not leave the call: {self.describe(e)}")
+        if self.observer is not None:
+            try:
+                await self.observer.leave()
+            except Exception as e:
+                problems.append(f"the observer could not leave the call: {self.describe(e)}")
 
 
 # ---------------------------------------------------------------------- the test
@@ -719,6 +749,8 @@ async def test_every_meetings_feature_against_a_real_call(
     pieces = link.parts()
     out_dir = Path(os.environ.get(OUT_ENV) or tempfile.mkdtemp(prefix="sb-selftest-"))
     containers = {"switchboard": Joinly("switchboard"), "speaker": Joinly("speaker")}
+    if OBSERVER:
+        containers["observer"] = Joinly("observer")
     steps: list[StepResult] = []
     problems: list[str] = []
     zoom_fix = link.platform == "zoom" and os.environ.get(STOCK_ENV, "") != "1"
@@ -806,16 +838,22 @@ async def run_in_a_broker(
     kept_messages = ""
     try:
         assert web.post("/api/rooms", json={"name": ROOM}, headers=broker.write_headers()).status_code == 200
+        observing = (
+            Speaker(containers["observer"].url, OBSERVER_NAME)
+            if "observer" in containers
+            else contextlib.nullcontext()
+        )
         async with (
             FakeAgent(broker.home, "selftest-claude") as agent,
             Speaker(containers["speaker"].url) as speaker,
+            observing as observer,
         ):
             joined = await agent.join(
                 ROOM, "claude-1"
             )  # before the call: its spoken names are the bot's hints
             if not joined.get("ok"):
                 raise RuntimeError(f"the scripted agent could not join: {joined.get('code')}")
-            world = World(broker, web, agent, speaker, link, steps)
+            world = World(broker, web, agent, speaker, link, steps, observer)
             try:
                 await world.run()
             finally:
