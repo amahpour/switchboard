@@ -13,7 +13,20 @@ from fastmcp import Client
 from switchboard import __version__, guardrails
 from switchboard.mcp import server as srv
 
-TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status", "claim"}
+TOOLS = {
+    "join",
+    "leave",
+    "who",
+    "say",
+    "read",
+    "wait",
+    "pass",
+    "away",
+    "review",
+    "status",
+    "claim",
+    "host_call",
+}
 
 
 class Backend:
@@ -66,6 +79,9 @@ async def test_tools_annotations_and_instructions() -> None:
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False}
         for n in ("join", "leave", "away", "status"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False, "idempotentHint": True}
+        # the one tool that opens a way into a room from a machine outside it (§52.12): open world, so a
+        # harness that skips its approval prompt for the rest (Codex) asks its person first
+        assert ann["host_call"] == {"destructiveHint": False, "openWorldHint": True}
         init = c.initialize_result
         assert init.instructions == srv.INSTRUCTIONS
         caps = init.capabilities.model_dump(by_alias=True, exclude_none=True)
@@ -78,7 +94,9 @@ async def test_tools_annotations_and_instructions() -> None:
 async def test_tool_list_fits_the_review_budget() -> None:
     """Every agent turn carries the tool list. The maintainer approved 3,700 for one claim
     tool in #293, and 3,900 for review's report in #291 ("Raise it", 2026-10-14); another tool
-    or parameter must still fit, with every description a sentence."""
+    or parameter must still fit, with every description a sentence. host_call (#623, the maintainer's
+    yes of 2026-11-05 to building it) is a tool of 372 characters in a list that had 15 left, so the
+    limit is its size more: 4,260."""
     _st, server = make()
     async with Client(server, mode="legacy") as c:
         tools = await c.list_tools()
@@ -94,7 +112,8 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # 3,700 for claims (#293); 3,900 for review's report (#291), the maintainer's yes: "Raise it".
     # #423's Markdown, Mermaid and concur fit inside it by shortening the review tool's own wording
     # and putting it on one line (a newline costs two characters on the wire); the budget did not move.
-    assert size <= 3900, size
+    # 4,260 since #623: the host_call tool (above). The tool is kept to a sentence and four parameters.
+    assert size <= 4260, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
@@ -118,6 +137,42 @@ async def test_the_review_tool_asks_for_markdown_allows_mermaid_and_lists_concur
 
     for action in ACTIONS:  # a move the broker takes but the tool never names is one agents can't find
         assert action in desc, action
+
+
+async def test_host_call_takes_the_hash_of_a_key_and_says_when_it_may_be_used() -> None:
+    """The tool that registers a hosted call (#623) takes the key's sha256 and nothing that could be the
+    key, and says in its one sentence that it is for when the user asks, as join does. A parameter named
+    for the key itself would invite a model to pass it: the key is made on the machine and never goes
+    through the model."""
+    _st, server = make()
+    async with Client(server, mode="legacy") as c:
+        tool = next(t for t in await c.list_tools() if t.name == "host_call")
+    props = tool.input_schema["properties"]
+    assert set(props) == {"room", "key_hash", "platform", "model"}
+    assert tool.input_schema["required"] == ["room", "key_hash"]
+    assert "only when your user asks" in (tool.description or "")
+    assert "sha256" in (tool.description or "")
+
+
+async def test_host_call_asks_the_backend_for_a_membership_and_passes_only_what_it_was_given() -> None:
+    """The tool names its room's membership like every room tool and sends the hash, platform and model
+    to ``agent.host_call``: nothing else, so nothing in a call's arguments can name a token or a person."""
+    st, server = make()
+
+    async def found(room: str, tid: str | None) -> tuple[str, str] | str:
+        return (room, "m:7")
+
+    st.find_cred = found  # type: ignore[method-assign]
+    async with Client(server, mode="legacy") as c:
+        await c.call_tool(
+            "host_call", {"room": "#build", "key_hash": "ab" * 32, "platform": "zoom", "model": "base"}
+        )
+    assert st.calls == [
+        (
+            "agent.host_call",
+            {"cred": "m:7", "key_hash": "ab" * 32, "platform": "zoom", "model": "base"},
+        )
+    ]
 
 
 def test_instructions_are_tiny() -> None:
