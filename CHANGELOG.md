@@ -2,6 +2,18 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.51.0 (2026-11-05)
+
+### Added
+
+- **The Docker Compose example can run the meeting bot.** `deploy/compose/compose.yaml` has joinly behind a `meetings` profile: put `COMPOSE_PROFILES=meetings` and `SWITCHBOARD_JOINLY_URL=http://joinly:8000/mcp/` in a `.env` file beside it, and `docker compose up -d` starts it beside the broker, with no published port. Without them nothing changes. DEPLOY.md says how to add the Zoom speaker-name fix.
+- **`[meeting] max_calls` limits how many calls the broker follows at once.** One meeting bot can follow several calls, but each live call takes about 2.7 GiB of memory and a CPU in it, so a bot sized for one call is killed when a second room starts another. The limit is a whole number from 1 to 50, default 1, counted over all rooms (a call counts from the moment it is joining). A `/meeting <link>` past it is refused before anything reaches the bot, with `This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).` The message gives the number and no room or link, because the person asking may not be able to see the room that holds a call. `SWITCHBOARD_MEETING_MAX_CALLS` sets it from the environment, for a Kubernetes manifest or a chart: a non-empty value wins over the file, an empty one leaves the file's, and a bad one stops the broker at start with a message that names the variable. DEPLOY.md has the sizing, `memory ≈ 2.7Gi × max_calls + 0.5Gi`, for Docker and for the Kubernetes patch.
+- **A Helm chart for the broker, with the meeting bot as an option** (`deploy/helm/switchboard/`). It renders what `deploy/kubernetes/` does, from values: a Service, a StatefulSet with one replica and one ReadWriteOnce volume, and an Ingress with the timeout and body-size annotations that keep an agent's wait open. It has the same hardening: service links off, uid 10001, a read-only root, no capabilities, the probes. `publicUrl` is the one required value, and the chart says so if it is missing. Image, volume size and class, ingress, resources and the admin's name are values too. `--set meetings.enabled=true` adds joinly beside the broker, as `deploy/kubernetes/meetings/` does. `meetings.maxCalls` sets how many calls may run at once (the broker's `SWITCHBOARD_MEETING_MAX_CALLS`) and sizes joinly's memory and CPU for them: 3.5 GiB for one call, 9 GiB for three. `meetings.zoomFix.configMap` mounts the Zoom speaker-name fix. The chart installs the image of its own release, so an upgrade is a new tag. docs/DEPLOY.md has a "Helm" section with the values, the upgrade, meetings and an Argo CD `Application`. A test renders the chart and compares it with the plain manifests, so they can't drift apart, and `scripts/lint.py` now runs `helm lint` with a pinned Helm. The plain manifests are unchanged.
+
+### Changed
+
+- **A broker follows one call at a time unless `max_calls` says more.** Before, every room could have a call at once, so a second room's call could run the bot out of memory. If you follow calls in several rooms at once, set `[meeting] max_calls` (or `SWITCHBOARD_MEETING_MAX_CALLS`) to that number, and give the bot the memory for it.
+
 ## 0.50.0 (2026-11-04)
 
 ### Upgrading

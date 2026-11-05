@@ -1,7 +1,0 @@
-### Added
-
-- **`[meeting] max_calls` limits how many calls the broker follows at once.** One meeting bot can follow several calls, but each live call takes about 2.7 GiB of memory and a CPU in it, so a bot sized for one call is killed when a second room starts another. The limit is a whole number from 1 to 50, default 1, counted over all rooms (a call counts from the moment it is joining). A `/meeting <link>` past it is refused before anything reaches the bot, with `This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).` The message gives the number and no room or link, because the person asking may not be able to see the room that holds a call. `SWITCHBOARD_MEETING_MAX_CALLS` sets it from the environment, for a Kubernetes manifest or a chart: a non-empty value wins over the file, an empty one leaves the file's, and a bad one stops the broker at start with a message that names the variable. DEPLOY.md has the sizing, `memory ≈ 2.7Gi × max_calls + 0.5Gi`, for Docker and for the Kubernetes patch.
-
-### Changed
-
-- **A broker follows one call at a time unless `max_calls` says more.** Before, every room could have a call at once, so a second room's call could run the bot out of memory. If you follow calls in several rooms at once, set `[meeting] max_calls` (or `SWITCHBOARD_MEETING_MAX_CALLS`) to that number, and give the bot the memory for it.
