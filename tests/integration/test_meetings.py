@@ -160,6 +160,50 @@ async def test_a_link_joins_with_hotwords_and_a_call_out_wakes_only_that_agent(
         assert "from=call" in got["text"]
 
 
+async def test_a_line_that_is_only_the_hint_list_is_not_posted_and_wakes_nobody(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """#616, from a real call: the transcript had "Claude switchboard" (the transcriber writing back an
+    agent's name and the bot's own) and then the real request. The echo was posted as a call line and
+    woke claude-1 for nothing, which spent a wake. It is dropped now: the room has only the request, and
+    the wake claude-1 gets is the request's, with no echo line in its batch. Fails if the echo is posted,
+    or wakes the agent."""
+    async with FakeAgent(broker.home, "k1") as claude:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        command(broker, f"/meeting {ZOOM}")
+        await wait_until(lambda: len(joinly.joins) == 1)
+        named = claude.wait_task("#build", timeout_s=30)
+        joinly.push([seg("Claude switchboard", 0.0, 1.0)])
+        joinly.push([seg("Claude one, can you find the upload size limit?", 10.0, 12.0)])
+        got = await named
+        assert got.get("ok") and "to_you=yes" in got["text"]
+        assert "upload size limit" in got["text"] and "Claude switchboard" not in got["text"]
+        assert [m["text"] for m in meeting_lines(broker)] == [
+            "Claude one, can you find the upload size limit?"
+        ]
+
+
+async def test_an_echoed_lead_in_wakes_its_agent_and_only_the_real_words_are_posted(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """#602: "Okay, Claude one, can you hear me?" came out as "Claude-1 Claude switchboard Claude one
+    can you hear me?". The agent is woken by the name before the words (the wake test is in
+    test_meeting_names too), and the room reads "Claude one can you hear me?" without the echoed names.
+    A line of names that no real words follow, in the same call, is not posted at all. Fails if the
+    echoed words are in the posted line."""
+    async with FakeAgent(broker.home, "k1") as claude:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        command(broker, f"/meeting {ZOOM}")
+        await wait_until(lambda: len(joinly.joins) == 1)
+        named = claude.wait_task("#build", timeout_s=30)
+        joinly.push([seg("Claude Claude one switchboard", 0.0, 1.0)])
+        joinly.push([seg("Claude-1 Claude switchboard Claude one can you hear me?", 10.0, 12.0)])
+        got = await named
+        assert got.get("ok") and "to_you=yes" in got["text"]
+        assert 'text="Claude one can you hear me?"' in got["text"]
+        assert [m["text"] for m in meeting_lines(broker)] == ["Claude one can you hear me?"]
+
+
 async def test_an_ambiguous_name_asks_which_agent(broker: InProcBroker, joinly: FakeJoinly) -> None:
     """A bare "Claude" with two Claudes posts the line and a notice, and wakes neither.
     Fails if one of them is guessed, or the notice names the wrong pair."""
