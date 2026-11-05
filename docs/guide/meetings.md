@@ -4,6 +4,12 @@ A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a m
 
 The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and [an agent can see the shared screen](#show-an-agent-the-shared-screen). The bot never shares a screen of its own.
 
+## See it work
+
+A real Zoom call, a real Claude Code session and the room, in about 90 seconds. alice sends the bot into the call and says her upload page fails on big files. She turns Voice on and asks "Claude one" to find the upload limit. Claude reads the code and answers out loud in the call. Then alice types "raise it", and Claude makes the change and says so. The waits are cut, and nothing is sped up. alice's voice is a second bot reading her lines.
+
+<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/bac87fc1-733a-4766-95ce-8ccceed78de5"></video>
+
 ## How it works
 
 1. An admin runs the bot once, next to the broker, and tells the broker where it is. The bot is [joinly](https://github.com/joinly-ai/joinly), a separate open-source project. See [Set it up](#set-it-up).
