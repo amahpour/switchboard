@@ -253,8 +253,9 @@ def stylesheet(icons: list[AgentIcon]) -> str:
     weight. For each harness or platform with an image: the tile shows it (the light one, the dark one
     under a dark scheme or an explicit Dark theme, and either one for both when only one was uploaded),
     the drawn glyph and the word under it are hidden, and the settings page's preview of each stored
-    slot gets its image. One with none gets no rule, so the built-in drawing is untouched. A call's avatar
-    is the same ``.avatar`` with the platform's name as its class (``h-zoom``), so the same rules cover it."""
+    slot gets its image. One with none gets no rule, so the built-in avatar or logo is untouched. A call's
+    avatar is the same ``.avatar`` with the platform's name as its class (``h-zoom``), so the same rules cover
+    it."""
     by_slot = {
         (i.harness, i.scheme): i
         for i in icons

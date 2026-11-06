@@ -130,30 +130,47 @@ AGENT_ICONS = {
     "agents/devin-light.png": "3afb7f4c0e2c233a6e3a1956e4c9606a0ac3f774972bc7085f17d1b48dca6ee2",
     "agents/devin-dark.png": "b604b099bcdb8d09455368e67eb7ae74962871eac87524eddc3b30e3a31b4e2d",
 }
-AGENT_ICON_URL = re.compile(r"url\('/static/(agents/[a-z-]+\.png)'\)")
+# The call platforms' logos (#623, DESIGN.md §29.9): Zoom's, Google's and Microsoft's artwork, unaltered,
+# which the maintainer chose to ship (2026-11-05). Pinned by hash the same way, and CSS may load exactly these
+# too.
+CALL_LOGOS = {
+    "calls/zoom.png": "d4c91dcf188a12e1426aa9cb3aade313c12189fc171d8f3e2b17299075ab2ac9",
+    "calls/meet.png": "2cbdf72a1413bf855574f4419bb9f3b07b4fa10d80ac7c23c15c6ada9f1574ce",
+    # rendered at 512 x 512 from Microsoft's teams_48x1.svg (sha256 6ec0e1af...), the artwork unchanged
+    "calls/teams.png": "ab89ed8883e1fa1625f14d3ed52db6dc701ac2b1954dd94356d832a10a2c6029",
+}
+PINNED_IMAGES = {**AGENT_ICONS, **CALL_LOGOS}
+AGENT_ICON_URL = re.compile(r"url\('/static/((?:agents|calls)/[a-z-]+\.png)'\)")
 
 
 def test_css_loads_nothing_external() -> None:
-    """No @import, and no url() but an agent icon's: one of the pinned files, by its exact path."""
+    """No @import, and no url() but an agent icon's or a call logo's: one of the pinned files, by its exact
+    path."""
     for p in files("css"):
         text = p.read_text()
         assert "@import" not in text
         icons = AGENT_ICON_URL.findall(text)
-        assert set(icons) <= set(AGENT_ICONS), icons
-        assert "url(" not in AGENT_ICON_URL.sub("", text), "a url() that isn't an agent icon"
+        assert set(icons) <= set(PINNED_IMAGES), icons
+        assert "url(" not in AGENT_ICON_URL.sub("", text), "a url() that isn't an agent icon or a call logo"
 
 
-def test_css_allows_only_the_pinned_agent_icons() -> None:
-    """The exception is that narrow: any other url(), even one below /static/agents/, still fails."""
+def test_css_allows_only_the_pinned_images() -> None:
+    """The exception is that narrow: any other url(), even one below /static/agents/ or /static/calls/,
+    still fails."""
     for bad in (
         "url('/static/agents/other.png')",
         "url(/static/agents/codex-light.png)",
         "url('https://example.com/agents/codex-light.png')",
         "url('/static/favicon-32.png')",
         "url('/static/agents/../app.js')",
+        "url('/static/calls/other.png')",
+        "url(/static/calls/zoom.png)",
+        "url('https://example.com/calls/zoom.png')",
+        "url('/static/calls/../app.js')",
+        "url('/static/calls/zoom.png/../../app.js')",
     ):
         icons = AGENT_ICON_URL.findall(bad)
-        assert not set(icons) <= set(AGENT_ICONS) or "url(" in AGENT_ICON_URL.sub("", bad), bad
+        assert not set(icons) <= set(PINNED_IMAGES) or "url(" in AGENT_ICON_URL.sub("", bad), bad
 
 
 def test_the_agent_icons_are_the_pinned_files() -> None:
@@ -171,6 +188,52 @@ def test_the_agent_icons_are_the_pinned_files() -> None:
     assert "not affiliated" in notice and "Cognition" in notice
     for source in ("openai.com/brand", "cursor.com/brand", "devin.ai/brand"):
         assert source in notice, source
+
+
+def test_the_call_logos_are_the_pinned_files_with_a_notice_that_claims_no_permission() -> None:
+    """#623: Zoom's, Google's and Microsoft's logos are shipped as the owners made them: a square PNG of at
+    least 120 px, the file that was reviewed (by hash), and each one is what style.css puts on its tile.
+    The NOTICE beside them names each file, its owner, its source and its hash, says switchboard is not
+    affiliated with the owners and that the logos are theirs and not under the MIT license, says an owner can
+    have its logo removed, quotes the maintainer's choice, and does not say that an owner's terms permit it
+    (Zoom's say otherwise). Fails if a file changes, one is added without a pin, the CSS points at a file
+    that is not there, or the NOTICE claims a permission."""
+    for name, sha in CALL_LOGOS.items():
+        b = (STATIC / name).read_bytes()
+        assert b.startswith(b"\x89PNG\r\n\x1a\n"), name
+        w, h = int.from_bytes(b[16:20], "big"), int.from_bytes(b[20:24], "big")
+        assert w == h >= 120, (name, w, h)  # square; Zoom's has no transparency, Meet's and Teams' do
+        assert hashlib.sha256(b).hexdigest() == sha, name
+    on_disk = sorted(p.name for p in (STATIC / "calls").iterdir())
+    assert on_disk == sorted(["NOTICE", *(n.removeprefix("calls/") for n in CALL_LOGOS)]), on_disk
+    css = (STATIC / "style.css").read_text()
+    for name in CALL_LOGOS:
+        assert css.count(f"url('/static/{name}')") == 1, name  # each logo is on one tile, in one rule
+    notice = (STATIC / "calls" / "NOTICE").read_text()
+    for name, sha in CALL_LOGOS.items():
+        assert name.removeprefix("calls/") in notice and sha in notice, name
+    for owner in ("Zoom", "Google", "Microsoft"):
+        assert owner in notice, owner
+    for source in (
+        "brand.zoom.com/document/9",
+        "media.ffycdn.net/us/zoom-video-communications/bsYy1D8LURh18tD1iLzH.png",
+        "fonts.gstatic.com/s/i/productlogos/meet_2020q4/v1/web-512dp/logo_meet_2020q4_color_1x_web_512dp.png",
+        "about.google/brand-resource-center/logos-list",
+        "res-1.cdn.office.net/files/fabric-cdn-prod_20230815.002/assets/brand-icons/product/svg/teams_48x1.svg",
+        "6ec0e1afd7359a71915430bab4a49554bcfd1f1b881db5108c807ed08f1a0afb",  # the Teams SVG it came from
+    ):
+        assert source in notice, source
+    assert "rendered" in notice and "512 x 512" in notice and "Chromium" in notice
+    flat = " ".join(notice.split())
+    assert "not affiliated with, sponsored by or endorsed by Zoom, Google or Microsoft" in flat
+    assert "trademarks and artwork, not covered by switchboard's MIT license" in flat
+    assert "used only to show which platform a call is on" in flat
+    assert "If an owner asks, its logo is removed and switchboard's own drawing comes back" in flat
+    assert "The maintainer chose to ship them" in flat and "Use all three logos including teams" in flat
+    assert "does not say that any owner's terms permit this use" in flat
+    assert "written trademark license" in flat  # what Zoom's brand page says, which the NOTICE does not hide
+    for claim in ("permitted", "licensed to", "with permission", "under license", "used under"):
+        assert claim not in flat, claim
 
 
 def test_the_one_stylesheet_the_page_applies_by_script_is_the_brokers_own() -> None:
@@ -294,7 +357,9 @@ def test_the_vendored_mermaid_is_the_vetted_release() -> None:
     nested = sorted(
         p.relative_to(STATIC).as_posix() for p in STATIC.rglob("*") if p.is_file() and p.parent != STATIC
     )
-    assert nested == sorted(["agents/NOTICE", *AGENT_ICONS, "vendor/mermaid/LICENSE", MERMAID]), nested
+    assert nested == sorted(
+        ["agents/NOTICE", *AGENT_ICONS, "calls/NOTICE", *CALL_LOGOS, "vendor/mermaid/LICENSE", MERMAID]
+    ), nested
     assert hashlib.sha256((STATIC / MERMAID).read_bytes()).hexdigest() == MERMAID_SHA256
     lic = STATIC / "vendor" / "mermaid" / "LICENSE"
     assert hashlib.sha256(lic.read_bytes()).hexdigest() == MERMAID_LICENSE_SHA256

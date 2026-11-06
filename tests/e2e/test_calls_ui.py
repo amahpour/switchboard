@@ -39,8 +39,36 @@ ADMIN_PW = "correct horse battery"
 PLATFORMS = ("zoom", "meet", "teams")
 
 
+# the built-in logo each platform shows (#623, §29.9): its file under static/calls/ and the file's own width
+LOGO = {
+    "zoom": ("/static/calls/zoom.png", 640),
+    "meet": ("/static/calls/meet.png", 512),
+    "teams": ("/static/calls/teams.png", 512),
+}
+LABEL = {"zoom": "Zoom", "meet": "Meet", "teams": "Teams"}
+WHITE, NO_TEXT = "rgb(255, 255, 255)", "rgba(0, 0, 0, 0)"
+
+
 def key_for(name: str) -> str:
     return "sbc_" + hashlib.sha256(f"an example key for {name}".encode()).hexdigest()
+
+
+TILE = {"row": 32, "details": 48, "bar": 22}  # the three places a call's avatar is, in CSS pixels
+
+
+def logo_shown(avatar: Locator, platform: str, where: str = "") -> None:
+    """The avatar draws the platform's built-in logo, the file the page ships, decoded at its own size (a file
+    that is missing or that the CSP blocks fails the decode), on the white tile, with no drawn glyph on it and
+    no text showing. It fills a square tile of the size its place has, when ``where`` names a place."""
+    path, width = LOGO[platform]
+    if where in TILE:
+        box = avatar.evaluate("el => { const r = el.getBoundingClientRect(); return [r.width, r.height]; }")
+        assert box == [TILE[where]] * 2, (where, platform, box)
+    got = avatar.evaluate(PIXEL)
+    assert got is not None and got["url"] == path and got["width"] == width, (where, platform, got)
+    look = avatar.evaluate("el => { const s = getComputedStyle(el); return [s.backgroundColor, s.color]; }")
+    assert look == [WHITE, NO_TEXT], (where, platform, look)
+    expect(avatar.locator("svg")).to_have_count(0)
 
 
 # ------------------------------------------------------------------ the brokers
@@ -262,13 +290,12 @@ def test_the_server_s_own_bot_is_a_call_in_members_and_its_details_end_it(ui: UI
     expect(call_row(page)).to_have_count(1)
     expect(call_row(page).locator(".m-name")).to_have_text("Meet call")
     expect(call_row(page).locator(".m-status")).to_have_text("Live · the server")
-    expect(call_row(page).locator(".avatar.call.h-meet svg.ic-call-meet")).to_have_count(1)
+    logo_shown(call_row(page).locator(".avatar.call.h-meet"), "meet", "row")
     expect(call_row(page).locator(".avatar .dot.s-idle")).to_have_count(1)
     expect(page.locator("#members-count")).to_have_text("2")  # alice and the call
     assert below(page, "buddy-me", "buddy-list", "call-list")  # You, the agents, then the calls
-    expect(page.locator("#banner-meeting-mark svg.ic-call-meet")).to_have_count(
-        1
-    )  # the bar draws the same icon
+    # the bar's is the same
+    logo_shown(page.locator("#banner-meeting-mark .avatar.call.h-meet"), "meet", "bar")
 
     open_details(page)
     expect(page.locator("#insp-name")).to_have_text("Meet call")
@@ -276,7 +303,7 @@ def test_the_server_s_own_bot_is_a_call_in_members_and_its_details_end_it(ui: UI
     expect(page.locator(".insp-status")).to_have_text(re.compile(r"^Live since \d\d:\d\d · transcribing$"))
     expect(page.locator(".insp-chips .tier")).to_have_text("server bot")
     expect(page.locator(".insp-chips .host-chip")).to_have_text("the server")
-    expect(page.locator(".insp-id .avatar.call.lg svg.ic-call-meet")).to_have_count(1)
+    logo_shown(page.locator(".insp-id .avatar.call.lg.h-meet"), "meet", "details")
     facts = page.locator(".insp-facts")
     expect(facts).to_contain_text("Hosted on")
     expect(facts.locator("dt")).to_have_text(["Hosted on", "Started by", "Voice"])
@@ -329,7 +356,7 @@ def test_a_hosted_call_names_its_machine_key_model_and_lines_and_can_copy_the_fi
     members(page)
     expect(call_row(page).locator(".m-name")).to_have_text("Zoom call")
     expect(call_row(page).locator(".m-status")).to_have_text("Live · alice-laptop")
-    expect(call_row(page).locator(".avatar svg.ic-call-zoom")).to_have_count(1)
+    logo_shown(call_row(page).locator(".avatar.call.h-zoom"), "zoom", "row")
     open_details(page)
     expect(page.locator(".insp-chips .tier")).to_have_text("hosted bot")
     expect(page.locator(".insp-chips .host-chip")).to_have_text("alice-laptop")
@@ -394,62 +421,81 @@ def test_joining_and_live_look_different_and_the_page_follows_the_call_going_liv
     assert dot.evaluate("el => getComputedStyle(el).borderStyle") == "solid"
 
 
+@pytest.mark.parametrize("scheme", ["light", "dark"])
 @pytest.mark.parametrize(
-    ("platform", "name", "icon"),
-    [
-        ("zoom", "Zoom call", "call-zoom"),
-        ("meet", "Meet call", "call-meet"),
-        ("teams", "Teams call", "call-teams"),
-    ]
-    + [("unknown", "Call", "call")],
+    ("platform", "name"), [("zoom", "Zoom call"), ("meet", "Meet call"), ("teams", "Teams call")]
 )
-def test_each_platform_has_its_own_drawing_and_its_name_is_always_beside_it(
-    ui: UI, desk: InProcBroker, platform: str, name: str, icon: str
+def test_zoom_meet_and_teams_show_their_logo_everywhere_with_the_name_beside_it(
+    ui: UI, desk: InProcBroker, platform: str, name: str, scheme: str
 ) -> None:
-    """Zoom, Meet, Teams and a hosted call that does not say its platform each have a drawing of switchboard's
-    own, on the page's neutral tile in its own colours, and the platform's name is written beside it (a
-    hosted call that says none is just "Call"). The drawings differ, none is an image loaded from
-    anywhere, and the tile is the page's colour, not a brand's. Fails if two platforms share a drawing,
-    the name is missing, or the tile carries an image."""
-    room = f"plat-{platform}"
+    """#623, §29.9: a Zoom, Meet or Teams call shows that platform's logo, the file the page ships under
+    static/calls/, in the Calls row, in the call's details and in the call bar, filling the tile as Codex's
+    and Devin's logos fill an agent's, in light and in dark (one file for both, on a white tile: Meet's
+    middle is see-through and would go dark on a dark page). The platform's name is written beside it, and no
+    drawing is over the logo. Fails if a place still draws the old glyph, loads another file, shows the logo
+    on the neutral tile, or leaves the name out."""
+    room = f"logo-{platform}-{scheme}"
     make_room(desk, f"#{room}")
     host_call(desk, f"#{room}", None, "alice-laptop", platform=platform, key=key_for(room))
-    page = open_page(ui, desk, room)
+    page = open_page(ui, desk, room, color_scheme=scheme)
     members(page)
     expect(call_row(page).locator(".m-name")).to_have_text(name)
-    avatar = call_row(page).locator(".avatar.call")
-    expect(avatar.locator(f"svg.ic-{icon}")).to_have_count(1)
-    look = avatar.evaluate(
-        "el => { const s = getComputedStyle(el); return [s.backgroundImage, s.backgroundColor]; }"
-    )
-    assert look[0] == "none" and look[1] == "rgb(236, 236, 240)", look  # the neutral tile, no image
+    logo_shown(call_row(page).locator(".avatar.call"), platform, "row")
     open_details(page)
     expect(page.locator("#insp-name")).to_have_text(name)
-    # the details and the bar draw the same icon as the row
-    expect(page.locator(f".insp-id .avatar.call.lg svg.ic-{icon}")).to_have_count(1)
-    expect(page.locator(f"#banner-meeting-mark svg.ic-{icon}")).to_have_count(1)
+    logo_shown(page.locator(".insp-id .avatar.call.lg"), platform, "details")
+    logo_shown(page.locator("#banner-meeting-mark .avatar.call"), platform, "bar")
+    # the name beside the bar's logo, and the three drawings the logos replaced are gone from the page
+    expect(page.locator("#banner-meeting-text")).to_contain_text(f"({LABEL[platform]})")
+    expect(page.locator("svg.ic-call-zoom, svg.ic-call-meet, svg.ic-call-teams")).to_have_count(0)
 
 
-def test_the_drawings_are_all_different_and_none_is_an_image(ui: UI, desk: InProcBroker) -> None:
-    """The four drawings (read from the page's own icon table through one row each) are four different
-    paths, drawn as strokes in the tile's colour: an SVG path and nothing loaded. Fails if two platforms share
-    a path, or the glyph is not drawn in the tile's own ink."""
-    seen: dict[str, str] = {}
-    for platform in ("zoom", "meet", "teams", "unknown"):
-        room = f"look-{platform}"
-        make_room(desk, f"#{room}")
-        host_call(desk, f"#{room}", None, "alice-laptop", platform=platform, key=key_for(room))
-        page = open_page(ui, desk, room)
-        members(page)
-        glyph = call_row(page).locator(".avatar.call svg.ic path")
-        seen[platform] = glyph.get_attribute("d") or ""
-        ink = (
-            call_row(page)
-            .locator(".avatar.call svg.ic")
-            .evaluate("el => { const s = getComputedStyle(el); return [s.fill, s.stroke]; }")
+def test_the_logos_show_on_a_phone_in_the_sheet_its_details_and_the_bar(ui: UI, desk: InProcBroker) -> None:
+    """On a phone the Members sheet's row, the call's details in it and the call bar show the same logo at the
+    same sizes as on a desktop, and every control is still inside the screen. Fails if the logo is missing on
+    the phone's layout, is not the tile's size, or pushes the bar past the screen's edge."""
+    make_room(desk, "#phone-logo")
+    host_call(desk, "#phone-logo", None, "alice-laptop", platform="teams", key=key_for("phone-logo"))
+    page = open_page(ui, desk, "phone-logo", **PHONE)
+    logo_shown(page.locator("#banner-meeting-mark .avatar.call"), "teams", "bar")
+    members(page)
+    logo_shown(call_row(page).locator(".avatar.call"), "teams", "row")
+    open_details(page, tap=True)
+    logo_shown(page.locator(".insp-id .avatar.call.lg"), "teams", "details")
+    inside_the_screen(page, "#insp-body .insp-id", "#insp-end-call")
+    inside_the_screen(page, "#meeting-voice", "#meeting-snapshot", "#meeting-leave", "#banner-meeting-mark")
+
+
+def test_a_call_that_does_not_say_its_platform_keeps_the_sound_wave_drawing(
+    ui: UI, desk: InProcBroker
+) -> None:
+    """A hosted call with no platform is "Call" and has no logo to show: its row, details and bar draw the
+    sound-wave bars on the page's neutral tile, an SVG path in the tile's own ink and no image. Fails if it
+    is given one of the logos, the tile carries an image, or the drawing's ink is not the tile's."""
+    make_room(desk, "#nameless")
+    host_call(desk, "#nameless", None, "alice-laptop", platform="unknown", key=key_for("nameless"))
+    page = open_page(ui, desk, "nameless")
+    members(page)
+    expect(call_row(page).locator(".m-name")).to_have_text("Call")
+    for where, avatar in (
+        ("row", call_row(page).locator(".avatar.call")),
+        ("bar", page.locator("#banner-meeting-mark .avatar.call")),
+    ):
+        expect(avatar).to_have_class(re.compile(r"\bh-call\b"))
+        expect(avatar.locator("svg.ic-call")).to_have_count(1)
+        look = avatar.evaluate(
+            "el => { const s = getComputedStyle(el); return [s.backgroundImage, s.backgroundColor]; }"
         )
-        assert ink[0] == "none" and ink[1] == "rgb(60, 60, 67)", (platform, ink)  # the tile's own ink
-    assert all(seen.values()) and len(set(seen.values())) == 4, seen
+        # the neutral tile, no image
+        assert look[0] == "none" and look[1] == "rgb(236, 236, 240)", (where, look)
+        ink = avatar.locator("svg.ic").evaluate(
+            "el => { const s = getComputedStyle(el); return [s.fill, s.stroke]; }"
+        )
+        assert ink[0] == "none" and ink[1] == "rgb(60, 60, 67)", (where, ink)  # the tile's own ink
+        bars = "M3 6.2v3.6M6 4.2v7.6M10 4.2v7.6M13 6.2v3.6"
+        assert avatar.locator("svg.ic path").get_attribute("d") == bars
+    open_details(page)
+    expect(page.locator(".insp-id .avatar.call.lg svg.ic-call")).to_have_count(1)
 
 
 # ------------------------------------------------------------------ who may end it
@@ -646,12 +692,15 @@ def test_with_agents_in_the_room_focus_goes_to_the_agent_above_when_the_call_end
 
 # ------------------------------------------------------------------ light, dark and a phone
 def test_a_call_in_light_dark_and_on_a_phone_fits_and_shows_its_controls(ui: UI, desk: InProcBroker) -> None:
-    """The row and the details in light and dark (the tile and the text change with the scheme), and on a
+    """The row and the details in light and dark (the text and the neutral tile of a call that names no
+    platform change with the scheme; a logo's white tile does not, which the logos' test covers), and on a
     phone Members is the sheet, the row opens the details in it, every control is inside the screen and
     nothing scrolls sideways, and Back and Esc work in the sheet. Fails if a colour does not follow the
     scheme, a control is cut off, or the phone scrolls sideways."""
     make_room(desk, "#looks")
-    host_call(desk, "#looks", None, "alice-laptop-with-24-chr", key=key_for("looks"))  # the longest label
+    host_call(  # the longest label, on a call that names no platform: its tile is the page's neutral one
+        desk, "#looks", None, "alice-laptop-with-24-chr", platform="unknown", key=key_for("looks")
+    )
     page = open_page(ui, desk, "looks")
     members(page)
     tile = call_row(page).locator(".avatar.call")
@@ -714,19 +763,24 @@ def png_for(scheme: str) -> bytes:
 
 def test_an_admin_replaces_a_platform_s_icon_and_removes_it_again(ui: UI, desk: InProcBroker) -> None:
     """Settings → Appearance lists the three platforms a call can be on under Call icons, beside the agents'
-    avatars, with the same Upload, Replace and Reset. After a Zoom upload the Calls row, the call bar and the
-    details show that file (the dark one in dark), Meet's and Teams' drawings are untouched, and Reset brings
-    the drawing back everywhere. A file that is not an image is refused in words and nothing changes. Fails if
-    a place still draws the glyph over the image, the other platforms change, or Reset leaves the picture."""
+    avatars, each card showing the platform's logo, with the same Upload, Replace and Reset. After a Zoom
+    upload the Calls row, the call bar, the details and the card show that file (the dark one in dark) and
+    not Zoom's built-in logo, Meet's and Teams' logos are untouched, and Reset brings Zoom's logo back
+    everywhere. A file that is not an image is refused in words and nothing changes. Fails if a place keeps
+    the built-in logo over the upload, the other platforms change, or Reset leaves the picture."""
     make_room(desk, "#upload")
     host_call(desk, "#upload", None, "alice-laptop", platform="zoom", key=key_for("upload"))
     page = open_page(ui, desk, "upload")
     members(page)
-    tile = call_row(page).locator(".avatar.call")
-    expect(tile.locator("svg.ic-call-zoom")).to_be_visible()
+    logo_shown(call_row(page).locator(".avatar.call"), "zoom", "row before the upload")
 
     open_icons(page)
     expect(page.locator("#agent-icons-calls-title")).to_have_text("Call icons")
+    expect(page.locator("#agent-icons-calls-title + p")).to_have_text(
+        "A call in a room shows its platform's logo beside its name, until you upload an image of your own."
+    )
+    for platform in LOGO:  # each card's own avatar is the logo, as everyone's call shows it
+        logo_shown(page.locator(f'.agent-icon-row[data-harness="{platform}"] .avatar'), platform, "card")
     expect(page.locator('.agent-icon-row[data-harness="zoom"] strong')).to_have_text("Zoom")
     expect(page.locator('.agent-icon-row[data-harness="meet"] strong')).to_have_text("Meet")
     expect(page.locator('.agent-icon-row[data-harness="teams"] strong')).to_have_text("Teams")
@@ -748,37 +802,41 @@ def test_an_admin_replaces_a_platform_s_icon_and_removes_it_again(ui: UI, desk: 
     row = page.locator('.agent-icon-row[data-harness="zoom"]')
     expect(row).to_contain_text("Your light and dark images")
     tile_shows(row.locator(".avatar"), "zoom", "light")  # the card's own avatar shows it
+    for platform in ("meet", "teams"):  # and the other two cards still show their logos
+        logo_shown(page.locator(f'.agent-icon-row[data-harness="{platform}"] .avatar'), platform, "card")
     page.click("#settings-close")
 
     for scheme in ("light", "dark"):
         page.emulate_media(color_scheme=scheme)
         members(page)
         tile_shows(call_row(page).locator(".avatar.call"), "zoom", scheme)
-        expect(call_row(page).locator(".avatar.call svg.ic")).to_be_hidden()  # the glyph is under the picture
+        expect(call_row(page).locator(".avatar.call svg")).to_have_count(0)
         tile_shows(page.locator("#banner-meeting-mark .avatar"), "zoom", scheme)
         open_details(page)
         tile_shows(page.locator(".insp-id .avatar.call.lg"), "zoom", scheme)
         page.click("#insp-back")
     page.emulate_media(color_scheme="light")
 
-    # the other platforms keep their drawings
+    # the other platforms keep their logos
     make_room(desk, "#other")
     host_call(desk, "#other", None, "bobs-laptop", platform="meet", key=key_for("other"))
     page.locator('#tabs .room[data-room="#other"]').click()
     expect(page.locator("#room-title")).to_have_text("other")
-    expect(call_row(page).locator(".avatar svg.ic-call-meet")).to_be_visible()
+    logo_shown(call_row(page).locator(".avatar.call.h-meet"), "meet", "row in another room")
+    logo_shown(page.locator("#banner-meeting-mark .avatar.call.h-meet"), "meet", "bar in another room")
     page.locator('#tabs .room[data-room="#upload"]').click()
 
     open_icons(page)
     page.click("#agent-icon-reset-zoom")
     expect(page.locator("#agent-icons-status")).to_have_text("Zoom is back to its built-in icon.")
     expect(row).to_contain_text("The built-in icon")
+    logo_shown(row.locator(".avatar"), "zoom", "card after Reset")
     page.click("#settings-close")
     members(page)
-    expect(call_row(page).locator(".avatar.call svg.ic-call-zoom")).to_be_visible()
-    got = call_row(page).locator(".avatar.call").evaluate(PIXEL)
-    assert got is None
-    expect(page.locator("#banner-meeting-mark svg.ic-call-zoom")).to_be_visible()
+    logo_shown(call_row(page).locator(".avatar.call"), "zoom", "row after Reset")
+    logo_shown(page.locator("#banner-meeting-mark .avatar.call"), "zoom", "bar after Reset")
+    open_details(page)
+    logo_shown(page.locator(".insp-id .avatar.call.lg"), "zoom", "details after Reset")
 
 
 def test_a_person_who_is_not_an_admin_sees_the_icons_and_has_no_way_to_change_them(

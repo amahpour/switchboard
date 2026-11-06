@@ -1,0 +1,40 @@
+The call platforms' logos (issue #623, DESIGN.md §29.9)
+
+These files show which platform a call is on, next to its name in Members, in the call's details
+and in the call bar. switchboard is not affiliated with, sponsored by or endorsed by Zoom, Google
+or Microsoft. The logos are their owners' trademarks and artwork, not covered by switchboard's MIT
+license, and are used only to show which platform a call is on. Nothing in any file was changed
+(Teams' was rendered from the owner's SVG, below). If an owner asks, its logo is removed and
+switchboard's own drawing comes back.
+
+This NOTICE does not say that any owner's terms permit this use. The maintainer chose to ship
+them (2026-11-05: "Use all three logos including teams"), after being told:
+  - Zoom's brand page says its logo needs a written trademark license, and this repository holds
+    none;
+  - Microsoft's logos were taken out of the Simple Icons set;
+  - Google states no explicit rule for the Meet logo.
+They also knew that Cal.com's open-source repository ships all three.
+
+zoom.png (640 x 640)
+  The Zoom logo: the white "zoom" wordmark on Zoom's blue square (Zoom's "Zoom-Brand-Avatar-Square"),
+  Zoom Video Communications' trademark, used to mark a call on Zoom.
+  Source: Zoom Brand Center, https://brand.zoom.com/document/9 (the Favicons collection), served
+  from https://media.ffycdn.net/us/zoom-video-communications/bsYy1D8LURh18tD1iLzH.png?format=png
+  The file is unchanged.
+  sha256 d4c91dcf188a12e1426aa9cb3aade313c12189fc171d8f3e2b17299075ab2ac9
+
+meet.png (512 x 512)
+  The Google Meet logo, Google's trademark, used to mark a call on Google Meet.
+  Source: Google's own CDN, https://fonts.gstatic.com/s/i/productlogos/meet_2020q4/v1/web-512dp/logo_meet_2020q4_color_1x_web_512dp.png
+  Google's logos are listed at https://about.google/brand-resource-center/logos-list/
+  The file is unchanged.
+  sha256 2cbdf72a1413bf855574f4419bb9f3b07b4fa10d80ac7c23c15c6ada9f1574ce
+
+teams.png (512 x 512)
+  The Microsoft Teams product icon, Microsoft's trademark, used to mark a call on Microsoft Teams.
+  Source: Microsoft's own CDN,
+  https://res-1.cdn.office.net/files/fabric-cdn-prod_20230815.002/assets/brand-icons/product/svg/teams_48x1.svg
+  (sha256 6ec0e1afd7359a71915430bab4a49554bcfd1f1b881db5108c807ed08f1a0afb). switchboard ships its logos
+  as PNG files, so the SVG was rendered to a PNG at 512 x 512 in Chromium. The artwork is
+  unchanged; only its format is.
+  sha256 ab89ed8883e1fa1625f14d3ed52db6dc701ac2b1954dd94356d832a10a2c6029

@@ -752,10 +752,21 @@ const SCENARIOS = {
     const rowOf = function () {
       return findAll(w.$('call-list'), function (n) { return n.tag === 'button' && n.dataset.focus === 'call'; })[0];
     };
+    // the glyphs drawn inside an avatar (span.ic): the logos of Zoom, Meet and Teams have none, they are the tile's
+    // background (the row's own chevron is not in the avatar)
+    const glyphsIn = function (root) {
+      let count = 0;
+      findAll(root, function (a) { return a.className.split(' ').includes('avatar'); }).forEach(function (a) {
+        count += findAll(a, function (n) { return n.className.split(' ').includes('ic'); }).length;
+      });
+      return count;
+    };
     seen.row = { title: text('calls-title'), name: text('call-list'), count: text('members-count'),
-                 icon: findAll(w.$('call-list'), function (n) { return n.className.includes('ic-call-zoom'); }).length,
+                 logo: findAll(w.$('call-list'), function (n) { return n.className.split(' ').includes('h-zoom'); }).length,
+                 glyph: glyphsIn(w.$('call-list')),
                  bar: text('banner-meeting-text'),
-                 mark: findAll(w.$('banner-meeting-mark'), function (n) { return n.className.includes('ic-call-zoom'); }).length };
+                 mark: findAll(w.$('banner-meeting-mark'), function (n) { return n.className.split(' ').includes('h-zoom'); }).length,
+                 markGlyph: glyphsIn(w.$('banner-meeting-mark')) };
     // the details: what the frame says at once, then what the broker says of this viewer
     w.server.calls.build = Object.assign({}, hosted, { started_by: 'alice', started_at: TS, live_at: TS + 5,
                                                        model: 'large-v3-turbo', lines: 3, can_end: false });
@@ -780,10 +791,12 @@ const SCENARIOS = {
     seen.gone = { inspecting: w.$('pane').classList.contains('inspecting'),
                   hidden: w.$('calls-title').classList.contains('hidden'), rows: w.$('call-list').children.length,
                   count: text('members-count'), bar: w.$('banner-meeting').classList.contains('hidden') };
-    // a hosted call that does not say its platform is "Call", and a platform the page has no drawing for hides it
+    // a hosted call that does not say its platform is "Call" with the generic drawing and no logo, and a platform the
+    // page does not know hides it
     room({ state: 'joining', platform: 'unknown', voice: false, source: 'hosted', host: 'alice-laptop', fingerprint: 'x' });
     await settle();
-    seen.unknown = { name: text('call-list'), generic: findAll(w.$('call-list'), function (n) { return n.className === 'ic ic-call'; }).length };
+    seen.unknown = { name: text('call-list'), generic: findAll(w.$('call-list'), function (n) { return n.className === 'ic ic-call'; }).length,
+                     logo: findAll(w.$('call-list'), function (n) { return /\bh-(zoom|meet|teams)\b/.test(n.className); }).length };
     room({ state: 'live', platform: 'webex', voice: false });
     await settle();
     seen.webex = { rows: w.$('call-list').children.length, hidden: w.$('calls-title').classList.contains('hidden') };

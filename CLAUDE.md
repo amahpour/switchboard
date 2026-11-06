@@ -52,7 +52,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `store.py`, `db.py`, `models.py` | every SQL statement; the schema, `SCHEMA_VERSION` and its migrations; the dataclasses rows become |
 | `envelope.py` | what an agent reads: text hygiene and the batch envelope |
 | `guardrails.py` | the strings switchboard must never emit, and the only file they may appear in |
-| `web/static/` | the UI, plain JavaScript: `app.js`, `md.js` (Markdown to DOM through `createElement` and `textContent` only), `style.css`, the sign-in pages |
+| `web/static/` | the UI, plain JavaScript: `app.js`, `md.js` (Markdown to DOM through `createElement` and `textContent` only), `style.css`, the sign-in pages; `agents/` and `calls/` hold the vendors' and the call platforms' logos, each folder with a NOTICE, and every file pinned by hash in `tests/unit/test_web_static_lint.py` (§29.9) |
 | `docs/`, `docs/guide/`, `zensical.toml` | the documentation, a guide per feature, and the site built from them (Zensical; `.github/workflows/docs.yml` publishes it to GitHub Pages on each merge) |
 
 The path of a message: a person posts in the web UI (`web.py`) or an agent calls `say` (`mcp/server.py`, over HTTPS through `agent_http.py`); it is stored and classified; the engine decides who hears it and when; the runner carries that out, and the message reaches the agent only as the answer to something it did: a tool call, a hook, or the Stop hook it waits in (`hook_replies.py`). Hooks report each session's state back over the same connection.

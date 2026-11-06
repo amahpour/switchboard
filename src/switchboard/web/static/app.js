@@ -472,16 +472,10 @@
     // angle brackets around a slash: OpenCode's avatar, switchboard's own generic "code" drawing,
     // not any company's mark (#518)
     code: 'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9 3.5 7 12.5',
-    // the platforms a call can be on (#623, §29.9): switchboard's own generic drawings, one per platform, drawn like
-    // the rest of these. Zoom, Google and Microsoft don't allow their logos without a licence, so none imitates a
-    // mark (no camera in a square, no coloured shapes): a webcam for Zoom, a screen with a person for Meet, a group
-    // of three for Teams, and sound-wave bars (a call's audio) for a call that doesn't say its platform. The name is
-    // always written beside it, and an admin can upload the real ones (§29.11).
+    // sound-wave bars (a call's audio): the avatar of a call that doesn't say its platform (#623, §29.9). Zoom, Meet and
+    // Teams show their own logo, a file under static/calls/ that style.css puts on the tile, so there is no drawing here
+    // for them. The name is always written beside the tile, and an admin can upload another image (§29.11).
     call: 'M3 6.2v3.6M6 4.2v7.6M10 4.2v7.6M13 6.2v3.6',
-    'call-zoom': circ(8, 6.4, 4.6) + circ(8, 6.4, 1.7) + 'M8 11v2.4M5 13.6h6',
-    'call-meet': rr(1.5, 2.2, 13, 9.2, 1.6) + circ(8, 5.3, 1.3) + 'M5.4 9.5c.5-1.3 1.4-1.9 2.6-1.9s2.1.6 2.6 1.9M5.5 14h5',
-    'call-teams': circ(8, 4.6, 2) + 'M4.6 13c.3-2.4 1.8-3.6 3.4-3.6s3.1 1.2 3.4 3.6' + circ(3, 6.4, 1.4) +
-      'M1 12.4c.2-1.5 1-2.4 2-2.6' + circ(13, 6.4, 1.4) + 'M15 12.4c-.2-1.5-1-2.4-2-2.6',
     plus: 'M8 3v10M3 8h10',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
@@ -654,13 +648,14 @@
     return a;
   }
 
-  // A call's avatar (#623): its platform's drawing on a neutral tile. A platform the page has no drawing for is the
-  // generic one. The class is the platform's name (h-zoom), so an admin's upload for it (§29.11) is covered by the same
-  // stylesheet rule an agent's is, and nothing in a message or a URL chooses an image. `extra` adds classes (lg, mini).
+  // A call's avatar (#623): its platform's logo, or the sound-wave drawing for a call that doesn't say its platform, on
+  // the avatar tile. The class is the platform's name (h-zoom), so style.css's built-in logo and an admin's upload for
+  // it (§29.11) are both rules on that class, as an agent's are, and nothing in a message or a URL chooses an image.
+  // A logo is the tile's background, so a known platform has no glyph inside. `extra` adds classes (lg, bar).
   function callAvatar(platform, extra, live) {
     const known = meetingLabel(platform) !== undefined;
     const a = el('span', 'avatar call h-' + (known ? platform : 'call'));
-    a.append(icon(known ? 'call-' + platform : 'call'));
+    if (!known) a.append(icon('call'));
     if (extra) for (const c of extra.split(' ')) if (c) a.classList.add(c);
     // the corner dot of a call that is a row or a heading: solid while it is live, dashed while it is joining
     if (live !== undefined) {
@@ -4072,7 +4067,7 @@
     return /[.!?]$/.test(up) ? up : up + '.';
   }
 
-  // what a call's icon is: the platform a call can be on has a drawing of switchboard's own where a harness has an avatar
+  // what a call's icon is: the platform a call can be on has a logo where a harness has an avatar
   function isCallIcon(h) { return meetingLabel(h) !== undefined; }
   function iconThing(h) { return isCallIcon(h) ? 'icon' : 'avatar'; }
   function iconName(h) { return isCallIcon(h) ? MEETING_LABEL[h] : harnessOf(h)[1]; }
@@ -4146,8 +4141,8 @@
       if (Array.isArray(data.platforms) && data.platforms.length) {
         const sub = el('h5', 'agent-icons-sub', 'Call icons');
         sub.id = 'agent-icons-calls-title';
-        body.append(sub, el('p', 'fine', 'A call in a room shows its platform\'s icon beside its name: switchboard\'s own drawing'
-          + ' until you upload one.'));
+        body.append(sub, el('p', 'fine', 'A call in a room shows its platform\'s logo beside its name, until you upload'
+          + ' an image of your own.'));
         for (const h of data.platforms) body.append(agentIconRow(h, data));
       }
     } else body.append(el('p', 'fine', 'Loading…'));

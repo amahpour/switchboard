@@ -286,8 +286,8 @@ MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
 # the avatars an admin may upload (#498, DESIGN.md §29.11): for these harnesses, in these two schemes, as
 # these types, at most this big; ``db.SCHEMA`` says the same in its CHECKs
 ICON_HARNESSES = ("claude", "codex", "cursor", "devin", "opencode")
-# and for the platforms a call can be on (#623, §29.9): Zoom, Meet and Teams don't let anyone ship their
-# logos either, so the page draws its own and an admin may upload the real ones, in the same table
+# and for the platforms a call can be on (#623, §29.9): the page shows each platform's own logo
+# (static/calls/), and an admin may upload another image over it, in the same table
 ICON_PLATFORMS = ("zoom", "meet", "teams")
 # every name ``agent_icons.harness`` may hold, in the order Settings lists them
 ICON_SLOTS = ICON_HARNESSES + ICON_PLATFORMS
