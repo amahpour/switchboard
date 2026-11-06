@@ -15,23 +15,23 @@ Whether voice is on is memory only: a call does not outlive the process, so neit
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 import time
-import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastmcp import Client
-from fastmcp.client.messages import MessageHandler
-from fastmcp.client.transports import StreamableHttpTransport
-from mcp.shared.exceptions import MCPDeprecationWarning
-
-from switchboard.meeting import ingest
+from switchboard.meeting import ingest, joinly
 from switchboard.meeting.ingest import LINE_GAP_S
-from switchboard.meeting.lines import Assembler, Line, Segment
+from switchboard.meeting.joinly import (
+    INTERRUPTED,
+    LEAVE_TIMEOUT_S,
+    PARTICIPANT,
+    POLL_S,
+    RESOURCE,
+    SPEAK_TIMEOUT_S,
+)
+from switchboard.meeting.lines import Assembler, Line
 from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
@@ -40,106 +40,8 @@ from switchboard.meeting.speech import call_text, speakable
 
 log = logging.getLogger("switchboard.meeting")
 
-PARTICIPANT = "switchboard (transcribing)"
-# joinly screenshots its 1280x720 page, trims a tenth off each edge and fits the rest to this size. Its
-# own default, 512x288, is too small to read text on a shared screen; 1024x576 keeps the 16:9 frame near
-# the trimmed page's own width, as a JPEG of a few hundred KB (checked against joinly v0.5.4, which takes
-# it as a BrowserMeetingProvider argument through meeting_provider_args).
-SNAPSHOT_SIZE = (1024, 576)
-# joinly's Whisper cuts the call into pieces: after `min_silence` seconds of quiet, once a piece holds
-# `min_audio` seconds. Its defaults (0.2 s and 0.4 s) cut "Hi Codex," off from the request after it, and
-# a piece that short is misheard ("High Codex"). Longer ones (#620): on the recorded call of #617, with the
-# pre-roll fix, every call-out woke the right agent (17 of 17, against 16), for about 0.14 s more delay.
-# Both are arguments of joinly v0.5.4's WhisperSTT, so a joinly without our fixes takes them (a key it did
-# not have would break every call).
-STT_MIN_SILENCE_S = 0.35
-STT_MIN_AUDIO_S = 1.0
-RESOURCE = "transcript://live/segments"
 JOIN_TIMEOUT_S = 45.0
-LEAVE_TIMEOUT_S = 5.0
-POLL_S = 3.0
-SPEAK_TIMEOUT_S = 180.0  # speak_text returns when the speech has ended; 600 characters is under a minute
 SNAPSHOT_TIMEOUT_S = 8.0  # a call-out's line waits no longer than this for its picture
-INTERRUPTED = "Interrupted"  # how joinly's reply to speak_text starts when someone spoke over it
-_SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
-
-
-_REDACT_LOGGERS = ("mcp", "fastmcp", "httpx", "httpcore", "sse_starlette", "switchboard.meeting")
-_redact_installed = False
-
-
-def _install_redact() -> None:
-    """The MCP client logs a tool call's arguments at DEBUG, and that call carries the
-    link. A filter on the root logger does not see a child logger's records, so the
-    redaction runs when the record is created. Only those libraries are touched."""
-    global _redact_installed
-    if _redact_installed:
-        return
-    _redact_installed = True
-    previous = logging.getLogRecordFactory()
-
-    def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-        record = previous(*args, **kwargs)
-        if not record.name.startswith(_REDACT_LOGGERS):
-            return record
-        try:
-            rendered = record.getMessage()
-        except Exception:
-            return record
-        if "://" not in rendered and "pwd=" not in rendered.lower():
-            return record
-        record.msg = _SECRET.sub("[redacted]", rendered)
-        record.args = ()
-        return record
-
-    logging.setLogRecordFactory(factory)
-
-
-class _Updates(MessageHandler):
-    def __init__(self) -> None:
-        self.updated = asyncio.Event()
-
-    async def on_resource_updated(self, message: Any) -> None:
-        self.updated.set()
-
-
-def _segments(contents: Any) -> list[Segment]:
-    raw = ""
-    if isinstance(contents, str):
-        raw = contents
-    else:
-        for block in contents or []:
-            text = getattr(block, "text", None)
-            if isinstance(text, str) and text:
-                raw = text
-                break
-    if not raw:
-        return []
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        return []
-    out: list[Segment] = []
-    for item in data.get("segments") or []:
-        if not isinstance(item, dict):
-            continue
-        start_v, end_v = item.get("start"), item.get("end")
-        if isinstance(start_v, bool) or not isinstance(start_v, (int, float)):
-            continue
-        if isinstance(end_v, bool) or not isinstance(end_v, (int, float)):
-            continue
-        start, end = float(start_v), float(end_v)
-        speaker = item.get("speaker")
-        out.append(
-            Segment(
-                text=str(item.get("text") or ""),
-                start=start,
-                end=end,
-                speaker=speaker if isinstance(speaker, str) and speaker.strip() else None,
-                role=str(item.get("role") or "participant"),
-            )
-        )
-    return out
 
 
 @dataclass
@@ -154,18 +56,6 @@ class _Live:
     last_snapshot: float | None = None
 
 
-def _reply(result: Any) -> str:
-    """The text of a tool result, whatever shape the client library gave it."""
-    data = getattr(result, "data", None)
-    if isinstance(data, str):
-        return data
-    for block in getattr(result, "content", None) or []:
-        text = getattr(block, "text", None)
-        if isinstance(text, str):
-            return text
-    return ""
-
-
 class MeetingBridge:
     """The calls the broker has open. ``start`` and ``stop`` are called on the broker's loop."""
 
@@ -177,7 +67,7 @@ class MeetingBridge:
         self._voice: set[int] = set()  # rooms whose call is speaking agents' @call lines
         self._live: dict[int, _Live] = {}  # calls the bot has joined
         self._side: set[asyncio.Task[None]] = set()  # snapshots under way, kept from being collected
-        _install_redact()
+        joinly.install_redact()
 
     def recover(self) -> None:
         """A call that was open when the process died has no session left to leave.
@@ -238,38 +128,14 @@ class MeetingBridge:
 
     async def _session(self, room_id: int, url: str, stop: asyncio.Event, errors: list[str]) -> None:
         names = self.state.store.active_names(room_id)
-        words = [w[:40] for w in hotwords(names)[:100]]
         cfg = self.state.cfg.meeting
-        stt_args: dict[str, Any] = {
-            "hotwords": words,
-            "min_silence": STT_MIN_SILENCE_S,
-            "min_audio": STT_MIN_AUDIO_S,
-        }
-        if cfg.stt_model:
-            # Only when the operator named one: a ``model_name`` that is given at all, even an empty one,
-            # makes joinly look for the model on the network, where leaving it out keeps its own files (§52).
-            stt_args["model_name"] = cfg.stt_model
-        header = json.dumps(
-            {
-                "name": PARTICIPANT,
-                "stt_args": stt_args,
-                "tts_args": {"voice": cfg.tts_voice},  # the Kokoro voice (joinly's settings, §52)
-                # a frame whose text can be read
-                "meeting_provider_args": {"snapshot_size": list(SNAPSHOT_SIZE)},
-            },
-            ensure_ascii=True,
+        header = joinly.settings_header(
+            hotwords=hotwords(names), model=cfg.stt_model, voice=cfg.tts_voice, participant=PARTICIPANT
         )
-        transport = StreamableHttpTransport(cfg.joinly_url, headers={"joinly-settings": header})
-        handler = _Updates()
-        client = Client(transport, message_handler=handler, mode="legacy")
+        client, handler = joinly.open_client(cfg.joinly_url, header)
         async with client:
             try:
-                try:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", DeprecationWarning)
-                        warnings.simplefilter("ignore", MCPDeprecationWarning)
-                        await client.session.subscribe_resource(RESOURCE)
-                except Exception:
+                if not await joinly.subscribe(client):
                     log.warning("meeting room %s: transcript subscribe failed", room_id)
                 try:
                     await client.call_tool(
@@ -308,7 +174,7 @@ class MeetingBridge:
         self.state.service.notice_in(room_id, f'Transcribing a {label} call as "{PARTICIPANT}".')
 
     async def _listen(
-        self, live: _Live, handler: _Updates, room_id: int, stop: asyncio.Event, errors: list[str]
+        self, live: _Live, handler: joinly.Updates, room_id: int, stop: asyncio.Event, errors: list[str]
     ) -> None:
         client = live.client
         seen: set[tuple[Any, ...]] = set()
@@ -324,7 +190,7 @@ class MeetingBridge:
                 errors.append("the call dropped")
                 return
             now = time.monotonic()
-            for seg in _segments(contents):
+            for seg in joinly.segments(contents):
                 key = (seg.start, seg.end, seg.text, seg.speaker, seg.role)
                 if key in seen:
                     continue
@@ -338,7 +204,7 @@ class MeetingBridge:
             if queue and (not last or now - last >= LINE_GAP_S):
                 await self._post_line(room_id, queue.popleft(), live)
                 last = time.monotonic()
-            await _wait_for(handler, stop, POLL_S if not queue else min(POLL_S, LINE_GAP_S))
+            await joinly.wait_for(handler, stop, POLL_S if not queue else min(POLL_S, LINE_GAP_S))
         for line in asm.flush():
             queue.append(line)
         while queue:
@@ -422,7 +288,7 @@ class MeetingBridge:
                     live.speech.clear()
                     self.state.service.notice_in(room_id, "Couldn't speak in the call.")
                     return
-                if _reply(result).startswith(INTERRUPTED):
+                if joinly.reply(result).startswith(INTERRUPTED):
                     self.state.service.notice_in(
                         room_id, "Someone spoke over the line in the call, so it stopped early."
                     )
@@ -535,16 +401,3 @@ class MeetingBridge:
         if reason == "the broker stopped":
             return "The call ended because the broker stopped."
         return None
-
-
-async def _wait_for(handler: _Updates, stop: asyncio.Event, timeout: float) -> None:
-    if stop.is_set() or handler.updated.is_set():
-        return
-    stop_t = asyncio.ensure_future(stop.wait())
-    upd_t = asyncio.ensure_future(handler.updated.wait())
-    try:
-        await asyncio.wait({stop_t, upd_t}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
-    finally:
-        for task in (stop_t, upd_t):
-            task.cancel()
-        await asyncio.gather(stop_t, upd_t, return_exceptions=True)

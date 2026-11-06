@@ -1,0 +1,28 @@
+{
+  "_source": "m3:live claude 2.1.307 (haiku, --plugin-dir, agent token typed): the Bash command a plugin skill's text asked for, which Claude Code had filled in before the model saw it: ${CLAUDE_PLUGIN_ROOT}, ${CLAUDE_PLUGIN_DATA}, ${CLAUDE_SKILL_DIR}, ${CLAUDE_SESSION_ID} and the non-sensitive ${user_config.server_url} (the token is not substituted into a skill)",
+  "_unverified": false,
+  "session_id": "00000000-0000-4000-8000-00000000c200",
+  "transcript_path": "/ws/transcript.jsonl",
+  "cwd": "/ws",
+  "scratchpad_dir": "/tmp/scratch",
+  "prompt_id": "00000000-0000-4000-8000-00000000c201",
+  "permission_mode": "default",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "sh probe.sh skill 'root=<plugin root>' 'data=<home>/.claude/plugins/data/switchboard-inline' 'skilldir=<plugin root>/skills/host-meeting-bot' 'sid=00000000-0000-4000-8000-00000000c200' 'url=http://switchboard.localhost:7419'",
+    "description": "Run probe.sh in skill mode with the given arguments"
+  },
+  "tool_response": {
+    "stdout": "done\nargs:\n  root=<plugin root>\n  data=<home>/.claude/plugins/data/switchboard-inline\n  skilldir=<plugin root>/skills/host-meeting-bot\n  sid=00000000-0000-4000-8000-00000000c200\n  url=http://switchboard.localhost:7419\nenv names:\n  CLAUDECODE\n  CLAUDE_CODE_CHILD_SESSION\n  CLAUDE_CODE_ENTRYPOINT\n  CLAUDE_CODE_EXECPATH\n  CLAUDE_CODE_MESSAGING_SOCKET\n  CLAUDE_CODE_MESSAGING_TOKEN\n  CLAUDE_CODE_SESSION_ATTENDED\n  CLAUDE_CODE_SESSION_ID\n  CLAUDE_EFFORT\n  CLAUDE_PID\nCLAUDE_PLUGIN_ROOT=<unset>\nCLAUDE_PLUGIN_DATA=<unset>\nCLAUDE_PID=4242\nCLAUDE_CODE_SESSION_ID=00000000-0000-4000-8000-00000000c200\nCLAUDE_PROJECT_DIR=<unset>\nCLAUDE_CONFIG_DIR=<unset>\nCLAUDE_CODE_ENTRYPOINT=cli\nCLAUDECODE=1\nppid chain:\n  1000 sh\n  1000 bash\n  1000 claude\n  1000 tmux: server\n  1000 systemd\ndata folders:\n  <home>/.claude/plugins/data/switchboard-inline\n    .\n    ..\n    listener-key-4242\n    switchboard-ended-00000000-0000-4000-8000-00000000c1ff",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_fixture_c211",
+  "duration_ms": 39
+}
