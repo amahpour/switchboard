@@ -319,7 +319,7 @@ function Cmd-Stop([string[]]$rest) {
         Say ('stopped the call with key ' + $id.Substring(0, 4) + [char]0x00B7 + $id.Substring(4, 4))
     }
     if (-not $any) { Say 'no hosted call to stop'; return }
-    if ($live) { Say 'The call stays in the room until someone presses End call, or for five minutes after the relay left.' }
+    if ($live) { Say 'The relay reports departure so the call bar ends at once; an unreachable server uses the silence timeout.' }
 }
 
 function Cmd-Start([string[]]$rest) {

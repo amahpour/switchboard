@@ -8,8 +8,9 @@ the broker instead of the broker pulling it from a bot beside it (§52). The bro
   the sha256 of a key it made for this call, at ``POST /mcp/meeting/host``. It is no agent tool: the model
   never handles the key or even its hash. The call is the person's: its owner and its machine's label come
   from the token, not from anything the script says, and the room must have a member on that machine.
-- **The key** is a bearer for two routes (``broker/call_http.py``) and nothing else: pushing segments
-  (``push``) and waiting for what is to be spoken (``speech``). ``check`` is what both ask first. It ends
+- **The key** is a bearer for three routes (``broker/call_http.py``) and nothing else: pushing segments
+  (``push``), waiting for what is to be spoken (``speech``), and reporting departure (``left``).
+  ``check`` is what each asks first. It ends
   with the call, and it is refused at once when the call is over or its machine's sign-in is revoked.
 - **What a push becomes** is what the broker's own bot's lines become: the same ``Assembler`` joins
   segments into lines and the same ``ingest`` checks and posts them, so every source gets the same fixes.
@@ -86,6 +87,10 @@ ENDS: dict[str, tuple[str | None, str | None]] = {
         "its host never started sending",
         "The call ended: its host never started sending.",
     ),
+    "bot_left": ("its bot left", "The call ended: its bot left."),
+    "bot_stopped": ("its bot stopped", "The call ended: its bot stopped."),
+    "join_failed": ("its bot could not join", "The call ended: its bot could not join."),
+    "joinly_lost": ("its bot lost the call", "The call ended: its bot lost the call."),
     "quiet": ("its host went quiet", "The call ended: its host went quiet."),
 }
 
@@ -508,6 +513,13 @@ class HostedCalls:
             ev.set()
 
     # ------------------------------------------------------------------ ending
+    def left(self, row: Meeting, reason: Any) -> None:
+        """The key's relay left. Only fixed reasons reach storage or notices; unknown input is generic.
+        Recheck after reading the body: an ended key must never affect a newer call in the room."""
+        row = self._fresh(row)
+        reasons = {"stopped": "bot_stopped", "join_failed": "join_failed", "joinly_lost": "joinly_lost"}
+        self.end(row, reasons.get(reason, "bot_left") if isinstance(reason, str) else "bot_left")
+
     def may_end(self, row: Meeting, person_id: int | None, admin: bool) -> bool:
         """Who may end a hosted call: the person it belongs to, or an admin (the owner is one)."""
         return admin or person_id == row.owner_person_id

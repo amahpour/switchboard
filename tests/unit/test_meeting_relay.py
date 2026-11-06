@@ -89,6 +89,8 @@ class Broker:
         self.calls.append((path, body))
         if self.aborted:
             raise Unreachable("closed")
+        if path == "/mcp/meeting/leave":
+            return ok(ended=True)
         if path == relay.PUSH_PATH:
             got = self.push_answers.pop(0) if self.push_answers else ok(accepted=0, duplicate=0, ended=False)
             if isinstance(got, Exception):
@@ -885,3 +887,36 @@ async def test_the_first_poll_selects_a_checked_server_voice_or_the_older_server
     header = json.loads(client.header)
     assert header["tts_args"]["voice"] == expected
     assert header["stt_args"]["hotwords"] == ["Codex"]
+
+
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [
+        (Exit.STOPPED, "stopped"),
+        (Exit.JOIN_FAILED, "join_failed"),
+        (Exit.JOINLY_LOST, "joinly_lost"),
+        (Exit.ENDED, "ended"),
+        (Exit.REFUSED, "left"),
+        (Exit.SERVER_LOST, "left"),
+    ],
+)
+async def test_every_exit_reports_departure_once(code: Exit, reason: str) -> None:
+    """After registration the relay reports every exit, including an already ended call. This must
+    happen after the last push and before aborting its broker connection, without exposing secrets."""
+    r = await joined(Rig())
+    r.relay.finish(code)
+    assert await r.code() == code
+    assert [(p, b) for p, b in r.broker.calls if p == "/mcp/meeting/leave"] == [
+        ("/mcp/meeting/leave", {"reason": reason})
+    ]
+    assert r.broker.aborted
+    assert KEY not in r.heard() and LINK not in r.heard()
+
+
+async def test_failed_join_reports_departure_and_keeps_the_exit_code() -> None:
+    """A real join failure reports its fixed reason, rather than leaving a ten-minute joining bar."""
+    r = Rig()
+    r.joinly.fail_join = True
+    r.start()
+    assert await r.code() == Exit.JOIN_FAILED
+    assert ("/mcp/meeting/leave", {"reason": "join_failed"}) in r.broker.calls

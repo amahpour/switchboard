@@ -1,7 +1,7 @@
 """The routes of a hosted call (DESIGN.md §54, #623).
 
 A call hosted on a person's machine (``meeting/hosted.py``) is registered by the host script and run by a
-relay with a key made for that one call. Three routes:
+relay with a key made for that one call. Four routes:
 
 - ``POST /mcp/meeting/host``: the host script registers a call: the room, the sha256 of the key it made, the
   platform and the model. It is opened by what the plugin's other scripts already present at ``/mcp/listen``
@@ -15,8 +15,10 @@ relay with a key made for that one call. Three routes:
 - ``POST /mcp/meeting/speech``: a long poll, answered with what is to be spoken (while voice is on), the
   room's names as the transcriber's hints, the voice switch and whether the call has ended.
 
-The call key (``sbc_``) is a bearer for the last two and nothing else: every other route answers an agent
-token or a person's session and refuses it, and those two refuse an agent token, a session and a browser (any
+- ``POST /mcp/meeting/leave``: the bot left or could not join; end only this key's call.
+
+The call key (``sbc_``) is a bearer for the last three and nothing else: every other route answers an agent
+token or a person's session and refuses it. Those three refuse an agent token, a session and a browser (any
 request with an ``Origin``): a call key does one thing. A key that was never registered is ``unknown_key``
 (401), one whose machine's sign-in was revoked is ``revoked`` (401), and one whose call is over is ``ended``
 (410): a relay that is told so stops and leaves.
@@ -44,6 +46,7 @@ if TYPE_CHECKING:  # pragma: no cover
 HOST_PATH = "/mcp/meeting/host"
 PUSH_PATH = "/mcp/meeting/push"
 SPEECH_PATH = "/mcp/meeting/speech"
+LEAVE_PATH = "/mcp/meeting/leave"
 HOST_BODY_MAX = 4096  # the registration is a room, a hash, a platform, a model and a session id
 REFUSED_STATUS = {"ended": 410}  # every other refusal of a key is a 401
 HOST_STATUS = {"not_member": 403}  # a ServiceError code whose status is not ServiceError.HTTP's
@@ -63,7 +66,7 @@ async def _read_body(receive: Receive, send: Send, limit: int) -> bytes | None:
 
 
 class _CallRoute:
-    """What both routes do first: POST only, no browser, a call key that opens a call, a small JSON body."""
+    """The call-key routes: POST only, no browser, a key that opens a call, a bounded JSON body."""
 
     def __init__(self, state: "BrokerState") -> None:
         self.state = state
@@ -164,6 +167,25 @@ class MeetingSpeech(_CallRoute):
         await _reply(send, 200, res)
 
 
+class MeetingLeave(_CallRoute):
+    """``/mcp/meeting/leave``: end only the call authenticated by this key (§54)."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        got = await self.enter(scope, receive, send)
+        if got is None:
+            return
+        call, body = got
+        if not isinstance(body, dict):
+            await _reply(send, 400, {"error": "bad_request", "message": "a JSON object is needed"})
+            return
+        try:
+            self.state.hosted_calls.left(call, body.get("reason"))
+        except Refused as e:
+            await _refused(send, e)
+            return
+        await _reply(send, 200, {"ended": True})
+
+
 class MeetingHost:
     """``/mcp/meeting/host``: the host script registers a call (§54). The door is the listener's and the
     session hook's (``AgentAuth.door``): an agent token, or a listener key, which is only ever taken there.
@@ -228,3 +250,4 @@ def install(app: "FastAPI", state: "BrokerState") -> None:
     app.router.routes.append(Route(HOST_PATH, endpoint=MeetingHost(state)))
     app.router.routes.append(Route(PUSH_PATH, endpoint=MeetingPush(state)))
     app.router.routes.append(Route(SPEECH_PATH, endpoint=MeetingSpeech(state)))
+    app.router.routes.append(Route(LEAVE_PATH, endpoint=MeetingLeave(state)))

@@ -929,9 +929,7 @@ def test_stop_removes_the_project_and_its_files_and_status_says_what_runs(machin
     fp = f"{first[:4]}\u00b7{first[4:]}"
     r = m.run(["stop", "--data", str(m.data), fp], stdin="", env=m.env(FAKE_DOCKER_RUNNING=both))
     assert r.returncode == 0 and f"stopped the call with key {fp}" in r.stdout
-    assert (
-        "stays in the room until someone presses End call" in r.stdout
-    )  # it was running: the room still has it
+    assert "relay reports departure" in r.stdout  # only an unreachable broker needs the silence fallback
     assert [p.name for p in m.call_dirs()] == [second]  # only that one
     downs = [c for c in m.compose("down") if c["project"] == running]
     assert downs and "--timeout" in downs[-1]["args"]

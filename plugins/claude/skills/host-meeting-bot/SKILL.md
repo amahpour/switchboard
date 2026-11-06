@@ -40,4 +40,4 @@ When your user says to leave the call:
 sh "${CLAUDE_PLUGIN_ROOT}/bin/meeting-host" stop --data "${CLAUDE_PLUGIN_DATA}"
 ```
 
-That stops both containers. The call stays in the room's call bar until someone presses **End call** or five minutes pass. Pressing End call in the room also makes the bot leave and both containers stop on their own. `status` (same arguments) shows what is running.
+That stops both containers. The relay reports departure, so the call bar ends at once; if the broker cannot be reached, its silence timeout is the fallback. Pressing End call in the room also makes the bot leave and both containers stop on their own. `status` (same arguments) shows what is running.

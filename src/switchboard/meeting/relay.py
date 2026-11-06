@@ -55,6 +55,7 @@ from switchboard.meeting.links import LinkError, parse_link
 
 PUSH_PATH = "/mcp/meeting/push"
 SPEECH_PATH = "/mcp/meeting/speech"
+LEAVE_PATH = "/mcp/meeting/leave"
 DEFAULT_VOICE = "bm_george"  # the Kokoro voice the broker's own bot speaks with by default (§52)
 DEFAULT_JOINLY = "http://127.0.0.1:8000/mcp/"
 
@@ -75,6 +76,7 @@ BACKOFF_FIRST_S = 1.0
 BACKOFF_MAX_S = 30.0
 RETRY_AFTER_MAX_S = 60.0  # a longer Retry-After is waited out in pieces this long
 PENDING_MAX = 2000  # segments waiting to be pushed; past it the oldest go, with one line of warning
+DEPARTURE_S = 3.0  # best effort, within Docker's stop grace after the final push
 FINAL_PUSH_S = 5.0  # a relay told to stop reads the transcript once more, and waits this long to push it
 REPLY_MAX = 64 * 1024  # the most of an answer it reads
 SECRET_FILE_MAX = 4096
@@ -218,7 +220,7 @@ class Broker(Protocol):
 
 
 class BrokerClient:
-    """The broker's two routes over HTTPS, with the standard library: one connection a request, in a thread,
+    """The broker's key routes over HTTPS, with the standard library: one connection a request, in a thread,
     which ``abort`` closes from outside so a long poll ends the moment the relay is told to stop. TLS uses the
     machine's own trust store, as the broker's sign-in to an identity provider does (``oidc.py``)."""
 
@@ -508,10 +510,11 @@ class Relay:
         except Exception as e:
             self.finish(Exit.JOINLY_LOST, f"stopped on an error ({type(e).__name__})")
         finally:
-            self.broker.abort()
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await self._depart()
+            self.broker.abort()
             if jy is not None:
                 await self._leave(jy)
             self._burn(self.cfg.key_path)
@@ -519,6 +522,18 @@ class Relay:
                 with contextlib.suppress(NotImplementedError, RuntimeError, ValueError):
                     loop.remove_signal_handler(sig)
         return self._code()
+
+    async def _depart(self) -> None:
+        """Best effort once, including after the room ended it (410 is harmless). Never retry shutdown
+        or replace the original exit reason; a broker out of reach still has its silence timeout."""
+        reason = {
+            Exit.STOPPED: "stopped",
+            Exit.JOIN_FAILED: "join_failed",
+            Exit.JOINLY_LOST: "joinly_lost",
+            Exit.ENDED: "ended",
+        }.get(self._code(), "left")
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.broker.post(LEAVE_PATH, {"reason": reason}, DEPARTURE_S), DEPARTURE_S)
 
     def _code(self) -> Exit:
         return self.exit if self.exit is not None else Exit.ENDED
