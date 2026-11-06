@@ -402,7 +402,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six step
 - `meeting-host plan [--cpu|--gpu] [--model NAME]` prints the device, the model and the joinly image it would use, and starts nothing.
 - Environment: `SWITCHBOARD_AGENT_TOKEN` (the credential, instead of the listener key), `SWITCHBOARD_RELAY_IMAGE` (another image for the relay, to try a build of your own), `SWITCHBOARD_RELAY_ADD_HOST` (the same as `--add-host`), `SWITCHBOARD_RELAY_ALLOW_HTTP=1` (a plain `http` server address on a network you trust: the key would cross it in the clear).
 
-**The relay** (`switchboard meeting relay`, in switchboard's image; the script starts it, you don't): `--server`, `--joinly`, `--key-file` and `--link-file` (a file only you can read, or `-` for stdin), `--model`, `--voice`, `--no-join`, `--allow-http`, `--burn-files` and `--trust-files`. It never takes the key or the link as an argument or from the environment. `switchboard meeting relay --help` has them.
+**The relay** (`switchboard meeting relay`, in switchboard's image; the script starts it, you don't): `--server`, `--joinly`, `--key-file` and `--link-file` (a file only you can read, or `-` for stdin), `--model`, `--voice`, `--no-join`, `--allow-http`, `--burn-files` and `--no-mode-check`. It never takes the key or the link as an argument or from the environment. `switchboard meeting relay --help` has them.
 
 **Config**, in the broker's `config.toml` or its environment:
 

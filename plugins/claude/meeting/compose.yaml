@@ -56,7 +56,7 @@ services:
       - --link-file
       - /call/link
       - --burn-files   # the link is deleted once the call is joined, and the key when the relay ends
-      - --trust-files  # a container shows the host's file modes; the host script made these 0600 itself
+      - --no-mode-check  # a container shows the host's file modes; the host script made these 0600 itself
     environment:
       SWITCHBOARD_URL: ${SB_SERVER:?the host script sets this}
       SWITCHBOARD_MEETING_STT_MODEL: ${SB_MODEL:-}

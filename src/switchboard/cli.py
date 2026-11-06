@@ -536,7 +536,7 @@ def cmd_meeting_relay(args: argparse.Namespace) -> int:
         join=not args.no_join,
         allow_http=args.allow_http,
         burn=args.burn_files,
-        trust_files=args.trust_files,
+        no_mode_check=args.no_mode_check,
     )
 
 
@@ -851,7 +851,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="delete the link's file once the call is joined, and the key's file when the relay ends",
     )
     r.add_argument(
-        "--trust-files",
+        "--no-mode-check",
         action="store_true",
         help="do not refuse a key or link file that others can read (a container shows the host's modes)",
     )

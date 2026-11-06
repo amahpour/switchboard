@@ -685,7 +685,7 @@ What the file starts, and why it is built this way:
 - **Images.** A missing image is pulled before the script tells the server anything, so a call registered in the room is ready to start. To try a build of your own, `SWITCHBOARD_RELAY_IMAGE=my-switchboard:dev` (`docker build -f deploy/image/Dockerfile .`) names the relay's image, and nothing else changes.
 - **A server the containers can't resolve.** `--add-host NAME:IP` (or `host-gateway`) writes a second Compose file with `extra_hosts` for the relay, for a server whose name only this machine knows.
 
-The key and the link are files in `calls/<fingerprint>/` of the plugin's data folder, mode 0600 in a folder only the person can enter. The relay deletes the link once it has joined, and the key when it exits. On Docker Desktop (a Mac, or Windows) a bind-mounted file shows the host's mode differently, which is why the relay is told to trust the files the script made (`--trust-files`); the folder is the person's, and the relay runs as them.
+The key and the link are files in `calls/<fingerprint>/` of the plugin's data folder, mode 0600 in a folder only the person can enter. The relay deletes the link once it has joined, and the key when it exits. On Docker Desktop (a Mac, or Windows) a bind-mounted file shows the host's mode differently, which is why the relay is told to trust the files the script made (`--no-mode-check`); the folder is the person's, and the relay runs as them.
 
 ## Health checks and logs
 

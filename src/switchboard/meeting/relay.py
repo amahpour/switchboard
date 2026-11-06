@@ -337,14 +337,17 @@ class JoinlyClient:
             "join_meeting", {"meeting_url": url, "participant_name": name}, timeout=timeout
         )
 
+    def _updates(self) -> joinly.Updates:
+        if self._handler is None:
+            raise RuntimeError("joinly is not open")
+        return self._handler
+
     async def segments(self) -> list[Segment]:
-        assert self._handler is not None
-        self._handler.updated.clear()
+        self._updates().updated.clear()
         return joinly.segments(await self._client.read_resource(joinly.RESOURCE))
 
     async def changed(self, stop: asyncio.Event, timeout: float) -> None:
-        assert self._handler is not None
-        await joinly.wait_for(self._handler, stop, timeout)
+        await joinly.wait_for(self._updates(), stop, timeout)
 
     async def speak(self, text: str) -> str:
         result = await self._client.call_tool("speak_text", {"text": text}, timeout=joinly.SPEAK_TIMEOUT_S)
@@ -754,7 +757,7 @@ def main(
     join: bool = True,
     allow_http: bool = False,
     burn: bool = False,
-    trust_files: bool = False,
+    no_mode_check: bool = False,
 ) -> int:
     """``switchboard meeting relay``: read the key and the link, run the relay, return its exit code. The
     arguments are the command line's (``cli.py``); a key or link that cannot be used is ``Exit.USAGE``."""
@@ -762,7 +765,7 @@ def main(
     try:
         if join and link_file is None:
             raise UsageError("a call to join needs --link-file (or --no-join, to join none)")
-        key, link = read_secrets(key_file, link_file if join else None, mode_check=not trust_files)
+        key, link = read_secrets(key_file, link_file if join else None, mode_check=not no_mode_check)
         broker = BrokerClient(server, key, allow_http=allow_http)
     except UsageError as e:
         print(f"switchboard: meeting relay: {e}", file=sys.stderr)
