@@ -758,7 +758,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   line-height: 1.4;
 }
 /* fallback glyph for a band whose text was set without an icon */
-.band:not(:has(> .ic))::before {
+.band:not(:has(> .ic)):not(:has(> .call-mark))::before {
   content: "!";
   display: inline-flex;
   align-items: center;
@@ -775,8 +775,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .band-amber { background: var(--amber-bg); color: var(--amber-fg); }
 .band-danger { background: var(--danger-bg); color: var(--danger); font-weight: 500; }
 .band-meeting { background: var(--chip-bg); color: var(--ink-2); flex-wrap: wrap; }
+.call-mark { display: inline-flex; flex-shrink: 0; }
 /* the text keeps room to be read: when the buttons would squeeze it, they wrap to a row of their own */
-.band-meeting > span { flex: 1 1 14em; min-width: 0; }
+.band-meeting > #banner-meeting-text { flex: 1 1 14em; min-width: 0; }
 .meeting-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
 .meeting-btn { height: 26px; padding: 0 10px; flex-shrink: 0; font-size: calc(12px * var(--text-scale)); }
 /* the voice switch: a track and a knob drawn here; aria-checked says its state, and the bar's words repeat it */
@@ -1097,6 +1098,12 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .avatar.h-codex { background-color: var(--h-codex-tile); background-image: var(--h-codex-img); }
 .avatar.h-cursor { background-color: transparent; background-image: var(--h-cursor-img); }
 .avatar.h-devin { background-color: transparent; background-image: var(--h-devin-img); }
+/* A call, the room's third kind of member (#623, DESIGN.md §54): the page's own drawing of its platform on a neutral
+   tile, in the page's own colours. An admin's upload for a platform replaces it (/api/agent-icons.css, §29.11). */
+.avatar.call { background: var(--h-other-bg); color: var(--h-other-fg); }
+.avatar.call .ic { width: 62%; height: 62%; stroke-width: 1.6; }
+.avatar.call.lg { width: 48px; height: 48px; border-radius: 12px; }
+.avatar.call.bar { width: 22px; height: 22px; border-radius: 6px; }
 .avatar.human { border-radius: 50%; background: var(--human-bg); color: var(--human-fg); font-size: calc(12.5px * var(--text-scale)); font-weight: 600; }
 .avatar.sys { background: var(--chip-bg); color: var(--muted-2); font-size: calc(15px * var(--text-scale)); font-weight: 400; }
 .avatar.sm { width: 28px; height: 28px; font-size: calc(12px * var(--text-scale)); }
@@ -1922,6 +1929,8 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   margin: 0;
   font-size: calc(12.5px * var(--text-scale));
 }
+/* a call's details have a longer label ("Key fingerprint") that should not wrap */
+.insp-facts.call-facts { grid-template-columns: 102px minmax(0, 1fr); }
 .insp-facts dt, .insp-facts dd { margin: 0; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .insp-facts dt { display: flex; align-items: center; color: var(--muted-2); }  /* level with a dd that holds a button */
 .insp-facts dd { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -2910,6 +2919,8 @@ body.login {
 .agent-icons-head { position: relative; display: flex; align-items: center; gap: 6px; }
 .agent-icons-title { margin: 0; font-size: calc(14px * var(--text-scale)); font-weight: 600; }
 .agent-icons > p { margin: 0; }
+.agent-icons-sub { margin: 8px 0 0; font-size: calc(13px * var(--text-scale)); font-weight: 600; }
+.agent-icons-sub + p { margin: -4px 0 0; }
 .agent-icons-body { display: flex; flex-direction: column; gap: 10px; }
 .info-wrap { display: inline-flex; }
 .info-btn {

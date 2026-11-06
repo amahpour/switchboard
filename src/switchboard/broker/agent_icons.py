@@ -1,5 +1,6 @@
-"""The avatars an admin uploads for each harness (DESIGN.md §29.11, #498): what a file must be before the
-broker stores it and sends it to every browser, and the stylesheet that shows it.
+"""The avatars an admin uploads for each harness, and the icons for each platform a call can be on
+(DESIGN.md §29.11, #498, #623): what a file must be before the broker stores it and sends it to every
+browser, and the stylesheet that shows it.
 
 An upload is a PNG or a WebP, at most 256 KB and 512 pixels a side, and never an SVG (which can carry
 script). The check reads the bytes and trusts nothing the sender says about them:
@@ -12,8 +13,9 @@ script). The check reads the bytes and trusts nothing the sender says about them
 - nothing is decoded and nothing is re-encoded: the server image has no imaging library, and the
   caps on bytes and pixels are what bound the work the browser does.
 
-``stylesheet`` writes the page's CSS for the icons that are set. Every value in it is one of five harness
-names, one of two schemes or twelve hex digits, so no byte of an upload or of a request reaches it.
+``stylesheet`` writes the page's CSS for the icons that are set. Every value in it is one of eight names (the
+five harnesses and the three platforms), one of two schemes or twelve hex digits, so no byte of an upload or
+of a request reaches it.
 """
 
 from __future__ import annotations
@@ -27,12 +29,16 @@ from switchboard.models import (
     ICON_HARNESSES,
     ICON_MAX_BYTES,
     ICON_MAX_SIDE,
+    ICON_PLATFORMS,
     ICON_SCHEMES,
+    ICON_SLOTS,
     ICON_TYPES,
     AgentIcon,
 )
 
-HARNESSES = ICON_HARNESSES
+HARNESSES = ICON_HARNESSES  # the agents' avatars (§29.11)
+PLATFORMS = ICON_PLATFORMS  # the calls' icons (#623): the same table, checks and stylesheet
+SLOTS = ICON_SLOTS  # every name an upload may be for
 SCHEMES = ICON_SCHEMES
 TYPES = ICON_TYPES
 MAX_BYTES = ICON_MAX_BYTES
@@ -244,17 +250,18 @@ def url(harness: str, scheme: str, version: str) -> str:
 
 def stylesheet(icons: list[AgentIcon]) -> str:
     """The CSS that puts the uploaded avatars on the page, after ``style.css`` so it wins at equal
-    weight. For each harness with an image: the tile shows it (the light one, the dark one under a dark
-    scheme or an explicit Dark theme, and either one for both when only one was uploaded), the drawn
-    glyph and the word under it are hidden, and the settings page's preview of each stored slot gets its
-    image. A harness with none gets no rule, so the built-in avatar is untouched."""
+    weight. For each harness or platform with an image: the tile shows it (the light one, the dark one
+    under a dark scheme or an explicit Dark theme, and either one for both when only one was uploaded),
+    the drawn glyph and the word under it are hidden, and the settings page's preview of each stored
+    slot gets its image. One with none gets no rule, so the built-in drawing is untouched. A call's avatar
+    is the same ``.avatar`` with the platform's name as its class (``h-zoom``), so the same rules cover it."""
     by_slot = {
         (i.harness, i.scheme): i
         for i in icons
-        if i.harness in HARNESSES and i.scheme in SCHEMES and _VERSION_RE.fullmatch(i.version)
+        if i.harness in SLOTS and i.scheme in SCHEMES and _VERSION_RE.fullmatch(i.version)
     }
     out = ["/* the avatars an admin uploaded (DESIGN.md §29.11), written by the broker */"]
-    for h in HARNESSES:
+    for h in SLOTS:
         light, dark = by_slot.get((h, "light")), by_slot.get((h, "dark"))
         if light is None and dark is None:
             continue

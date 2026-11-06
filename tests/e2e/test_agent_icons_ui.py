@@ -224,12 +224,13 @@ def settings_icons(page: Page) -> Locator:
 
 
 def open_icons(page: Page) -> None:
-    """Settings → Appearance, with the five harnesses' rows loaded."""
+    """Settings → Appearance, with the five harnesses' rows and the three platforms' loaded."""
     if (page.viewport_size or {}).get("width", 1440) <= 760:
         page.click("#rooms-toggle")  # a phone's sidebar is a drawer, and Settings is at its foot
     open_settings(page, "appearance")
     expect(settings_icons(page)).to_be_visible()
-    expect(page.locator(".agent-icon-row")).to_have_count(5)
+    # the five harnesses, then the three platforms a call can be on (#623)
+    expect(page.locator(".agent-icon-row")).to_have_count(8)
 
 
 def choose(page: Page, harness: str, scheme: str, data: bytes, mime: str, name: str = "avatar.png") -> None:

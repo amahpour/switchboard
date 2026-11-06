@@ -37,3 +37,25 @@ def test_count_open_meetings_counts_joining_and_live_calls_in_every_room(store: 
     store.insert_meeting(c.id, started_by="alice", platform="teams")  # a room may start another one later
     store.insert_meeting(a.id, started_by="alice", platform="zoom")  # and so may the first
     assert store.count_open_meetings() == 2
+
+
+def test_a_call_records_when_it_went_live_once(store: Store, clock: FakeClock) -> None:
+    """The call's details say "Live since" (§54), so the time it went live is kept: nothing while it is
+    joining, the broker's clock when it goes live, and never moved by a later call to set it live (a second
+    push, a retry) or after it ended. Fails if ``live_at`` is the time it started, is overwritten, or is
+    set on a call that is not joining."""
+    room = store.create_room("a", "alice", 60, 6)
+    row = store.insert_meeting(room.id, started_by="alice", platform="zoom")
+    assert row.state == "joining" and row.live_at is None
+    clock.advance(42)
+    store.set_meeting_live(row.id)
+    live = store.meeting_by_id(row.id)
+    assert live is not None and live.state == "live" and live.live_at == clock.now() != row.started_at
+    clock.advance(10)
+    store.set_meeting_live(row.id)  # already live: left as it is
+    again = store.meeting_by_id(row.id)
+    assert again is not None and again.live_at == live.live_at
+    store.end_meeting(row.id, None)
+    store.set_meeting_live(row.id)  # ended: not brought back
+    ended = store.meeting_by_id(row.id)
+    assert ended is not None and ended.state == "ended" and ended.live_at == live.live_at

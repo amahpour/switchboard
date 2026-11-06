@@ -15,10 +15,10 @@ from typing import Any
 from switchboard import claims, db, reviews
 from switchboard.clock import Clock, SystemClock
 from switchboard.models import (
-    ICON_HARNESSES,
     ICON_MAX_BYTES,
     ICON_MAX_SIDE,
     ICON_SCHEMES,
+    ICON_SLOTS,
     ICON_TYPES,
     LOCAL_HOST,
     MAX_BUDGET,
@@ -642,8 +642,14 @@ class Store:
         return int(r[0])
 
     def set_meeting_live(self, meeting_id: int) -> None:
+        """The call is in: joining becomes live, and when that happened is kept (``live_at``, the "Live
+        since" of its details, §54). A call that is live already, or ended, is left as it is."""
+        now = self.clock.now()
         with db.tx(self.con):
-            self.con.execute("UPDATE meetings SET state='live' WHERE id=? AND state='joining'", (meeting_id,))
+            self.con.execute(
+                "UPDATE meetings SET state='live', live_at=? WHERE id=? AND state='joining'",
+                (now, meeting_id),
+            )
 
     def end_meeting(self, meeting_id: int, error: str | None) -> None:
         """Mark the call ended. A second call is a no-op. ``error`` is a short phrase, never a link."""
@@ -1686,7 +1692,7 @@ class Store:
         argument could be a row the schema refuses, so a bug elsewhere is a ValueError, not a stored
         SVG. The old row goes in the same transaction, so a refused write keeps the old icon."""
         if (
-            harness not in ICON_HARNESSES
+            harness not in ICON_SLOTS
             or scheme not in ICON_SCHEMES
             or mime not in ICON_TYPES
             or not 0 < len(data) <= ICON_MAX_BYTES
@@ -1718,13 +1724,13 @@ class Store:
             "SELECT harness, scheme, mime, width, height, length(data) AS size, sha256, updated_at"
             " FROM agent_icons"
         ).fetchall()
-        order = {(h, s): i for i, (h, s) in enumerate((h, s) for h in ICON_HARNESSES for s in ICON_SCHEMES)}
+        order = {(h, s): i for i, (h, s) in enumerate((h, s) for h in ICON_SLOTS for s in ICON_SCHEMES)}
         return sorted((self._icon_row(r) for r in rows), key=lambda i: order[(i.harness, i.scheme)])
 
     def agent_icon_reset(self, harness: str) -> int:
         """Remove ``harness``'s avatars, light and dark: the built-in one comes back. How many went."""
-        if harness not in ICON_HARNESSES:
-            raise ValueError("not a harness with an avatar")
+        if harness not in ICON_SLOTS:
+            raise ValueError("not a harness or a platform with an icon")
         with db.tx(self.con):
             return self.con.execute("DELETE FROM agent_icons WHERE harness=?", (harness,)).rowcount
 

@@ -1705,7 +1705,7 @@ def shoot_agent_icons(browser: Any, out: Path, world: Any) -> None:
             page.click("#me-settings")
             expect(page.locator("#app-dialog")).to_be_visible()
             page.click("#settings-row-appearance" if size is PHONE else "#settings-tab-appearance")
-            expect(page.locator(".agent-icon-row")).to_have_count(5)
+            expect(page.locator(".agent-icon-row")).to_have_count(8)
             expect(page.locator('.agent-icon-row[data-harness="codex"]')).to_contain_text(
                 "Your light and dark images"
             )

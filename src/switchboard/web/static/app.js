@@ -60,8 +60,10 @@
     pingTimer: null,
     sendQueue: null,   // sends (typed or from the Inspector) go out one at a time, in order
     // Inspector: which agent, the latest member-detail GET, and its UI toggles
-    inspect: null,     // { room, name } or null (the pane shows Members)
+    inspect: null,     // { room, name, host } for an agent, { room, call: true } for the room's call, or null (Members)
     detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
+    callDetail: null,  // { room, data } from GET /api/rooms/{slug}/call: the open call's details, for this viewer (#623)
+    callRow: null,     // the call's row button in Members, for focus on "back"
     inspSeq: 0,        // only the newest detail response is applied
     inspTimer: null,
     statusTimer: null,
@@ -468,6 +470,16 @@
     // angle brackets around a slash: OpenCode's avatar, switchboard's own generic "code" drawing,
     // not any company's mark (#518)
     code: 'M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5M9 3.5 7 12.5',
+    // the platforms a call can be on (#623, §29.9): switchboard's own generic drawings, one per platform, drawn like
+    // the rest of these. Zoom, Google and Microsoft don't allow their logos without a licence, so none imitates a
+    // mark (no camera in a square, no coloured shapes): a webcam for Zoom, a screen with a person for Meet, a group
+    // of three for Teams, and sound-wave bars (a call's audio) for a call that doesn't say its platform. The name is
+    // always written beside it, and an admin can upload the real ones (§29.11).
+    call: 'M3 6.2v3.6M6 4.2v7.6M10 4.2v7.6M13 6.2v3.6',
+    'call-zoom': circ(8, 6.4, 4.6) + circ(8, 6.4, 1.7) + 'M8 11v2.4M5 13.6h6',
+    'call-meet': rr(1.5, 2.2, 13, 9.2, 1.6) + circ(8, 5.3, 1.3) + 'M5.4 9.5c.5-1.3 1.4-1.9 2.6-1.9s2.1.6 2.6 1.9M5.5 14h5',
+    'call-teams': circ(8, 4.6, 2) + 'M4.6 13c.3-2.4 1.8-3.6 3.4-3.6s3.1 1.2 3.4 3.6' + circ(3, 6.4, 1.4) +
+      'M1 12.4c.2-1.5 1-2.4 2-2.6' + circ(13, 6.4, 1.4) + 'M15 12.4c-.2-1.5-1-2.4-2-2.6',
     plus: 'M8 3v10M3 8h10',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
@@ -636,6 +648,24 @@
   function broadcastAvatar() {
     const a = el('span', 'avatar sys');
     a.append(icon('people'));
+    a.setAttribute('aria-hidden', 'true');
+    return a;
+  }
+
+  // A call's avatar (#623): its platform's drawing on a neutral tile. A platform the page has no drawing for is the
+  // generic one. The class is the platform's name (h-zoom), so an admin's upload for it (§29.11) is covered by the same
+  // stylesheet rule an agent's is, and nothing in a message or a URL chooses an image. `extra` adds classes (lg, mini).
+  function callAvatar(platform, extra, live) {
+    const known = meetingLabel(platform) !== undefined;
+    const a = el('span', 'avatar call h-' + (known ? platform : 'call'));
+    a.append(icon(known ? 'call-' + platform : 'call'));
+    if (extra) for (const c of extra.split(' ')) if (c) a.classList.add(c);
+    // the corner dot of a call that is a row or a heading: solid while it is live, dashed while it is joining
+    if (live !== undefined) {
+      const d = el('span', 'dot ' + (live ? 's-idle' : 's-starting'));
+      d.title = live ? 'Live: transcribing' : 'Joining the call';
+      a.append(d);
+    }
     a.setAttribute('aria-hidden', 'true');
     return a;
   }
@@ -994,7 +1024,7 @@
 
   function inspectedLabel() {
     const ins = state.inspect;
-    if (!ins || ins.room !== state.active) return null;
+    if (!ins || ins.call || ins.room !== state.active) return null;
     const m = memberOf(activeRoom(), ins.name, ins.host);
     return m ? label(m.name, m.host) : null;
   }
@@ -1510,7 +1540,6 @@
     const stale = !state.wsOpen && state.wsEverOpen;
     list.classList.toggle('stale', stale);
     $('agents-title').textContent = 'Agents (' + members.length + ')' + (stale ? ' · last known' : '');
-    $('members-count').textContent = String(members.length + (state.me ? 1 : 0));
     if (!members.length) {
       list.append(el('li', 'member-empty', 'Nobody yet. Ask an agent to join ' + (state.active || 'a room') + '.'));
     }
@@ -1534,6 +1563,7 @@
     renderBuddyPill(members);
     updateTitle();
     renderRoomPeople();
+    renderCalls();  // after People and Agents, and in the Members total
   }
 
   // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person.
@@ -1633,7 +1663,7 @@
 
   // narrow: the Members pill (people icon, count, and a red badge for agents needing attention)
   function renderBuddyPill(members) {
-    const total = members.length + (state.me ? 1 : 0);
+    const total = memberTotal(activeRoom());
     $('buddy-count').textContent = String(total);
     const need = [];
     for (const m of members) {
@@ -1751,21 +1781,49 @@
     }
     hops.classList.toggle('bad', guardOff);
     $('banner-test').classList.toggle('hidden', !(state.me && state.me.test_mode));
-    renderMeeting(r, s);
+    renderMeeting(r);
+    renderCalls();
+    followCall();
   }
 
-  // The call bar (#573). Only the platforms the broker accepts; anything else stays hidden. A call hosted on a
-  // person's machine (§54) may not say which platform it is on ('unknown'): the bar then names none.
+  // The platforms a call can be on, and the room's open call (#573, #623). Only the platforms the broker accepts show;
+  // anything else stays hidden. A call hosted on a person's machine (§54) may not say which platform it is on
+  // ('unknown'): it is then named "Call", and the bar names none.
   const MEETING_LABEL = { zoom: 'Zoom', meet: 'Meet', teams: 'Teams' };
 
-  function renderMeeting(r, s) {
+  function meetingLabel(platform) {
+    return Object.prototype.hasOwnProperty.call(MEETING_LABEL, platform) ? MEETING_LABEL[platform] : undefined;
+  }
+
+  // The room's open call as the page shows it, or null: its settings entry, whether a person's machine hosts it,
+  // and the platform's name ('' for a hosted call that says none). The bar, the Calls row and the details all draw
+  // from this, so they agree on what is open.
+  function callOf(r) {
+    const call = r && r.settings && r.settings.meeting;
+    if (!call || (call.state !== 'joining' && call.state !== 'live')) return null;
+    const hosted = call.source === 'hosted';
+    const label = meetingLabel(call.platform) || (hosted && call.platform === 'unknown' ? '' : undefined);
+    if (label === undefined) return null;
+    return { call: call, hosted: hosted, label: label };
+  }
+
+  function callTitle(cur) { return cur.label ? cur.label + ' call' : 'Call'; }
+
+  // where it runs: the machine a hosted call's host script registered it from, or the broker's own bot
+  function callWhere(cur) {
+    return cur.hosted && typeof cur.call.host === 'string' && cur.call.host ? cur.call.host : 'the server';
+  }
+
+  function renderMeeting(r) {
     const band = $('banner-meeting');
-    const call = s.meeting;
-    const hosted = !!(call && call.source === 'hosted');
-    const label = call && (MEETING_LABEL[call.platform] || (hosted && call.platform === 'unknown' ? '' : undefined));
-    const open = !!(r && call && label !== undefined && (call.state === 'joining' || call.state === 'live'));
-    band.classList.toggle('hidden', !open);
-    if (!open) return;
+    const cur = callOf(r);
+    band.classList.toggle('hidden', !cur);
+    if (!cur) return;
+    const call = cur.call;
+    const hosted = cur.hosted;
+    const label = cur.label;
+    // the platform's icon, the one the Calls row has (an admin's upload for it too)
+    $('banner-meeting-mark').replaceChildren(callAvatar(call.platform, 'bar'));
     const voice = call.voice === true;  // anything but true is off: a frame without it is an older broker
     const named = label ? ' (' + label + ')' : '';
     let text = call.state === 'live'
@@ -1774,8 +1832,8 @@
     if (hosted) {
       // whose machine runs it, and the key's short fingerprint: what a person checks against the relay's own line
       // a no-break space keeps each word with its value when the bar wraps on a phone
-      if (typeof call.host === 'string' && call.host) text += ' · on\u00a0' + call.host;
-      if (typeof call.fingerprint === 'string' && call.fingerprint) text += ' · key\u00a0' + call.fingerprint;
+      if (typeof call.host === 'string' && call.host) text += ' · on ' + call.host;
+      if (typeof call.fingerprint === 'string' && call.fingerprint) text += ' · key ' + call.fingerprint;
     }
     $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '');
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
@@ -1790,6 +1848,57 @@
     end.textContent = hosted ? 'End call' : 'Leave call';
     if (hosted) end.title = 'End the call: its machine\'s key stops working now';
     else end.removeAttribute('title');
+  }
+
+  // Calls (#623, §54): the room's open call is a third kind of member, after People and Agents. One row: its platform's
+  // icon with a status dot (solid while it is live, dashed while it is joining), "Zoom call" ("Call" when a hosted call
+  // does not say its platform), and where it runs: the machine's label, or "the server" for the broker's own bot. It
+  // opens the call's details in the pane the way an agent's row opens its Inspector, and it counts in the Members total.
+  function callRow(cur) {
+    const call = cur.call;
+    const live = call.state === 'live';
+    const li = el('li', 'member call-member');
+    const b = btn('m-open');
+    b.dataset.focus = 'call';
+    b.title = 'Open the call in the inspector';
+    const ins = state.inspect;
+    if (ins && ins.call && ins.room === state.active) li.setAttribute('aria-current', 'true');
+    const main = el('span', 'm-main');
+    const nameLine = el('span', 'm-name-line');
+    b.append(el('span', 'm-name', callTitle(cur)));
+    nameLine.append(b);
+    main.append(nameLine, el('span', 'm-status', (live ? 'Live' : 'Joining…') + ' · ' + callWhere(cur)));
+    const chev = icon('chev-right');
+    chev.classList.add('m-chev');
+    li.append(callAvatar(call.platform, null, live), main, chev);
+    b.addEventListener('click', function (ev) { ev.stopPropagation(); openCallInspector(); });
+    li.addEventListener('click', function () { openCallInspector(); });
+    state.callRow = b;
+    return li;
+  }
+
+  function memberTotal(r) {
+    return (r ? r.members.length : 0) + (state.me ? 1 : 0) + (callOf(r) ? 1 : 0);
+  }
+
+  function renderCalls() {
+    const r = activeRoom();
+    const cur = callOf(r);
+    const title = $('calls-title');
+    const list = $('call-list');
+    const focused = focusKey(list);
+    list.replaceChildren();
+    state.callRow = null;
+    $('members-count').textContent = String(memberTotal(r));
+    renderBuddyPill(r ? r.members : []);
+    title.classList.toggle('hidden', !cur);
+    list.classList.toggle('hidden', !cur);
+    if (!cur) return;
+    const stale = !state.wsOpen && state.wsEverOpen;  // as the agents' list: what was last known
+    title.textContent = 'Calls (1)' + (stale ? ' · last known' : '');
+    list.classList.toggle('stale', stale);
+    list.append(callRow(cur));
+    refocus(list, focused);
   }
 
   function selectRoom(name) {
@@ -1922,7 +2031,7 @@
   // ------------------------------------------------------------ Inspector
   function inspectedMember() {
     const ins = state.inspect;
-    if (!ins) return null;
+    if (!ins || ins.call) return null;
     const r = state.rooms.get(ins.room);
     return r ? r.members.find(function (m) { return m.name === ins.name; }) || null : null;
   }
@@ -1965,6 +2074,7 @@
     const inPane = hasFocusIn($('pane'));
     state.inspect = null;
     state.detail = null;
+    state.callDetail = null;
     state.inspSeq += 1;  // a response still in flight is dropped
     clearTimeout(state.inspTimer);
     state.inspTimer = null;
@@ -1972,6 +2082,11 @@
     markSel();
     renderBuddies();
     if (focus || inPane) {
+      if (was && was.call) {
+        // the call's row (a call that has ended has none: the agent above where it was, as for a row that went away)
+        if (!tryFocus(state.callRow)) focusNear(Number.MAX_SAFE_INTEGER, '');
+        return;
+      }
       const row = was ? state.rowRefs.get(was.name) : null;
       if (!tryFocus(row)) focusNear(was && was.idx >= 0 ? was.idx : 0, was ? was.name : '');
     }
@@ -1983,6 +2098,20 @@
     const r = state.rooms.get(ins.room);
     if (!r) return;
     const seq = ++state.inspSeq;
+    if (ins.call) {
+      // the call's details, for this viewer: what the settings frame can't say to everyone (#623)
+      api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/call').then(function (d) {
+        const now = state.inspect;
+        if (seq !== state.inspSeq || !now || !now.call || now.room !== ins.room) return;
+        if (!d || !d.call) { closeInspector(false); return; }  // it ended while this was on its way
+        state.callDetail = { room: ins.room, data: d.call };
+        renderInspector();
+      }, function (e) {
+        if (seq !== state.inspSeq) return;
+        if (e && e.status === 404) closeInspector(false);  // the room is gone, or is not this person's any more
+      });
+      return;
+    }
     api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/members/' + encodeURIComponent(ins.name)).then(function (d) {
       if (seq !== state.inspSeq || !state.inspect || state.inspect.name !== ins.name || state.inspect.room !== ins.room) return;
       state.detail = { room: ins.room, name: ins.name, data: d || {} };
@@ -2060,6 +2189,7 @@
     const ins = state.inspect;
     const body = $('insp-body');
     if (!ins) return;
+    if (ins.call) { renderCallInspector(); return; }
     const r = state.rooms.get(ins.room);
     const m = inspectedMember();
     if (!r || !m) {
@@ -2369,6 +2499,137 @@
     body.replaceChildren(id);
     if (notes.length) body.append(attn);
     body.append(details, tl, actions);
+    body.scrollTop = scroll;
+    state.insp = refs;
+    refocus(body, focused);
+  }
+
+  // ---------------------------------------------------- the call's details (#623, §54)
+  // The room's call opens in the pane the way an agent does, with the same keys: Enter or a click on its row opens
+  // it and focus goes to its name, Esc or Back closes it and focus returns to its row, and a re-render keeps focus on
+  // the control it was on. What the settings frame says to everyone is drawn at once (where it runs, the key's
+  // fingerprint, whether voice is on); the rest (who started it, since when, the model, the lines it has sent, and
+  // whether *this* viewer may end it) is asked of the broker for each viewer, so End this call is shown only to
+  // someone the broker would let end it. The broker still decides: a command from anyone else is refused.
+  function openCallInspector() {
+    const r = activeRoom();
+    if (!r || !callOf(r)) return;
+    const same = state.inspect && state.inspect.call && state.inspect.room === r.name;
+    state.inspect = { room: r.name, call: true, name: '', host: '' };
+    if (!same) {
+      state.detail = null;
+      state.callDetail = null;
+      state.inspUi = { menu: false, queueOpen: false, copied: false, pokeCopied: false };
+    }
+    setPaneView(true);
+    showPane();
+    markSel();
+    renderBuddies();
+    renderInspector();
+    if (state.insp.name) state.insp.name.focus();
+    fetchDetail();
+  }
+
+  // the room's settings changed (a frame, or a room listing) while the details are open: they follow it, or close
+  // when the call is over (the room's own notice says why)
+  function followCall() {
+    const ins = state.inspect;
+    if (!ins || !ins.call || ins.room !== state.active) return;
+    if (!callOf(activeRoom())) { closeInspector(false); return; }
+    renderInspector();  // at once from the frame; the details follow
+    scheduleRefetch();
+  }
+
+  function renderCallInspector() {
+    const ins = state.inspect;
+    const body = $('insp-body');
+    const r = state.rooms.get(ins.room);
+    const cur = r ? callOf(r) : null;
+    if (!cur) { closeInspector(false); return; }
+    const call = cur.call;
+    const hosted = cur.hosted;
+    const live = call.state === 'live';
+    const ui = state.inspUi;
+    const d = state.callDetail && state.callDetail.room === ins.room ? state.callDetail.data : null;
+    $('insp-pos').textContent = 'Call 1 of 1';
+    const focused = focusKey(body);
+    const scroll = body.scrollTop;
+    const refs = {};
+
+    // 1. identity: the platform's icon, the title, when it went live, and what runs it
+    const id = el('div', 'insp-id');
+    const nameH = el('h2', null, callTitle(cur));
+    nameH.id = 'insp-name';
+    nameH.tabIndex = -1;
+    nameH.dataset.focus = 'name';
+    refs.name = nameH;
+    let since = 'Joining…';
+    if (live) since = d && has(d.live_at) ? 'Live since ' + hhmm(d.live_at) + ' · transcribing' : 'Live · transcribing';
+    const idText = el('div');
+    idText.append(nameH, el('p', 'insp-status', since));
+    const chips = el('div', 'insp-chips');
+    const where = el('span', 'host-chip device');
+    where.append(icon(hosted ? 'laptop' : 'server'), callWhere(cur));
+    where.title = hosted ? 'runs on ' + callWhere(cur) + ', where its host script started it' : 'runs on the server';
+    chips.append(el('code', 'tier', hosted ? 'hosted bot' : 'server bot'), where);
+    const how = el('p', 'insp-tier-how', hosted
+      ? 'It pushes what it hears into this room as call lines. Nobody wakes unless called out by name.'
+      : 'The server\'s bot listens to the call and posts what it hears into this room as call lines. '
+        + 'Nobody wakes unless called out by name.');
+    id.append(callAvatar(call.platform, 'lg', live), idText, chips, how);
+
+    // 2. details
+    const details = el('section', 'insp-details');
+    details.setAttribute('aria-label', 'Details');
+    const dl = el('dl', 'insp-facts call-facts');
+    const loading = function () { return el('span', 'muted', 'loading…'); };
+    fact(dl, 'Hosted on', callWhere(cur));
+    if (!d) fact(dl, 'Started by', loading());
+    else if (d.started_by) fact(dl, 'Started by', String(d.started_by));
+    if (hosted && typeof call.fingerprint === 'string' && call.fingerprint) {
+      const fp = call.fingerprint;
+      const box = el('span');
+      const code = el('code', 'sess', fp);
+      code.title = 'The first eight characters of its key\'s hash: the relay prints the same when it starts';
+      const copy = btn('copy-btn');
+      copy.dataset.focus = 'copy-fingerprint';
+      const lbl = ui.copied ? 'Fingerprint copied' : 'Copy the key fingerprint';
+      copy.setAttribute('aria-label', lbl);
+      copy.title = lbl;
+      copy.append(icon(ui.copied ? 'check' : 'copy'));
+      copy.addEventListener('click', function () {
+        clipboardWrite(fp).then(function () {
+          ui.copied = true;
+          renderInspector();
+          setTimeout(function () { ui.copied = false; renderInspector(); }, COPIED_MS);
+        }, function () { copyFailed(copy, code); });
+      });
+      box.append(code, copy);
+      fact(dl, 'Key fingerprint', box);
+    }
+    if (hosted && d && d.model) fact(dl, 'Model', String(d.model));
+    if (hosted) fact(dl, 'Lines sent', d ? String(d.lines) : loading());
+    fact(dl, 'Voice', call.voice === true ? 'On' : 'Off');
+    details.append(el('div', 'group-label', 'Details'), dl);
+
+    // 3. End this call, for whoever the broker says may (the same words a person types: /meeting leave)
+    const actions = el('div', 'insp-actions');
+    if (d && d.can_end === true) {
+      const end = btn('btn-danger-ghost');
+      end.id = 'insp-end-call';
+      end.dataset.focus = 'end';
+      end.title = '/meeting leave: ' + (hosted ? 'end the call; its machine\'s key stops working now' : 'the bot leaves the call');
+      end.append(icon('logout'), 'End this call');
+      end.addEventListener('click', function () { submitText('/meeting leave'); });
+      refs.end = end;
+      const owner = typeof d.started_by === 'string' && d.started_by ? d.started_by : 'the person who hosts it';
+      actions.append(end, el('p', 'fine', hosted
+        ? 'Only ' + owner + ' and an admin see this. The next push with this key is refused; lines already sent keep their label.'
+        : 'The bot leaves the call. What it already posted stays in the room.'));
+    }
+
+    body.replaceChildren(id, details);
+    if (actions.children.length) body.append(actions);
     body.scrollTop = scroll;
     state.insp = refs;
     refocus(body, focused);
@@ -3027,7 +3288,9 @@
       if (!r) return;
       appendMsg(r, f.msg);
       // the inspected agent spoke: its Last seen and timeline changed
-      if (ins && ins.room === f.room && f.msg.from === ins.name && (f.msg.host || '') === (ins.host || '')) scheduleRefetch();
+      if (ins && !ins.call && ins.room === f.room && f.msg.from === ins.name && (f.msg.host || '') === (ins.host || '')) scheduleRefetch();
+      // a line the call posted: its count of lines sent changed (#623)
+      if (ins && ins.call && ins.room === f.room && f.msg.sender_kind === 'meeting') scheduleRefetch();
     } else if (f.t === 'file') {
       if (!r || !f.file || !f.file.id) return;
       const m = r.msgs.find(function (x) { return x.id === f.message_id; });
@@ -3051,7 +3314,7 @@
           })) loadBoard(r);
         }
       }
-      if (ins && ins.room === f.room) {
+      if (ins && !ins.call && ins.room === f.room) {
         if (!inspectedMember()) memberLeft(ins);
         else {
           renderInspector();  // at once from member_dict; the detail follows
@@ -3784,29 +4047,34 @@
     return /[.!?]$/.test(up) ? up : up + '.';
   }
 
-  function agentIconState(have) {
+  // what a call's icon is: the platform a call can be on has a drawing of switchboard's own where a harness has an avatar
+  function isCallIcon(h) { return meetingLabel(h) !== undefined; }
+  function iconThing(h) { return isCallIcon(h) ? 'icon' : 'avatar'; }
+  function iconName(h) { return isCallIcon(h) ? MEETING_LABEL[h] : harnessOf(h)[1]; }
+
+  function agentIconState(have, thing) {
     if (have.light && have.dark) return 'Your light and dark images';
     if (have.light) return 'Your light image, used for dark too';
     if (have.dark) return 'Your dark image, used for light too';
-    return 'The built-in avatar';
+    return 'The built-in ' + thing;
   }
 
   function agentIconRow(h, data) {
-    const name = harnessOf(h)[1];
+    const name = iconName(h);
     const have = {};
     for (const i of data.icons) if (i.harness === h) have[i.scheme] = i;
     const row = el('div', 'passkey-card agent-icon-row');
     row.dataset.harness = h;
     const head = el('div', 'agent-icon-head');
     const who = el('span', 'agent-icon-who');
-    who.append(el('strong', null, name), el('span', 'fine agent-icon-state', agentIconState(have)));
+    who.append(el('strong', null, name), el('span', 'fine agent-icon-state', agentIconState(have, iconThing(h))));
     const reset = btn('btn', 'Reset');
     reset.id = 'agent-icon-reset-' + h;
     reset.dataset.focus = 'reset-' + h;
-    reset.setAttribute('aria-label', 'Reset ' + name + ' to the built-in avatar');
+    reset.setAttribute('aria-label', 'Reset ' + name + ' to the built-in ' + iconThing(h));
     reset.disabled = state.agentIconBusy || !(have.light || have.dark);
     reset.addEventListener('click', function () { resetAgentIcon(h, name); });
-    head.append(avatar(h, 'agent', name, 'lg'), who, reset);
+    head.append(isCallIcon(h) ? callAvatar(h, 'lg') : avatar(h, 'agent', name, 'lg'), who, reset);
     row.append(head);
     const slots = el('div', 'agent-icon-slots');
     for (const scheme of ['light', 'dark']) {
@@ -3847,8 +4115,17 @@
     const focused = focusKey(body);
     const data = state.agentIcons;
     body.replaceChildren();
-    if (data) for (const h of data.harnesses) body.append(agentIconRow(h, data));
-    else body.append(el('p', 'fine', 'Loading…'));
+    if (data) {
+      for (const h of data.harnesses) body.append(agentIconRow(h, data));
+      // the icons of the platforms a call can be on (#623), uploaded the same way
+      if (Array.isArray(data.platforms) && data.platforms.length) {
+        const sub = el('h5', 'agent-icons-sub', 'Call icons');
+        sub.id = 'agent-icons-calls-title';
+        body.append(sub, el('p', 'fine', 'A call in a room shows its platform\'s icon beside its name: switchboard\'s own drawing'
+          + ' until you upload one.'));
+        for (const h of data.platforms) body.append(agentIconRow(h, data));
+      }
+    } else body.append(el('p', 'fine', 'Loading…'));
     const msg = state.agentIconMsg;
     refs.status.textContent = msg && !msg.bad ? msg.text : '';
     refs.error.textContent = msg && msg.bad ? msg.text : '';
@@ -3891,7 +4168,7 @@
     try {
       await api('DELETE', '/api/agent-icons/' + h);
       await Promise.all([refreshAgentIcons(), loadAgentIcons()]);
-      state.agentIconMsg = { bad: false, text: name + ' is back to its built-in avatar.' };
+      state.agentIconMsg = { bad: false, text: name + ' is back to its built-in ' + iconThing(h) + '.' };
     } catch (e) {
       state.agentIconMsg = { bad: true, text: iconSentence(e.message || e) };
     } finally {
