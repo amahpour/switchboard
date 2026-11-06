@@ -9,7 +9,7 @@ Your user asked for the meeting bot to run on this machine and follow a call for
 
 ## Start
 
-Run this once with the room and the link your user gave you. The link goes in on **stdin**, through a quoted heredoc as below, so it is in no command line:
+Run this once, with the room your user named in place of `'#room'` (for example `'#uploads'`, quoted, because `#` starts a comment in a shell) and the link they gave you. The link goes in on **stdin**, through a quoted heredoc as below, so it is in no command line:
 
 ```sh
 sh "${CLAUDE_PLUGIN_ROOT}/bin/meeting-host" start --server "${user_config.server_url}" --data "${CLAUDE_PLUGIN_DATA}" '#room' <<'LINK'
