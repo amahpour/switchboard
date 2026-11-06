@@ -196,7 +196,7 @@ class Rig:
         self.said: list[str] = []
         self.hints: list[Sequence[str]] = []
 
-        def open_joinly(hints: Sequence[str]) -> Joinly:
+        def open_joinly(hints: Sequence[str], _voice: str) -> Joinly:
             self.hints.append(list(hints))
             return self.joinly
 
@@ -872,13 +872,15 @@ async def test_the_first_poll_selects_a_checked_server_voice_or_the_older_server
     given: Any, expected: str
 ) -> None:
     """A valid server voice wins before joinly opens. An older server or malformed field preserves
-    --voice, so one bad setting cannot make joinly ignore the entire settings header.
+    --voice, so one bad setting cannot make joinly ignore the entire settings header. The original
+    configuration stays unchanged when a connection selects the server's voice.
     """
     cfg = RelayConfig(voice="bm_lewis")
     rig = Rig(cfg=cfg)
     rig.broker.first = ok(hints=["Codex"], **({"tts_voice": given} if given is not None else {}))
-    hints = await rig.relay._first_poll()
-    client = relay.real_joinly("http://localhost/mcp/", cfg)(hints)
+    hints, voice = await rig.relay._first_poll()
+    assert cfg.voice == "bm_lewis"  # the server setting belongs to this connection, not the config
+    client = relay.real_joinly("http://localhost/mcp/", cfg)(hints, voice)
     assert isinstance(client, relay.JoinlyClient)
     header = json.loads(client.header)
     assert header["tts_args"]["voice"] == expected

@@ -362,7 +362,7 @@ class JoinlyClient:
 
 
 # ---------------------------------------------------------------------------------- the relay
-@dataclass
+@dataclass(frozen=True)
 class RelayConfig:
     # the speech model to ask joinly for; "" leaves it joinly's own (``joinly.settings_header``)
     model: str = ""
@@ -374,7 +374,7 @@ class RelayConfig:
     link_path: str | None = None
 
 
-OpenJoinly = Callable[[Sequence[str]], Joinly]
+OpenJoinly = Callable[[Sequence[str], str], Joinly]
 
 
 class Relay:
@@ -487,10 +487,10 @@ class Relay:
         tasks: list[asyncio.Task[None]] = []
         pump: asyncio.Task[None] | None = None
         try:
-            hints = await self._first_poll()
+            hints, voice = await self._first_poll()
             if self.stop.is_set():
                 return self._code()
-            jy = self.open_joinly(hints)
+            jy = self.open_joinly(hints, voice)
             # the voice loop runs from the start: a call ended from the room while the relay is still joining
             # is heard, and the join is dropped
             tasks.append(asyncio.create_task(self._speech_loop()))
@@ -523,9 +523,10 @@ class Relay:
     def _code(self) -> Exit:
         return self.exit if self.exit is not None else Exit.ENDED
 
-    async def _first_poll(self) -> list[str]:
-        """The room's names, which joinly is told as hints before it joins, and whether the call is over
-        already. Answered at once (``wait`` 0). An empty list when the relay is stopping."""
+    async def _first_poll(self) -> tuple[list[str], str]:
+        """The room's names and server voice, before joinly opens. Answered at once (``wait`` 0).
+        An empty list and the fallback voice when the relay is stopping.
+        """
         while not self.stop.is_set():
             reply = await self._call(SPEECH_PATH, {"wait": 0}, REQUEST_TIMEOUT_S)
             if reply is None:
@@ -536,17 +537,18 @@ class Relay:
                     f"the broker did not take the key's first request ({reply.status}):"
                     " is it a switchboard that hosts calls on a person's machine?",
                 )
-                return []
+                return [], self.cfg.voice
             if reply.body.get("ended"):
                 self.finish(Exit.ENDED)
             voice = reply.body.get("tts_voice")
             # Older brokers omit the field. Keep --voice as their fallback; never give joinly an
             # unchecked setting from a response (it would ignore the entire settings header).
-            if isinstance(voice, str) and re.fullmatch(r"[a-z0-9_]{1,32}", voice):
-                self.cfg.voice = voice
+            if not isinstance(voice, str) or not re.fullmatch(r"[a-z0-9_]{1,32}", voice):
+                voice = self.cfg.voice
             hints = reply.body.get("hints")
-            return [w for w in hints if isinstance(w, str)] if isinstance(hints, list) else []
-        return []
+            words = [w for w in hints if isinstance(w, str)] if isinstance(hints, list) else []
+            return words, voice
+        return [], self.cfg.voice
 
     async def _start(self, jy: Joinly) -> bool:
         """Connect to joinly (it may still be starting), join the call, and mark the broker's call live with
@@ -739,12 +741,12 @@ def _print(text: str) -> None:
 
 
 def real_joinly(url: str, cfg: RelayConfig) -> OpenJoinly:
-    """The factory a real run gives ``Relay``: a ``JoinlyClient`` whose settings carry the room's names, which
-    the broker's first answer supplied."""
+    """The factory a real run gives ``Relay``: a ``JoinlyClient`` whose settings carry the room's names
+    and selected voice from the broker's first answer."""
 
-    def make(hints: Sequence[str]) -> Joinly:
+    def make(hints: Sequence[str], voice: str) -> Joinly:
         header = joinly.settings_header(
-            hotwords=hints, model=cfg.model, voice=cfg.voice, participant=cfg.participant
+            hotwords=hints, model=cfg.model, voice=voice, participant=cfg.participant
         )
         return JoinlyClient(url, header)
 
