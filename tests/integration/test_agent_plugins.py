@@ -10,7 +10,9 @@ import http.client
 import json
 import os
 import re
+import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -28,6 +30,7 @@ from test_agents_http_claude import SESSION_1, Claude
 from test_agents_http_wake import claude_hook, codex_hook, member, parked, participant, row, until
 
 from switchboard import envelope
+from switchboard.broker import proc
 from switchboard.broker.agent_http import HOOK_FIELDS, HOOK_TOOL, LISTEN_PATH, PATH
 from switchboard.mcp.server import TOOL_NAMES
 
@@ -965,12 +968,15 @@ class Stub:
                     reply = (409, "")
                 status, text, *more = reply
                 data = text.encode()
-                self.send_response(status)
-                for name, value in (more[0] if more else {}).items():
-                    self.send_header(name, value)
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                try:
+                    self.send_response(status)
+                    for name, value in (more[0] if more else {}).items():
+                        self.send_header(name, value)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    return  # the listener has already gone: nothing to answer, and no traceback
 
             do_POST = do_GET = answer
 
@@ -1049,6 +1055,140 @@ def test_the_listener_ends_with_claude_code() -> None:
     finally:
         owner.kill()
         stub.close()
+
+
+def process_children(pid: int) -> list[tuple[int, str]]:
+    """Live children of ``pid`` as ``(pid, comm)``. ``ps`` so Linux and macOS agree."""
+    binary = proc.ps_bin()
+    assert binary is not None
+    out = subprocess.run(
+        [binary, "-ax", "-o", "pid=,ppid=,comm="], capture_output=True, text=True, timeout=10, check=False
+    ).stdout
+    found = []
+    for line in out.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1] == str(pid):
+            found.append((int(parts[0]), parts[2]))
+    return found
+
+
+def still_there(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def pipe_closed(pipe: Any, timeout: float) -> bool:
+    """Whether ``pipe`` reaches EOF within ``timeout``. A child that inherited it never does."""
+    deadline = time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        ready, _, _ = select.select([pipe], [], [], left)
+        if not ready:
+            return False
+        if pipe.read(65536) == b"":
+            return True
+
+
+SHELL_COMMS = {"sh", "bash", "dash"}
+
+
+def _watcher(pid: int) -> int | None:
+    """The listener's shell child: the watcher subshell, once it has been forked."""
+    shells = [child for child, comm in process_children(pid) if comm in SHELL_COMMS]
+    if len(shells) == 1:
+        return shells[0]
+    return None
+
+
+@pytest.mark.usefixtures("impl")
+def test_the_listener_watcher_ends_with_the_script_and_frees_the_hook() -> None:
+    """The shell listener forks a watcher beside each round's curl and stops it with SIGTERM when
+    the round ends. dash keeps that subshell on the script's TERM trap until the subshell has
+    cleared its traps, and a SIGTERM in that moment is dropped, so the watcher lives on (#632). It
+    then loops until Claude Code's pid dies and holds the hook's output, so the hook never
+    finishes. Here the watcher is stopped once it is in that loop, and the script is killed, which
+    is that lost signal: the script never runs its kill. Stopped, the watcher cannot exit and
+    close the hook's stdout itself (curl's own stdout is its status file, not that pipe), so the
+    pipe must already be closed. Continued, with this process (``CLAUDE_PID``) still alive and no
+    SIGTERM sent, the watcher must still end because the script is gone, and take the curl with
+    it. The PowerShell listener watches in-process and forks no watcher; the same kill must leave
+    no child and close the pipes. Fails if the watcher only checks Claude Code's pid, or if it
+    inherits the hook's output."""
+    stub = Stub([None])  # holds the round open, so the watcher is in its loop, past the fork
+    env = {
+        "PATH": os.environ["PATH"],
+        "CLAUDE_PLUGIN_OPTION_SERVER_URL": stub.url,
+        "CLAUDE_PLUGIN_OPTION_TOKEN": "sbat_" + "x" * 43,
+        "CLAUDE_PID": str(os.getpid()),
+    }
+    argv, throwaway = script_run("listen", env)
+    stop = json.dumps(
+        {"session_id": SESSION_1, "hook_event_name": "Stop", "source": "", "stop_hook_active": False}
+    )
+    listener = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        bufsize=0,
+    )
+    kids: list[tuple[int, str]] = []
+    watcher: int | None = None
+    try:
+        assert listener.stdin is not None and listener.stdout is not None and listener.stderr is not None
+        listener.stdin.write(stop.encode())
+        listener.stdin.close()
+        until(lambda: stub.again == ["0"], timeout=30)
+        if CURRENT_IMPL[0] == "sh":
+            until(lambda: _watcher(listener.pid) is not None, timeout=10)
+            watcher = _watcher(listener.pid)
+            assert watcher is not None
+            until(lambda: any(comm == "sleep" for _, comm in process_children(watcher)), timeout=10)
+            os.kill(watcher, signal.SIGSTOP)  # frozen in the loop: it cannot close the pipes by exiting
+        kids = process_children(listener.pid)
+        os.kill(listener.pid, signal.SIGKILL)  # gone, without the script's kill of the watcher
+        # curl keeps the hook's stderr until the watcher ends it. The hook's stdout is not curl's
+        # (that is the status file), so only a watcher that inherited it can hold stdout open.
+        assert pipe_closed(listener.stdout, 1.0), "the watcher held the hook's output"
+        listener.wait(timeout=5)  # reap, so a watcher that checks the script's pid can see it gone
+        if watcher is not None:
+            assert still_there(watcher), "the watcher ended before it could be continued"
+            os.kill(watcher, signal.SIGCONT)
+        deadline = time.monotonic() + 5  # the watcher sleeps 2s, then must notice the script is gone
+        while True:
+            left = [pid for pid, _ in kids if still_there(pid)]
+            if not left:
+                break
+            assert time.monotonic() < deadline, f"left behind: {left}"
+            time.sleep(0.02)
+        assert pipe_closed(listener.stderr, 1.0), "the hook's stderr stayed open"
+    finally:
+        if listener.poll() is None:
+            listener.kill()
+        for pid, _ in kids:
+            if still_there(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        if watcher is not None and still_there(watcher):
+            try:
+                os.kill(watcher, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        listener.wait(timeout=5)
+        for pipe in (listener.stdout, listener.stderr):
+            if pipe is not None:
+                pipe.close()
+        stub.close()
+        if throwaway is not None:
+            shutil.rmtree(throwaway, ignore_errors=True)
 
 
 # ------------------------------------------------------- a change to a plugin bumps its version

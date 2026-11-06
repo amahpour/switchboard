@@ -129,7 +129,17 @@ while kill -0 "$owner" 2>/dev/null; do
       -H "X-Switchboard-Session: $sid" -H "X-Switchboard-Wait: $round" -H "X-Switchboard-Again: $again" \
       "$url/mcp/listen" >"$code" &
   job=$!
-  (while kill -0 "$owner" 2>/dev/null; do sleep 2; done; kill "$job" 2>/dev/null) &
+  # dash (Debian and Ubuntu's sh) keeps a subshell on this script's TERM trap until the subshell
+  # has cleared its traps, and drops a SIGTERM that arrives in that moment. The watcher would then
+  # outlive the hook, looping until Claude Code's pid dies, and hold the hook's output so the hook
+  # never finishes (#632). It also ends when this script does ($$ is the script, even here), and
+  # its output is not the hook's, so a survivor can't keep Claude Code waiting on it.
+  (
+    while kill -0 "$owner" 2>/dev/null && kill -0 "$$" 2>/dev/null; do
+      sleep 2
+    done
+    kill "$job" 2>/dev/null
+  ) >/dev/null 2>&1 </dev/null &
   watch=$!
   wait "$job" 2>/dev/null
   kill "$watch" 2>/dev/null
