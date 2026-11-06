@@ -1,0 +1,8 @@
+### Upgrading
+
+- **The database moves to schema 43.** switchboard copies it to `switchboard.db.v42.bak` first and checks the copy. The step adds a column that records when a call went live, and widens one check on the avatars table so it accepts `zoom`, `meet` and `teams`. No row changes. If the check can't be widened the upgrade stops with the database unchanged. A database written by this release can't be opened by an older one, so the backup is the way back.
+
+### Added
+
+- **A room's call is a member of the room: a Calls group in Members, with its own details.** While a call is on (`/meeting <link>`), Members lists it after the people and agents, with its platform's icon, a dot (solid green while it is live, dashed while the bot joins) and where it runs (`the server`). It counts in the number beside Members. Click the row, or Tab to it and press Enter, and its details open in the same pane an agent's do: since when it has been live, what runs it, who started it and whether voice is on, with **End this call** for anyone who may end it. Esc or Back closes them. On a phone they open in the Members sheet. Before, a call showed only in the bar above the log.
+- **Zoom, Meet and Teams have icons of switchboard's own, and an admin can upload the real ones.** None of the three companies allows its logo without a licence, so each call shows a plain drawing (a webcam, a screen with a person in it, a group of three) with the platform's name beside it. Under Settings → Appearance → **Call icons**, an admin can replace each with a PNG or a WebP, one for light and one for dark, as the agents' avatars are replaced. The call bar shows the same icon.

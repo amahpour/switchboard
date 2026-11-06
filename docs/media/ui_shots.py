@@ -3156,8 +3156,10 @@ def shoot_meeting_guide(browser: Any, out: Path, world: Any) -> None:
     palette filtered to /meeting (``guide-meeting-command-light``), the bar while the bot joins
     (``guide-meeting-joining-light``) and a live Meet call with a few call lines, a call-out and the agent's
     answer (``guide-meeting-call-light``), then (#593) the voice switch turned on as a person clicks it, a snapshot
-    of the shared screen posted as a card, and an agent's ``@call`` line (``guide-meeting-voice-light``). The call
-    is seeded through the store and the service, as tests/e2e/test_meetings_ui.py does."""
+    of the shared screen posted as a card, and an agent's ``@call`` line (``guide-meeting-voice-light``), then
+    (#623) Members with the call under Calls and the call's details (``guide-meeting-members-light``,
+    ``guide-meeting-details-light``). The call is seeded through the store and the service, as
+    tests/e2e/test_meetings_ui.py does."""
     from playwright.sync_api import expect
 
     room, b = "#planning", world.broker
@@ -3262,6 +3264,27 @@ def shoot_meeting_guide(browser: Any, out: Path, world: Any) -> None:
         page.evaluate("document.activeElement && document.activeElement.blur()")
         page.mouse.move(0, 0)
         shot(page, out, "guide-meeting-voice-light.png", clip=pane_clip(page, "#banner-meeting"))
+
+        # the call as a member (#623): Members with its row under Calls, then its details
+        def pane_box(last: str) -> dict[str, float]:
+            """The pane, from its top to the bottom of ``last`` and a margin."""
+            return page.evaluate(
+                """(last) => { const r = document.getElementById('pane').getBoundingClientRect();
+                              const end = document.querySelector(last).getBoundingClientRect().bottom;
+                              return {x: r.left, y: r.top, width: r.width, height: end + 14 - r.top}; }""",
+                last,
+            )
+
+        expect(page.locator("#call-list .member")).to_have_count(1)
+        page.mouse.move(0, 0)
+        shot(page, out, "guide-meeting-members-light.png", clip=pane_box("#call-list"))
+        page.locator("#call-list .m-open").click()
+        expect(page.locator("#insp-name")).to_have_text("Meet call")
+        expect(page.locator("#members-view")).to_be_hidden()  # the pane has slid to the details
+        expect(page.locator("#insp-end-call")).to_be_visible()
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        shot(page, out, "guide-meeting-details-light.png", clip=pane_box(".insp-actions"))
     finally:
         page.context.close()
 

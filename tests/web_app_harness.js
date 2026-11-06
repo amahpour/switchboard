@@ -109,6 +109,7 @@ function makeWorld(rooms) {
     me: null,         // the body of GET /api/me, when a scenario needs more than the human's name
     boards: {},       // slug -> the room's open review boards (one, or a list), for GET /api/rooms/{slug}/review
     details: {},      // 'slug/name' -> the member-detail body; missing -> 404
+    calls: {},        // slug -> the call's details for this viewer (GET /api/rooms/{slug}/call), or none
     commands: [],     // every command text the page sent, in order
     said: [],         // every /say text the page sent, in order
   };
@@ -166,6 +167,11 @@ function makeWorld(rooms) {
         const d = server.details[key];
         return d ? [200, d] : [404, { error: 'not_found', message: key + ' is not in the room' }];
       };
+    }
+    const mc = /^\/api\/rooms\/([^/]+)\/call$/.exec(url);
+    if (method === 'GET' && mc) {
+      const slug = decodeURIComponent(mc[1]);
+      return function () { return [200, { room: '#' + slug, call: server.calls[slug] || null }]; };
     }
     return function () { return [404, { message: 'no route ' + method + ' ' + url }]; };
   }
@@ -724,6 +730,63 @@ const SCENARIOS = {
       return findAll(w.$('insp-body'), function (n) { return n.id === 'insp-owner'; }).map(function (n) { return n.textContent; });
     };
     seen.inspector = { alice: await inspector('claude-1'), bob: await inspector('codex-1'), none: await inspector('devin-1') };
+    return seen;
+  },
+
+  // The call as a member (#623): a room frame that carries an open call makes a Calls row after the agents
+  // (counted in Members), the row opens the call's details through the Inspector's own pane, End this call is
+  // there only when the broker says this viewer may end it (and sends the same command a person types), and
+  // a frame that takes the call away closes the details and the group.
+  async call_member() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const hosted = { state: 'live', platform: 'zoom', voice: false, source: 'hosted', host: 'alice-laptop',
+                     fingerprint: '7f3a\u00b791c2' };
+    const room = function (meeting) {
+      ws.deliver({ t: 'room', room: '#build', settings: { meeting: meeting } });
+    };
+    const text = function (id) { return w.$(id).textContent; };
+    const seen = { before: { title: text('calls-title'), hidden: w.$('calls-title').classList.contains('hidden'),
+                             count: text('members-count') } };
+    room(hosted);
+    await settle();
+    const rowOf = function () {
+      return findAll(w.$('call-list'), function (n) { return n.tag === 'button' && n.dataset.focus === 'call'; })[0];
+    };
+    seen.row = { title: text('calls-title'), name: text('call-list'), count: text('members-count'),
+                 icon: findAll(w.$('call-list'), function (n) { return n.className.includes('ic-call-zoom'); }).length,
+                 bar: text('banner-meeting-text'),
+                 mark: findAll(w.$('banner-meeting-mark'), function (n) { return n.className.includes('ic-call-zoom'); }).length };
+    // the details: what the frame says at once, then what the broker says of this viewer
+    w.server.calls.build = Object.assign({}, hosted, { started_by: 'alice', started_at: TS, live_at: TS + 5,
+                                                       model: 'large-v3-turbo', lines: 3, can_end: false });
+    click(rowOf());
+    await settle();
+    const button = function (id) {
+      return findAll(w.$('insp-body'), function (n) { return n.id === id; })[0] || null;
+    };
+    seen.details = { inspecting: w.$('pane').classList.contains('inspecting'), pos: text('insp-pos'),
+                     name: button('insp-name').textContent, text: text('insp-body'), end: !!button('insp-end-call') };
+    click(w.$('insp-back'));
+    w.server.calls.build.can_end = true;
+    click(rowOf());
+    await settle();
+    seen.mayEnd = { end: !!button('insp-end-call'), note: findAll(w.$('insp-body'), function (n) {
+      return n.className === 'fine'; }).map(function (n) { return n.textContent; }) };
+    click(button('insp-end-call'));
+    await settle();
+    seen.commands = w.server.commands.slice();
+    room(null);
+    await settle();
+    seen.gone = { inspecting: w.$('pane').classList.contains('inspecting'),
+                  hidden: w.$('calls-title').classList.contains('hidden'), rows: w.$('call-list').children.length,
+                  count: text('members-count'), bar: w.$('banner-meeting').classList.contains('hidden') };
+    // a hosted call that does not say its platform is "Call", and a platform the page has no drawing for hides it
+    room({ state: 'joining', platform: 'unknown', voice: false, source: 'hosted', host: 'alice-laptop', fingerprint: 'x' });
+    await settle();
+    seen.unknown = { name: text('call-list'), generic: findAll(w.$('call-list'), function (n) { return n.className === 'ic ic-call'; }).length };
+    room({ state: 'live', platform: 'webex', voice: false });
+    await settle();
+    seen.webex = { rows: w.$('call-list').children.length, hidden: w.$('calls-title').classList.contains('hidden') };
     return seen;
   },
 
