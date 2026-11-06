@@ -64,7 +64,8 @@ CHART_FILE = "deploy/helm/switchboard/Chart.yaml"
 CHART_APP_VERSION_RE = re.compile(r'(?m)^(appVersion:[ \t]*")\d+\.\d+\.\d+(")')
 PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
              "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml",
-             "plugins/claude/meeting/compose.yaml")   # a call's relay on a person's machine (#623)
+             "plugins/claude/meeting/compose.yaml",
+             "plugins/codex/meeting/compose.yaml")   # a call's relay on a person's machine (#623)
 # with the notes files, all a release PR changes
 RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES, CHART_FILE)
 CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)

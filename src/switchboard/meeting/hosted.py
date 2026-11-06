@@ -410,9 +410,9 @@ class HostedCalls:
 
     def _post(self, row: Meeting, line: Line) -> None:
         try:
-            prepared = ingest.prepare(line.text, self.state.store.active_names(row.room_id))
-            if prepared is not None:
-                ingest.post(self.state, row.room_id, line, prepared, meeting_id=row.id, host=row.host)
+            incoming = ingest.receive(self.state, row, line)
+            if incoming is not None:
+                incoming.post(self.state)
         except Exception:
             log.warning("hosted call %s: a line could not be posted", row.id)  # never its words
 
@@ -494,7 +494,13 @@ class HostedCalls:
             st.speech.clear()
             st.spoke_overflow = False
         words = [w[:40] for w in hotwords(self.state.store.active_names(row.room_id))[:HINTS_MAX]]
-        return {"lines": lines, "hints": words, "voice": st.voice, "ended": st.ended}
+        return {
+            "lines": lines,
+            "hints": words,
+            "voice": st.voice,
+            "ended": st.ended,
+            "tts_voice": self.state.cfg.meeting.tts_voice,
+        }
 
     @staticmethod
     def _wake(st: _Call) -> None:

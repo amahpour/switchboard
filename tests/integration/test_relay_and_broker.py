@@ -304,3 +304,33 @@ async def test_a_relay_with_no_join_is_heard_from_and_obeys_the_end(world: World
     finally:
         await claude.close()
         await codex.close()
+
+
+async def test_the_servers_tts_voice_reaches_hosted_joinly_before_it_joins(
+    world: World, joinly: FakeJoinly
+) -> None:
+    """A hosted bot must use the operator's configured voice, as the server bot does.
+    Fails if the speech response omits it, or the relay opens joinly with its local default.
+    """
+    from dataclasses import replace
+
+    world.b.on_loop(
+        lambda: setattr(
+            world.b.state,
+            "cfg",
+            world.b.state.cfg.replace(meeting=replace(world.b.state.cfg.meeting, tts_voice="af_heart")),
+        )
+    )
+    claude, codex = await hosting(world)
+    run = Run(world, joinly)
+    try:
+        await until(live(world), what="the hosted call to join with the configured voice")
+        assert json.loads(joinly.settings[-1])["tts_args"]["voice"] == "af_heart"
+        assert run.client.replies[0][2]["tts_voice"] == "af_heart"
+        world.command("/meeting leave")
+        assert await run.code() == Exit.ENDED
+    finally:
+        run.relay.finish(Exit.STOPPED)
+        await run.code()
+        await claude.close()
+        await codex.close()
