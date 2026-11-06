@@ -140,6 +140,7 @@ class Stub:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.answer: tuple[int, dict[str, Any] | None] | None = None  # None: the real answer for the hash
+        self.handoff: str | None = None  # encoded link returned only to a requesting host script
         self.fetches: list[str] = []
         self.files: dict[str, bytes] = {}
         outer = self
@@ -169,9 +170,10 @@ class Stub:
                     200,
                     json.dumps(
                         {
+                            **({"link_b64": outer.handoff} if outer.handoff is not None else {}),
                             "room": body["room"],
                             "state": "joining",
-                            "platform": body["platform"],
+                            "platform": "zoom" if outer.handoff is not None else body["platform"],
                             "host": "alice-laptop",
                             "fingerprint": keys.fingerprint(h),
                         }
@@ -253,7 +255,7 @@ class Machine:
         tools.mkdir(exist_ok=True)
         needed = (
             "sh cat sed grep head cut tr od mktemp mkdir chmod rm mv dirname basename date id uname"
-            " sha256sum shasum curl ps stty timeout wc env readlink pwsh"
+            " sha256sum shasum curl ps stty timeout wc env readlink pwsh base64"
         )
         for name in needed.split():
             found = shutil.which(name, path=REAL_PATH)

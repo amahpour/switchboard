@@ -8,7 +8,8 @@ relay with a key made for that one call. Four routes:
   and ``/mcp/session``, an agent token (``sbat_``) or a listener key (``sbl_``, which acts only for its own
   session, §49.11), through the same door (``AgentAuth.door``). It refuses a call key, a session cookie and
   any request with an ``Origin``. The tool list has no tool for this (the maintainer's yes, 2026-11-05): the
-  model never handles the key or even its hash.
+  model never handles the key or even its hash. With ``from_room: true``, this same registration
+  returns its person's one-use private room handoff (§54), never through a model-facing tool.
 - ``POST /mcp/meeting/push``: segments the bot heard (speaker, text, start, end), which the broker joins
   into lines and posts as it posts its own bot's (§52). The first push, an empty one too, marks the call
   live.

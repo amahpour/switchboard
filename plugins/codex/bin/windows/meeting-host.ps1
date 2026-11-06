@@ -2,7 +2,7 @@
 # twin of bin/meeting-host, which bin/meeting-host (under Git Bash) and bin/meeting-host.cmd (under PowerShell)
 # hand over to. Read bin/meeting-host first: it says what each command does and why; this does the same.
 #
-#   meeting-host start [-server URL] [-data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM
+#   meeting-host start [-server URL] [-data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM
 #                                                                                     (the meeting link on stdin)
 #   meeting-host stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]
 #
@@ -30,7 +30,7 @@ function Err([string]$text) { [Console]::Error.WriteLine($text) }
 function Die([string]$text) { Err "${Prog}: $text"; exit 1 }
 function Usage([string]$text) {
     Err "${Prog}: $text"
-    Err "usage: $Prog start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM"
+    Err "usage: $Prog start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM"
     Err '       (the meeting link on stdin)'
     Err "       $Prog stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]"
     exit 2
@@ -323,7 +323,8 @@ function Cmd-Stop([string[]]$rest) {
 }
 
 function Cmd-Start([string[]]$rest) {
-    $o = Parse $rest @('--server', '--data', '--model', '--add-host') @('--cpu', '--gpu', '--no-join')
+    $o = Parse $rest @('--server', '--data', '--model', '--add-host') @('--cpu', '--gpu', '--no-join', '--from-room')
+    if ($o['--from-room'] -and $o['--no-join']) { Usage 'cannot combine --from-room and --no-join' }
     if ($o['_'].Count -gt 1) { Usage 'start: one room' }
     if ($o['_'].Count -lt 1) { Usage 'start: which room?' }
     $room = ([string]$o['_'][0]).TrimStart('#')
@@ -370,7 +371,7 @@ function Cmd-Start([string[]]$rest) {
     # ---- the link: stdin only, into a file only its owner reads
     $platform = 'unknown'
     $link = ''
-    if (-not $noJoin) {
+    if (-not $noJoin -and -not $o['--from-room']) {
         $link = [Console]::In.ReadLine()
         if ($null -eq $link) { $link = '' }
         $link = $link.Trim()
@@ -406,6 +407,7 @@ function Cmd-Start([string[]]$rest) {
     if ($link) { Write-Private (Join-Path $cdir 'link') $link }
     $link = ''
     $body = '{{"room": "#{0}", "key_hash": "{1}", "platform": "{2}", "model": "{3}"}}' -f $room, $hash, $platform, $m.Model
+    if ($o['--from-room']) { $body = $body.Substring(0, $body.Length - 1) + ', "from_room": true}' }
     Add-Type -AssemblyName System.Net.Http
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $handler = New-Object Net.Http.HttpClientHandler
@@ -428,6 +430,7 @@ function Cmd-Start([string[]]$rest) {
     function JsonField([string]$name) { $mm = [regex]::Match($text, '"' + $name + '":\s*"([^"]*)"'); if ($mm.Success) { $mm.Groups[1].Value } else { '' } }
     if ($status -ne 200) {
         Remove-Item -LiteralPath $cdir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($o['--from-room']) { Die "the server refused the room handoff ($status); ask again in the room" }
         if ($status -eq 0) { Die "could not reach the server at $server" }
         if ($status -eq 401) {
             if (Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')) {
@@ -443,6 +446,25 @@ function Cmd-Start([string[]]$rest) {
     if ($theirs -cne $fp8) {
         Remove-Item -LiteralPath $cdir -Recurse -Force -ErrorAction SilentlyContinue
         Die 'the server''s fingerprint for this key is not the one made here: not starting. Tell the person; do not retry'
+    }
+    if ($o['--from-room']) {
+        $encoded = JsonField 'link_b64'
+        $platform = JsonField 'platform'
+        $usable = $encoded -and $encoded.Length -le 2700 -and $platform -cin @('zoom', 'meet', 'teams')
+        if ($usable) {
+            try {
+                $decoded = [Convert]::FromBase64String($encoded)
+                $link = (New-Object Text.UTF8Encoding $false, $true).GetString($decoded)
+                if (-not $link) { $usable = $false }
+            } catch { $usable = $false }
+        }
+        $encoded = ''; $text = ''
+        if (-not $usable) {
+            Remove-Item -LiteralPath $cdir -Recurse -Force -ErrorAction SilentlyContinue
+            Die 'no usable room handoff returned; update the server first, then ask again in the room'
+        }
+        Write-Private (Join-Path $cdir 'link') $link
+        $link = ''; $decoded = $null
     }
     $override = ''
     if ($addHost) {

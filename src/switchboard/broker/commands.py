@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from switchboard import reviews
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
-from switchboard.meeting.links import PLATFORM_LABEL, LinkError, parse_link
+from switchboard.meeting.links import PLATFORM_LABEL, LinkError, MeetingLink, parse_link
 from switchboard.meeting.screen import Asker
 from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
 from switchboard.reviews import ReviewError
@@ -66,6 +66,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /unpin <id>         unpin it
   /meeting            say whether this room is transcribing a call
   /meeting <link>     transcribe a Zoom, Meet or Teams call here (web only)
+  /meeting <link> mine  ask your own agent to host it; no model sees the link (web only)
   /meeting leave      leave the call and stop transcribing (web only)
   /meeting voice on   let agents speak in the call: a say() that starts with @call
                       is read aloud to everyone on it. Off when a call starts (web only)
@@ -208,13 +209,13 @@ def parse_command(text: str) -> Command:
     return Command(name=name, args=args, raw=raw)
 
 
-MEETING_USAGE = "usage: /meeting [<link>|leave|snapshot|voice on|voice off]"
+MEETING_USAGE = "usage: /meeting [<link> [mine]|leave|snapshot|voice on|voice off]"
 
 
 def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     """``/meeting``, ``/meeting leave``, ``/meeting snapshot``, ``/meeting voice on|off``, or
-    ``/meeting <link>``. The link is one argument. It is kept on the command only until ``apply``
-    has handed it to the bridge."""
+    ``/meeting <link> [mine]``. The link is one argument, kept only until ``apply`` hands it to
+    the bridge or the expiring private handoff (§54)."""
     if not args:
         return Command(name="meeting", args=(), raw=raw)
     word = args[0].lower()
@@ -224,6 +225,8 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
         if len(args) == 2 and args[1].lower() in ("on", "off"):
             return Command(name="meeting", args=("voice", args[1].lower()), raw=raw)
         raise CommandError("bad_request", "usage: /meeting voice on|off")
+    if len(args) == 2 and args[1].lower() == "mine":
+        return Command(name="meeting", args=(args[0], "mine"), raw=raw)
     if len(args) != 1:
         raise CommandError("bad_request", MEETING_USAGE)
     return Command(name="meeting", args=(args[0],), raw=raw)
@@ -682,6 +685,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         link = parse_link(cmd.args[0])
     except LinkError:
         raise CommandError("bad_request", "That link isn't a Zoom, Meet or Teams https link.") from None
+    if cmd.args[1:] == ("mine",):
+        return _meeting_mine(room, actor, svc, link)
     if not svc.cfg.meeting.joinly_url:
         return Result(
             True,
@@ -709,6 +714,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         raise CommandError(
             "conflict", f"{room.name} is already transcribing a call. /meeting leave ends it."
         ) from None
+    if svc.hosted_calls is not None:
+        svc.hosted_calls.forget_requests(room.id)
     if svc.meetings is None:
         svc.store.end_meeting(row.id, "the meeting bridge is not running")
         return Result(True, "No meeting server is running. See DEPLOY.md.")
@@ -719,6 +726,31 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         notice=f"is joining a {label} call",
         room_changed=True,
         event="meeting_join",
+        event_data={"platform": link.platform},
+    )
+
+
+def _meeting_mine(room: Room, actor: Actor, svc: "RoomService", link: "MeetingLink") -> Result:
+    """Keep the secret out of every persisted command result, notice, event and model message (§54)."""
+    if svc.hosted_calls is None:
+        return Result(True, "Hosted calls are not available.")
+    targets = svc.hosted_calls.request(room, actor.person_id, link)
+    if not targets:
+        return Result(
+            True, f"{room.name}: no agent acting for you is in this room. Join one first, then ask again."
+        )
+    members = svc.store.room_memberships(room.id)
+    names = " ".join(f"@{m.screen_name}" for m in members if m.id in targets)
+    return Result(
+        True,
+        f"{room.name}: asked your own agent to host the call. The request expires in ten minutes.",
+        notice="asked their own agent to host the call",
+        post=f"{names} Run your host-meeting-bot skill for {room.name} with --from-room and empty stdin. "
+        "This is your person's /meeting mine handoff. The script receives the link privately. "
+        "Do not ask for, read, print or repeat the link. "
+        "The first successful host takes it; do not retry a refusal.",
+        post_skip=tuple(m.id for m in members if m.id not in targets),
+        event="meeting_mine",
         event_data={"platform": link.platform},
     )
 
