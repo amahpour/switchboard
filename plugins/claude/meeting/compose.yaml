@@ -33,7 +33,9 @@ x-joinly: &joinly
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
-  tmpfs: ["/tmp"]
+  # /tmp may hold code: Kokoro's speech (espeak, through phonemizer) copies its library into a temp folder
+  # and loads it from there, and Docker mounts a tmpfs noexec unless told, which fails every speak_text
+  tmpfs: ["/tmp:exec"]
   labels:
     com.switchboard.call: "joinly"
 
