@@ -1098,12 +1098,28 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .avatar.h-codex { background-color: var(--h-codex-tile); background-image: var(--h-codex-img); }
 .avatar.h-cursor { background-color: transparent; background-image: var(--h-cursor-img); }
 .avatar.h-devin { background-color: transparent; background-image: var(--h-devin-img); }
-/* A call, the room's third kind of member (#623, DESIGN.md §54): the page's own drawing of its platform on a neutral
-   tile, in the page's own colours. An admin's upload for a platform replaces it (/api/agent-icons.css, §29.11). */
+/* A call, the room's third kind of member (#623, DESIGN.md §54): the sound-wave drawing on a neutral tile, in the page's
+   own colours, for a call that doesn't say its platform. Zoom, Meet and Teams show their logo, below. */
 .avatar.call { background: var(--h-other-bg); color: var(--h-other-fg); }
 .avatar.call .ic { width: 62%; height: 62%; stroke-width: 1.6; }
 .avatar.call.lg { width: 48px; height: 48px; border-radius: 12px; }
 .avatar.call.bar { width: 22px; height: 22px; border-radius: 6px; }
+/* Zoom, Meet and Teams show their logo, unaltered, as Codex, Cursor and Devin show theirs (#623, DESIGN.md §29.9): one
+   file each in static/calls/, with the platform's name beside it. The same file serves light and dark, on a white
+   tile in both: the logos are drawn for a light ground, and Meet's has a see-through middle that would go dark on a
+   dark page. These come after `.avatar.call`, at the same weight, and an admin's upload (/api/agent-icons.css,
+   §29.11) comes after these, so it wins. */
+.avatar.h-zoom, .avatar.h-meet, .avatar.h-teams {
+  color: transparent;
+  background-color: #ffffff;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 0 0 1px var(--h-icon-ring);
+}
+.avatar.h-zoom { background-image: url('/static/calls/zoom.png'); }
+.avatar.h-meet { background-image: url('/static/calls/meet.png'); }
+.avatar.h-teams { background-image: url('/static/calls/teams.png'); }
 .avatar.human { border-radius: 50%; background: var(--human-bg); color: var(--human-fg); font-size: calc(12.5px * var(--text-scale)); font-weight: 600; }
 .avatar.sys { background: var(--chip-bg); color: var(--muted-2); font-size: calc(15px * var(--text-scale)); font-weight: 400; }
 .avatar.sm { width: 28px; height: 28px; font-size: calc(12px * var(--text-scale)); }

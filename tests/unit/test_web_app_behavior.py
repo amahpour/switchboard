@@ -73,12 +73,13 @@ def test_the_page_names_an_agents_owner_by_the_number_of_people() -> None:
 
 def test_the_call_is_a_member_with_details_and_an_end_button_only_when_the_broker_allows_it() -> None:
     """#623: a room frame with an open call adds a Calls row after the agents, counted in Members, with the
-    platform's own drawing (in the bar too); the row opens the details in the Inspector's pane, and End this
-    call is there only when the broker's answer for this viewer says they may end it, sending the command a
-    person types. A frame that takes the call away closes the details and the group; a hosted call with no
-    platform is "Call" with the generic drawing; a platform the page has no drawing for shows nothing. Fails
-    if the group is drawn for no call, End this call is shown whatever the answer, or the details outlive
-    the call."""
+    platform's logo (its class, h-zoom, which style.css puts the file on; no glyph drawn) in the bar too; the
+    row opens the details in the Inspector's pane, and End this call is there only when the broker's answer
+    for this viewer says they may end it, sending the command a person types. A frame that takes the call
+    away closes the details and the group; a hosted call with no platform is "Call" with the generic drawing
+    and no logo; a platform the page does not know shows nothing. Fails if the group is drawn for no call,
+    a logo has a drawing over it, End this call is shown whatever the answer, or the details outlive the
+    call."""
     out = run("call_member")
     assert out["before"] == {
         "title": "",
@@ -87,7 +88,8 @@ def test_the_call_is_a_member_with_details_and_an_end_button_only_when_the_broke
     }  # no call: no group, four agents and you
     row = out["row"]
     assert row["title"] == "Calls (1)" and row["count"] == "6"  # the call is counted
-    assert row["name"] == "Zoom callLive \u00b7 alice-laptop" and row["icon"] == 1 and row["mark"] == 1
+    assert row["name"] == "Zoom callLive \u00b7 alice-laptop" and row["logo"] == 1 and row["mark"] == 1
+    assert row["glyph"] == 0 and row["markGlyph"] == 0  # a logo is the tile's background, nothing drawn on it
     assert row["bar"].startswith("Transcribing a call (Zoom) \u00b7 on\u00a0alice-laptop")
     details = out["details"]
     assert (
@@ -108,7 +110,7 @@ def test_the_call_is_a_member_with_details_and_an_end_button_only_when_the_broke
     assert out["mayEnd"]["end"] is True and "Only alice and an admin see this" in out["mayEnd"]["note"][0]
     assert out["commands"] == ["/meeting leave"]
     assert out["gone"] == {"inspecting": False, "hidden": True, "rows": 0, "count": "5", "bar": True}
-    assert out["unknown"] == {"name": "CallJoining\u2026 \u00b7 alice-laptop", "generic": 1}
+    assert out["unknown"] == {"name": "CallJoining\u2026 \u00b7 alice-laptop", "generic": 1, "logo": 0}
     assert out["webex"] == {"rows": 0, "hidden": True}
 
 

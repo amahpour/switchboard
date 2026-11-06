@@ -134,9 +134,9 @@ The call also ends by itself when the room is closed, when the connection to joi
 While a call is on, Members lists it, after the people and the agents, under **Calls**. It is a member of the room, like an agent: a row you can open.
 
 1. **Open Members.** On a phone, tap the pill with the people icon in the room's header.
-2. **Find the call** under **Calls (1)**. The row has the platform's icon, its name (**Zoom call**, **Meet call** or **Teams call**), a dot, and where it runs: `Live · the server` for the bot you run next to switchboard. The dot is solid green while the bot is transcribing. While it joins, the dot is dashed and the row says `Joining… · the server`. The call counts in the number beside **Members**.
+2. **Find the call** under **Calls (1)**. The row has the platform's logo, its name (**Zoom call**, **Meet call** or **Teams call**), a dot, and where it runs: `Live · the server` for the bot you run next to switchboard. The dot is solid green while the bot is transcribing. While it joins, the dot is dashed and the row says `Joining… · the server`. The call counts in the number beside **Members**.
 
-    ![Members with the call under Calls: the Meet call's icon, a green dot and Live · the server](../media/ui/guide-meeting-members-light.png)
+    ![Members with the call under Calls: the Google Meet logo, a green dot and Live · the server](../media/ui/guide-meeting-members-light.png)
 
 3. **Open it.** Click the row, or Tab to it and press Enter. Its details open in the same pane an agent's details do. They show when the call went live (`Live since 14:02 · transcribing`), what runs it, who started it and whether voice is on.
 
@@ -145,9 +145,9 @@ While a call is on, Members lists it, after the people and the agents, under **C
 4. **End it from there**, if you may. **End this call** is at the bottom, and does what **Leave call** on the bar does. Anyone who can use **Leave call** sees it. If you may not end the call, the button is not shown. switchboard checks again on its side either way, so a button shown by mistake is refused in words.
 5. **Go back** with **Back**, or Esc on a desktop. Focus returns to the call's row. If the call ends while its details are open, they close by themselves.
 
-**The icons.** Zoom, Google and Microsoft don't allow their logos to be used without a licence, so switchboard doesn't ship them. Each call shows a small drawing of switchboard's own instead: a webcam for Zoom, a screen with a person in it for Meet, a group of three for Teams, and sound-wave bars for a call that doesn't say its platform. The platform's name is always beside it.
+**The icons.** Each call shows its platform's logo: Zoom's, Google Meet's or Microsoft Teams'. It is the same in the light and the dark theme, on a white tile, and a call that doesn't say its platform shows sound-wave bars instead. The platform's name is always beside it. The logos belong to Zoom, Google and Microsoft. They are not under switchboard's MIT license, switchboard is not affiliated with any of them, and they are there only to show which platform a call is on. The maintainer chose to ship them. [The NOTICE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/calls/NOTICE) next to the files says where each came from, and an owner who asks has its logo removed.
 
-**An admin can put the real ones in.** Open **Settings**, then **Appearance**. Under the agents' avatars, **Call icons** has a card each for Zoom, Meet and Teams. **Upload** takes a PNG or a WebP, up to 256 KB and 512 × 512 pixels, one for the light theme and one for the dark (with only one, it is used for both). The new icon shows in Members, the call's details and the bar within a moment, for everyone on the server. **Reset** brings switchboard's drawing back. An SVG is refused, because it can carry script. Only an admin can do this. It works the same as [the agents' avatars](../USAGE.md#web-ui-notes).
+**An admin can put other images in.** Open **Settings**, then **Appearance**. Under the agents' avatars, **Call icons** has a card each for Zoom, Meet and Teams. **Upload** takes a PNG or a WebP, up to 256 KB and 512 × 512 pixels, one for the light theme and one for the dark (with only one, it is used for both). The new icon shows in Members, the call's details and the bar within a moment, for everyone on the server. **Reset** brings the platform's logo back. An SVG is refused, because it can carry script. Only an admin can do this. It works the same as [the agents' avatars](../USAGE.md#web-ui-notes).
 
 ## Let agents speak
 
