@@ -62,6 +62,8 @@
     // Inspector: which agent, the latest member-detail GET, and its UI toggles
     inspect: null,     // { room, name, host } for an agent, { room, call: true } for the room's call, or null (Members)
     detail: null,      // { room, name, data } from GET /api/rooms/{slug}/members/{name}
+    callEnd: null,  // { key, can }: whether this viewer may end the room's hosted call (#623), per room and key
+    callEndAsk: null,  // the key whose answer is on its way
     callDetail: null,  // { room, data } from GET /api/rooms/{slug}/call: the open call's details, for this viewer (#623)
     callRow: null,     // the call's row button in Members, for focus on "back"
     inspSeq: 0,        // only the newest detail response is applied
@@ -1848,6 +1850,29 @@
     end.textContent = hosted ? 'End call' : 'Leave call';
     if (hosted) end.title = 'End the call: its machine\'s key stops working now';
     else end.removeAttribute('title');
+    // a hosted call ends only for the person whose it is or an admin: the button stays hidden until the broker
+    // says this viewer may (the frame goes to everyone, so it can't say). The server still decides.
+    end.classList.toggle('hidden', hosted && callEndable(r, call) !== true);
+  }
+
+  // Whether this viewer may end the room's hosted call, from GET /api/rooms/{slug}/call: true, false, or undefined
+  // while that is not known yet, when it is asked once (per room and key fingerprint) and the bar drawn again.
+  function callEndable(r, call) {
+    const key = r.name + ' ' + (call.fingerprint || '');
+    const known = state.callEnd;
+    if (known && known.key === key) return known.can;
+    if (state.callEndAsk === key) return undefined;
+    state.callEndAsk = key;
+    api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/call').then(function (d) {
+      if (state.callEndAsk !== key) return;
+      state.callEndAsk = null;
+      state.callEnd = { key: key, can: !!(d && d.call && d.call.can_end === true) };
+      const now = activeRoom();
+      if (now && now.name === r.name) renderMeeting(now);
+    }, function () {
+      if (state.callEndAsk === key) state.callEndAsk = null;
+    });
+    return undefined;
   }
 
   // Calls (#623, §54): the room's open call is a third kind of member, after People and Agents. One row: its platform's

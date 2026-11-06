@@ -495,17 +495,14 @@ def test_end_this_call_is_shown_only_to_whoever_may_end_it_and_ends_it_for_every
         ("carol", "carol-call"): True,  # whose call it is
         ("carol", "alice-call"): False,
     }
-    # the bar's End call still reaches the server's own rule: bob is refused, in words, and nothing ends
-    bob_page = pages[("bob", "carol-call")]
-    bob_page.click("#meeting-leave")
-    expect(bob_page.locator("#log")).to_contain_text(
-        "Only carol, who hosts it, or an admin can end this call."
-    )
-    expect(call_row(bob_page)).to_have_count(1)
-    assert len(ui.problems) == 1 and re.search(
-        r"status of 403 .*/api/rooms/carol-call/command", ui.problems[0]
-    )
-    ui.problems.clear()  # the refusal the server meant to send
+    # the bar's End call follows the same answer: bob, who would be refused, is not offered it
+    # (the server's own refusal of /meeting leave is in tests/integration/test_meeting_hosted.py)
+    for (person, room), may in shown.items():
+        bar_end = pages[(person, room)].locator("#meeting-leave")
+        if may:
+            expect(bar_end).to_be_visible()
+        else:
+            expect(bar_end).to_be_hidden()
 
     carol_page, alice_page = pages[("carol", "carol-call")], pages[("alice", "carol-call")]
     relay = relay_for(b, carol_key)
