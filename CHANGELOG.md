@@ -2,6 +2,59 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.53.0 (2026-11-06)
+
+### Upgrading
+
+- **The database moves to schema 43.** switchboard copies it to `switchboard.db.v42.bak` first and checks the copy. The step adds a column that records when a call went live, and widens one check on the avatars table so it accepts `zoom`, `meet` and `teams`. No row changes. If the check can't be widened the upgrade stops with the database unchanged. A database written by this release can't be opened by an older one, so the backup is the way back.
+- **Update the server first, then the plugin.** The Claude Code plugin of this release has a script that registers a hosted call at `/mcp/meeting/host`, a route an older server does not have. A plugin that is newer than its server only fails when someone asks it to host a call.
+
+Update the server and relay image together. Older relays still use the silence timeout.
+The host scripts and skills now describe immediate departure; Claude is 0.14.2 and Codex 0.5.1.
+
+Update the server first, then the plugins (Claude 0.15.0, Codex 0.6.0). Both host scripts support
+`start --from-room` with empty stdin. Codex hosting still needs an agent token in its shell.
+
+### Added
+
+- **A room's call is a member of the room: a Calls group in Members, with its own details.** While a call is on (`/meeting <link>`), Members lists it after the people and agents, with its platform's icon, a dot (solid green while it is live, dashed while the bot joins) and where it runs (`the server`). It counts in the number beside Members. Click the row, or Tab to it and press Enter, and its details open in the same pane an agent's do: since when it has been live, what runs it, who started it and whether voice is on, with **End this call** for anyone who may end it. Esc or Back closes them. On a phone they open in the Members sheet. Before, a call showed only in the bar above the log.
+- **A call shows its platform's logo: Zoom, Google Meet or Microsoft Teams.** The Calls row, the call's details and the call bar show the logo on a white tile, the same in light and dark, with the platform's name beside it. A call that doesn't say its platform shows sound-wave bars. The logos are their owners' trademarks and aren't under switchboard's MIT license, switchboard isn't affiliated with Zoom, Google or Microsoft, and a logo is removed if its owner asks ([NOTICE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/calls/NOTICE)). Under Settings → Appearance → **Call icons**, an admin can replace each with a PNG or a WebP, one for light and one for dark, as the agents' avatars are replaced, and **Reset** brings the logo back.
+- **Host the meeting bot on your own machine.** Tell your Claude Code, in a session that is in the room, "host the meeting bot for #uploads in this call: <link>". The plugin's new `host-meeting-bot` skill runs its `bin/meeting-host` script (a PowerShell twin for Windows), which makes a key for that one call, registers only the key's hash with the server, and starts two containers on your machine: [joinly](https://github.com/joinly-ai/joinly) and a relay. What the bot hears is pushed into the room as call lines marked `via alice-laptop`, a spoken name wakes only that agent, and with voice on an agent's `@call` line is spoken into the call. The server needs no joinly and none of the bot's memory, and the meeting link never reaches the server. The script prints the key's fingerprint and the device, to check against the call bar. **End call** in the room makes the relay leave and both containers stop on their own; `meeting-host stop` stops them from your side. Nothing is installed but Docker. [The meetings guide](https://amahpour.github.io/switchboard/guide/meetings/#host-the-bot-on-your-own-machine) has it step by step.
+- **GPU if there is one, CPU if not.** With an NVIDIA GPU that Docker can use (the driver and the NVIDIA Container Toolkit), the hosted bot runs joinly's CUDA image with `large-v3-turbo`. Otherwise, and always on a Mac, it runs the plain image with joinly's `base`, which is in the image. It says which it chose and why, and `--gpu`, `--cpu` and `--model` force them. `meeting-host plan` shows the choice and starts nothing.
+- **`switchboard meeting relay`**, in switchboard's image, is the relay the script starts: it reads the call's key and the meeting link from files only their owner can read (never an argument or the environment), pushes what joinly hears, speaks the room's `@call` lines, honours `Retry-After`, backs off on errors, and leaves when the server says the call ended. Its exit code says why it stopped.
+- **`meeting-host plan`, `status`, `stop` and `--no-join`.** `--no-join` with no link starts everything and joins no call, which checks that Docker, the images and the sign-in work. A hosted bot with no call is also what the new live test starts and stops (`tests/live/test_meeting_selftest_hosted.py`).
+- Codex's plugin can host a room's meeting bot through its `host-meeting-bot` skill, with the same shell and PowerShell scripts and Docker Compose setup as Claude Code. It needs `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` in Codex's shell; browser sign-in alone cannot register a hosted call.
+
+Type `/meeting <link> mine` in a room to ask your own agent there to host the call on your machine.
+The server's bot does not join. The link is held in broker memory only, tied to you and the room, for
+at most ten minutes. No model sees it: your host script takes it once through its existing registration.
+No link is kept in history, the database, notices or logs. With no eligible agent the command holds nothing;
+with several, the first successful registration takes it. A restart drops an unclaimed request.
+
+### Changed
+
+- **The broker's own meeting bot and the relay share one joinly client** (`meeting/joinly.py`). Nothing changes in how the broker's bot joins, listens or speaks.
+- **A release moves the relay's image tag in the plugin's Compose file** (`plugins/claude/meeting/compose.yaml`) with the other image pins, so the plugin of a release starts that release's relay.
+- The server's bot and hosted calls check, store and deliver finished lines through one ingest entry point. Server lines now retain their call id internally. Their labels, spoken-name wakes, speech, snapshots and endings stay the same.
+
+### Fixed
+
+- Hosted bots now use the server's `[meeting] tts_voice`, read before connecting to joinly. The relay's `--voice` remains a fallback for older servers that omit the setting.
+- **Claude Code's listener no longer leaves a watcher running after the hook ends.** On Debian and Ubuntu, a stop signal sent in the instant that watcher starts could be lost, so it kept running for as long as Claude Code did and held the hook open. The hook now finishes, and the watcher ends with the listener.
+
+`meeting-host stop`, a failed join and a lost joinly now tell the broker at once. The room's call bar
+ends immediately, with a fixed notice explaining why, and the call key stops working. If the broker
+cannot be reached, the existing silence timeout remains the fallback.
+
+Only that call's own key opens the departure route. It can end only its own call.
+
+### Known limitations
+
+- **A hosted bot has no snapshot yet.** `/meeting snapshot` and the button say so.
+- **Codex hosting requires an agent token in its shell.** Its browser sign-in alone cannot register a hosted call.
+- **Run on Linux, on the CPU path.** The GPU path, Docker Desktop on a Mac or Windows, and the PowerShell script were written to the same design and not run on those machines before this release.
+- Codex browser sign-in has no script credential for hosting. No credential, route or permission is added.
+
 ## 0.52.0 (2026-11-05)
 
 ### Added

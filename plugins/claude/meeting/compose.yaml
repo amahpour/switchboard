@@ -43,7 +43,7 @@ services:
   relay:
     # switchboard's image, at the release this plugin is. The script sets SB_RELAY_IMAGE only to try a build of
     # your own; docs/DEPLOY.md, "Meetings on your own machine". `.github/scripts/release.py` moves this tag.
-    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.52.0}
+    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.53.0}
     restart: "no"
     # run as you, so that the files you own (mode 0600) are readable to the relay and no one else's are
     user: "${SB_RELAY_USER:?the host script sets this}"
