@@ -127,8 +127,10 @@ function Claude-Pid { # CLAUDE_PID, which a Bash command is given, else the firs
     0
 }
 function Data-Dir([string]$given) {
-    $d = First $given (First $env:SWITCHBOARD_PLUGIN_DATA $env:CLAUDE_PLUGIN_DATA)
-    if (-not $d) {
+    $codex = Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')
+    $d = First $given $env:SWITCHBOARD_PLUGIN_DATA
+    if (-not $codex) { $d = First $d $env:CLAUDE_PLUGIN_DATA }
+    if (-not $d -and -not $codex) {
         $pid_ = Claude-Pid
         $config = First $env:CLAUDE_CONFIG_DIR $(Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude')
         $glob = Join-Path (Join-Path $config 'plugins') 'data'
@@ -154,6 +156,9 @@ function Read-Text([string]$path) { # a small file's text, shared so a helper ma
     } catch { '' }
 }
 function Credential([string]$data) { # the agent token, else the listener key of this Claude Code; '' when there is neither
+    if (Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')) {
+        return [string]$env:SWITCHBOARD_AGENT_TOKEN
+    }
     $t = First $env:SWITCHBOARD_AGENT_TOKEN $env:CLAUDE_PLUGIN_OPTION_TOKEN
     if ($t) { return $t }
     $id = Claude-Pid
@@ -344,6 +349,9 @@ function Cmd-Start([string[]]$rest) {
     $data = Data-Dir $o['--data']
     [void][IO.Directory]::CreateDirectory($data)
     $cred = Credential $data
+    if (-not $cred -and (Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin'))) {
+        Die 'no credential: hosting from Codex needs SWITCHBOARD_AGENT_TOKEN in its shell; browser sign-in alone cannot host a call'
+    }
     if (-not $cred) { Die "no credential: this Claude Code has no agent token in its environment and no listener key in $data (listener-key-<its pid>); sign in to switchboard from Claude Code (/mcp, then Authenticate) or set the plugin's token, then ask again" }
     $forced = if ($o['--cpu']) { 'cpu' } elseif ($o['--gpu']) { 'gpu' } else { '' }
     $d = Choose-Device $forced
@@ -406,7 +414,7 @@ function Cmd-Start([string[]]$rest) {
     $client.Timeout = [TimeSpan]::FromSeconds(30)
     $req = New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Post), "$server/mcp/meeting/host"
     [void]$req.Headers.TryAddWithoutValidation('Authorization', "Bearer $cred")
-    [void]$req.Headers.TryAddWithoutValidation('User-Agent', 'switchboard-claude-plugin')
+    [void]$req.Headers.TryAddWithoutValidation('User-Agent', 'switchboard-meeting-host')
     $req.Headers.ExpectContinue = $false
     $req.Content = New-Object Net.Http.StringContent $body, (New-Object Text.UTF8Encoding $false), 'application/json'
     $cred = ''
@@ -421,7 +429,12 @@ function Cmd-Start([string[]]$rest) {
     if ($status -ne 200) {
         Remove-Item -LiteralPath $cdir -Recurse -Force -ErrorAction SilentlyContinue
         if ($status -eq 0) { Die "could not reach the server at $server" }
-        if ($status -eq 401) { Die ('the server did not accept this Claude Code''s credential (' + (JsonField 'error') + '): sign in to switchboard again from Claude Code (/mcp, then Authenticate), then ask again') }
+        if ($status -eq 401) {
+            if (Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')) {
+                Die ('the server did not accept the host credential (' + (JsonField 'error') + '): check SWITCHBOARD_AGENT_TOKEN, then ask again')
+            }
+            Die ('the server did not accept this Claude Code''s credential (' + (JsonField 'error') + '): sign in to switchboard again from Claude Code (/mcp, then Authenticate), then ask again')
+        }
         if ($status -eq 429) { Die ('too many tries: wait a minute (' + (JsonField 'message') + ')') }
         Die ("the server refused ($status, " + (JsonField 'error') + '): ' + (JsonField 'message'))
     }

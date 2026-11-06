@@ -142,8 +142,13 @@ print_plan() {
 
 # ---------------------------------------------------------------------------------------------- the data folder
 set_data_dir() { # sets `data`: --data, else what the skill passes, else Claude Code's, else the user's
-  d=${data_arg:-${SWITCHBOARD_PLUGIN_DATA:-${CLAUDE_PLUGIN_DATA:-}}}
-  if [ -z "$d" ]; then
+  d=${data_arg:-${SWITCHBOARD_PLUGIN_DATA:-}}
+  if [ -d "$plugin/.codex-plugin" ]; then
+    d=${d:-${HOME:+$HOME/.cache/switchboard}}
+  else
+    d=${d:-${CLAUDE_PLUGIN_DATA:-}}
+  fi
+  if [ -z "$d" ] && [ ! -d "$plugin/.codex-plugin" ]; then
     # a Bash command is not given CLAUDE_PLUGIN_DATA (live run, Claude Code 2.1.307): the key of this Claude
     # Code is in the data folder that holds listener-key-<its pid>, which names exactly one
     pid=${CLAUDE_PID:-}
@@ -170,6 +175,11 @@ claude_pid() { # Claude Code's pid: CLAUDE_PID, which a Bash command is given, e
   esac
 }
 credential() { # prints the credential, or nothing: the agent token, else the listener key of this Claude Code
+  if [ -d "$plugin/.codex-plugin" ]; then
+    # Codex's browser credential belongs to its MCP client. Its shell has no listener key.
+    printf '%s' "${SWITCHBOARD_AGENT_TOKEN:-}"
+    return
+  fi
   t=${SWITCHBOARD_AGENT_TOKEN:-${CLAUDE_PLUGIN_OPTION_TOKEN:-}}
   if [ -n "$t" ]; then
     printf '%s' "$t"
@@ -391,6 +401,9 @@ cmd_start() {
   set_data_dir
   mkdir -p "$data" 2>/dev/null || die "cannot make $data"
   cred=$(credential)
+  if [ -z "$cred" ] && [ -d "$plugin/.codex-plugin" ]; then
+    die "no credential: hosting from Codex needs SWITCHBOARD_AGENT_TOKEN in its shell; browser sign-in alone cannot host a call"
+  fi
   [ -n "$cred" ] || die "no credential: this Claude Code has no agent token in its environment and no listener key in $data (listener-key-<its pid>); sign in to switchboard from Claude Code (/mcp, then Authenticate) or set the plugin's token, then ask again"
   choose_device "$force"
   choose_model "$model_arg"
@@ -459,7 +472,11 @@ cmd_start() {
     rm -rf "$cdir"
     case $code in
       '' | 000) die "could not reach the server at $server" ;;
-      401) die "the server did not accept this Claude Code's credential ($(field error "$resp")): sign in to switchboard again from Claude Code (/mcp, then Authenticate), then ask again" ;;
+      401)
+        if [ -d "$plugin/.codex-plugin" ]; then
+          die "the server did not accept the host credential ($(field error "$resp")): check SWITCHBOARD_AGENT_TOKEN, then ask again"
+        fi
+        die "the server did not accept this Claude Code's credential ($(field error "$resp")): sign in to switchboard again from Claude Code (/mcp, then Authenticate), then ask again" ;;
       429) die "too many tries: wait a minute ($(field message "$resp"))" ;;
       *) die "the server refused ($code, $(field error "$resp")): $(field message "$resp")" ;;
     esac

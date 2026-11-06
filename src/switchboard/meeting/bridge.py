@@ -216,17 +216,17 @@ class MeetingBridge:
         )
 
     async def _post_line(self, room_id: int, line: Line, live: _Live, *, ending: bool = False) -> None:
-        # what becomes of a line is ``ingest``'s, shared with a call hosted on a person's machine (§54):
-        # nothing posted when only the transcriber's hint list came back (#616), an echoed lead-in taken
-        # off and the real words kept (#602)
-        prepared = ingest.prepare(line.text, self.state.store.active_names(room_id))
-        if prepared is None:
+        row = self.state.store.open_meeting(room_id)
+        if row is None:
             return
-        if prepared.mentions and says_screen(prepared.text) and not ending:
-            # "Claude, look at my screen": the picture is posted first, so the agent this line wakes
-            # is handed it with the line. A picture that fails or is refused never holds the line back.
+        incoming = ingest.receive(self.state, row, line)
+        if incoming is None:
+            return
+        if incoming.prepared.mentions and says_screen(incoming.prepared.text) and not ending:
+            # The picture comes first so the agent this line wakes gets both. A failed picture
+            # never holds the line back; the checked line and its call stay together while it waits.
             await self._screen_for_line(room_id, live)
-        ingest.post(self.state, room_id, line, prepared)
+        incoming.post(self.state)
 
     # ------------------------------------------------------------------ voice (§52)
     def voice(self, room_id: int) -> bool:

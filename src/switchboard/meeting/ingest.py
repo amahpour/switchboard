@@ -20,6 +20,7 @@ from typing import Any
 from switchboard.envelope import clean
 from switchboard.meeting.lines import Line
 from switchboard.meeting.names import Match, match
+from switchboard.models import Meeting
 
 LINE_GAP_S = 1.0  # the room posts at most one call line a second
 QUEUE_MAX = 50  # lines waiting for their turn; past it the oldest is dropped, with one warning
@@ -84,8 +85,8 @@ def post(
     host: str | None = None,
 ) -> Any:
     """Post ``prepared`` as a call line by ``line``'s speaker (cut to ``SENDER_MAX``, or ``call`` when it
-    gave none). ``meeting_id`` and ``host`` are a hosted call and the machine that heard the line: it is
-    stored with them. An ambiguous name is told to the room, after the line."""
+    gave none). ``meeting_id`` identifies either kind of call; ``host`` names a hosted call's machine.
+    The line is stored with them. An ambiguous name is told to the room, after the line."""
     sender = clean(line.speaker).strip()[:SENDER_MAX] if line.speaker else ""
     posted = state.service.post_meeting_line(
         room_id,
@@ -104,3 +105,31 @@ def post(
             f'Someone on the call said "{heard}", and this room has {who}. Say the number.',
         )
     return posted
+
+
+@dataclass(frozen=True)
+class Incoming:
+    """A checked line with its source attached. The server may take a snapshot before posting it."""
+
+    meeting: Meeting
+    line: Line
+    prepared: Prepared
+
+    def post(self, state: Any) -> Any:
+        """Store and deliver with the call id for either source; only a hosted line names a machine."""
+        return post(
+            state,
+            self.meeting.room_id,
+            self.line,
+            self.prepared,
+            meeting_id=self.meeting.id,
+            host=self.meeting.host if self.meeting.hosted else None,
+        )
+
+
+def receive(state: Any, meeting: Meeting, line: Line) -> Incoming | None:
+    """The entry point for either source's finished line. Check it once, then carry the same checked
+    text and provenance through any server snapshot and into storage and delivery.
+    """
+    prepared = prepare(line.text, state.store.active_names(meeting.room_id))
+    return Incoming(meeting, line, prepared) if prepared is not None else None

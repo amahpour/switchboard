@@ -503,13 +503,14 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
     assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]  # gathered, the README stays
 
 
-def test_the_plugins_relay_image_is_a_pin_a_release_moves() -> None:
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_the_plugins_relay_image_is_a_pin_a_release_moves(harness: str) -> None:
     """``plugins/claude/meeting/compose.yaml`` starts the relay from switchboard's image (#623), and the
     plugin is installed from a release's tag, so the tag in it has to be the release's. Fails if the file is
     not among the files a release rewrites, or if its image is named in a way the pin does not match (a
     ``:latest``, or a
     second image line that a release would half move)."""
-    path = "plugins/claude/meeting/compose.yaml"
+    path = f"plugins/{harness}/meeting/compose.yaml"
     assert path in rel.PIN_FILES and rel.is_release_file(path)
     text = (rel.ROOT / path).read_text()
     moved = rel.update_pins(text, "9.9.9")

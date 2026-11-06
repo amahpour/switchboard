@@ -34,6 +34,7 @@ import contextlib
 import http.client
 import json
 import os
+import re
 import signal
 import socket
 import ssl
@@ -361,7 +362,7 @@ class JoinlyClient:
 
 
 # ---------------------------------------------------------------------------------- the relay
-@dataclass(frozen=True)
+@dataclass
 class RelayConfig:
     # the speech model to ask joinly for; "" leaves it joinly's own (``joinly.settings_header``)
     model: str = ""
@@ -538,6 +539,11 @@ class Relay:
                 return []
             if reply.body.get("ended"):
                 self.finish(Exit.ENDED)
+            voice = reply.body.get("tts_voice")
+            # Older brokers omit the field. Keep --voice as their fallback; never give joinly an
+            # unchecked setting from a response (it would ignore the entire settings header).
+            if isinstance(voice, str) and re.fullmatch(r"[a-z0-9_]{1,32}", voice):
+                self.cfg.voice = voice
             hints = reply.body.get("hints")
             return [w for w in hints if isinstance(w, str)] if isinstance(hints, list) else []
         return []
