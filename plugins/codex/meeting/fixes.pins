@@ -1,0 +1,9 @@
+# The two fixes to joinly 0.5.4 that a hosted call's joinly mounts over its own files (docs/DEPLOY.md, "A meeting
+# bot"; DESIGN.md section 54). Neither is in a joinly release yet; drop a line, and its mount in compose.yaml, once
+# one is. The host script (bin/meeting-host) fetches each file from its URL when it does not have it, and uses it
+# only if its sha256 is the one here: a file that differs is refused, never mounted. The URLs name a commit, so they
+# do not move; tests/unit/test_meeting_host.py checks these against the self-test's and DEPLOY.md's.
+#
+# file  sha256  url
+zoom.py 9bf581c20a9a7911afb9f2ac1447a5d0800cdca24485dd215099d5d82afad6ff https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5/joinly/providers/browser/platforms/zoom.py
+transcription.py 6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97 https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py

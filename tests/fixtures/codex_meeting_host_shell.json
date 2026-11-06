@@ -1,0 +1,11 @@
+{
+  "_source": "Live codex-cli 0.158.0 (gpt-6-luna, low), 2026-11-06, #634: a temporary home and broker, the checkout plugin installed from a local marketplace. The model loaded host-meeting-bot and ran its packaged script plan after Esc cancelled the held Stop hook. Only presence was recorded, never credential values; no call was registered. This is a shell observation, not a hook payload.",
+  "_unverified": false,
+  "environment_present": {
+    "SWITCHBOARD_AGENT_TOKEN": true,
+    "SWITCHBOARD_URL": true
+  },
+  "tool_call": "const r = await tools.exec_command({cmd:\"sh '<run>/codex-home/plugins/cache/switchboard/switchboard/0.5.0/bin/meeting-host' plan --cpu > host-plan.txt\\nagent_set=false\\nurl_set=false\\nif [ -n \\\"${SWITCHBOARD_AGENT_TOKEN:-}\\\" ]; then agent_set=true; fi\\nif [ -n \\\"${SWITCHBOARD_URL:-}\\\" ]; then url_set=true; fi\\nprintf '{\\\"SWITCHBOARD_AGENT_TOKEN\\\":%s,\\\"SWITCHBOARD_URL\\\":%s}\\\\n' \\\"$agent_set\\\" \\\"$url_set\\\" > host-env.json\",\"max_output_tokens\":1000});\ntext(r.output);\ntext(\"exit_code=\"+r.exit_code);\n",
+  "stdout": "device=cpu\nreason=forced by --cpu\nmodel=base\njoinly=ghcr.io/joinly-ai/joinly:v0.5.4\n",
+  "calls_registered": 0
+}

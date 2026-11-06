@@ -85,10 +85,11 @@ def test_a_line_is_posted_with_its_speaker_cut_to_forty_characters_and_its_text_
     assert nobody.lines[0]["sender_name"] == "call"
 
 
-def test_a_hosted_lines_call_and_machine_are_passed_on_and_a_servers_are_not() -> None:
-    """A line a hosted call pushed is stored with that call and the machine that heard it (§54); the
-    broker's own bot's lines carry neither. Fails if the pair is dropped on the way to the service, or
-    invented for a line that has none."""
+def test_the_low_level_post_passes_on_provenance_when_supplied() -> None:
+    """The low-level helper forwards supplied provenance and invents none when called without it.
+    Production sources enter receive, which binds either kind of call before using this helper.
+    Fails if supplied provenance is dropped on the way to the service.
+    """
     hosted, _ = post("hello", meeting_id=9, host="alice-laptop")
     assert (hosted.lines[0]["meeting_id"], hosted.lines[0]["sender_host"]) == (9, "alice-laptop")
     server, _ = post("hello")

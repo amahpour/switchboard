@@ -89,7 +89,7 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
     ```
 
     It counts calls in every room, from the moment a call is joining. One joinly can follow several calls, but each live call takes about 2.7 GiB of memory and one CPU in it (measured). Give joinly `2.7 GiB × max_calls + 0.5 GiB`, or a second call can get it killed, and every call with it. [DEPLOY.md](../DEPLOY.md#meetings-on-kubernetes) has the sizes for Kubernetes. Where there is no file to edit, set `SWITCHBOARD_MEETING_MAX_CALLS` to the number instead. When both are set, the variable wins. Skip this step if one call at a time is enough.
-5. **Pick a voice, if you want another one.** Agents speak with `bm_george` unless you set `tts_voice` under `[meeting]`: `tts_voice = "af_bella"`. [DEPLOY.md](../DEPLOY.md#a-meeting-bot) says which voices joinly has. It takes effect for the next call after a broker restart. Skip this if the default suits you.
+5. **Pick a voice, if you want another one.** Agents speak with `bm_george` unless you set `tts_voice` under `[meeting]`: `tts_voice = "af_bella"`. [DEPLOY.md](../DEPLOY.md#a-meeting-bot) says which voices joinly has. It applies to both the server bot and a hosted bot, for the next call after a broker restart. Skip this if the default suits you.
 6. **Pick a speech model, if the default mishears names.** joinly turns speech into text with Whisper, and out of the box it runs `base` on the CPU. It is quick and sometimes mishears a name. `stt_model` under `[meeting]` names another: `base`, `small`, `distil-large-v3` or `large-v3-turbo`.
 
     ```toml
@@ -110,13 +110,13 @@ The bot does not have to run next to the server. It can run on your laptop or wo
 
 You need:
 
-- **Claude Code with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Update the server first and the plugin second: the plugin of this release talks to routes an older server doesn't have.
+- **Claude Code or Codex with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Codex also needs `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` in its shell; browser sign-in alone cannot host a call. Update the server first and the plugin second: the plugin of this release talks to routes an older server doesn't have.
 - **Docker with Compose** on that machine. The plugin installs nothing else: no `pip install`, no model to fetch by hand.
 - **An NVIDIA GPU, if you have one,** with its driver and the NVIDIA Container Toolkit. The script uses it by itself. Without one, or on a Mac, it runs on the CPU with a smaller model.
 
 Step by step:
 
-1. **Ask your agent.** In Claude Code, in the session that is in the room, say something like: *host the meeting bot for #uploads in this call: <the link>*. Claude Code uses the plugin's `host-meeting-bot` skill and runs the plugin's script, `bin/meeting-host`, in its shell. Claude Code's own permission prompt asks you to allow it, because it starts containers. Only your request should start it: the skill tells the agent so, and a message in a room or from another agent is not your request. There is no tool for it, so nothing in a room can call one.
+1. **Ask your agent.** In Claude Code or Codex, in the session that is in the room, say something like: *host the meeting bot for #uploads in this call: <the link>*. The agent uses the plugin's `host-meeting-bot` skill and runs the plugin's script, `bin/meeting-host`, in its shell. The harness's own permission prompt asks you to allow it, because it starts containers. Only your request should start it: the skill tells the agent so, and a message in a room or from another agent is not your request. There is no tool for it, so nothing in a room can call one.
 2. **Wait for the answer.** It takes seconds. The first time it takes minutes, because Docker pulls joinly's image (3.7 GB on disk, and the CUDA one is about 6 GB to pull) and switchboard's (about 330 MB), and a GPU run downloads its speech model (about 1.6 GB) while it joins. The script pulls what is missing before it tells the server anything, and says so.
 3. **Check three things in what it printed:** the room, the **key fingerprint** (such as `7f3a·91c2`), and whether it uses **the GPU or the CPU** and why.
 4. **Compare the fingerprint with the call bar.** The room's bar reads `Transcribing a call (Zoom) · on alice-laptop · key 7f3a·91c2` (while the bot is still joining, `Joining a Zoom call… · on alice-laptop · key 7f3a·91c2`). It is the same eight characters. If they differ, it is not your call: stop it and tell an admin. The relay prints the same fingerprint when it starts, so you can also read it in `meeting-host status`.
@@ -127,7 +127,7 @@ Step by step:
 ```mermaid
 sequenceDiagram
     participant You
-    participant Agent as your Claude Code
+    participant Agent as your coding agent
     participant Script as meeting-host
     participant Server as the switchboard server
     participant Relay as the relay, on your machine
@@ -158,13 +158,13 @@ sequenceDiagram
 
 `--gpu` or `--cpu` forces either, and says what it overrode. `--model` names another of `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Ask for `meeting-host plan` and it prints the choice without starting anything.
 
-**Where things are.** The script keeps each call in a folder of the plugin's data folder, `calls/<fingerprint>/`, readable by you alone: the call's key, and the meeting link until the call is joined. The relay deletes the link as soon as it has joined, and the key when it exits. There is one Compose project for each call, named `switchboard-call-<fingerprint>`, so two calls on one machine don't meet. `meeting-host status` lists them and the relay's last lines. The next `start` clears the folders and containers of calls that have ended.
+**Where things are.** The script keeps each call in `calls/<fingerprint>/` under its data folder (Claude Code's plugin data folder; `~/.cache/switchboard` for Codex by default, or `--data DIR`), readable by you alone: the call's key, and the meeting link until the call is joined. The relay deletes the link as soon as it has joined, and the key when it exits. There is one Compose project for each call, named `switchboard-call-<fingerprint>`, so two calls on one machine don't meet. `meeting-host status` lists them and the relay's last lines. The next `start` clears the folders and containers of calls that have ended.
 
 **Check the setup first, without a call.** Add `--no-join` and give no link: the containers start, the relay reaches joinly and is heard from, and nothing is joined. `meeting-host stop` removes it. It is the quick way to learn that Docker, the images and the sign-in all work.
 
 **On Windows,** the plugin has the same script for PowerShell (`meeting-host.cmd`), and under Git Bash the shell script hands over to it. In PowerShell the link is piped in: `'<the link>' | & meeting-host.cmd start --server <the server> --data <the plugin's data folder> '#uploads'`. The skill gives your agent the right form. The PowerShell script is newer than the shell one and has had less use.
 
-**Without Claude Code,** run the script yourself from a shell, with the machine's agent token (Settings → Agents) in `SWITCHBOARD_AGENT_TOKEN` and the link on stdin. The room must have an agent of this machine in it, because that is what lets the machine host a call there. In the plugin's folder:
+**By hand,** run either plugin's script yourself from a shell, with the machine's agent token (Settings → Agents) in `SWITCHBOARD_AGENT_TOKEN` and the link on stdin. The room must have an agent of this machine in it, because that is what lets the machine host a call there. In the plugin's folder:
 
 ```sh
 read -rs SWITCHBOARD_AGENT_TOKEN; export SWITCHBOARD_AGENT_TOKEN   # paste the token: it is not shown or kept in your history
@@ -317,13 +317,15 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 
 ## Troubleshooting
 
+- **Codex says hosting needs `SWITCHBOARD_AGENT_TOKEN`:** browser sign-in only authenticates its MCP connection, not its shell. Start Codex with the machine's agent token and `SWITCHBOARD_URL` set as in [USAGE.md](../USAGE.md#agents-over-https-a-preview), then join the room on that device. Do not copy credentials from Codex's private store.
+
 - **`/meeting <link>` says "No meeting server is set":** the broker has no `[meeting] joinly_url` and no `SWITCHBOARD_JOINLY_URL`. Add one and restart the broker. See [Set it up](#set-it-up). (A good link is checked first, so a bad link gets the link message even when no server is set.) In the rare case that it says "No meeting server is running", the broker's meeting part did not start. Restart the broker, and look at its log.
 - **`/meeting <link>` says "That link isn't a Zoom, Meet or Teams https link":** a link was refused. Only `https` links on the listed hosts work, with a real path (`https://zoom.us/` alone is refused). Copy the whole invite link again. Put nothing after it, because a second word gives `usage: /meeting [<link>|leave|snapshot|voice on|voice off]`.
 - **"…is already transcribing a call. /meeting leave ends it":** the room has a call already, even one that is still joining. Leave it first.
 - **`/meeting <link>` says "This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).":** other rooms have calls, and together they are as many as `max_calls` allows. The message gives the number and nothing else, because a call may be in a room you can't see. Leave one of them (`/meeting leave` in the room that has it; if you can't see that room, ask someone who can), or raise `max_calls` and give joinly the memory for it ([Set it up](#set-it-up)). A call that is still leaving counts until the bot has left, so if you just left one, try again in a few seconds. The refused start wrote nothing and sent the link nowhere.
 - **The bot waits in the meeting's waiting room:** the host has to admit `switchboard (transcribing)`. Until then it hears nothing. If joining takes longer than 45 seconds, the room says `The call ended: couldn't join the call.`. Ask the host to admit it as soon as it shows up, and start again.
 - **`meeting-host` says "no credential":** this Claude Code has no agent token in its environment and the plugin's data folder has no listener key for it (`listener-key-<its pid>`). Sign in to switchboard from Claude Code (`/mcp`, then Authenticate), or type the token into the plugin's settings and restart Claude Code, then ask again.
-- **`meeting-host` says "the server refused (403, not_member)":** the room has no agent of this machine in it. Join the room from the Claude Code on this machine first, then ask again. A room that doesn't exist, or one this machine isn't in, gets the same answer.
+- **`meeting-host` says "the server refused (403, not_member)":** the room has no agent of this machine in it. Join the room from an agent on the token's device first, then ask again. A room that doesn't exist, or one this machine isn't in, gets the same answer.
 - **`meeting-host` says "(409)":** the room already has a call (a call has one source), or you already host one, or the server follows as many calls as `max_calls` allows. End the other with **End call**, or run `meeting-host stop`.
 - **`meeting-host` says "Docker is installed but not running":** start Docker (or Docker Desktop). "Docker Compose is needed" means `docker compose` is missing: Docker Desktop has it, and on Linux it is the `docker-compose-plugin` package.
 - **The key fingerprint in the room is not the one `meeting-host` printed:** do not use it. The script stops by itself when the server's answer names another fingerprint. If the bar shows a fingerprint you don't recognise on a machine you don't recognise, tell an admin: anyone with the call's key can push lines into it, and ending the call from the bar refuses the key at once.
@@ -394,20 +396,20 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six step
 - `/meeting voice on` and `/meeting voice off` turn speaking on and off for this call. The **Voice** switch on the bar does the same.
 - `/meeting snapshot` posts a picture of the shared screen. **Snapshot** on the bar does the same.
 
-**The host script** (`meeting-host`, in the Claude Code plugin's `bin`; your agent runs it):
+**The host script** (`meeting-host`, in either the Claude Code or Codex plugin's `bin`; your agent runs it):
 
-- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM` registers a call for `ROOM` and starts its two containers. The meeting link is read from stdin, never from an argument. `--server` and `--data` are what the skill fills in from the plugin's settings. `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--no-join` checks the setup without a call.
+- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM` registers a call for `ROOM` and starts its two containers. The meeting link is read from stdin, never from an argument. Claude Code's skill fills in `--server` and `--data` from the plugin's settings. Codex uses `SWITCHBOARD_URL` and its default data folder; its script requires `SWITCHBOARD_AGENT_TOKEN` and cannot use Codex's browser sign-in. `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--no-join` checks the setup without a call.
 - `meeting-host stop [FINGERPRINT]` stops this machine's hosted call (or the one with that fingerprint): both containers and their files.
 - `meeting-host status` lists the calls on this machine, the relay's last lines, and whether they run.
 - `meeting-host plan [--cpu|--gpu] [--model NAME]` prints the device, the model and the joinly image it would use, and starts nothing.
 - Environment: `SWITCHBOARD_AGENT_TOKEN` (the credential, instead of the listener key), `SWITCHBOARD_RELAY_IMAGE` (another image for the relay, to try a build of your own), `SWITCHBOARD_RELAY_ADD_HOST` (the same as `--add-host`), `SWITCHBOARD_RELAY_ALLOW_HTTP=1` (a plain `http` server address on a network you trust: the key would cross it in the clear).
 
-**The relay** (`switchboard meeting relay`, in switchboard's image; the script starts it, you don't): `--server`, `--joinly`, `--key-file` and `--link-file` (a file only you can read, or `-` for stdin), `--model`, `--voice`, `--no-join`, `--allow-http`, `--burn-files` and `--no-mode-check`. It never takes the key or the link as an argument or from the environment. `switchboard meeting relay --help` has them.
+**The relay** (`switchboard meeting relay`, in switchboard's image; the script starts it, you don't): `--server`, `--joinly`, `--key-file` and `--link-file` (a file only you can read, or `-` for stdin), `--model`, `--voice` (a fallback for older servers; the server's `tts_voice` wins), `--no-join`, `--allow-http`, `--burn-files` and `--no-mode-check`. It never takes the key or the link as an argument or from the environment. `switchboard meeting relay --help` has them.
 
 **Config**, in the broker's `config.toml` or its environment:
 
 - `[meeting] joinly_url`: joinly's address, for example `http://127.0.0.1:8010/mcp/`. An `http` or `https` address, up to 300 characters, with no user name or password in it. Empty by default, which turns the feature off.
-- `[meeting] tts_voice`: the voice agents speak with, for example `af_bella`. A word of 1 to 32 characters from `a-z`, `0-9` and `_`. The default is `bm_george`. It is sent to joinly when a call starts.
+- `[meeting] tts_voice`: the voice agents speak with, for example `af_bella`. A word of 1 to 32 characters from `a-z`, `0-9` and `_`. The default is `bm_george`. It is sent to joinly when either kind of call starts; a hosted relay reads it from its first speech poll.
 - `[meeting] stt_model`: the Whisper model joinly transcribes with: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Empty or unset by default, which leaves the choice to joinly (`base` on a CPU, `distil-large-v3` on a GPU). Anything else stops the broker at start. A model you name is downloaded on the first call. It is sent to joinly when a call starts.
 - `[meeting] max_calls`: how many calls the broker follows at once, in all rooms together. An integer from 1 to 50. The default is 1. A start past it is refused. Each live call takes about 2.7 GiB of memory and one CPU in joinly.
 - `[files] max_mb`: the size limit for one file also limits a snapshot ([attachments](attachments.md)).

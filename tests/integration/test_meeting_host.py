@@ -208,11 +208,15 @@ class Machine:
     """One person's machine for a run of the script: a copy of the plugin whose fixes are pinned to the stub's
     files, a folder of its own for the plugin's data, the stand-ins on a PATH, and the logs they write."""
 
-    def __init__(self, stub: Stub, gpu: bool = False, darwin: bool = False) -> None:
+    def __init__(
+        self, stub: Stub, gpu: bool = False, darwin: bool = False, plugin_name: str = "claude"
+    ) -> None:
         self.stub = stub
         self.root = Path(tempfile.mkdtemp(prefix="sb-host-"))
         self.plugin = self.root / "plugin"
-        shutil.copytree(PLUGIN, self.plugin, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(
+            ROOT / "plugins" / plugin_name, self.plugin, ignore=shutil.ignore_patterns("__pycache__")
+        )
         self.data = self.root / "data"
         self.data.mkdir(mode=0o700)
         self.bin = self.root / "bin"
