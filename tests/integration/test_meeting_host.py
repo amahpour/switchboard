@@ -119,7 +119,7 @@ for f in "$@"; do
     *)
       [ -e "$f" ] || continue
       m=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")
-      if [ -d "$f" ]; then s=0; else s=$(wc -c <"$f"); fi
+      if [ -d "$f" ]; then s=$(ls -A "$f" | wc -l); else s=$(wc -c <"$f"); fi
       printf '%s %s %s\\n' "$m" "$(printf '%s' "$s" | tr -d ' ')" "$f" >> "$FAKE_CHMOD_LOG"
       ;;
   esac
@@ -233,8 +233,9 @@ class Machine:
             self.write_exe("curl", CURL_WRAPPER.format(curl=curl))
         if gpu:
             self.write_exe("nvidia-smi", "#!/bin/sh\necho 'GPU 0: Stand-in GPU (UUID: GPU-0000)'\n")
-        if darwin:
-            self.write_exe("uname", "#!/bin/sh\necho Darwin\n")
+        # the script asks `uname -s` for a Mac (and for Git Bash): the machine here is whatever the test says,
+        # never the one running it (a macOS runner would otherwise send every GPU case down the Mac branch)
+        self.write_exe("uname", f"#!/bin/sh\necho {'Darwin' if darwin else 'Linux'}\n")
         # the plugin's fixes: pinned to the files the stub serves, and the files already in the data folder
         self.fix_dir = self.data / "joinly-fixes"
         self.pin_fixes({"zoom.py": FIX_ZOOM, "transcription.py": FIX_TRANSCRIPTION})
@@ -502,7 +503,8 @@ def test_neither_the_link_nor_the_key_is_in_any_argument_or_environment_of_anyth
     seen = m.everything_a_process_was_given() + r.stdout + r.stderr
     for secret in (key, key[4:], LINK, "hunter2hunter2", "123456789", LISTENER, LISTENER[4:]):
         assert secret not in seen, secret[:12]
-    assert keys.key_hash(key) in seen  # (the hash is what goes to the server, in the body: curl's argument)
+    if CURRENT_IMPL[0] == "sh":  # (the hash is what goes to the server, in the body: curl's argument)
+        assert keys.key_hash(key) in seen
 
 
 def test_the_files_are_the_owners_alone_and_the_link_is_in_one(machine: Machine) -> None:
@@ -539,7 +541,11 @@ def test_a_secrets_file_is_private_from_the_moment_it_exists(machine: Machine) -
         # private already, or (the PowerShell script's way, as headers.ps1's: the access list is set while
         # it is empty) holding nothing yet
         assert mode == "600" or size == 0, (name, seen)
-    assert seen[str(call)][0] == "700" and seen[str(m.data / "calls")][0] == "700", seen
+    for folder in (call, m.data / "calls"):
+        mode, entries = seen[str(folder)]
+        # a folder is private from its creation (the shell's umask), or, as with the PowerShell script, made
+        # private while it is still empty, before a secret is put in it
+        assert mode == "700" or entries == 0, (folder.name, seen)
 
 
 def test_a_check_of_the_setup_takes_no_link_and_leaves_none(machine: Machine) -> None:
