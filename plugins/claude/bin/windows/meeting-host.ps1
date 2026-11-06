@@ -390,8 +390,9 @@ function Cmd-Start([string[]]$rest) {
     }
     $calls = Join-Path $data 'calls'
     $cdir = Join-Path $calls $fp8
-    [void][IO.Directory]::CreateDirectory($cdir)
+    [void][IO.Directory]::CreateDirectory($calls)
     Make-PrivateDir $calls
+    [void][IO.Directory]::CreateDirectory($cdir)
     Make-PrivateDir $cdir
     Write-Private (Join-Path $cdir 'key') $key
     if ($link) { Write-Private (Join-Path $cdir 'link') $link }
