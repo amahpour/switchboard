@@ -16,7 +16,6 @@
 
 ### Known limitations
 
-- **`meeting-host stop` leaves the call in the room for up to five minutes.** The server only learns that a stopped relay has left by its silence. **End call** in the room ends it at once, and makes the containers stop by themselves.
 - **A hosted bot has no snapshot yet.** `/meeting snapshot` and the button say so.
 - **Codex hosting requires an agent token in its shell.** Its browser sign-in alone cannot register a hosted call.
 - **Run on Linux, on the CPU path.** The GPU path, Docker Desktop on a Mac or Windows, and the PowerShell script were written to the same design and not run on those machines before this release.

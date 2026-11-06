@@ -13,4 +13,3 @@
 ### Known limitations
 
 - Codex browser sign-in has no script credential for hosting. No credential, route or permission is added.
-- `meeting-host stop` still leaves the room's call bar until End call or the five-minute silence timeout. A relay leave route and `/meeting <link> mine` remain follow-ups.

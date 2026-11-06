@@ -44,6 +44,7 @@ AGENT_PATHS = frozenset(
         "/mcp/meeting/host",
         "/mcp/meeting/push",
         "/mcp/meeting/speech",
+        "/mcp/meeting/leave",
     }
 )
 # signing an agent in through the browser (DESIGN.md §49.9, #386): the two OAuth routes a coding agent
