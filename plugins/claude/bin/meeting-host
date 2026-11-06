@@ -2,7 +2,7 @@
 # Host the meeting bot for one call on this machine (docs/DESIGN.md section 54, docs/guide/meetings.md, #623).
 # Started by the agent from its shell when its person asks (skills/host-meeting-bot), never by a hook.
 #
-#   meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM
+#   meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM
 #                                                                                                       (link on stdin)
 #   meeting-host stop [FINGERPRINT]       stop this machine's hosted call(s): both containers, then the files
 #   meeting-host status                   what is running, and what the relay last said
@@ -48,7 +48,7 @@ die() { # a sentence on stderr, exit 1
 }
 usage() { # a bad command line: exit 2
   printf '%s: %s\n' "$PROG" "$*" >&2
-  printf 'usage: %s start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM\n' "$PROG" >&2
+  printf 'usage: %s start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM\n' "$PROG" >&2
   printf '       (the meeting link on stdin)\n' >&2
   printf '       %s stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]\n' "$PROG" >&2
   exit 2
@@ -334,7 +334,7 @@ cmd_stop() {
 }
 
 cmd_start() {
-  force='' model_arg='' server=${SWITCHBOARD_URL:-${CLAUDE_PLUGIN_OPTION_SERVER_URL:-}} data_arg='' nojoin='' room='' allow_http=''
+  force='' model_arg='' server=${SWITCHBOARD_URL:-${CLAUDE_PLUGIN_OPTION_SERVER_URL:-}} data_arg='' nojoin='' from_room='' room='' allow_http=''
   add_host=${SWITCHBOARD_RELAY_ADD_HOST:-} override=''
   [ "${SWITCHBOARD_RELAY_ALLOW_HTTP:-}" = 1 ] && allow_http=1
   while [ $# -gt 0 ]; do
@@ -362,6 +362,7 @@ cmd_start() {
         shift 2
         ;;
       --no-join) nojoin=1; shift ;;
+      --from-room) from_room=1; shift ;;
       -*) usage "start: unknown argument $1" ;;
       *://*) usage "the meeting link goes on stdin, never on the command line" ;;
       *)
@@ -371,6 +372,8 @@ cmd_start() {
         ;;
     esac
   done
+  [ -z "$from_room" ] || [ -z "$nojoin" ] || usage "cannot combine --from-room and --no-join"
+  [ -z "$from_room" ] || command -v base64 >/dev/null 2>&1 || die "base64 is needed for --from-room"
   [ -n "$room" ] || usage "start: which room?"
   room=${room#\#}
   case $room in '' | *[!A-Za-z0-9._-]*) usage "start: a room is letters, digits, . _ - (as in #uploads)" ;; esac
@@ -415,6 +418,9 @@ cmd_start() {
     docker image inspect "$img" >/dev/null 2>&1 || missing="$missing $img"
   done
 
+  # ---- stdin for a direct request; a room handoff reads nothing from the model
+  link='' platform=unknown
+  if [ -z "$from_room" ]; then
   # ---- the link: stdin only, into a file only its owner reads
   if [ -t 0 ]; then
     printf 'Meeting link (not shown): ' >&2
@@ -441,6 +447,8 @@ cmd_start() {
     link=
   fi
 
+  fi
+
   # ---- the key, its files, the registration
   key=sbc_$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
   [ "${#key}" -eq 68 ] || die "could not make a key"
@@ -460,7 +468,9 @@ cmd_start() {
   fi
   link=
   # the relay runs as you, and the folder is yours: it may delete what is in it. Nothing else is readable.
-  body=$(printf '{"room": "#%s", "key_hash": "%s", "platform": "%s", "model": "%s"}' "$room" "$hash" "$platform" "$model")
+  handoff=''
+  [ -z "$from_room" ] || handoff=', "from_room": true'
+  body=$(printf '{"room": "#%s", "key_hash": "%s", "platform": "%s", "model": "%s"%s}' "$room" "$hash" "$platform" "$model" "$handoff")
   resp=$(mktemp) || die "no temporary file"
   trap 'rm -f "$resp"' EXIT
   code=$(printf 'header = "Authorization: Bearer %s"\n' "$cred" |
@@ -469,6 +479,7 @@ cmd_start() {
   cred=
   if [ "$code" != 200 ]; then
     rm -rf "$cdir"
+    [ -z "$from_room" ] || die "the server refused the room handoff ($code); ask again in the room"
     case $code in
       '' | 000) die "could not reach the server at $server" ;;
       401)
@@ -485,6 +496,27 @@ cmd_start() {
   if [ "$theirs" != "$fp8" ]; then
     rm -rf "$cdir"
     die "the server's fingerprint for this key is not the one made here: not starting. Tell the person; do not retry"
+  fi
+  if [ -n "$from_room" ]; then
+    # The response is private (mktemp under umask 077). Only its ASCII transport encoding is parsed;
+    # decoding goes straight to the same private file stdin uses, never an argument or a child variable.
+    encoded=$(field link_b64 "$resp")
+    platform=$(field platform "$resp")
+    valid=1
+    [ -n "$encoded" ] && [ "${#encoded}" -le 2700 ] || valid=''
+    case $platform in zoom|meet|teams) ;; *) valid='' ;; esac
+    if [ -n "$valid" ]; then
+      if ! printf '%s' "$encoded" | base64 -d >"$cdir/link" 2>/dev/null; then
+        printf '%s' "$encoded" | base64 -D >"$cdir/link" 2>/dev/null || valid=''
+      fi
+    fi
+    encoded=''
+    rm -f "$resp"
+    if [ -z "$valid" ] || [ ! -s "$cdir/link" ]; then
+      rm -rf "$cdir"
+      die "no usable room handoff returned; update the server first, then ask again in the room"
+    fi
+    chmod 600 "$cdir/link"
   fi
   if [ -n "$add_host" ]; then
     # a server whose name the containers' resolver does not know (a LAN name, a test address): written beside the

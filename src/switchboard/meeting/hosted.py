@@ -21,13 +21,15 @@ the broker instead of the broker pulling it from a bot beside it (§52). The bro
   a waiting speech poll is answered with ``ended``.
 
 All of it runs on the broker's loop and never waits, except ``speech``, which is a long poll. Memory is
-only the line being assembled, the lines waiting to be posted and spoken, and the voice switch: a call
-does not outlive the process (the bridge's ``recover`` ends every open call at the next start).
+the expiring private handoffs, the line being assembled, the lines waiting to be posted and spoken,
+and the voice switch: a call does not outlive the process (the bridge's ``recover`` ends every open call
+at the next start).
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import math
 from collections import deque
@@ -39,7 +41,7 @@ from switchboard.envelope import clean
 from switchboard.meeting import ingest, keys
 from switchboard.meeting.ingest import LINE_GAP_S
 from switchboard.meeting.lines import CAP, Assembler, Line, Segment
-from switchboard.meeting.links import PLATFORM_LABEL
+from switchboard.meeting.links import PLATFORM_LABEL, MeetingLink
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.speech import QUEUE_MAX as SPEAK_QUEUE_MAX
 from switchboard.meeting.speech import call_text, speakable
@@ -72,6 +74,8 @@ QUIET_S = 300.0
 # Registering a call is rare: a few tries a minute for a token is plenty, and a guesser or a loop is stopped.
 HOST_PER_WINDOW = 5
 HOST_WINDOW_S = 60.0
+REQUEST_TTL_S = 600.0  # a room-to-host handoff is memory only and can be taken once
+REQUEST_LINK_MAX = 2000  # bytes, within the host script and relay's secret-file limits
 TICK_S = 0.5  # how often ``run`` ticks: half the gap between two lines, so a gap is never two
 
 # why a call ended -> (the phrase kept in its row, or None; the notice the room reads, or None)
@@ -93,6 +97,15 @@ ENDS: dict[str, tuple[str | None, str | None]] = {
     "joinly_lost": ("its bot lost the call", "The call ended: its bot lost the call."),
     "quiet": ("its host went quiet", "The call ended: its host went quiet."),
 }
+
+
+@dataclass(frozen=True)
+class _Request:
+    """A secret held only in this process, never represented in logs or public state."""
+
+    platform: str
+    url: str = field(repr=False)
+    expires: float
 
 
 class Refused(Exception):
@@ -198,7 +211,51 @@ class HostedCalls:
         self.state = state
         self._calls: dict[int, _Call] = {}  # meeting id -> what it holds
         self._rooms: dict[int, int] = {}  # room id -> its hosted call's meeting id
+        self._requests: dict[tuple[int, int | None], _Request] = {}
         self._asked: dict[int, deque[float]] = {}  # token id -> when it last tried to register a call
+
+    # ------------------------------------------------------------------ a person's room-to-host handoff
+    def request(self, room: Room, person_id: int | None, link: MeetingLink) -> list[int]:
+        """Hold a link for ten minutes only if this person has credential-backed agents in this room.
+        Return their membership ids: normal human-message delivery wakes them, respecting every guard."""
+        self._expire_requests()
+        try:
+            size = len(link.url.encode("utf-8"))
+        except UnicodeError:
+            raise ServiceError("bad_request", "That meeting link is not valid UTF-8.") from None
+        if size > REQUEST_LINK_MAX:
+            raise ServiceError("bad_request", "That meeting link is too long.")
+        store = self.state.store
+        targets = []
+        for membership in store.room_memberships(room.id):
+            p = store.get_participant(membership.participant_id)
+            token = store.agent_token_for_device(p.host) if p is not None and p.active and p.host else None
+            if token is not None and token.person_id == person_id:
+                targets.append(membership.id)
+        if not targets:
+            self._requests.pop((room.id, person_id), None)
+            return []
+        if store.open_meeting(room.id) is not None:
+            raise ServiceError("conflict", "This room already has a call. End it first.")
+        if store.open_hosted_meeting_of(person_id) is not None:
+            raise ServiceError("conflict", "You already host a call. End it first.")
+        if store.count_open_meetings() >= self.state.cfg.meeting.max_calls:
+            raise ServiceError("conflict", "This broker is already following its maximum number of calls.")
+        self._requests[room.id, person_id] = _Request(
+            link.platform, link.url, self.state.clock.now() + REQUEST_TTL_S
+        )
+        return targets
+
+    def _expire_requests(self) -> None:
+        now = self.state.clock.now()
+        for key, request in list(self._requests.items()):
+            room = self.state.store.room_by_id(key[0])
+            if now >= request.expires or room is None or room.closed:
+                del self._requests[key]
+
+    def forget_requests(self, room_id: int) -> None:
+        for key in [key for key in self._requests if key[0] == room_id]:
+            del self._requests[key]
 
     # ------------------------------------------------------------------ opening (the host script)
     def register(
@@ -222,7 +279,25 @@ class HostedCalls:
         except InvalidName as e:
             raise ServiceError("bad_request", str(e)) from None
         room = self.room_for(token, name, session, harness)
-        return self.open(token, room, params)
+        from_room = params.get("from_room", False)
+        if not isinstance(from_room, bool):
+            raise ServiceError("bad_request", "from_room must be a boolean")
+        if not from_room:
+            return self.open(token, room, params)
+        given = params.get("platform")
+        if given not in (None, "") and keys.platform_in(given) is None:
+            raise ServiceError("bad_request", "platform is zoom, meet, teams or unknown")
+        self._expire_requests()
+        pending = self._requests.get((room.id, token.person_id))
+        if pending is None:
+            raise ServiceError(
+                "conflict", "No pending meeting request for you in this room. Ask again in the room."
+            )
+        # No await between validation, opening and consuming: only the first successful registration wins.
+        # Base64 keeps the one secret field independent of shell/JSON quoting; scripts decode it privately.
+        result = self.open(token, room, {**params, "platform": pending.platform})
+        result["link_b64"] = base64.b64encode(pending.url.encode("utf-8")).decode("ascii")
+        return result
 
     def _admit(self, token_id: int) -> None:
         """Count one attempt, whatever its outcome, or refuse with 429 once ``HOST_PER_WINDOW`` were made in
@@ -314,6 +389,7 @@ class HostedCalls:
                 "conflict", f"{room.name} already has a call, or that key was used before"
             ) from None
         self._state(row)
+        self.forget_requests(room.id)  # any successful start cancels stale handoffs for this room
         fp = keys.fingerprint(h)
         store.add_event(
             "meeting_host",
@@ -527,6 +603,7 @@ class HostedCalls:
     def stop(self, room_id: int, reason: str) -> bool:
         """End the room's hosted call, if it has one: True when it did, so a caller that would also stop the
         broker's own bot knows there was nothing for it to do."""
+        self.forget_requests(room_id)
         row = self.state.store.open_meeting(room_id)
         if row is None or not row.hosted:
             return False
@@ -563,6 +640,7 @@ class HostedCalls:
 
     def shutdown(self) -> None:
         """The broker stops: every hosted call ends, so no row is left open for the next start."""
+        self._requests.clear()
         for row in self.state.store.open_hosted_meetings():
             self.end(row, "the broker stopped")
 
@@ -573,6 +651,7 @@ class HostedCalls:
         line that has been quiet and post the next one waiting when its turn has come. All by the broker's
         clock. A call that is still joining is given its whole window: the host may be pulling an image or
         a model, and says nothing until it is in the call."""
+        self._expire_requests()
         now = self.state.clock.now()
         for row in self.state.store.open_hosted_meetings():
             st = self._state(row)
