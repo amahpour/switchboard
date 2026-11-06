@@ -52,6 +52,7 @@ def test_a_release_pr_skips_the_tests() -> None:
         "docs/INSTALL.md",
         "docs/DEPLOY.md",
         "deploy/compose/compose.yaml",
+        "plugins/claude/meeting/compose.yaml",  # the hosted-call relay's image (#623)
         ".claude-plugin/marketplace.json",  # the plugins' pins move with a release (#462)
         ".agents/plugins/marketplace.json",
         "deploy/helm/switchboard/Chart.yaml",  # the chart's appVersion moves too (#608)

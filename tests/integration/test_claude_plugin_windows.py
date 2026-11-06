@@ -196,18 +196,25 @@ def test_powershell_finds_the_cmd_file_for_the_command_and_nothing_else() -> Non
     """In PowerShell (the hook shell on a Windows without Git), ``./listen`` is resolved like a typed
     command: a ``.ps1`` beside it wins over ``.cmd``, and PowerShell's default policy on Windows refuses
     every ``.ps1``; a ``.bat``, ``.com`` or ``.exe`` would win over the ``.cmd`` too. So ``bin`` holds the
-    shell scripts and the three ``.cmd`` files, and the PowerShell scripts are in ``bin/windows``. Fails
+    shell scripts and the four ``.cmd`` files, and the PowerShell scripts are in ``bin/windows``. Fails
     if a file that would be found first lands in ``bin``."""
     assert sorted(p.name for p in BIN.iterdir()) == [
         "headers",
         "headers.cmd",
         "listen",
         "listen.cmd",
+        "meeting-host",
+        "meeting-host.cmd",
         "session",
         "session.cmd",
         "windows",
     ]
-    assert sorted(p.name for p in (BIN / "windows").iterdir()) == ["headers.ps1", "listen.ps1", "session.ps1"]
+    assert sorted(p.name for p in (BIN / "windows").iterdir()) == [
+        "headers.ps1",
+        "listen.ps1",
+        "meeting-host.ps1",
+        "session.ps1",
+    ]
 
 
 @pytest.mark.parametrize("name", ["listen", "session"])

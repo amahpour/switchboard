@@ -254,6 +254,10 @@ def make_repo(tmp_path: Path) -> Path:
     (repo / "deploy" / "compose" / "compose.yaml").write_text(
         "    image: ghcr.io/amahpour/switchboard:0.4.0\n"
     )
+    (repo / "plugins" / "claude" / "meeting").mkdir(parents=True)  # the relay's Compose file (#623)
+    (repo / "plugins" / "claude" / "meeting" / "compose.yaml").write_text(
+        "    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.4.0}   # a release\n"
+    )
     (repo / "deploy" / "helm" / "switchboard").mkdir(parents=True)
     (repo / "deploy" / "helm" / "switchboard" / "Chart.yaml").write_text(CHART)
     for rel_path, folder in (
@@ -287,6 +291,11 @@ def test_a_release_on_a_real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         "@v0.5.0" in (repo / "README.md").read_text() and "@v0.5.0" in (repo / "docs/INSTALL.md").read_text()
     )
     assert ":0.5.0\n" in (repo / "deploy/compose/compose.yaml").read_text()  # the image pin
+    # the relay of a hosted call (#623) is that image, named in the plugin's own Compose file, which a release
+    # has to move or a plugin of the new release would start the last one's relay
+    assert (repo / "plugins/claude/meeting/compose.yaml").read_text() == (
+        "    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.5.0}   # a release\n"
+    )
     # the Helm chart's image tag (#608): appVersion moves, the chart's own version stays
     chart = (repo / "deploy/helm/switchboard/Chart.yaml").read_text()
     assert chart == CHART.replace('appVersion: "0.4.0"', 'appVersion: "0.5.0"')
@@ -492,6 +501,21 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
     )
     assert "## 0.4.1 (2026-09-30)\n\n" + notes in (repo / "CHANGELOG.md").read_text()
     assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]  # gathered, the README stays
+
+
+def test_the_plugins_relay_image_is_a_pin_a_release_moves() -> None:
+    """``plugins/claude/meeting/compose.yaml`` starts the relay from switchboard's image (#623), and the
+    plugin is installed from a release's tag, so the tag in it has to be the release's. Fails if the file is
+    not among the files a release rewrites, or if its image is named in a way the pin does not match (a
+    ``:latest``, or a
+    second image line that a release would half move)."""
+    path = "plugins/claude/meeting/compose.yaml"
+    assert path in rel.PIN_FILES and rel.is_release_file(path)
+    text = (rel.ROOT / path).read_text()
+    moved = rel.update_pins(text, "9.9.9")
+    changed = [b for a, b in zip(text.splitlines(), moved.splitlines(), strict=True) if a != b]
+    assert len(changed) == 1 and "ghcr.io/amahpour/switchboard:9.9.9" in changed[0], changed
+    assert "switchboard:latest" not in text
 
 
 def test_the_install_docs_carry_no_pin_a_release_would_move() -> None:

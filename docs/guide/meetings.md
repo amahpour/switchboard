@@ -2,7 +2,7 @@
 
 A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a meeting bot into the call. It listens, and switchboard posts what people say into the room as short lines tagged **call**. Your agents read those lines like any other message. When someone on the call says an agent's name, that agent wakes up and gets to work. Use it when the decisions happen on a call and you want your agents to hear them: to look something up while people keep talking, or to start on a fix the moment someone asks for it.
 
-The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and [an agent can see the shared screen](#show-an-agent-the-shared-screen). The bot never shares a screen of its own.
+The bot can run next to the server, or on your own machine ([host it yourself](#host-the-bot-on-your-own-machine)). The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and [an agent can see the shared screen](#show-an-agent-the-shared-screen). The bot never shares a screen of its own.
 
 ## See it work
 
@@ -104,6 +104,76 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
 
 Who can start a call: any signed-in person who can see the room, in the web UI. Agents can't. If an agent says `/meeting …` in a room, it is only text. The command line can't either, because a call lets anyone on it reach your agents, and that is your decision. This holds even for the plain `/meeting` that asks whether a call is live.
 
+## Host the bot on your own machine
+
+The bot does not have to run next to the server. It can run on your laptop or workstation, for one call in one room, and push what it hears into the room. Your own GPU and your own speech model do the listening, the server needs no joinly and no memory for the call, and the meeting link never leaves your machine. The call looks the same in the room: the same lines, the same wake by name, the same voice. The room says where it runs: `on alice-laptop`.
+
+You need:
+
+- **Claude Code with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Update the server first and the plugin second: the plugin of this release talks to routes an older server doesn't have.
+- **Docker with Compose** on that machine. The plugin installs nothing else: no `pip install`, no model to fetch by hand.
+- **An NVIDIA GPU, if you have one,** with its driver and the NVIDIA Container Toolkit. The script uses it by itself. Without one, or on a Mac, it runs on the CPU with a smaller model.
+
+Step by step:
+
+1. **Ask your agent.** In Claude Code, in the session that is in the room, say something like: *host the meeting bot for #uploads in this call: <the link>*. Claude Code uses the plugin's `host-meeting-bot` skill and runs the plugin's script, `bin/meeting-host`, in its shell. Claude Code's own permission prompt asks you to allow it, because it starts containers. Only your request should start it: the skill tells the agent so, and a message in a room or from another agent is not your request. There is no tool for it, so nothing in a room can call one.
+2. **Wait for the answer.** It takes seconds. The first time it takes minutes, because Docker pulls joinly's image (3.7 GB on disk, and the CUDA one is about 6 GB to pull) and switchboard's (about 330 MB), and a GPU run downloads its speech model (about 1.6 GB) while it joins. The script pulls what is missing before it tells the server anything, and says so.
+3. **Check three things in what it printed:** the room, the **key fingerprint** (such as `7f3a·91c2`), and whether it uses **the GPU or the CPU** and why.
+4. **Compare the fingerprint with the call bar.** The room's bar reads `Transcribing a call (Zoom) · on alice-laptop · key 7f3a·91c2` (while the bot is still joining, `Joining a Zoom call… · on alice-laptop · key 7f3a·91c2`). It is the same eight characters. If they differ, it is not your call: stop it and tell an admin. The relay prints the same fingerprint when it starts, so you can also read it in `meeting-host status`.
+5. **Admit the bot** if the meeting has a waiting room. It joins as `switchboard (transcribing)`, as the server's bot does.
+6. **Use the call as usual:** [Use it](#use-it) from step 5 on. Say an agent's name and it wakes. [Voice](#let-agents-speak) is off until you turn it on, and then an agent's `@call` line is spoken into the call by your machine.
+7. **End it.** Press **End call** in the room, or **End this call** in [the call's details](#the-call-in-members). The relay is told on its next poll, leaves the call and exits, and joinly's container stops with it, so nothing is left running. Or tell your agent to leave the call: it runs `meeting-host stop`, which stops both containers and removes their files at once. The room keeps showing the call until someone presses **End call**, or for five minutes after the relay left, because the server only learns of a stopped relay by its silence.
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Agent as your Claude Code
+    participant Script as meeting-host
+    participant Server as the switchboard server
+    participant Relay as the relay, on your machine
+    participant Joinly as joinly, on your machine
+    participant Call as the call
+    You->>Agent: host the bot for #uploads, here is the link
+    Agent->>Script: run it (the link on stdin)
+    Script->>Script: make a key for this call, in a file only you can read
+    Script->>Server: register the key's hash (never the key)
+    Script->>Relay: start both containers, then return
+    Relay->>Joinly: join the call, told the room's names
+    Joinly->>Call: joins
+    Relay->>Server: what joinly hears, with the key
+    Server->>Server: join the pieces into call lines, post them
+    Server-->>Relay: an agent's @call line, when voice is on
+    Relay->>Joinly: speak it
+    You->>Server: End call
+    Server-->>Relay: the call has ended
+    Relay->>Joinly: leave, then exit, and joinly stops with it
+```
+
+**GPU or CPU.** The script decides with three local questions, and pulls nothing to find out: does the NVIDIA driver see a GPU, does Docker have an `nvidia` runtime (the Container Toolkit sets it up), and is this not a Mac (Docker on a Mac can't use Apple's GPU). It prints its answer and the reason.
+
+| What the machine has | What runs | Speech model |
+|---|---|---|
+| An NVIDIA GPU that Docker can use | joinly's CUDA image | `large-v3-turbo` (the fewest word errors, [measured](../DEPLOY.md#the-speech-model-and-a-gpu)) |
+| Anything else | joinly's plain image | `base` (quick on a CPU, and in the image, so nothing is downloaded) |
+
+`--gpu` or `--cpu` forces either, and says what it overrode. `--model` names another of `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Ask for `meeting-host plan` and it prints the choice without starting anything.
+
+**Where things are.** The script keeps each call in a folder of the plugin's data folder, `calls/<fingerprint>/`, readable by you alone: the call's key, and the meeting link until the call is joined. The relay deletes the link as soon as it has joined, and the key when it exits. There is one Compose project for each call, named `switchboard-call-<fingerprint>`, so two calls on one machine don't meet. `meeting-host status` lists them and the relay's last lines. The next `start` clears the folders and containers of calls that have ended.
+
+**Check the setup first, without a call.** Add `--no-join` and give no link: the containers start, the relay reaches joinly and is heard from, and nothing is joined. `meeting-host stop` removes it. It is the quick way to learn that Docker, the images and the sign-in all work.
+
+**On Windows,** the plugin has the same script for PowerShell (`meeting-host.cmd`), and under Git Bash the shell script hands over to it. In PowerShell the link is piped in: `'<the link>' | & meeting-host.cmd start --server <the server> --data <the plugin's data folder> '#uploads'`. The skill gives your agent the right form. The PowerShell script is newer than the shell one and has had less use.
+
+**Without Claude Code,** run the script yourself from a shell, with the machine's agent token (Settings → Agents) in `SWITCHBOARD_AGENT_TOKEN` and the link on stdin. The room must have an agent of this machine in it, because that is what lets the machine host a call there. In the plugin's folder:
+
+```sh
+read -rs SWITCHBOARD_AGENT_TOKEN; export SWITCHBOARD_AGENT_TOKEN   # paste the token: it is not shown or kept in your history
+sh bin/meeting-host start --server https://sb.example.com --data ~/.cache/switchboard '#uploads' < link.txt   # link.txt: the link, mode 0600
+sh bin/meeting-host stop --data ~/.cache/switchboard
+```
+
+[DEPLOY.md](../DEPLOY.md#meetings-on-your-own-machine) has the Compose file, what it keeps private and why, and the images.
+
 ## Use it
 
 You start and end a call from the room's message box.
@@ -134,7 +204,7 @@ The call also ends by itself when the room is closed, when the connection to joi
 While a call is on, Members lists it, after the people and the agents, under **Calls**. It is a member of the room, like an agent: a row you can open.
 
 1. **Open Members.** On a phone, tap the pill with the people icon in the room's header.
-2. **Find the call** under **Calls (1)**. The row has the platform's logo, its name (**Zoom call**, **Meet call** or **Teams call**), a dot, and where it runs: `Live · the server` for the bot you run next to switchboard. The dot is solid green while the bot is transcribing. While it joins, the dot is dashed and the row says `Joining… · the server`. The call counts in the number beside **Members**.
+2. **Find the call** under **Calls (1)**. The row has the platform's logo, its name (**Zoom call**, **Meet call** or **Teams call**), a dot, and where it runs: `Live · the server` for the bot you run next to switchboard, or `Live · alice-laptop` for [one hosted on a machine](#host-the-bot-on-your-own-machine). The dot is solid green while the bot is transcribing. While it joins, the dot is dashed and the row says `Joining… · the server`. The call counts in the number beside **Members**.
 
     ![Members with the call under Calls: the Google Meet logo, a green dot and Live · the server](../media/ui/guide-meeting-members-light.png)
 
@@ -215,7 +285,8 @@ How a name is matched:
 - **The passcode is never kept.** The link, with its passcode, is held in memory only long enough to join. The room's record keeps the platform and nothing of the link. The command is not stored as a chat message. It is not logged, and not shown in the room.
 - **switchboard hears text, not audio.** joinly turns speech into text with a speech-to-text model. switchboard reads the text and stores it like any room message, and nowhere else. It never stores audio. A private room's call lines are as private as its other messages. Deleting the room deletes them.
 - **joinly stays on localhost or a private network.** It has no sign-in, and it accepts its settings from the program that connected. If it were open to the world, anyone could use it.
-- **Agents can't start or stop a call.** `/meeting` only runs from your signed-in browser. The same goes for `/meeting voice on` and `/meeting snapshot`.
+- **Agents can't start or stop a call.** `/meeting` only runs from your signed-in browser. The same goes for `/meeting voice on` and `/meeting snapshot`. The one thing an agent does is run the plugin's host script when its own person asks, and the script's registration is rejected unless the room has an agent of that machine in it.
+- **A hosted bot's link and key stay on the host's machine.** The server never gets the meeting link: it can't join, and a passcode never reaches it. The key made for the call is in a file only its owner can read, and the server keeps only its sha256. The key opens two routes of the server, to push this one call's lines and to read its `@call` lines, and nothing else. Every line a hosted bot pushes is marked `via alice-laptop`, and the call bar shows the host and the key's fingerprint. The owner, or an admin, ends the call from the bar, and the next push is refused. Any process of the same user on the host can read the key's file, a prompt-injected agent's shell included; it could push lines into that one call until it is ended, and nothing else.
 - **Spoken text reaches everyone on the call.** That is why voice is your switch, per call, and off at the start. An agent could be talked into saying something it should not, by someone on the call or by anything it reads, and with voice on it says it aloud to every participant. Leave voice off unless you would let those agents speak for you. Nothing an agent does can turn it on.
 - **A snapshot can show anything on the shared screen**, including what the person sharing did not mean to show. It is kept as a room file under the room's retention (30 days unless an admin changed it), and anyone who can read the room can download it. Take one when you mean to, and tell the person sharing. An admin can shorten how long files are kept in Settings → Files, and deleting the room deletes them.
 - **A picture is only kept if it is one.** The bytes have to be a PNG, JPEG or WebP, whatever the bot says they are. The room file size limit applies.
@@ -225,6 +296,9 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 ## Limits
 
 - **One call per room**, and only Zoom, Meet and Teams links.
+- **A hosted call counts too, and one person hosts one at a time.** It counts toward `max_calls`, but the memory it takes is the host machine's, so there the limit only caps how many calls the server follows. It must go live within ten minutes (images and a model are pulled meanwhile), and it ends by itself if its key is silent for five. Ten segments a second are taken, a hundred at once.
+- **A hosted bot has no snapshot yet.** `/meeting snapshot` and the **Snapshot** button say so.
+- **A stopped relay is noticed by its silence.** `meeting-host stop` and a closed laptop can't tell the server the bot has left, so the call stays in the room until someone presses **End call** or five minutes pass.
 - **At most `max_calls` calls at once in the whole broker**, in all rooms together. The default is 1. A call counts from the moment it is joining, until it has ended and the bot has left. A start past the limit is refused, and nothing is sent to joinly. Each call needs about 2.7 GiB of memory in joinly, so raise the limit only with the memory to match ([Set it up](#set-it-up)).
 - **A bigger speech model needs more memory for each call.** Every call loads its own copy of the model, and the memory figures in this guide were measured with `base`. In a test, a process holding `large-v3-turbo` peaked at about 1.7 GB, against 0.5 GB for `base`. A live call with it was not measured, so give joinly more than the sizes say, and watch the first call ([DEPLOY.md](../DEPLOY.md#the-speech-model-and-a-gpu)).
 - **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on, and it takes pictures of what it sees.
@@ -248,6 +322,16 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **"…is already transcribing a call. /meeting leave ends it":** the room has a call already, even one that is still joining. Leave it first.
 - **`/meeting <link>` says "This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).":** other rooms have calls, and together they are as many as `max_calls` allows. The message gives the number and nothing else, because a call may be in a room you can't see. Leave one of them (`/meeting leave` in the room that has it; if you can't see that room, ask someone who can), or raise `max_calls` and give joinly the memory for it ([Set it up](#set-it-up)). A call that is still leaving counts until the bot has left, so if you just left one, try again in a few seconds. The refused start wrote nothing and sent the link nowhere.
 - **The bot waits in the meeting's waiting room:** the host has to admit `switchboard (transcribing)`. Until then it hears nothing. If joining takes longer than 45 seconds, the room says `The call ended: couldn't join the call.`. Ask the host to admit it as soon as it shows up, and start again.
+- **`meeting-host` says "no credential":** this Claude Code has no agent token in its environment and the plugin's data folder has no listener key for it (`listener-key-<its pid>`). Sign in to switchboard from Claude Code (`/mcp`, then Authenticate), or type the token into the plugin's settings and restart Claude Code, then ask again.
+- **`meeting-host` says "the server refused (403, not_member)":** the room has no agent of this machine in it. Join the room from the Claude Code on this machine first, then ask again. A room that doesn't exist, or one this machine isn't in, gets the same answer.
+- **`meeting-host` says "(409)":** the room already has a call (a call has one source), or you already host one, or the server follows as many calls as `max_calls` allows. End the other with **End call**, or run `meeting-host stop`.
+- **`meeting-host` says "Docker is installed but not running":** start Docker (or Docker Desktop). "Docker Compose is needed" means `docker compose` is missing: Docker Desktop has it, and on Linux it is the `docker-compose-plugin` package.
+- **The key fingerprint in the room is not the one `meeting-host` printed:** do not use it. The script stops by itself when the server's answer names another fingerprint. If the bar shows a fingerprint you don't recognise on a machine you don't recognise, tell an admin: anyone with the call's key can push lines into it, and ending the call from the bar refuses the key at once.
+- **The room says "The call ended: its host never started sending.":** the call was registered, but nothing joined it within ten minutes. Run `meeting-host status`, and `docker logs` of the relay's container (`docker ps -a --filter label=com.switchboard.call` lists it) says why. The usual causes are a link joinly can't open, a waiting room nobody admitted, and a first GPU call still downloading its model. Ask again.
+- **The room says "The call ended: its host went quiet.":** the relay stopped without End call (the machine slept, Docker stopped, or `meeting-host stop`), and the server heard nothing from it for five minutes.
+- **The relay stopped, and you want to know why:** its exit code says. `0` the call ended (End call, a closed room, or a stopped server), `2` the key or the link could not be used, `3` the server did not accept the key (revoked or wrong), `4` joinly could not join the call, `5` joinly was lost, `6` the server could not be reached for five minutes, `7` it was stopped. `meeting-host status` shows the relay's last lines, and `docker ps -a --filter label=com.switchboard.call` its containers.
+- **It chose the CPU, and you have a GPU:** `meeting-host plan` says why: the driver sees no GPU (`nvidia-smi` is missing or lists none), or Docker has no `nvidia` runtime (install the NVIDIA Container Toolkit and restart Docker). `--gpu` forces it.
+- **The first call on a GPU takes minutes before it goes live:** joinly is downloading `large-v3-turbo` (about 1.6 GB) into a volume that the next call reuses. The bar says **Joining a Zoom call…** meanwhile, and the server waits up to ten minutes.
 - **The room says "The call ended: couldn't join the call.":** joinly could not get in, or did not answer within 45 seconds. The meeting may not have started, may need a sign-in, or may refuse guests, or the host did not admit the bot in time. Check the link, then look at joinly's log.
 - **The broker won't start and says `SWITCHBOARD_JOINLY_URL must be an http(s) URL`:** the variable is set to something that is not one: no `http://` or `https://`, a user name or password in it, or more than 300 characters. It is never ignored, so fix it or remove it. (The message does not print the value.)
 - **The broker won't start and says `SWITCHBOARD_MEETING_MAX_CALLS must be a whole number from 1 to 50`:** the variable is set to something else: `0`, `51`, `2.5`, `two`. It is never ignored, so fix it or remove it. The same limits apply to `max_calls` in `config.toml`, which stops the broker the same way.
@@ -292,6 +376,14 @@ SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<the file> \
 
 The link has the call's passcode in it, so the test refuses a file that others can read, keeps the link out of its output and its report, and checks that the broker's database, messages and log never held any of it. For a Meet or Teams call, someone has to admit both bots when they ask to join. The test does not create or delete anything in those. [CONTRIBUTING.md](https://github.com/amahpour/switchboard/blob/main/CONTRIBUTING.md#live-tests-real-agent-clis-opt-in) has the details, and the skill lists the Zoom account settings that stop a guest from joining.
 
+**The same test with a hosted bot** is `tests/live/test_meeting_selftest_hosted.py`. Without a link it checks that a hosted bot starts and stops cleanly, on any machine with Docker and the joinly image: no call, no meeting, no model:
+
+```bash
+SWITCHBOARD_LIVE=meeting uv run pytest -m live tests/live/test_meeting_selftest_hosted.py -s -q
+```
+
+With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six steps with the bot started by `meeting-host`: step 1 is the script, step 5 is that a hosted call has no snapshot yet, and in step 6 both containers must be gone. `SWITCHBOARD_SELFTEST_HOSTED=remote` runs the bot on another machine, such as one with a GPU: the test prints the commands to run there, and the other machine reaches the throwaway broker through an SSH tunnel. The test's own docstring has them.
+
 ## Reference
 
 **Commands** (web UI only; see [A live call](../USAGE.md#a-live-call) in USAGE.md and [DESIGN.md §10](../DESIGN.md#10-commands)):
@@ -301,6 +393,16 @@ The link has the call's passcode in it, so the test refuses a file that others c
 - `/meeting leave` leaves it. **Leave call** on the bar, and **End this call** in [the call's details](#the-call-in-members), do the same.
 - `/meeting voice on` and `/meeting voice off` turn speaking on and off for this call. The **Voice** switch on the bar does the same.
 - `/meeting snapshot` posts a picture of the shared screen. **Snapshot** on the bar does the same.
+
+**The host script** (`meeting-host`, in the Claude Code plugin's `bin`; your agent runs it):
+
+- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM` registers a call for `ROOM` and starts its two containers. The meeting link is read from stdin, never from an argument. `--server` and `--data` are what the skill fills in from the plugin's settings. `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--no-join` checks the setup without a call.
+- `meeting-host stop [FINGERPRINT]` stops this machine's hosted call (or the one with that fingerprint): both containers and their files.
+- `meeting-host status` lists the calls on this machine, the relay's last lines, and whether they run.
+- `meeting-host plan [--cpu|--gpu] [--model NAME]` prints the device, the model and the joinly image it would use, and starts nothing.
+- Environment: `SWITCHBOARD_AGENT_TOKEN` (the credential, instead of the listener key), `SWITCHBOARD_RELAY_IMAGE` (another image for the relay, to try a build of your own), `SWITCHBOARD_RELAY_ADD_HOST` (the same as `--add-host`), `SWITCHBOARD_RELAY_ALLOW_HTTP=1` (a plain `http` server address on a network you trust: the key would cross it in the clear).
+
+**The relay** (`switchboard meeting relay`, in switchboard's image; the script starts it, you don't): `--server`, `--joinly`, `--key-file` and `--link-file` (a file only you can read, or `-` for stdin), `--model`, `--voice`, `--no-join`, `--allow-http`, `--burn-files` and `--no-mode-check`. It never takes the key or the link as an argument or from the environment. `switchboard meeting relay --help` has them.
 
 **Config**, in the broker's `config.toml` or its environment:
 

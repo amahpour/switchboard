@@ -16,6 +16,10 @@ EXIT_OK = 0
 EXIT_ERR = 1
 EXIT_USAGE = 2
 EXIT_DOWN = 3
+# `meeting relay`'s defaults, written out because the relay imports fastmcp and this file's imports stay
+# light; tests/unit/test_meeting_relay.py fails if they differ from meeting/relay.py's
+RELAY_JOINLY = "http://127.0.0.1:8000/mcp/"
+RELAY_VOICE = "bm_george"
 
 
 def _paths(args: argparse.Namespace):
@@ -512,6 +516,35 @@ RETIRED = {
 }
 
 
+def cmd_meeting_relay(args: argparse.Namespace) -> int:
+    from switchboard.meeting.relay import Exit
+    from switchboard.meeting.relay import main as run_relay
+
+    if not args.server:
+        print(
+            "switchboard: meeting relay: --server (or SWITCHBOARD_URL) is the broker's address",
+            file=sys.stderr,
+        )
+        return int(Exit.USAGE)
+    return run_relay(
+        server=args.server,
+        joinly_url=args.joinly,
+        key_file=args.key_file,
+        link_file=args.link_file if not args.no_join else None,
+        model=args.model,
+        voice=args.voice,
+        join=not args.no_join,
+        allow_http=args.allow_http,
+        burn=args.burn_files,
+        no_mode_check=args.no_mode_check,
+    )
+
+
+def cmd_meeting_help(args: argparse.Namespace) -> int:
+    args.meeting_parser.print_help()
+    return EXIT_USAGE
+
+
 def cmd_retired(args: argparse.Namespace) -> int:
     print(f"switchboard {args.cmd}: {RETIRED[args.cmd]}", file=sys.stderr)
     return EXIT_USAGE
@@ -579,6 +612,11 @@ def _port_number(text: str) -> int:
             )
         raise argparse.ArgumentTypeError(f"{text!r} is not a port number (0..65535)")
     return port
+
+
+def _flag(name: str) -> bool:
+    """A switch set by an environment variable (a container's), true for ``1``, ``true`` or ``yes``."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -750,6 +788,75 @@ def build_parser() -> argparse.ArgumentParser:
         help="also delete switchboard's hook copies in <home>/hooks if no harness config still runs them",
     )
     s.set_defaults(func=cmd_uninstall)
+
+    s = sub.add_parser(
+        "meeting",
+        help="run the meeting bot's relay for a call hosted on this machine (docs/guide/meetings.md)",
+    )
+    ms = s.add_subparsers(dest="meeting_cmd", metavar="ACTION")
+    r = ms.add_parser(
+        "relay",
+        help="join a call through a joinly beside this process and push what it hears to a broker",
+        description="Join a call through a joinly beside this process, push what it hears to the broker's"
+        " room, and say the room's @call lines. Started by the host script of the Claude Code plugin"
+        " (docs/guide/meetings.md); the call's key and the meeting link are read from files only their"
+        " owner can read, or from stdin, never from an argument. Its exit code says why it stopped:"
+        " 0 the call ended, 2 a key or link that cannot be used, 3 the key was refused, 4 joinly could not"
+        " join the call, 5 joinly was lost, 6 the broker was lost, 7 stopped.",
+    )
+    r.add_argument(
+        "--server",
+        default=os.environ.get("SWITCHBOARD_URL") or None,
+        metavar="URL",
+        help="the broker's address, https://... (env SWITCHBOARD_URL)",
+    )
+    r.add_argument(
+        "--joinly", default=RELAY_JOINLY, metavar="URL", help=f"joinly's address (default {RELAY_JOINLY})"
+    )
+    r.add_argument(
+        "--key-file",
+        default="-",
+        metavar="FILE",
+        help="the call key: a file only you can read, or - for stdin",
+    )
+    r.add_argument(
+        "--link-file",
+        default=None,
+        metavar="FILE",
+        help="the meeting link: a file only you can read, or - for stdin (after the key's line)",
+    )
+    r.add_argument(
+        "--model",
+        default=os.environ.get("SWITCHBOARD_MEETING_STT_MODEL") or "",
+        help="the speech model to ask joinly for (default: joinly's own; env SWITCHBOARD_MEETING_STT_MODEL)",
+    )
+    r.add_argument(
+        "--voice", default=RELAY_VOICE, help=f"joinly's voice for spoken lines (default {RELAY_VOICE})"
+    )
+    r.add_argument(
+        "--no-join",
+        action="store_true",
+        default=_flag("SWITCHBOARD_RELAY_NO_JOIN"),
+        help="start everything and join no call, a check of the setup (env SWITCHBOARD_RELAY_NO_JOIN=1)",
+    )
+    r.add_argument(
+        "--allow-http",
+        action="store_true",
+        default=_flag("SWITCHBOARD_RELAY_ALLOW_HTTP"),
+        help="accept a plain http address on a network you trust (env SWITCHBOARD_RELAY_ALLOW_HTTP=1)",
+    )
+    r.add_argument(
+        "--burn-files",
+        action="store_true",
+        help="delete the link's file once the call is joined, and the key's file when the relay ends",
+    )
+    r.add_argument(
+        "--no-mode-check",
+        action="store_true",
+        help="do not refuse a key or link file that others can read (a container shows the host's modes)",
+    )
+    r.set_defaults(func=cmd_meeting_relay)
+    s.set_defaults(func=cmd_meeting_help, meeting_parser=s)
 
     for verb in ("install", "mcp", "hook", "remote", "satellite", "join"):
         sub.add_parser(verb, parents=[common]).set_defaults(func=cmd_retired)
