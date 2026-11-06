@@ -1,0 +1,105 @@
+# switchboard's meeting bot on your own machine, for one call (docs/guide/meetings.md, docs/DEPLOY.md,
+# docs/DESIGN.md section 54, #623). Two containers: joinly, which joins the call and listens, and the relay, which
+# is `switchboard meeting relay` in switchboard's own image and pushes what joinly hears to your server.
+#
+# Do not start this by hand. The plugin's host script (bin/meeting-host) makes the call's key, registers it with
+# your server, puts the key and the meeting link in a folder only you can read (SB_CALL_DIR), and starts one
+# Compose project per call from this file, so two calls on one machine do not meet. It sets the SB_ variables.
+#
+#   joinly is reachable only by the relay. It shares the relay's network (network_mode: service:relay) and
+#   listens on that network's 127.0.0.1, so it has no address of its own: no published port, nothing else on
+#   this machine or your network can talk to it. (joinly has no sign-in and takes its settings from whoever
+#   connects, which is why.) The same arrangement as the broker's pod in deploy/kubernetes/meetings/.
+#
+#   joinly ends with the relay. It shares the relay's process namespace (pid: service:relay): when the relay
+#   exits (the call was ended from the room, the key was revoked, or `meeting-host stop` was run) the relay's
+#   first process ends, the kernel ends every process in that namespace, and joinly's container stops with it.
+#   Nothing is left running, and nothing needs to watch for it. The exited containers stay until the host script
+#   removes them (it does at the next start, and at `stop`).
+#
+#   GPU if there is one, CPU if not: the host script picks a profile. `gpu` is joinly's CUDA build and needs the
+#   NVIDIA driver and the NVIDIA Container Toolkit; `cpu` is the plain image.
+name: switchboard-call
+
+x-joinly: &joinly
+  restart: "no"
+  network_mode: "service:relay"
+  pid: "service:relay"
+  shm_size: "1gb"   # Chromium's shared memory; Docker's default 64 MB is known to crash it
+  environment:
+    JOINLY_SERVER_HOST: 127.0.0.1   # the relay's loopback only; the image's own default is 0.0.0.0
+    XDG_CONFIG_HOME: /tmp           # PulseAudio's state: the one place a read-only root leaves writable
+  # As tight as the broker's own joinly in deploy/kubernetes/meetings/joinly.yaml, which ran with these
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp"]
+  labels:
+    com.switchboard.call: "joinly"
+
+services:
+  relay:
+    # switchboard's image, at the release this plugin is. The script sets SB_RELAY_IMAGE only to try a build of
+    # your own; docs/DEPLOY.md, "Meetings on your own machine". `.github/scripts/release.py` moves this tag.
+    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.52.0}
+    restart: "no"
+    # run as you, so that the files you own (mode 0600) are readable to the relay and no one else's are
+    user: "${SB_RELAY_USER:?the host script sets this}"
+    working_dir: /tmp   # the image's /data belongs to its own user, and the libraries read a .env from where they run
+    command:
+      - meeting
+      - relay
+      - --joinly
+      - http://127.0.0.1:8000/mcp/
+      - --key-file
+      - /call/key
+      - --link-file
+      - /call/link
+      - --burn-files   # the link is deleted once the call is joined, and the key when the relay ends
+      - --trust-files  # a container shows the host's file modes; the host script made these 0600 itself
+    environment:
+      SWITCHBOARD_URL: ${SB_SERVER:?the host script sets this}
+      SWITCHBOARD_MEETING_STT_MODEL: ${SB_MODEL:-}
+      SWITCHBOARD_RELAY_NO_JOIN: ${SB_NO_JOIN:-}
+      SWITCHBOARD_RELAY_ALLOW_HTTP: ${SB_ALLOW_HTTP:-}
+    volumes:
+      - ${SB_CALL_DIR:?the host script sets this}:/call   # key and link: its contents are yours alone
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
+    stop_grace_period: 20s   # the last words are pushed and the call left before it is killed
+    labels:
+      com.switchboard.call: "relay"
+
+  joinly:
+    <<: *joinly
+    profiles: [cpu]
+    image: ghcr.io/joinly-ai/joinly:v0.5.4   # a release, not :latest; the tag docs/DEPLOY.md runs (3.7 GB)
+    volumes:
+      # Two fixes that joinly 0.5.4 does not have yet, mounted over its own copies and pinned by sha256 in
+      # meeting/fixes.pins: Zoom's speaker names (joinly-ai/joinly#187) and the first word of a line (#620).
+      - ${SB_FIXES_DIR:?the host script sets this}/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
+      - ${SB_FIXES_DIR}/transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
+
+  joinly-gpu:
+    <<: *joinly
+    profiles: [gpu]
+    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release built for CUDA (about 8.7 GB); move both together
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ${SB_FIXES_DIR}/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
+      - ${SB_FIXES_DIR}/transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
+      # a model you name is downloaded once (about 1.6 GB for large-v3-turbo) and kept here for the next call;
+      # the CUDA image holds a different default model than the CPU one, so this volume is its own
+      - joinly-models-cuda:/home/app/.cache/huggingface
+
+volumes:
+  joinly-models-cuda:
+    name: switchboard-joinly-models-cuda

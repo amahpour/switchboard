@@ -5,7 +5,7 @@ speech poll when the test puts an answer in its queue (a long poll is woken by a
 and a joinly's transcript changes when the test says so. Time is a list the relay's ``sleep`` appends to and a
 clock that moves by what it was asked to wait, so a backoff, a ``Retry-After`` and the broker's quiet limit
 are read off numbers and nothing sleeps. The relay against the real broker and the real wire is in
-``tests/integration/test_meeting_relay.py``.
+``tests/integration/test_relay_and_broker.py``.
 """
 
 from __future__ import annotations

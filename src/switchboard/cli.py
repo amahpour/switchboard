@@ -614,6 +614,11 @@ def _port_number(text: str) -> int:
     return port
 
 
+def _flag(name: str) -> bool:
+    """A switch set by an environment variable (a container's), true for ``1``, ``true`` or ``yes``."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
 def build_parser() -> argparse.ArgumentParser:
     from switchboard.colors import MODES
 
@@ -820,15 +825,25 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="the meeting link: a file only you can read, or - for stdin (after the key's line)",
     )
-    r.add_argument("--model", default="", help="the speech model to ask joinly for (default: joinly's own)")
+    r.add_argument(
+        "--model",
+        default=os.environ.get("SWITCHBOARD_MEETING_STT_MODEL") or "",
+        help="the speech model to ask joinly for (default: joinly's own; env SWITCHBOARD_MEETING_STT_MODEL)",
+    )
     r.add_argument(
         "--voice", default=RELAY_VOICE, help=f"joinly's voice for spoken lines (default {RELAY_VOICE})"
     )
     r.add_argument(
-        "--no-join", action="store_true", help="start everything and join no call (a check of the setup)"
+        "--no-join",
+        action="store_true",
+        default=_flag("SWITCHBOARD_RELAY_NO_JOIN"),
+        help="start everything and join no call, a check of the setup (env SWITCHBOARD_RELAY_NO_JOIN=1)",
     )
     r.add_argument(
-        "--allow-http", action="store_true", help="accept a plain http address on a network you trust"
+        "--allow-http",
+        action="store_true",
+        default=_flag("SWITCHBOARD_RELAY_ALLOW_HTTP"),
+        help="accept a plain http address on a network you trust (env SWITCHBOARD_RELAY_ALLOW_HTTP=1)",
     )
     r.add_argument(
         "--burn-files",

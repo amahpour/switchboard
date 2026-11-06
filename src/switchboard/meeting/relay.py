@@ -316,12 +316,7 @@ class JoinlyClient:
 
     async def open(self) -> None:
         client, handler = joinly.open_client(self.url, self.header)
-        try:
-            await asyncio.wait_for(client.__aenter__(), JOINLY_OPEN_S)
-        except BaseException:
-            with contextlib.suppress(Exception):
-                await client.__aexit__(None, None, None)
-            raise
+        await asyncio.wait_for(client.__aenter__(), JOINLY_OPEN_S)
         self._client, self._handler = client, handler
         await joinly.subscribe(client)  # without it the transcript is read on a timer, which is slower
 
@@ -547,6 +542,7 @@ class Relay:
         while not self.stop.is_set():
             try:
                 await jy.open()
+                self.say("joinly is ready")
                 break
             except Exception:
                 if self._now() - began >= JOINLY_START_S:

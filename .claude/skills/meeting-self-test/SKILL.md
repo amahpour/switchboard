@@ -51,6 +51,10 @@ Asking for the self-test is the person's yes to **one** Zoom meeting, made and t
 
 6. **Report** the table from `meeting-selftest.md`, pasted as it is, and one line for each failed step with what it probably means (below). Say that the meeting was deleted and the file removed. If the link, the passcode or the meeting id appears anywhere in what you are about to send, stop: the test is supposed to keep them out of every output, so that is a bug to report on its own, without pasting what leaked.
 
+## The bot on a person's machine (a hosted bot)
+
+The same test exists with the bot started by the plugin's host script instead of by `/meeting <link>` (#623): `tests/live/test_meeting_selftest_hosted.py`. The procedure above is the same, with that file in step 4. It needs the joinly image from step 1 and builds switchboard's own image from the checkout, so nothing new is pulled. With **no link** the module runs only its first test, which needs no meeting at all (a hosted bot starts and stops with no call), so run that one first and never make a meeting for it. With the link file it runs the six steps; step 5 is that a hosted call has no snapshot yet, and step 6 also needs both containers gone. To run the bot on a second machine, `SWITCHBOARD_SELFTEST_HOSTED=remote` prints the commands for it; the module's docstring has them. The link goes to the second machine in a file of its own, never in a message or a command line.
+
 ## What the six steps check
 
 | # | Step | Passes when |

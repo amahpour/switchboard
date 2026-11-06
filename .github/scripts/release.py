@@ -17,7 +17,7 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
   section is gathered too. With no notes at all, the notes are the commits' titles;
 - points the README's and docs/INSTALL.md's `uv tool install …@vX.Y.Z` lines at the new tag,
   and the deployment examples' and docs/DEPLOY.md's `ghcr.io/amahpour/switchboard:X.Y.Z` at
-  the new image;
+  the new image (and the Claude Code plugin's `meeting/compose.yaml`, whose relay is that image: #623);
 - sets `appVersion` in the Helm chart (`deploy/helm/switchboard/Chart.yaml`, #608) to the new version, because
   it is the image tag the chart defaults to;
 - moves the `ref` of each plugin in the two marketplaces (`.claude-plugin/marketplace.json`,
@@ -63,7 +63,8 @@ MARKETPLACE_FILES = (".claude-plugin/marketplace.json", ".agents/plugins/marketp
 CHART_FILE = "deploy/helm/switchboard/Chart.yaml"
 CHART_APP_VERSION_RE = re.compile(r'(?m)^(appVersion:[ \t]*")\d+\.\d+\.\d+(")')
 PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
-             "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml")
+             "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml",
+             "plugins/claude/meeting/compose.yaml")   # a call's relay on a person's machine (#623)
 # with the notes files, all a release PR changes
 RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES, CHART_FILE)
 CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)

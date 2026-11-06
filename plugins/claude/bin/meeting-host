@@ -1,0 +1,494 @@
+#!/bin/sh
+# Host the meeting bot for one call on this machine (docs/DESIGN.md section 54, docs/guide/meetings.md, #623).
+# Started by the agent from its shell when its person asks (skills/host-meeting-bot), never by a hook.
+#
+#   meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM
+#                                                                                                       (link on stdin)
+#   meeting-host stop [FINGERPRINT]       stop this machine's hosted call(s): both containers, then the files
+#   meeting-host status                   what is running, and what the relay last said
+#   meeting-host plan [--cpu|--gpu] [--model NAME]   which device and model it would use; starts nothing
+#
+# `start` does, in order, and stops at the first thing that is wrong, before it has made a key or told the server
+# anything: checks Docker and Compose; chooses the GPU (joinly's CUDA image and large-v3-turbo) when an NVIDIA GPU
+# is there for Docker to use, else the CPU image and a smaller model; has the two joinly fixes in the plugin's
+# data folder, each checked against its pinned sha256 (meeting/fixes.pins); pulls an image that is missing (the
+# only thing that can take minutes). Then it reads the meeting link from stdin, makes a key for this one call
+# (sbc_ and 64 hex) in a file only its owner reads, registers the key's sha256 at POST /mcp/meeting/host, starts
+# the Compose project (meeting/compose.yaml, one per call) and returns. The room's call bar shows "key 7f3a 91c2";
+# this prints the same, and the choice of device, so its owner can check them against the bar.
+#
+# The meeting link and the key never appear on a command line, in the environment of a process, or in anything it
+# prints: the link is read from stdin and written to a 0600 file by the shell itself, the key is made here, and
+# curl and the relay read them from files and from stdin. The credential it registers with is what the plugin's
+# other scripts hold (docs/DESIGN.md section 49.11): the agent token if there is one in the environment
+# (SWITCHBOARD_AGENT_TOKEN), else the listener key bin/headers made for this Claude Code in the plugin's data
+# folder (listener-key-<Claude Code's pid>), found from CLAUDE_PID, which a Bash command is given.
+#
+# Exit codes: 0 done, 1 something is wrong (it says what), 2 a bad command line.
+# Git for Windows' sh (Git Bash) hands over to windows/meeting-host.ps1 (the PowerShell version).
+case $(uname -s) in
+  MINGW* | MSYS* | CYGWIN*)
+    [ -f "${0%/*}/windows/meeting-host.ps1" ] &&
+      exec powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${0%/*}/windows/meeting-host.ps1" "$@" ;;
+esac
+set -u
+umask 077
+
+PROG=meeting-host
+here=$(cd "$(dirname "$0")" && pwd)
+plugin=${SWITCHBOARD_PLUGIN_ROOT:-$(cd "$here/.." && pwd)}
+compose=$plugin/meeting/compose.yaml
+pins=$plugin/meeting/fixes.pins
+PROJECT_PREFIX=switchboard-call-
+MODELS="base small distil-large-v3 large-v3-turbo"
+
+die() { # a sentence on stderr, exit 1
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  exit 1
+}
+usage() { # a bad command line: exit 2
+  printf '%s: %s\n' "$PROG" "$*" >&2
+  printf 'usage: %s start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join] ROOM\n' "$PROG" >&2
+  printf '       (the meeting link on stdin)\n' >&2
+  printf '       %s stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]\n' "$PROG" >&2
+  exit 2
+}
+sha256() { # the hex sha256 of stdin
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-64
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-64
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | sed 's/^.*= //'
+  else
+    return 1
+  fi
+}
+is_hex() { # $1 is $2 characters of lower-case hex
+  case $1 in '' | *[!0-9a-f]*) return 1 ;; esac
+  [ "${#1}" -eq "$2" ]
+}
+flat() { # what a server said, on one line and cut short
+  tr '\r\n' '  ' <"$1" | cut -c1-300
+}
+field() { # a string field of a JSON object in file $2
+  grep -o "\"$1\": *\"[^\"]*\"" "$2" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+# ------------------------------------------------------------------------------------------ the device
+# GPU if there is one for Docker to use, CPU if not (#623). Cheap and nothing is pulled: three local
+# questions, each of which must hold. Sets `device`, `why` and (for a person who forced it) `forced`.
+nvidia_answers() {
+  command -v nvidia-smi >/dev/null 2>&1 || return 1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15 nvidia-smi -L 2>/dev/null
+  else
+    nvidia-smi -L 2>/dev/null
+  fi | grep -q '^GPU '
+}
+docker_has_nvidia() { # the Container Toolkit registers an `nvidia` runtime with Docker
+  docker info --format '{{range $name, $_ := .Runtimes}}{{$name}} {{end}}' 2>/dev/null | grep -qw nvidia
+}
+choose_device() { # $1: cpu or gpu if forced, else empty
+  forced=$1
+  if [ "$(uname -s)" = Darwin ]; then
+    detected=cpu
+    detected_why="Docker on a Mac cannot use the GPU"
+  elif ! nvidia_answers; then
+    detected=cpu
+    detected_why="no NVIDIA GPU: nvidia-smi is missing or sees none"
+  elif ! docker_has_nvidia; then
+    detected=cpu
+    detected_why="Docker has no nvidia runtime: the NVIDIA Container Toolkit is not set up"
+  else
+    detected=gpu
+    detected_why="an NVIDIA GPU that Docker can use"
+  fi
+  if [ -n "$forced" ]; then
+    device=$forced
+    why="forced by --$forced"
+    [ "$forced" = "$detected" ] || why="$why (detected: $detected, because $detected_why)"
+  else
+    device=$detected
+    why=$detected_why
+  fi
+}
+choose_model() { # $1: the model asked for, if any. Sets model and sb_model (what joinly is told; empty is its own)
+  model=${1:-}
+  if [ -z "$model" ]; then
+    # large-v3-turbo made the fewest word errors and is only fast enough on a GPU; joinly's own `base` is quick on
+    # a CPU and is in its image, so nothing is downloaded (docs/DEPLOY.md, "The speech model, and a GPU")
+    if [ "$device" = gpu ]; then model=large-v3-turbo; else model=base; fi
+  else
+    case " $MODELS " in *" $model "*) ;; *) usage "--model is one of: $MODELS" ;; esac
+  fi
+  sb_model=$model
+  [ "$device" = cpu ] && [ "$model" = base ] && sb_model=
+  return 0
+}
+print_plan() {
+  printf 'device=%s\nreason=%s\nmodel=%s\n' "$device" "$why" "$model"
+  if [ "$device" = gpu ]; then printf 'joinly=ghcr.io/joinly-ai/joinly:v0.5.4-cuda\n'; else printf 'joinly=ghcr.io/joinly-ai/joinly:v0.5.4\n'; fi
+}
+
+# ---------------------------------------------------------------------------------------------- the data folder
+set_data_dir() { # sets `data`: --data, else what the skill passes, else Claude Code's, else the user's
+  d=${data_arg:-${SWITCHBOARD_PLUGIN_DATA:-${CLAUDE_PLUGIN_DATA:-}}}
+  if [ -z "$d" ]; then
+    # a Bash command is not given CLAUDE_PLUGIN_DATA (live run, Claude Code 2.1.307): the key of this Claude
+    # Code is in the data folder that holds listener-key-<its pid>, which names exactly one
+    pid=${CLAUDE_PID:-}
+    if [ -n "$pid" ]; then
+      for f in "${CLAUDE_CONFIG_DIR:-${HOME:-/nonexistent}/.claude}"/plugins/data/*/listener-key-"$pid"; do
+        [ -f "$f" ] && d=${f%/*} && break
+      done
+    fi
+  fi
+  [ -n "$d" ] || d=${HOME:+$HOME/.cache/switchboard}
+  case $d in /*) ;; *) die "no folder to keep this call's files in: pass --data DIR (the plugin's data folder)" ;; esac
+  data=$d
+}
+claude_pid() { # Claude Code's pid: CLAUDE_PID, which a Bash command is given, else this script's parent's parent
+  if [ -n "${CLAUDE_PID:-}" ]; then
+    printf '%s' "$CLAUDE_PID"
+    return
+  fi
+  p=$PPID
+  if [ -r "/proc/$p/comm" ]; then c=$(cat "/proc/$p/comm" 2>/dev/null); else c=$(ps -o comm= -p "$p" 2>/dev/null); fi
+  case $c in
+    *sh) if [ -r "/proc/$p/status" ]; then sed -n 's/^PPid:[[:space:]]*//p' "/proc/$p/status"; else ps -o ppid= -p "$p" | tr -d ' '; fi ;;
+    *) printf '%s' "$p" ;;
+  esac
+}
+credential() { # prints the credential, or nothing: the agent token, else the listener key of this Claude Code
+  t=${SWITCHBOARD_AGENT_TOKEN:-${CLAUDE_PLUGIN_OPTION_TOKEN:-}}
+  if [ -n "$t" ]; then
+    printf '%s' "$t"
+    return
+  fi
+  pid=$(claude_pid)
+  case $pid in '' | *[!0-9]*) return ;; esac
+  k=$(cat "$data/listener-key-$pid" 2>/dev/null)
+  case $k in sbl_*) ;; *) return ;; esac
+  is_hex "${k#sbl_}" 64 || return
+  printf '%s' "$k"
+}
+
+# ------------------------------------------------------------------------------------------------ the fixes
+# Each fix is a file named in fixes.pins with its sha256 and where to fetch it. Kept in the data folder, checked
+# against the pin every time, fetched when missing, and refused (and removed) when it is not the pinned file.
+ensure_fixes() {
+  fixes=$data/joinly-fixes
+  mkdir -p "$fixes" 2>/dev/null || die "cannot make $fixes"
+  chmod 755 "$fixes" 2>/dev/null # joinly's user is not yours: it reads the files, so they and their folder are public
+  [ -f "$pins" ] || die "the plugin has no meeting/fixes.pins: reinstall the plugin"
+  while read -r name sum url; do
+    case $name in '' | '#'*) continue ;; esac
+    is_hex "$sum" 64 || die "meeting/fixes.pins: $name has no sha256"
+    have=$(sha256 <"$fixes/$name" 2>/dev/null)
+    if [ "$have" != "$sum" ]; then
+      command -v curl >/dev/null 2>&1 || die "curl is needed to fetch $name"
+      tmp=$(mktemp "$fixes/.fetch.XXXXXX") || die "cannot write in $fixes"
+      if ! curl -fsSL --max-time 120 -o "$tmp" "$url" 2>/dev/null; then
+        rm -f "$tmp"
+        die "could not fetch $name from the address in meeting/fixes.pins; run again when it can be reached"
+      fi
+      got=$(sha256 <"$tmp")
+      if [ "$got" != "$sum" ]; then
+        rm -f "$tmp"
+        die "$name is not the file meeting/fixes.pins pins (its sha256 is $got): not using it"
+      fi
+      mv -f "$tmp" "$fixes/$name" || die "cannot write $fixes/$name"
+    fi
+    chmod 644 "$fixes/$name" # joinly's user is not yours, and a file kept from another run may have been made private
+  done <"$pins"
+}
+
+# ----------------------------------------------------------------------------------------------- Compose
+compose_env() { # run docker compose with the project's variables (none of them secret)
+  SB_CALL_DIR=$cdir SB_SERVER=$server SB_MODEL=$sb_model SB_FIXES_DIR=$fixes SB_RELAY_USER=$(id -u):$(id -g) \
+    SB_NO_JOIN=${nojoin:+1} SB_ALLOW_HTTP=${allow_http:+1} SB_RELAY_IMAGE=${SWITCHBOARD_RELAY_IMAGE:-} \
+    docker compose -f "$compose" ${override:+-f "$override"} -p "$project" --profile "$device" "$@"
+}
+down_env() { # `docker compose <args>` for project $1, whose settings are forgotten: only the names matter
+  p=$1
+  shift
+  SB_CALL_DIR=/unused SB_SERVER=https://unused SB_FIXES_DIR=/unused SB_RELAY_USER=0:0 \
+    docker compose -f "$compose" -p "$p" --profile cpu --profile gpu "$@"
+}
+running() { # whether project $1 has a running container
+  [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$1" 2>/dev/null)" ]
+}
+remove_project() { # $1 project: stop and remove its containers and network, then forget its files
+  p=$1
+  down_env "$p" down --timeout 20 >/dev/null 2>&1
+  rm -rf "${data:?}/calls/${p#"$PROJECT_PREFIX"}"
+}
+sweep() { # calls that ended (their containers exited) leave nothing behind
+  for d in "$data"/calls/*/; do
+    [ -d "$d" ] || continue
+    id=$(basename "$d")
+    running "$PROJECT_PREFIX$id" || remove_project "$PROJECT_PREFIX$id"
+  done
+}
+
+# ------------------------------------------------------------------------------------------------ commands
+cmd_plan() {
+  force='' model_arg=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --cpu) force=cpu; shift ;;
+      --gpu) force=gpu; shift ;;
+      --model)
+        [ $# -ge 2 ] || usage "--model needs a value"
+        model_arg=$2
+        shift 2
+        ;;
+      *) usage "plan: unknown argument" ;;
+    esac
+  done
+  choose_device "$force"
+  choose_model "$model_arg"
+  print_plan
+}
+
+cmd_status() {
+  data_arg=
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --data)
+        [ $# -ge 2 ] || usage "--data needs a value"
+        data_arg=$2
+        shift 2
+        ;;
+      *) usage "status: unknown argument" ;;
+    esac
+  done
+  set_data_dir
+  any=
+  for d in "$data"/calls/*/; do
+    [ -d "$d" ] || continue
+    any=1
+    id=$(basename "$d")
+    printf '%s\n' "--- call $id"
+    cat "$d/info" 2>/dev/null
+    if running "$PROJECT_PREFIX$id"; then
+      printf 'state=running\n'
+      down_env "$PROJECT_PREFIX$id" logs --no-color --tail 6 relay 2>&1 | tail -n 6
+    else
+      printf 'state=stopped\n'
+    fi
+  done
+  [ -n "$any" ] || printf 'no hosted call on this machine\n'
+}
+
+cmd_stop() {
+  data_arg='' want=''
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --data)
+        [ $# -ge 2 ] || usage "--data needs a value"
+        data_arg=$2
+        shift 2
+        ;;
+      -*) usage "stop: unknown argument" ;;
+      *)
+        want=$(printf '%s' "$1" | sed 's/\\u00b7//g; s/[^0-9a-f]//g' | cut -c1-8)
+        shift
+        ;;
+    esac
+  done
+  set_data_dir
+  any=
+  for d in "$data"/calls/*/; do
+    [ -d "$d" ] || continue
+    id=$(basename "$d")
+    [ -z "$want" ] || [ "$id" = "$want" ] || continue
+    any=1
+    remove_project "$PROJECT_PREFIX$id"
+    printf 'stopped the call with key %s%s\n' "$(printf '%s' "$id" | cut -c1-4)" "$(printf '\302\267%s' "$(printf '%s' "$id" | cut -c5-8)")"
+  done
+  [ -n "$any" ] || { printf 'no hosted call to stop\n'; return 0; }
+  printf 'The call stays in the room until someone presses End call, or for five minutes after the relay left.\n'
+}
+
+cmd_start() {
+  force='' model_arg='' server=${SWITCHBOARD_URL:-${CLAUDE_PLUGIN_OPTION_SERVER_URL:-}} data_arg='' nojoin='' room='' allow_http=''
+  add_host=${SWITCHBOARD_RELAY_ADD_HOST:-} override=''
+  [ "${SWITCHBOARD_RELAY_ALLOW_HTTP:-}" = 1 ] && allow_http=1
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --server)
+        [ $# -ge 2 ] || usage "--server needs a value"
+        server=$2
+        shift 2
+        ;;
+      --data)
+        [ $# -ge 2 ] || usage "--data needs a value"
+        data_arg=$2
+        shift 2
+        ;;
+      --cpu) force=cpu; shift ;;
+      --gpu) force=gpu; shift ;;
+      --model)
+        [ $# -ge 2 ] || usage "--model needs a value"
+        model_arg=$2
+        shift 2
+        ;;
+      --add-host)
+        [ $# -ge 2 ] || usage "--add-host needs NAME:IP"
+        add_host=$2
+        shift 2
+        ;;
+      --no-join) nojoin=1; shift ;;
+      -*) usage "start: unknown argument $1" ;;
+      *://*) usage "the meeting link goes on stdin, never on the command line" ;;
+      *)
+        [ -z "$room" ] || usage "start: one room"
+        room=$1
+        shift
+        ;;
+    esac
+  done
+  [ -n "$room" ] || usage "start: which room?"
+  room=${room#\#}
+  case $room in '' | *[!A-Za-z0-9._-]*) usage "start: a room is letters, digits, . _ - (as in #uploads)" ;; esac
+  [ "${#room}" -le 64 ] || usage "start: that room name is too long"
+  server=${server%/}
+  [ -n "$server" ] || die "which server? pass --server URL (the plugin's server_url)"
+  case $server in
+    https://*) ;;
+    http://localhost | http://localhost:* | http://*.localhost | http://*.localhost:* | http://127.0.0.1 | http://127.0.0.1:*) ;;
+    http://*) [ -n "$allow_http" ] || die "the server address is plain http: the key would cross the network in the clear (SWITCHBOARD_RELAY_ALLOW_HTTP=1 allows it on a network you trust)" ;;
+    *) die "the server address must start with https://" ;;
+  esac
+  case $server in *[!A-Za-z0-9._~:/@%+=-]*) die "the server address has a character it should not" ;; esac
+  case $add_host in
+    '') ;;
+    *[!A-Za-z0-9.:-]* | *:) usage "--add-host is NAME:IP (or NAME:host-gateway), such as sb.example.internal:192.0.2.7" ;;
+    *:*) ;;
+    *) usage "--add-host is NAME:IP (or NAME:host-gateway), such as sb.example.internal:192.0.2.7" ;;
+  esac
+
+  # ---- everything that can be wrong before a key exists
+  command -v docker >/dev/null 2>&1 || die "Docker is needed: the bot runs in two containers (https://docs.docker.com/get-docker/)"
+  docker info >/dev/null 2>&1 || die "Docker is installed but not running (or you may not use it)"
+  docker compose version >/dev/null 2>&1 || die "Docker Compose is needed: 'docker compose' did not answer"
+  command -v curl >/dev/null 2>&1 || die "curl is needed"
+  [ -f "$compose" ] || die "the plugin has no meeting/compose.yaml: reinstall the plugin"
+  set_data_dir
+  mkdir -p "$data" 2>/dev/null || die "cannot make $data"
+  cred=$(credential)
+  [ -n "$cred" ] || die "no credential: this Claude Code has no agent token in its environment and no listener key in $data (listener-key-<its pid>); sign in to switchboard from Claude Code (/mcp, then Authenticate) or set the plugin's token, then ask again"
+  choose_device "$force"
+  choose_model "$model_arg"
+  ensure_fixes
+  sweep
+  imgs=$(SB_CALL_DIR=/unused SB_SERVER=https://unused SB_FIXES_DIR=/unused SB_RELAY_USER=0:0 SB_RELAY_IMAGE=${SWITCHBOARD_RELAY_IMAGE:-} \
+    docker compose -f "$compose" --profile "$device" config --images 2>/dev/null) || die "docker compose could not read meeting/compose.yaml"
+  missing=
+  for img in $imgs; do
+    docker image inspect "$img" >/dev/null 2>&1 || missing="$missing $img"
+  done
+
+  # ---- the link: stdin only, into a file only its owner reads
+  if [ -t 0 ]; then
+    printf 'Meeting link (not shown): ' >&2
+    stty -echo 2>/dev/null
+    IFS= read -r link
+    stty echo 2>/dev/null
+    printf '\n' >&2
+  else
+    IFS= read -r link
+  fi
+  link=${link%"$(printf '\r')"}
+  if [ -z "$nojoin" ]; then
+    [ -n "$link" ] || die "the meeting link is read from stdin, and there was none"
+    case $link in *[![:print:]]* | *' '* | '') die "that is not a meeting link" ;; esac
+    [ "${#link}" -le 2000 ] || die "that is not a meeting link"
+    case $link in
+      https://zoom.us/* | https://*.zoom.us/*) platform=zoom ;;
+      https://meet.google.com/*) platform=meet ;;
+      https://teams.microsoft.com/* | https://teams.live.com/*) platform=teams ;;
+      *) die "that is not an https link to a Zoom, Meet or Teams call" ;;
+    esac
+  else
+    platform=unknown
+    link=
+  fi
+
+  # ---- the key, its files, the registration
+  key=sbc_$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+  [ "${#key}" -eq 68 ] || die "could not make a key"
+  hash=$(printf '%s' "$key" | sha256)
+  is_hex "$hash" 64 || die "no sha256 tool (sha256sum, shasum or openssl)"
+  fp8=$(printf '%s' "$hash" | cut -c1-8)
+  project=$PROJECT_PREFIX$fp8
+  [ -z "$missing" ] || { printf 'Pulling:%s (this can take a few minutes)\n' "$missing" >&2; SB_CALL_DIR=/unused SB_SERVER=https://unused SB_FIXES_DIR=/unused SB_RELAY_USER=0:0 SB_RELAY_IMAGE=${SWITCHBOARD_RELAY_IMAGE:-} docker compose -f "$compose" --profile "$device" pull >&2 || die "could not pull the images"; }
+  cdir=$data/calls/$fp8
+  mkdir -p "$data/calls" "$cdir" 2>/dev/null || die "cannot make $cdir"
+  chmod 700 "$data/calls" "$cdir" 2>/dev/null
+  printf '%s\n' "$key" >"$cdir/key" || die "cannot write the key's file"
+  chmod 600 "$cdir/key"
+  if [ -n "$link" ]; then
+    printf '%s\n' "$link" >"$cdir/link" || die "cannot write the link's file"
+    chmod 600 "$cdir/link"
+  fi
+  link=
+  # the relay runs as you, and the folder is yours: it may delete what is in it. Nothing else is readable.
+  body=$(printf '{"room": "#%s", "key_hash": "%s", "platform": "%s", "model": "%s"}' "$room" "$hash" "$platform" "$model")
+  resp=$(mktemp) || die "no temporary file"
+  trap 'rm -f "$resp"' EXIT
+  code=$(printf 'header = "Authorization: Bearer %s"\n' "$cred" |
+    curl -sS --max-time 30 -K - -X POST -H 'Content-Type: application/json' --data-binary "$body" \
+      -o "$resp" -w '%{http_code}' "$server/mcp/meeting/host" 2>/dev/null)
+  cred=
+  if [ "$code" != 200 ]; then
+    rm -rf "$cdir"
+    case $code in
+      '' | 000) die "could not reach the server at $server" ;;
+      401) die "the server did not accept this Claude Code's credential ($(field error "$resp")): sign in to switchboard again from Claude Code (/mcp, then Authenticate), then ask again" ;;
+      429) die "too many tries: wait a minute ($(field message "$resp"))" ;;
+      *) die "the server refused ($code, $(field error "$resp")): $(field message "$resp")" ;;
+    esac
+  fi
+  theirs=$(field fingerprint "$resp" | sed 's/\\u00b7//g; s/[^0-9a-f]//g')
+  device_name=$(field host "$resp")
+  if [ "$theirs" != "$fp8" ]; then
+    rm -rf "$cdir"
+    die "the server's fingerprint for this key is not the one made here: not starting. Tell the person; do not retry"
+  fi
+  if [ -n "$add_host" ]; then
+    # a server whose name the containers' resolver does not know (a LAN name, a test address): written beside the
+    # call's files, passed to Compose as a second file, the one place the relay's /etc/hosts is made
+    printf 'services:\n  relay:\n    extra_hosts: ["%s"]\n' "$add_host" >"$cdir/override.yaml"
+    override=$cdir/override.yaml
+  fi
+  {
+    printf 'room=#%s\nplatform=%s\nfingerprint=%s\ndevice=%s\nmodel=%s\nproject=%s\nserver=%s\nstarted=%s\n' \
+      "$room" "$platform" "$fp8" "$device" "$model" "$project" "$server" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } >"$cdir/info"
+
+  # ---- start it and return
+  if ! compose_env up -d >&2; then
+    compose_env down --timeout 5 >/dev/null 2>&1
+    rm -rf "$cdir"
+    die "the containers did not start. The call is registered in the room and ends by itself in ten minutes, or sooner with End call"
+  fi
+  fpshow=$(printf '%s\302\267%s' "$(printf '%s' "$fp8" | cut -c1-4)" "$(printf '%s' "$fp8" | cut -c5-8)")
+  case $platform in zoom) label=Zoom ;; meet) label=Meet ;; teams) label=Teams ;; *) label=call ;; esac
+  printf 'Hosting #%s (%s) from %s.\n' "$room" "$label" "${device_name:-this machine}"
+  printf 'Key fingerprint: %s. The room'"'"'s call bar shows the same; if it does not, stop and tell the person.\n' "$fpshow"
+  printf 'Speech: %s, model %s (%s).\n' "$(printf '%s' "$device" | tr '[:lower:]' '[:upper:]')" "$model" "$why"
+  printf 'It runs in two containers (project %s). To stop it: %s stop\n' "$project" "$PROG"
+}
+
+cmd=${1:-}
+[ $# -eq 0 ] || shift
+case $cmd in
+  start) cmd_start "$@" ;;
+  stop) cmd_stop "$@" ;;
+  status) cmd_status "$@" ;;
+  plan) cmd_plan "$@" ;;
+  *) usage "which one: start, stop, status or plan?" ;;
+esac

@@ -437,7 +437,7 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   ghcr.io/joinly-ai/joinly:v0.5.4
 ```
 
-Drop the mount once a joinly release has the fix, and move to that release.
+Drop the mount once a joinly release has the fix, and move to that release. The file's sha256 is `9bf581c20a9a7911afb9f2ac1447a5d0800cdca24485dd215099d5d82afad6ff`; check it after you download it (`sha256sum zoom.py`), because a mount makes it run inside the bot.
 
 **First words of a call line.** joinly 0.5.4 starts each piece of speech partway into its first word. Its voice detection flags speech late (a median of 73 ms after it begins in a recorded call, and up to 378 ms) and keeps only 32 ms from before that, so the speech-to-text model gets the first word cut off. The room's agent names are its hotwords, and a clipped "Our" or "Hey" can come out as "Claude". A line then wakes Claude for nothing, or the name that opens a call-out is lost ([#620](https://github.com/amahpour/switchboard/issues/620)). The fix keeps 0.3 s of the audio from before each utterance and passes it on with it. It adds no waiting, since that audio has already arrived. The fix is [joinly-ai/joinly#188](https://github.com/joinly-ai/joinly/pull/188), a change to joinly's transcription controller; until a joinly release has it, the file comes from [our fork](https://github.com/amahpour/joinly/commit/1fe384d9deba32f38fabd5bfc77fc5975adef6a7). On the recorded call of [#617](https://github.com/amahpour/switchboard/issues/617) (24 lines, 17 of them call-outs, `base` on four CPUs, joinly's own code run over the recording), it took the right agent from 14.8 of 17 call-outs to 16, the false wakes from 1 to 0, and the words wrong from 8.8% to 3.5%, for about 0.01 s more delay. The broker also asks joinly for longer pieces of speech (0.35 s of quiet and 1 s of audio before a piece is cut, arguments every joinly 0.5.4 has), and with both every call-out woke the right agent, for about 0.14 s more delay in all. Its file differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only, in the same `docker run` as the Zoom file (use either or both):
 
@@ -448,7 +448,7 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   ghcr.io/joinly-ai/joinly:v0.5.4
 ```
 
-switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` argument has the fix as its default (0 turns it off), and a setting that stock joinly doesn't know would break every call for anyone who hasn't mounted the file. So a joinly without the file works as before, and with it the fix is on. As with the Zoom fix, drop the mount once a joinly release has it, and move to that release.
+switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` argument has the fix as its default (0 turns it off), and a setting that stock joinly doesn't know would break every call for anyone who hasn't mounted the file. So a joinly without the file works as before, and with it the fix is on. As with the Zoom fix, drop the mount once a joinly release has it, and move to that release. The file's sha256 is `6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97`.
 
 ### The speech model, and a GPU
 
@@ -666,6 +666,26 @@ The second command runs in the broker's container and reaches joinly on the pod'
 kubectl -n switchboard run probe --image=busybox:1.37 --restart=Never --rm -it -- \
   wget -T3 -qO- http://<pod-ip>:8000/health    # "Connection refused"; the same on :7419/healthz answers
 ```
+
+### Meetings on your own machine
+
+A person can run the bot on their own machine instead of beside the broker, for one call in one room ([DESIGN.md §54](DESIGN.md#54-hosted-calls-a-persons-machine-pushes-the-call-in-623), [the guide](guide/meetings.md#host-the-bot-on-your-own-machine)). The broker needs nothing for it: no joinly, no `joinly_url`, and none of the bot's memory. The plugin's script starts two containers from [`plugins/claude/meeting/compose.yaml`](https://github.com/amahpour/switchboard/blob/main/plugins/claude/meeting/compose.yaml), one Compose project for each call, and you don't run that file by hand:
+
+```bash
+sh plugins/claude/bin/meeting-host start --server https://sb.example.com '#uploads' < link.txt
+```
+
+What the file starts, and why it is built this way:
+
+- **The relay** is `switchboard meeting relay`, in [switchboard's own image](#the-image) (about 330 MB, the release the plugin is: `.github/scripts/release.py` moves the tag). It reads the call's key and the meeting link from files in the call's folder, mounted at `/call`, never from its arguments or environment. It runs as the person who started it, with a read-only root, no capability, and `no-new-privileges`. It reaches the server over HTTPS (a plain `http` address is refused unless `SWITCHBOARD_RELAY_ALLOW_HTTP=1`), trusting what the container's trust store trusts.
+- **joinly** is the same bot as [above](#a-meeting-bot), with the same two fixes mounted over its copies (below). It has no sign-in, so it has **no address of its own**: it shares the relay's network (`network_mode: service:relay`) and listens on that network's `127.0.0.1` (`JOINLY_SERVER_HOST`), as the broker's pod does for its own ([Meetings on Kubernetes](#meetings-on-kubernetes)). No port is published, and nothing else on the machine or the network can talk to it. It runs with the same restrictions as the Kubernetes patch gives it: a read-only root with `/tmp` writable, no capability, and `no-new-privileges`.
+- **joinly ends with the relay.** It also shares the relay's process namespace (`pid: service:relay`), so when the relay exits (End call, a revoked sign-in, `meeting-host stop`) the kernel ends every process in that namespace and joinly's container stops with it. Nothing is left running and nothing has to watch for it. The exited containers stay until the script removes them, at the next `start` or at `stop`.
+- **GPU or CPU is a Compose profile.** `gpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4-cuda` (about 6 GB to pull) with one NVIDIA device reserved (`deploy.resources.reservations.devices`) and a named volume, `switchboard-joinly-models-cuda`, that keeps the speech model (about 1.6 GB for `large-v3-turbo`) between calls, so only the first GPU call waits for the download. `cpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4` with joinly's own `base`, which is in the image, so nothing is downloaded and no volume is mounted (a volume at that path would hide the model the image holds). The script picks the profile: `nvidia-smi` sees a GPU, Docker has an `nvidia` runtime (the NVIDIA Container Toolkit), and the machine is not a Mac. It pulls nothing to find out, says which it chose and why, and `--gpu` or `--cpu` forces either. The GPU image needs the driver for CUDA 12.6 or newer.
+- **The two fixes are pinned by sha256.** `plugins/claude/meeting/fixes.pins` names each fix, its address (a commit, so it doesn't move) and its sha256, the same files as [above](#a-meeting-bot). The script keeps them in the plugin's data folder, checks both against the pins every time, fetches a missing one from its address, and refuses (and deletes) one whose hash differs, so a changed file never reaches joinly. The addresses are `raw.githubusercontent.com`, which the machine must reach the first time. Drop a line, and its mount, once a joinly release has the fix.
+- **Images.** A missing image is pulled before the script tells the server anything, so a call registered in the room is ready to start. To try a build of your own, `SWITCHBOARD_RELAY_IMAGE=my-switchboard:dev` (`docker build -f deploy/image/Dockerfile .`) names the relay's image, and nothing else changes.
+- **A server the containers can't resolve.** `--add-host NAME:IP` (or `host-gateway`) writes a second Compose file with `extra_hosts` for the relay, for a server whose name only this machine knows.
+
+The key and the link are files in `calls/<fingerprint>/` of the plugin's data folder, mode 0600 in a folder only the person can enter. The relay deletes the link once it has joined, and the key when it exits. On Docker Desktop (a Mac, or Windows) a bind-mounted file shows the host's mode differently, which is why the relay is told to trust the files the script made (`--trust-files`); the folder is the person's, and the relay runs as them.
 
 ## Health checks and logs
 
