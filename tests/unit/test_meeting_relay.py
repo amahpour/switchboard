@@ -256,6 +256,62 @@ def test_the_commands_defaults_are_the_relays() -> None:
     assert cli.RELAY_VOICE == relay.DEFAULT_VOICE
 
 
+def test_the_command_takes_its_switches_from_the_environment_a_container_sets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Compose file gives the relay its non-secret settings by environment (the server, the model and two
+    switches), because a command list cannot leave a flag out. Fails if one is not read, or if a blank one
+    counts as on."""
+    for name in ("SWITCHBOARD_URL", "SWITCHBOARD_MEETING_STT_MODEL", "SWITCHBOARD_RELAY_NO_JOIN",
+                 "SWITCHBOARD_RELAY_ALLOW_HTTP"):  # fmt: skip
+        monkeypatch.delenv(name, raising=False)
+    plain = cli.build_parser().parse_args(["meeting", "relay"])
+    assert (plain.server, plain.model, plain.no_join, plain.allow_http) == (None, "", False, False)
+    monkeypatch.setenv("SWITCHBOARD_URL", "https://sb.example.com")
+    monkeypatch.setenv("SWITCHBOARD_MEETING_STT_MODEL", "large-v3-turbo")
+    monkeypatch.setenv("SWITCHBOARD_RELAY_NO_JOIN", "1")
+    monkeypatch.setenv("SWITCHBOARD_RELAY_ALLOW_HTTP", "true")
+    got = cli.build_parser().parse_args(["meeting", "relay"])
+    assert (got.server, got.model, got.no_join, got.allow_http) == (
+        "https://sb.example.com",
+        "large-v3-turbo",
+        True,
+        True,
+    )
+    monkeypatch.setenv("SWITCHBOARD_RELAY_NO_JOIN", "")  # a blank variable (Compose's default) is off
+    monkeypatch.setenv("SWITCHBOARD_RELAY_ALLOW_HTTP", "0")
+    off = cli.build_parser().parse_args(["meeting", "relay"])
+    assert (off.no_join, off.allow_http) == (False, False)
+
+
+def test_a_relay_that_should_join_but_has_no_link_is_a_usage_error_before_it_touches_the_network(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--link-file`` is missing and ``--no-join`` was not said: a mistake, not a call to join none. The
+    relay stops with exit 2 and a sentence, and has read nothing and connected to nothing. Fails if it
+    starts a relay that joins no call without being told to."""
+    key = write(tmp_path / "key", KEY)
+    code = relay.main(
+        server="https://sb.example.com", joinly_url="http://127.0.0.1:1/", key_file=key, link_file=None
+    )
+    assert code == Exit.USAGE
+    err = capsys.readouterr().err
+    assert "--link-file" in err and KEY not in err
+
+
+def test_a_key_file_that_cannot_be_used_stops_the_relay_with_exit_2_and_repeats_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    key = write(tmp_path / "key", KEY, 0o644)
+    link = write(tmp_path / "link", LINK)
+    code = relay.main(
+        server="https://sb.example.com", joinly_url="http://127.0.0.1:1/", key_file=key, link_file=link
+    )
+    assert code == Exit.USAGE
+    err = capsys.readouterr().err
+    assert "644" in err and KEY not in err and "hunter2" not in err
+
+
 def test_every_exit_code_has_a_distinct_number_and_a_sentence() -> None:
     assert len({int(e) for e in Exit}) == len(Exit)
     assert set(relay.WHY) == set(Exit)
@@ -372,6 +428,19 @@ async def test_it_joins_with_the_rooms_names_and_marks_the_call_live() -> None:
     assert rig.said[0] == f"relay: key {FP} (the room's call bar shows the same)"
     rig.relay.finish(Exit.ENDED)
     assert await rig.code() == Exit.ENDED
+
+
+async def test_the_first_push_is_asked_again_until_the_broker_has_it() -> None:
+    """The empty first push is what marks the call live, and a call nobody speaks in sends nothing else. An
+    error or a 429 on that one push must not leave the call "joining" for good. Fails if it is tried once."""
+    rig = Rig()
+    rig.broker.push_answers = [Unreachable("ConnectionResetError"), Reply(429, {}, 2.0), ok()]
+    await joined(rig)
+    await rig.until(lambda: len(rig.broker.pushes()) == 3, "the third try")
+    assert rig.broker.pushes() == [[], [], []]
+    assert rig.relay.exit is None  # and nothing ended
+    rig.relay.finish(Exit.ENDED)
+    await rig.code()
 
 
 async def test_it_pushes_each_new_segment_once_and_not_the_bots_own() -> None:

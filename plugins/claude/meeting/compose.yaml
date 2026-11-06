@@ -85,7 +85,7 @@ services:
   joinly-gpu:
     <<: *joinly
     profiles: [gpu]
-    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release built for CUDA (about 8.7 GB); move both together
+    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release built for CUDA (about 6 GB to pull); move both together
     deploy:
       resources:
         reservations:

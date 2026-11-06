@@ -75,8 +75,7 @@ function Choose-Device([string]$forced) {
 }
 function Choose-Model([string]$asked, [string]$device) { # (model, what joinly is told: empty is its own)
     $model = $asked
-    if (-not $model) { $model = if ($device -eq 'gpu') { 'large-v3-turbo' } else { 'base' } }
-    elseif ($Models -cnotcontains $model) { Usage ('--model is one of: ' + ($Models -join ' ')) }
+    if (-not $model) { $model = if ($device -eq 'gpu') { 'large-v3-turbo' } else { 'base' } } elseif ($Models -cnotcontains $model) { Usage ('--model is one of: ' + ($Models -join ' ')) }
     $told = $model
     if ($device -eq 'cpu' -and $model -ceq 'base') { $told = '' }
     @{ Model = $model; Told = $told }
@@ -180,6 +179,22 @@ function Make-Private([string]$path) { # readable by the user only: 0600, or on 
     foreach ($rule in $now.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
         if ($rule.IdentityReference.Value -cne $me.Value) { Die 'could not make a file private' }
     }
+}
+function Make-PrivateDir([string]$path) { # a folder only the user can enter: 0700, or an access list of the user alone
+    if (-not $windows) {
+        & chmod 700 $path
+        if ($LASTEXITCODE -ne 0) { Die 'chmod failed' }
+        return
+    }
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $rules = New-Object Security.AccessControl.DirectorySecurity
+    $rules.SetAccessRuleProtection($true, $false)
+    $full = [Security.AccessControl.FileSystemRights]::FullControl
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $none = [Security.AccessControl.PropagationFlags]::None
+    $allow = [Security.AccessControl.AccessControlType]::Allow
+    $rules.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule $me, $full, $inherit, $none, $allow))
+    Set-Acl -LiteralPath $path -AclObject $rules
 }
 function Write-Private([string]$path, [string]$text) { # the file exists, empty and private, before a byte of the secret is in it
     [IO.File]::WriteAllBytes($path, [byte[]]@())
@@ -290,14 +305,16 @@ function Cmd-Stop([string[]]$rest) {
     $want = ''
     if ($o['_'].Count -gt 0) { $want = ((($o['_'][0] -replace '\\u00b7', '') -replace '[^0-9a-f]', '') + '        ').Substring(0, 8).Trim() }
     $any = $false
+    $live = $false
     foreach ($id in Call-Dirs $data) {
         if ($want -and $id -cne $want) { continue }
         $any = $true
+        if (Running "$ProjectPrefix$id") { $live = $true }
         Remove-Project $data $id
         Say ('stopped the call with key ' + $id.Substring(0, 4) + [char]0x00B7 + $id.Substring(4, 4))
     }
     if (-not $any) { Say 'no hosted call to stop'; return }
-    Say 'The call stays in the room until someone presses End call, or for five minutes after the relay left.'
+    if ($live) { Say 'The call stays in the room until someone presses End call, or for five minutes after the relay left.' }
 }
 
 function Cmd-Start([string[]]$rest) {
@@ -371,8 +388,11 @@ function Cmd-Start([string[]]$rest) {
         $code = Compose $imgVars @('-f', $compose, '--profile', $device, 'pull')
         if ($code -ne 0) { Die 'could not pull the images' }
     }
-    $cdir = Join-Path (Join-Path $data 'calls') $fp8
+    $calls = Join-Path $data 'calls'
+    $cdir = Join-Path $calls $fp8
     [void][IO.Directory]::CreateDirectory($cdir)
+    Make-PrivateDir $calls
+    Make-PrivateDir $cdir
     Write-Private (Join-Path $cdir 'key') $key
     if ($link) { Write-Private (Join-Path $cdir 'link') $link }
     $link = ''

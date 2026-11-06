@@ -19,7 +19,7 @@ LINK
 
 On Windows without Git Bash, in PowerShell: `'the meeting link' | & "${CLAUDE_PLUGIN_ROOT}/bin/meeting-host.cmd" start --server "${user_config.server_url}" --data "${CLAUDE_PLUGIN_DATA}" '#room'`.
 
-It returns in seconds. The first time it pulls images (about 4 GB, 9 GB with a GPU) and a speech model, which can take minutes: if your shell tool can run a command in the background, do.
+It returns in seconds. The first time it pulls Docker images (a few GB, and the GPU one is about 6 GB) and, on a GPU, a speech model, which can take minutes: if your shell tool can run a command in the background, do.
 
 Then tell your user three things from what it printed: the room, the **key fingerprint** (such as `7f3a·91c2`, which should match the room's call bar: if it doesn't, tell them and run `stop`), and whether it uses the **GPU or the CPU**.
 

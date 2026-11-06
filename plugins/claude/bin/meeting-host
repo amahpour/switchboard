@@ -299,17 +299,20 @@ cmd_stop() {
     esac
   done
   set_data_dir
-  any=
+  any='' live=''
   for d in "$data"/calls/*/; do
     [ -d "$d" ] || continue
     id=$(basename "$d")
     [ -z "$want" ] || [ "$id" = "$want" ] || continue
     any=1
+    ! running "$PROJECT_PREFIX$id" || live=1
     remove_project "$PROJECT_PREFIX$id"
     printf 'stopped the call with key %s%s\n' "$(printf '%s' "$id" | cut -c1-4)" "$(printf '\302\267%s' "$(printf '%s' "$id" | cut -c5-8)")"
   done
   [ -n "$any" ] || { printf 'no hosted call to stop\n'; return 0; }
-  printf 'The call stays in the room until someone presses End call, or for five minutes after the relay left.\n'
+  # a call whose containers had stopped already (End call) is over in the room; one that was running is not,
+  # until someone presses End call or the server stops hearing from its key
+  [ -z "$live" ] || printf 'The call stays in the room until someone presses End call, or for five minutes after the relay left.\n'
 }
 
 cmd_start() {

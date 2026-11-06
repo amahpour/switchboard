@@ -17,7 +17,7 @@ it, it reaches in over HTTPS, holding the key made for this one call.
 - It leaves the call and exits when the broker says so: ``ended`` in a poll, a 410 on any request (a person
   ended the call, the room closed, the broker stopped), or a 401 (the key is not accepted, or its machine's
   sign-in was revoked). A 429 is waited out for as long as ``Retry-After`` says. An error is retried with a
-  growing pause, up to ``SERVER_LOST_S``, which is how long the broker waits before it ends a call that has
+  growing pause, up to ``QUIET_S``, which is how long the broker waits before it ends a call that has
   heard nothing (``hosted.QUIET_S``): past it nothing is gained by trying.
 
 The **exit code** says why it stopped (``Exit``), so the container's status is an answer. The pieces that
@@ -39,6 +39,7 @@ import socket
 import ssl
 import stat
 import sys
+import threading
 import time
 import urllib.parse
 from collections import deque
@@ -88,7 +89,7 @@ class Exit(IntEnum):
     REFUSED = 3  # the broker did not accept the key (401): wrong, or its machine's sign-in was revoked
     JOIN_FAILED = 4  # joinly could not join the call: a bad link, a waiting room nobody admitted, no audio
     JOINLY_LOST = 5  # joinly could not be reached, or dropped while in the call
-    SERVER_LOST = 6  # the broker could not be reached for ``SERVER_LOST_S``
+    SERVER_LOST = 6  # the broker could not be reached for ``QUIET_S``
     STOPPED = 7  # told to stop (SIGTERM, as ``docker stop`` sends it, or ^C)
 
 
@@ -224,6 +225,7 @@ class BrokerClient:
         self.scheme, self.host, self.port, self.prefix = server_target(address, allow_http=allow_http)
         self._key = key
         self._open: set[http.client.HTTPConnection] = set()
+        self._lock = threading.Lock()  # the set is used by the request threads and by ``abort``
         self._closed = False
 
     def _connection(self, timeout: float) -> http.client.HTTPConnection:
@@ -237,7 +239,8 @@ class BrokerClient:
     def _post(self, path: str, body: dict[str, Any], timeout: float) -> Reply:
         raw = json.dumps(body, ensure_ascii=True).encode("ascii")
         conn = self._connection(timeout)
-        self._open.add(conn)
+        with self._lock:
+            self._open.add(conn)
         try:
             conn.request(
                 "POST",
@@ -266,7 +269,8 @@ class BrokerClient:
             # the class says what went wrong; the text of an HTTP library's error is not repeated
             raise Unreachable(type(e).__name__) from None
         finally:
-            self._open.discard(conn)
+            with self._lock:
+                self._open.discard(conn)
             conn.close()
 
     async def post(self, path: str, body: dict[str, Any], timeout: float) -> Reply:
@@ -278,7 +282,9 @@ class BrokerClient:
         """Close every request that is under way (and refuse new ones). A thread blocked in a read wakes
         with an error, which ``post`` turns into ``Unreachable``."""
         self._closed = True
-        for conn in list(self._open):
+        with self._lock:
+            pending = list(self._open)
+        for conn in pending:
             sock = conn.sock
             if sock is not None:
                 with contextlib.suppress(OSError):
@@ -354,9 +360,8 @@ class JoinlyClient:
 # ---------------------------------------------------------------------------------- the relay
 @dataclass(frozen=True)
 class RelayConfig:
-    model: str = (
-        ""  # the speech model to ask joinly for; "" leaves it joinly's own (``joinly.settings_header``)
-    )
+    # the speech model to ask joinly for; "" leaves it joinly's own (``joinly.settings_header``)
+    model: str = ""
     voice: str = DEFAULT_VOICE
     participant: str = joinly.PARTICIPANT
     join: bool = True  # False: start everything and join no call (a check of the setup, ``--no-join``)
@@ -395,7 +400,6 @@ class Relay:
         self._speech_ready = asyncio.Event()
         self._down_since: float | None = None
         self._pause = BACKOFF_FIRST_S
-        self._hints: list[str] = []
         self._pending: deque[dict[str, Any]] = deque()
         self._warned_pending = False
         self._seen: set[tuple[Any, ...]] = set()
@@ -572,7 +576,10 @@ class Relay:
         self._link = None  # joined once: the link is not needed again, here or on disk
         self._burn(self.cfg.link_path)
         self.say("in the call")
-        await self._push([])  # the first push, even an empty one, marks the call live
+        # the first push, even an empty one, marks the call live: asked again until the broker has it, because
+        # a call nobody speaks in would otherwise stay "joining"
+        while not self.stop.is_set() and not await self._push([]):
+            pass
         return not self.stop.is_set()
 
     async def _leave(self, jy: Joinly) -> None:
@@ -753,6 +760,8 @@ def main(
     arguments are the command line's (``cli.py``); a key or link that cannot be used is ``Exit.USAGE``."""
     joinly.install_redact()
     try:
+        if join and link_file is None:
+            raise UsageError("a call to join needs --link-file (or --no-join, to join none)")
         key, link = read_secrets(key_file, link_file if join else None, mode_check=not trust_files)
         broker = BrokerClient(server, key, allow_http=allow_http)
     except UsageError as e:

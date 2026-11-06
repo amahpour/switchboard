@@ -2,18 +2,16 @@
 DESIGN.md §54).
 
 The script is run as the agent runs it, with a stand-in ``docker`` that records what it was asked (its
-arguments and the ``SB_`` variables it was given) and a real ``curl`` behind a wrapper that records the same.
-The server is a stub on a loopback port that records the registration and answers as told, or the real broker
-for the one test that runs the whole path. What the stand-ins record is how this file shows what the script
-does
-with the two secrets it handles: the meeting link and the call's key never reach an argument or a variable of
-any process it starts, and the files they are in are the owner's alone.
+arguments and the ``SB_`` variables it was given) and a real ``curl`` behind a wrapper that records the
+same. The server is a stub on a loopback port that records the registration and answers as told, or the
+real broker for the one test that runs the whole path. What the stand-ins record is how this file shows
+what the script does with the two secrets it handles: the meeting link and the call's key never reach an
+argument or a variable of any process it starts, and the files they are in are the owner's alone.
 
 The script exists twice, ``sh`` for Linux and macOS and PowerShell for Windows (the same as the listener
-and the session script): the tests marked ``impl`` run both, the PowerShell one wherever ``pwsh`` is installed
-(CI sets ``SWITCHBOARD_REQUIRE_PWSH=1``, which makes a missing one an error). What only a real GPU, a real
-Docker Desktop or a real Windows can show is in the pull request that added them.
-"""
+and the session script): the tests marked ``impl`` run both, the PowerShell one wherever ``pwsh`` is
+installed (CI sets ``SWITCHBOARD_REQUIRE_PWSH=1``, which makes a missing one an error). What only a real
+GPU, a real Docker Desktop or a real Windows can show is in the pull request that added them."""
 
 from __future__ import annotations
 
@@ -33,7 +31,9 @@ from typing import Any
 
 import pytest
 import yaml
+from conftest import FakeClock, make_tmp_home
 from test_agent_plugins import CURRENT_IMPL, PWSH, impl  # noqa: F401  (impl is a fixture)
+from test_meeting_hosted import Host, Relay, World
 
 from switchboard.meeting import keys
 
@@ -109,6 +109,23 @@ if argv[:1] == ["compose"]:
     sys.exit(0)
 sys.exit(0)
 '''
+
+CHMOD_WRAPPER = """#!/bin/sh
+# records the mode each file or folder has when chmod is asked to change it, then is chmod: a secret's
+# file must already be private at that moment (the script's umask), not only after it
+for f in "$@"; do
+  case $f in
+    -* | [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) ;;
+    *)
+      [ -e "$f" ] || continue
+      m=$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")
+      if [ -d "$f" ]; then s=0; else s=$(wc -c <"$f"); fi
+      printf '%s %s %s\\n' "$m" "$(printf '%s' "$s" | tr -d ' ')" "$f" >> "$FAKE_CHMOD_LOG"
+      ;;
+  esac
+done
+exec {chmod} "$@"
+"""
 
 CURL_WRAPPER = """#!/bin/sh
 # records the arguments and the whole environment of each curl, then is curl
@@ -203,8 +220,13 @@ class Machine:
         self.home = self.root / "home"
         self.home.mkdir()
         self.dlog, self.clog = self.root / "docker.log", self.root / "curl.log"
+        self.mlog = self.root / "chmod.log"
         self.dlog.touch()
         self.clog.touch()
+        self.mlog.touch()
+        chmod = shutil.which("chmod", path=REAL_PATH)
+        if chmod:
+            self.write_exe("chmod", CHMOD_WRAPPER.format(chmod=chmod))
         self.write_exe("docker", FAKE_DOCKER.format(python=sys.executable))
         curl = shutil.which("curl", path=REAL_PATH)
         if curl:
@@ -259,6 +281,7 @@ class Machine:
             "TMPDIR": str(self.root),
             "FAKE_DOCKER_LOG": str(self.dlog),
             "FAKE_CURL_LOG": str(self.clog),
+            "FAKE_CHMOD_LOG": str(self.mlog),
             "CLAUDE_PID": CLAUDE_PID,
             "SWITCHBOARD_AGENT_TOKEN": TOKEN,
             "SWITCHBOARD_RELAY_IMAGE": "switchboard:relay-test",
@@ -497,6 +520,26 @@ def test_the_files_are_the_owners_alone_and_the_link_is_in_one(machine: Machine)
         assert stat.S_IMODE((call / name).stat().st_mode) == 0o600, name
     assert (call / "link").read_text().strip() == LINK
     assert m.compose("up")[0]["listing"].keys() >= {"key", "link", "info"}
+
+
+def test_a_secrets_file_is_private_from_the_moment_it_exists(machine: Machine) -> None:
+    """Not only after the script has called chmod: the script's umask makes the key's file, the link's file
+    and their folders private as they are made, so there is no moment when another account could read a
+    passcode. The chmod stand-in records each mode as chmod is called. Fails if a file or folder is wider
+    than 0600 (0700 for a folder) before that."""
+    m = machine
+    assert m.start().returncode == 0
+    seen = {}
+    for line in m.mlog.read_text().splitlines():
+        mode, size, path = line.split(" ", 2)
+        seen.setdefault(path, (mode, int(size)))
+    [call] = m.call_dirs()
+    for name in ("key", "link"):
+        mode, size = seen[str(call / name)]
+        # private already, or (the PowerShell script's way, as headers.ps1's: the access list is set while
+        # it is empty) holding nothing yet
+        assert mode == "600" or size == 0, (name, seen)
+    assert seen[str(call)][0] == "700" and seen[str(m.data / "calls")][0] == "700", seen
 
 
 def test_a_check_of_the_setup_takes_no_link_and_leaves_none(machine: Machine) -> None:
@@ -779,8 +822,8 @@ def test_a_fix_that_cannot_be_fetched_stops_before_anything_is_made(machine: Mac
 
 def test_the_pins_are_the_ones_the_self_test_and_deploy_md_name() -> None:
     """The shipped pins (``meeting/fixes.pins``) are the files the broker's own bot runs with in the live
-    self-test
-    and the ones docs/DEPLOY.md tells an operator to download: one set. Fails if they drift apart."""
+    self-test and the ones docs/DEPLOY.md tells an operator to download: one set. Fails if they drift
+    apart."""
     text = (ROOT / "tests" / "live" / "test_meeting_selftest.py").read_text()
     pins = {}
     for line in (PLUGIN / "meeting" / "fixes.pins").read_text().splitlines():
@@ -851,11 +894,14 @@ def test_stop_removes_the_project_and_its_files_and_status_says_what_runs(machin
     fp = f"{first[:4]}\u00b7{first[4:]}"
     r = m.run(["stop", "--data", str(m.data), fp], stdin="", env=m.env(FAKE_DOCKER_RUNNING=both))
     assert r.returncode == 0 and f"stopped the call with key {fp}" in r.stdout
+    assert (
+        "stays in the room until someone presses End call" in r.stdout
+    )  # it was running: the room still has it
     assert [p.name for p in m.call_dirs()] == [second]  # only that one
     downs = [c for c in m.compose("down") if c["project"] == running]
     assert downs and "--timeout" in downs[-1]["args"]
-    r = m.run(["stop", "--data", str(m.data)], stdin="", env=m.env(FAKE_DOCKER_RUNNING=both))
-    assert r.returncode == 0 and m.call_dirs() == []
+    over = m.run(["stop", "--data", str(m.data)], stdin="")  # (nothing runs now: End call had ended it)
+    assert over.returncode == 0 and m.call_dirs() == [] and "stays in the room" not in over.stdout
     again = m.run(["stop", "--data", str(m.data)], stdin="")
     assert "no hosted call to stop" in again.stdout
 
@@ -954,6 +1000,49 @@ def test_docker_compose_reads_the_file_and_the_profiles_pick_the_right_services(
         )  # fmt: skip
         assert r.returncode == 0, r.stderr
         assert set(json.loads(r.stdout)["services"]) == want, profile
+
+
+async def test_the_script_registers_a_call_at_the_real_broker_with_the_key_a_claude_code_holds(
+    machine: Machine,
+) -> None:
+    """Against the real broker, not a stub: a Claude Code session of ``alice-laptop`` that signed in through
+    the browser holds only a listener key, which ``bin/headers`` left in the plugin's data folder under
+    its pid. The script finds it there, registers the call for the room that session is in, and the key
+    it made is the one the call's routes then accept. A second try for the same room is refused in the
+    server's words. Fails if the request the script sends is not the one the route takes, or the key it
+    made is not the registered one."""
+    from switchboard.meeting import keys as call_keys
+
+    w = World(make_tmp_home(), FakeClock())
+    claude = Host(w.b, listener_key=LISTENER)
+    m = machine
+    try:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        (m.data / f"listener-key-{CLAUDE_PID}").write_text(LISTENER + "\n")
+        env = {k: v for k, v in m.env().items() if k != "SWITCHBOARD_AGENT_TOKEN"}
+        r = m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=env)
+        assert r.returncode == 0, r.stderr
+        row = w.hosted_row()
+        [call] = m.call_dirs()
+        key = (call / "key").read_text().strip()
+        assert row["key_hash"] == call_keys.key_hash(key) and (row["state"], row["platform"]) == (
+            "joining",
+            "zoom",
+        )
+        assert (row["host"], row["model"], row["source"]) == ("alice-laptop", "base", "hosted")
+        fp = call_keys.fingerprint(row["key_hash"])
+        assert f"Key fingerprint: {fp}" in r.stdout and w.settings()["meeting"]["fingerprint"] == fp
+        assert Relay(w.b, key).push([]).status_code == 200  # the key the script made is the one it registered
+        running = {
+            **env,
+            "FAKE_DOCKER_RUNNING": f"switchboard-call-{call.name}",
+        }  # the first call is still up
+        again = m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=running)
+        assert again.returncode == 1 and "already has a call" in again.stderr, again.stderr
+        assert [p.name for p in m.call_dirs()] == [call.name]  # and the refused try left no folder behind
+    finally:
+        await claude.close()
+        w.stop()
 
 
 def test_the_script_is_executable_and_has_its_windows_twin() -> None:
