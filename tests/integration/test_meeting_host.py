@@ -400,6 +400,29 @@ def test_the_gpu_is_chosen_only_when_there_is_one_for_docker_to_use(
         m.close()
 
 
+def test_wsl_s_nvidia_smi_is_found_off_the_path(stub: Stub) -> None:
+    """On Windows with WSL2 and Docker Desktop, the driver's ``nvidia-smi`` lives in ``/usr/lib/wsl/lib``, which
+    is often not on the PATH: the script found no GPU on such a machine (a GTX 1660 with Docker's nvidia
+    runtime) and chose the CPU. With nothing on the PATH it now asks that file too, and only when it answers
+    with a GPU. Fails if the WSL path is not asked, or if a file there that sees no GPU sends it to the GPU.
+    (The sh script only: the PowerShell one runs on Windows itself, where nvidia-smi.exe is on the PATH.)"""
+    m = Machine(stub)
+    try:
+        wsl = m.root / "wsl-lib"
+        wsl.mkdir()
+        smi = wsl / "nvidia-smi"
+        smi.write_text("#!/bin/sh\necho 'GPU 0: Stand-in GPU (UUID: GPU-0000)'\n")
+        smi.chmod(0o755)
+        env = m.env(FAKE_DOCKER_RUNTIMES="io.containerd.runc.v2 nvidia runc ", SWITCHBOARD_WSL_NVIDIA_SMI=str(smi))
+        CURRENT_IMPL[0] = "sh"
+        got = plan(m, env=env)
+        assert got["device"] == "gpu" and got["model"] == "large-v3-turbo", got
+        smi.write_text("#!/bin/sh\necho 'No devices were found'\nexit 6\n")
+        assert plan(m, env=env)["device"] == "cpu"
+    finally:
+        m.close()
+
+
 @pytest.mark.usefixtures("impl")
 def test_a_flag_forces_either_and_says_what_it_overrode(stub: Stub) -> None:
     m = Machine(stub, gpu=True)

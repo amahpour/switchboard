@@ -78,12 +78,21 @@ field() { # a string field of a JSON object in file $2
 # ------------------------------------------------------------------------------------------ the device
 # GPU if there is one for Docker to use, CPU if not (#623). Cheap and nothing is pulled: three local
 # questions, each of which must hold. Sets `device`, `why` and (for a person who forced it) `forced`.
+# WSL2 puts the Windows driver's tools in /usr/lib/wsl/lib, which is often not on the PATH: a laptop with an NVIDIA
+# GPU and Docker Desktop was sent to the CPU because `command -v nvidia-smi` found nothing there
+WSL_NVIDIA_SMI=${SWITCHBOARD_WSL_NVIDIA_SMI:-/usr/lib/wsl/lib/nvidia-smi}
 nvidia_answers() {
-  command -v nvidia-smi >/dev/null 2>&1 || return 1
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 15 nvidia-smi -L 2>/dev/null
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    smi=nvidia-smi
+  elif [ -x "$WSL_NVIDIA_SMI" ]; then
+    smi=$WSL_NVIDIA_SMI
   else
-    nvidia-smi -L 2>/dev/null
+    return 1
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 15 "$smi" -L 2>/dev/null
+  else
+    "$smi" -L 2>/dev/null
   fi | grep -q '^GPU '
 }
 docker_has_nvidia() { # the Container Toolkit registers an `nvidia` runtime with Docker
