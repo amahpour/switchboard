@@ -183,7 +183,7 @@
     </div>
     <div class="band band-amber hidden" id="banner-paused" role="status"></div>
     <div class="band band-meeting hidden" id="banner-meeting" role="status">
-      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6.2v3.6M6 4.2v7.6M10 4.2v7.6M13 6.2v3.6"/></svg>
+      <span class="call-mark" id="banner-meeting-mark" aria-hidden="true"></span>
       <span id="banner-meeting-text"></span>
       <div class="meeting-actions">
         <button type="button" class="btn meeting-btn meeting-voice" id="meeting-voice" role="switch"
@@ -362,6 +362,8 @@
         <div class="group-label" id="agents-title">Agents (0)</div>
         <ul class="member-list" id="buddy-list" aria-labelledby="agents-title"></ul>
         <div class="room-people hidden" id="room-people" aria-label="The room's people"></div>
+        <div class="group-label hidden" id="calls-title">Calls (1)</div>
+        <ul class="member-list hidden" id="call-list" aria-labelledby="calls-title"></ul>
       </section>
 
       <section class="pane-view offscreen" id="inspector" aria-label="Inspector">

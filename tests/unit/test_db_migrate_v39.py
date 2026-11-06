@@ -49,7 +49,7 @@ def test_meeting_lines_and_the_meetings_table_and_the_backup_is_schema_38(
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 42
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 43
     assert db.row_counts(con, db.tables_of(38)) == counts
     assert db.row_counts(con, db.TABLES)["meetings"] == 0
     assert list(con.execute("PRAGMA foreign_key_check")) == []

@@ -252,6 +252,9 @@ class Meeting:
     host: str | None = None
     model: str | None = None
     lines_pushed: int = 0
+    # when the call went from joining to live (None while it is joining, and for a call that was live
+    # before schema 43 recorded it): "Live since" in the call's details (§54)
+    live_at: float | None = None
 
     @property
     def hosted(self) -> bool:
@@ -275,6 +278,7 @@ class Meeting:
             host=r["host"],
             model=r["model"],
             lines_pushed=r["lines_pushed"],
+            live_at=r["live_at"],
         )
 
 
@@ -282,6 +286,11 @@ MAX_PINS = 5  # a room's pinned decisions (#292, DESIGN.md §48)
 # the avatars an admin may upload (#498, DESIGN.md §29.11): for these harnesses, in these two schemes, as
 # these types, at most this big; ``db.SCHEMA`` says the same in its CHECKs
 ICON_HARNESSES = ("claude", "codex", "cursor", "devin", "opencode")
+# and for the platforms a call can be on (#623, §29.9): Zoom, Meet and Teams don't let anyone ship their
+# logos either, so the page draws its own and an admin may upload the real ones, in the same table
+ICON_PLATFORMS = ("zoom", "meet", "teams")
+# every name ``agent_icons.harness`` may hold, in the order Settings lists them
+ICON_SLOTS = ICON_HARNESSES + ICON_PLATFORMS
 ICON_SCHEMES = ("light", "dark")
 ICON_TYPES = ("image/png", "image/webp")
 ICON_MAX_BYTES = 256 * 1024

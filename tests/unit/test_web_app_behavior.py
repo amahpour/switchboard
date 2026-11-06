@@ -9,6 +9,7 @@ the first-run form. Skipped where node is missing, except under SWITCHBOARD_REQU
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,47 @@ def test_the_page_names_an_agents_owner_by_the_number_of_people() -> None:
         "bob": ["Owner: bob · device dev-1"],
         "none": [],
     }
+
+
+def test_the_call_is_a_member_with_details_and_an_end_button_only_when_the_broker_allows_it() -> None:
+    """#623: a room frame with an open call adds a Calls row after the agents, counted in Members, with the
+    platform's own drawing (in the bar too); the row opens the details in the Inspector's pane, and End this
+    call is there only when the broker's answer for this viewer says they may end it, sending the command a
+    person types. A frame that takes the call away closes the details and the group; a hosted call with no
+    platform is "Call" with the generic drawing; a platform the page has no drawing for shows nothing. Fails
+    if the group is drawn for no call, End this call is shown whatever the answer, or the details outlive
+    the call."""
+    out = run("call_member")
+    assert out["before"] == {
+        "title": "",
+        "hidden": True,
+        "count": "5",
+    }  # no call: no group, four agents and you
+    row = out["row"]
+    assert row["title"] == "Calls (1)" and row["count"] == "6"  # the call is counted
+    assert row["name"] == "Zoom callLive \u00b7 alice-laptop" and row["icon"] == 1 and row["mark"] == 1
+    assert row["bar"].startswith("Transcribing a call (Zoom) \u00b7 on\u00a0alice-laptop")
+    details = out["details"]
+    assert (
+        details["inspecting"] is True and details["pos"] == "Call 1 of 1" and details["name"] == "Zoom call"
+    )
+    assert re.search(r"Live since \d\d:\d\d \u00b7 transcribing", details["text"])
+    for want in (
+        "hosted bot",
+        "Hosted onalice-laptop",
+        "Started byalice",
+        "Key fingerprint7f3a\u00b791c2",
+        "Modellarge-v3-turbo",
+        "Lines sent3",
+        "VoiceOff",
+    ):
+        assert want in details["text"], want
+    assert details["end"] is False  # the broker said this viewer may not
+    assert out["mayEnd"]["end"] is True and "Only alice and an admin see this" in out["mayEnd"]["note"][0]
+    assert out["commands"] == ["/meeting leave"]
+    assert out["gone"] == {"inspecting": False, "hidden": True, "rows": 0, "count": "5", "bar": True}
+    assert out["unknown"] == {"name": "CallJoining\u2026 \u00b7 alice-laptop", "generic": 1}
+    assert out["webex"] == {"rows": 0, "hidden": True}
 
 
 def test_every_rooms_frame_subscribes_the_tabs_again() -> None:

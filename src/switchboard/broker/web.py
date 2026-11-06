@@ -33,7 +33,11 @@ person is a human to every agent.
 The agents' avatars (§29.11): ``GET /api/agent-icons`` (what is set and the limits),
 ``/api/agent-icons.css`` (the page's stylesheet for them) and ``/api/agent-icons/{harness}/{scheme}``
 (one image) answer any signed-in person; ``PUT`` the same path (the body is the file) and
-``DELETE /api/agent-icons/{harness}`` are the owner's.
+``DELETE /api/agent-icons/{harness}`` are the owner's. The icon of each platform a call can be on
+(``zoom``, ``meet``, ``teams``, #623) is one more name in the same routes.
+
+A room's call (§54): ``GET /api/rooms/{slug}/call`` is its details for the one person looking, with
+whether they may end it. Read-only, and never a link, a key or its hash.
 """
 
 from __future__ import annotations
@@ -1599,7 +1603,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         return w, no
 
     def icon_unknown(harness: str, scheme: str | None = None) -> Response | None:
-        if harness not in agent_icons.HARNESSES or (scheme is not None and scheme not in agent_icons.SCHEMES):
+        if harness not in agent_icons.SLOTS or (scheme is not None and scheme not in agent_icons.SCHEMES):
             return _err(404, "not_found", "no such avatar")
         return None
 
@@ -1613,6 +1617,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             {
                 "can_change": w.is_admin,
                 "harnesses": list(agent_icons.HARNESSES),
+                "platforms": list(agent_icons.PLATFORMS),  # the calls' icons, uploaded the same way (#623)
                 "limits": {
                     "bytes": agent_icons.MAX_BYTES,
                     "side": agent_icons.MAX_SIDE,
@@ -1923,6 +1928,21 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         try:
             state.service.room_for(slug, viewer(request))
             return _ok(state.service.member_detail(slug, name))
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # The call's details (§54): the room's open call as the one person looking may see it, with whether they
+    # may end it. A GET for the same reason as the Inspector's (and one more): the settings frame goes to
+    # everyone in the room, and what this viewer may do can't ride in it. It writes nothing and publishes
+    # nothing.
+    @app.get("/api/rooms/{slug}/call")
+    async def call_detail(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            room = state.service.room_for(slug, viewer(request))
+            return _ok({"room": room.name, "call": state.service.call_detail(room, w.person_id, w.is_admin)})
         except ServiceError as e:
             return _svc_err(e)
 

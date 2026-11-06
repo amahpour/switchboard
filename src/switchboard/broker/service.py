@@ -41,6 +41,7 @@ from switchboard.models import (
     PULL_PATHS,
     SCREEN_NAME_RE,
     InvalidName,
+    Meeting,
     Member,
     Message,
     Pin,
@@ -1172,17 +1173,30 @@ class RoomService:
         """The humans (§32): the owner, then everyone the owner added on a hosted broker."""
         return [self.cfg.human_name] + [p.name for p in self.store.people()]
 
-    def meeting_state(self, room: Room) -> dict[str, str | bool] | None:
-        """What the page shows while a call is open: ``joining`` or ``live``, the platform, and
-        whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link.
-        A call hosted on a person's machine (§54) also says so, whose machine it is on and the
-        short fingerprint of its key, never the key or its hash."""
+    def open_call(self, room: Room) -> Meeting | None:
+        """The room's call as the page may show it: joining or live, on a platform its source can be on, and
+        for a hosted call one that says whose machine it is and has a key. Anything else is None."""
         row = self.store.open_meeting(room.id)
         if row is None or row.state not in ("joining", "live"):
             return None
         if row.hosted:
             if row.platform not in PLATFORMS or not row.host or not row.key_hash:
                 return None  # a hosted call that does not say whose it is has nothing to show
+        elif row.platform not in ("zoom", "meet", "teams"):
+            return None  # the broker's own bot never joins an unknown platform
+        return row
+
+    def meeting_state(self, room: Room) -> dict[str, str | bool] | None:
+        """What the page shows while a call is open: ``joining`` or ``live``, the platform, and
+        whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link.
+        A call hosted on a person's machine (§54) also says so, whose machine it is on and the
+        short fingerprint of its key, never the key or its hash. This goes to everyone in the room
+        (the settings frame), so nothing in it depends on who is looking: that is ``call_detail``."""
+        row = self.open_call(room)
+        if row is None:
+            return None
+        if row.hosted:
+            assert row.host is not None and row.key_hash is not None  # open_call checked
             voice = self.hosted_calls is not None and self.hosted_calls.voice(room.id)
             return {
                 "state": row.state,
@@ -1192,10 +1206,42 @@ class RoomService:
                 "host": row.host,
                 "fingerprint": fingerprint(row.key_hash),
             }
-        if row.platform not in ("zoom", "meet", "teams"):
-            return None  # the broker's own bot never joins an unknown platform
         voice = self.meetings is not None and self.meetings.voice(room.id)
         return {"state": row.state, "platform": row.platform, "voice": voice}
+
+    def call_detail(self, room: Room, person_id: int | None, admin: bool) -> dict[str, Any] | None:
+        """The room's open call, for the one person looking (§54, the call's details in the page): what
+        ``meeting_state`` says to everyone, plus who started it, since when, the model, the lines it has
+        sent and ``can_end``, whether *this* viewer may end it. That last is why this is a GET and not a
+        frame: the settings frame goes to everyone in the room, and a per-viewer answer can't ride in it.
+        ``can_end`` is the rule ``/meeting leave`` holds, so the page only hides what would be refused: for a
+        hosted call the person whose it is or an admin (``HostedCalls.may_end``), for the broker's own bot
+        whoever may use Leave call, which is anyone who can run a command in the room. ``person_id`` is
+        the viewer's, and nothing of it, or of the call owner's id, is in the answer. The owner's name is
+        (it is in the room's own notice, "alice is hosting a Zoom call"), but in a private room only if
+        they are one of the room's people, so no name is carried into a room it is not in (as §29.10 does
+        for an agent's owner). Never a meeting link, a key or its hash: only the key's fingerprint."""
+        row = self.open_call(room)
+        state = self.meeting_state(room)
+        if row is None or state is None:
+            return None
+        started_by: str | None = row.started_by
+        if room.private and row.started_by not in self.room_people_names(room):
+            started_by = None
+        out: dict[str, Any] = dict(state)
+        out["source"] = "hosted" if row.hosted else "server"
+        out["started_by"] = started_by
+        out["started_at"] = row.started_at
+        out["live_at"] = row.live_at if row.state == "live" else None
+        if row.hosted:
+            out["model"] = row.model or None
+            out["lines"] = row.lines_pushed
+            out["can_end"] = self.hosted_calls is not None and self.hosted_calls.may_end(
+                row, person_id, admin
+            )
+        else:
+            out["can_end"] = True  # /meeting leave has no owner check for the broker's own bot (§52)
+        return out
 
     def publish_settings(self, room_id: int) -> None:
         room = self.store.room_by_id(room_id)

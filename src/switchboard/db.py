@@ -20,7 +20,9 @@ so a person the owner chooses is an admin too (§51); 39 (#573) adds a meeting l
 ``meetings`` table, a live call transcribed into a room (§52); 40 (#544) adds the files a room
 holds, the one-time grants that upload or download them, and a broker setting for how long
 files are kept (§53); 41 (#593) lets a call be a file's uploader; 42 (#623) lets a call be hosted on a
-person's machine, with a key per call, and stores each line it pushes with that call (§54).
+person's machine, with a key per call, and stores each line it pushes with that call (§54); 43 (#623)
+records when a call went live and lets an admin upload the icon of each platform a call can be on, in
+``agent_icons`` (§29.11).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -41,7 +43,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -238,7 +240,8 @@ CREATE TABLE oauth_clients(
   redirect_uris TEXT NOT NULL CHECK(length(redirect_uris) <= 2000),
   created_at REAL NOT NULL);
 CREATE TABLE agent_icons(
-  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','opencode')),
+  harness TEXT NOT NULL CHECK(harness IN
+    ('claude','codex','cursor','devin','opencode','zoom','meet','teams')),
   scheme TEXT NOT NULL CHECK(scheme IN ('light','dark')),
   mime TEXT NOT NULL CHECK(mime IN ('image/png','image/webp')),
   data BLOB NOT NULL CHECK(length(data) BETWEEN 1 AND 262144),
@@ -270,7 +273,8 @@ CREATE TABLE meetings(
   owner_person_id INTEGER,
   host TEXT CHECK(host IS NULL OR length(host) BETWEEN 1 AND 24),
   model TEXT CHECK(model IS NULL OR length(model) <= 80),
-  lines_pushed INTEGER NOT NULL DEFAULT 0 CHECK(lines_pushed >= 0));
+  lines_pushed INTEGER NOT NULL DEFAULT 0 CHECK(lines_pushed >= 0),
+  live_at REAL);
 CREATE UNIQUE INDEX meetings_one_open ON meetings(room_id) WHERE state!='ended';
 CREATE UNIQUE INDEX meetings_key ON meetings(key_hash) WHERE key_hash IS NOT NULL;
 
@@ -902,6 +906,23 @@ V41_TO_V42 = (
 )
 
 
+# v42 -> v43 (#623, DESIGN.md §29.11, §54): a call's details say when it went live, and an admin can
+# upload the icon of each platform a call can be on. ``meetings.live_at`` is NULL for a call that was live
+# before this step (the page then has nothing to say about when). The icons go in ``agent_icons`` with the
+# harnesses' (a platform is one more name its CHECK admits, 'zoom', 'meet' and 'teams'): the same
+# schema-text edit as v34 -> v35, which _migrate brackets with schema editing, verifies (the new CHECK must
+# be in the table's text, or the step fails closed and rolls back), and follows with the integrity checks.
+# Rows are untouched. The needle ends at the closing parenthesis, so it can only match the CHECK on harness.
+V42_TO_V43 = (
+    "ALTER TABLE meetings ADD COLUMN live_at REAL",
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''devin'',''opencode'')',"
+    " '''devin'',''opencode'',''zoom'',''meet'',''teams'')')"
+    " WHERE type='table' AND name='agent_icons'",
+    "UPDATE meta SET value='43' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -962,6 +983,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         39: MigrationStep(40, V39_TO_V40, ("broker_settings", "files", "file_grants")),
         40: MigrationStep(41, V40_TO_V41, (), (("files", "'human','agent','meeting')"),)),
         41: MigrationStep(42, V41_TO_V42, (), (("meetings", "'zoom','meet','teams','unknown')"),)),
+        42: MigrationStep(43, V42_TO_V43, (), (("agent_icons", "'opencode','zoom','meet','teams')"),)),
     }
     out = []
     v = frm

@@ -224,12 +224,13 @@ def settings_icons(page: Page) -> Locator:
 
 
 def open_icons(page: Page) -> None:
-    """Settings → Appearance, with the five harnesses' rows loaded."""
+    """Settings → Appearance, with the five harnesses' rows and the three platforms' loaded."""
     if (page.viewport_size or {}).get("width", 1440) <= 760:
         page.click("#rooms-toggle")  # a phone's sidebar is a drawer, and Settings is at its foot
     open_settings(page, "appearance")
     expect(settings_icons(page)).to_be_visible()
-    expect(page.locator(".agent-icon-row")).to_have_count(5)
+    # the five harnesses, then the three platforms a call can be on (#623)
+    expect(page.locator(".agent-icon-row")).to_have_count(8)
 
 
 def choose(page: Page, harness: str, scheme: str, data: bytes, mime: str, name: str = "avatar.png") -> None:
@@ -703,7 +704,8 @@ def test_a_person_who_is_not_the_admin_sees_the_icons_but_not_the_section(
     admin = open_as(hosted_ui, hosted, hosted.admin)
     open_settings(admin, "appearance")
     expect(admin.locator("#agent-icons-title")).to_have_text(HEADING)
-    expect(admin.locator(".agent-icon-row")).to_have_count(5)
+    # five harnesses and three call platforms (#623)
+    expect(admin.locator(".agent-icon-row")).to_have_count(8)
     bob = open_as(hosted_ui, hosted, hosted.bob)
     shows(bob.locator(".harness-head .avatar.h-codex"), "codex", "light", where="bob's welcome page")
     open_settings(bob, "appearance")

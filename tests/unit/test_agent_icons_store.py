@@ -125,3 +125,36 @@ def test_icons_survive_closing_and_opening_the_database(tmp_path: Path, clock: F
     store.con.close()
     again = Store(db.open_db(path), clock)
     assert again.agent_icon("cursor", "dark")[1] == b"kept"  # type: ignore[index]
+
+
+def test_a_platform_s_icon_is_stored_listed_after_the_harnesses_and_reset_like_theirs(store: Store) -> None:
+    """The icon of each platform a call can be on (#623) goes in the same table as the harnesses' avatars:
+    Zoom, Meet and Teams are stored byte for byte, listed after the five harnesses in that order whatever
+    order they were stored in, and a reset takes both schemes of one platform and only them. Fails if the
+    store's name list (or the schema's CHECK behind it) lacks a platform, so the write is a ValueError."""
+    for name, scheme in (("teams", "dark"), ("zoom", "light"), ("opencode", "light"), ("meet", "dark")):
+        put(store, name, scheme, f"{name}-{scheme}".encode())
+    put(store, "zoom", "dark", b"zoom-dark")
+    assert [(r.harness, r.scheme) for r in store.agent_icons()] == [
+        ("opencode", "light"),
+        ("zoom", "light"),
+        ("zoom", "dark"),
+        ("meet", "dark"),
+        ("teams", "dark"),
+    ]
+    assert store.agent_icon("meet", "dark")[1] == b"meet-dark"  # type: ignore[index]
+    assert store.agent_icon_reset("zoom") == 2
+    assert [r.harness for r in store.agent_icons()] == ["opencode", "meet", "teams"]
+    assert store.agent_icon_reset("zoom") == 0
+
+
+def test_a_platform_the_schema_does_not_know_is_no_row(store: Store) -> None:
+    """Only the three platforms a call can be on have an icon slot: a fourth name, a platform a hosted call
+    may report but the page has no drawing for (``unknown``) and a harness the participants table allows
+    but nobody uploads for (``test``) are a ValueError, and nothing is stored."""
+    for name in ("unknown", "webex", "test", "Zoom"):
+        with pytest.raises(ValueError):
+            put(store, name, "light", b"x")
+    assert store.agent_icons() == []
+    with pytest.raises(ValueError):
+        store.agent_icon_reset("webex")

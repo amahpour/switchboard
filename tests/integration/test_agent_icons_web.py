@@ -415,3 +415,119 @@ def test_a_person_who_is_not_the_admin_sees_the_icons_and_cannot_change_them(hos
     finally:
         bob.close()
         admin.close()
+
+
+# ------------------------------------------------------------------ the icon of each platform a call is on
+PLATFORMS = ["zoom", "meet", "teams"]
+
+
+def test_the_list_names_the_platforms_beside_the_harnesses(broker: InProcBroker, web: httpx.Client) -> None:
+    """Settings builds its cards from what the broker lists: the five harnesses, as before, and the three
+    platforms a call can be on (#623), so the page needs no list of its own. Fails if a platform is missing
+    or is among the harnesses (a harness is something an agent is)."""
+    listed = listing(web)
+    assert listed["harnesses"] == ["claude", "codex", "cursor", "devin", "opencode"]
+    assert listed["platforms"] == PLATFORMS
+
+
+def test_an_admin_uploads_and_resets_the_icon_of_each_platform_a_call_can_be_on(
+    broker: InProcBroker, web: httpx.Client
+) -> None:
+    """Zoom, Meet and Teams take a light and a dark upload like a harness (#623): each is served back as
+    what it is, listed after the harnesses, written into the stylesheet for the avatar a call shows
+    (`.avatar.h-zoom`, which hides the drawn glyph), and a reset removes both of one platform and nothing
+    else, with an event that names the platform. Fails with a 404 on the PUT if a platform isn't in the
+    routes' list, or on the schema's CHECK if the migration is missing."""
+    put(web, broker, "codex", "light", PNG, "image/png")
+    got = {}
+    for platform in PLATFORMS:
+        light = put(web, broker, platform, "light", PNG, "image/png")
+        assert light.status_code == 200, light.text
+        assert light.json()["harness"] == platform  # the field is the table's: a harness or a platform
+        got[platform] = put(web, broker, platform, "dark", PNG_DARK, "image/png").json()["v"]
+        assert web.get(f"/api/agent-icons/{platform}/dark?v={got[platform]}").content == PNG_DARK
+    assert stored(web) == [("codex", "light")] + [(p, s) for p in PLATFORMS for s in ("light", "dark")]
+    css = web.get("/api/agent-icons.css").text
+    for platform in PLATFORMS:
+        assert f".avatar.h-{platform} > .ic, .avatar.h-{platform} > .av-word {{ display: none; }}" in css
+        assert f"/api/agent-icons/{platform}/dark?v={got[platform]}" in css
+        assert f".agent-icon-slot.slot-{platform}-light" in css
+    assert web.delete("/api/agent-icons/meet", headers=broker.write_headers()).json() == {"removed": 2}
+    assert stored(web) == [
+        ("codex", "light"),
+        ("zoom", "light"),
+        ("zoom", "dark"),
+        ("teams", "light"),
+        ("teams", "dark"),
+    ]
+    assert "h-meet" not in web.get("/api/agent-icons.css").text
+    assert web.get("/api/agent-icons/meet/light").status_code == 404
+    events = [e for e in icon_events(broker) if e.get("harness") in PLATFORMS]
+    assert events[-1] == {"what": "reset", "harness": "meet", "by": "alice", "removed": 2}
+    assert PNG.hex()[:40] not in json.dumps(events).lower()
+
+
+def test_a_file_that_is_not_an_icon_is_refused_for_a_platform_as_for_a_harness(
+    broker: InProcBroker, web: httpx.Client
+) -> None:
+    """The same check by bytes (#623): an SVG, a mislabelled file and one too wide are refused with the
+    same words and nothing is stored, so a platform can't be a way round the avatar rules. Fails if a
+    platform's route is more lenient."""
+    for data, ctype, code in (
+        (pictures.SVG, "image/svg+xml", "svg"),
+        (PNG, "image/webp", "mismatch"),
+        (pictures.png_with_size(513, 100), "image/png", "dimensions"),
+        (PNG + b"<script>", "image/png", "bad_png"),
+    ):
+        r = put(web, broker, "zoom", "light", data, ctype)
+        assert r.status_code in (400, 415) and r.json()["error"] == code, (code, r.text)
+    assert stored(web) == [] and icon_events(broker) == []
+
+
+def test_a_call_s_platform_is_the_only_new_name_an_upload_may_be_for(
+    broker: InProcBroker, web: httpx.Client
+) -> None:
+    """``unknown`` (a hosted call that doesn't say its platform) has no slot, since the page draws only its
+    own generic glyph for it, and neither does any other name. Fails if the route takes a name the schema
+    would refuse (a 500) or one the page never asks for."""
+    for name in ("unknown", "webex", "ZOOM", "zoom-us"):
+        assert put(web, broker, name, "light", PNG, "image/png").status_code == 404
+        assert web.get(f"/api/agent-icons/{name}/light").status_code == 404
+    assert web.delete("/api/agent-icons/webex", headers=broker.write_headers()).status_code == 404
+    assert stored(web) == []
+
+
+def test_a_person_who_is_not_the_admin_sees_a_platform_s_icon_and_cannot_change_it(
+    hosted: InProcBroker,
+) -> None:
+    """On a hosted broker everyone is served the admin's Zoom icon and only the admin changes it (#623): bob's
+    upload and reset are refused with 403 and nothing is stored or logged by him. Fails if a person can
+    replace what everyone in a call's room sees."""
+    admin = set_up(hosted)
+    bob = join_as_bob(hosted, admin)
+
+    def write(who: Browser, method: str, path: str, body: bytes | None = None) -> Any:
+        h = who.headers(True)
+        h["Content-Type"] = "image/png"
+        r = who.c.request(method, path, content=body, headers=h)
+        who.take(r)
+        return r
+
+    try:
+        assert write(admin, "PUT", "/api/agent-icons/zoom/light", PNG).status_code == 200
+        assert bob.get("/api/agent-icons/zoom/light").content == PNG
+        assert "h-zoom" in bob.get("/api/agent-icons.css").text
+        assert bob.get("/api/agent-icons").json()["platforms"] == PLATFORMS
+        for method, path, body in (
+            ("PUT", "/api/agent-icons/zoom/light", PNG_DARK),
+            ("PUT", "/api/agent-icons/teams/dark", PNG),
+            ("DELETE", "/api/agent-icons/zoom", None),
+        ):
+            r = write(bob, method, path, body)
+            assert r.status_code == 403 and r.json()["error"] == "forbidden", (method, path, r.text)
+        assert admin.get("/api/agent-icons/zoom/light").content == PNG
+        evs = hosted.on_loop(lambda: hosted.state.store.recent_events(kinds=["icons"], limit=50))
+        assert [(e.data["by"], e.data["harness"]) for e in evs] == [("alice", "zoom")]
+    finally:
+        bob.close()
+        admin.close()

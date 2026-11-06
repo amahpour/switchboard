@@ -15,12 +15,12 @@ A real Zoom call, a real Claude Code session and the room, in about 90 seconds. 
 1. An admin runs the bot once, next to the broker, and tells the broker where it is. The bot is [joinly](https://github.com/joinly-ai/joinly), a separate open-source project. See [Set it up](#set-it-up).
 2. You type `/meeting` and a call link in a room, in the web UI.
 3. switchboard checks the link. It has to be an `https` link on Zoom, Meet or Teams. Then it asks joinly to join the call as a guest named `switchboard (transcribing)`. It also hands joinly the spoken names of the agents in the room, as hints. Joining usually takes a few seconds. The room shows **Joining a call…**.
-4. Once the bot is in, the room shows a bar: **Transcribing a call**, with a **Voice** switch, a **Snapshot** button and a **Leave call** button.
+4. Once the bot is in, the room shows a bar: **Transcribing a call**, with a **Voice** switch, a **Snapshot** button and a **Leave call** button. The call also shows in Members, as [a row of its own](#the-call-in-members).
 5. joinly turns speech into text. switchboard fetches that text every few seconds and joins the pieces into one line each time the speaker pauses.
 6. Each line is posted in the room, tagged **call**, with the speaker's name when joinly has one.
 7. Talk that names nobody stays in the room and waits. It does not wake any agent.
 8. When someone says an agent's name, only that agent wakes. It gets the call lines from just before, so it knows what was being talked about.
-9. **Leave call** or `/meeting leave` ends it. So does closing the room. switchboard tells the bot to leave, and the bar goes away.
+9. **Leave call**, **End this call** in [the call's details](#the-call-in-members), or `/meeting leave` ends it. So does closing the room. switchboard tells the bot to leave, and the bar and the row go away.
 
 Speaking and seeing use the same bot and the same connection. They only start when you do:
 
@@ -125,9 +125,29 @@ You start and end a call from the room's message box.
 
 7. **Wake an agent by saying its name.** Say it as an address: "Claude, can you check the image sizes?", "hey Codex, run the tests", or "Claude one, take this". The agent wakes and answers in the room. Its answer is text in the room, unless you have [let agents speak](#let-agents-speak).
 8. **Check on it** any time with `/meeting`. It says whether a call is being transcribed.
-9. **End it** with **Leave call** on the bar, or `/meeting leave`. The room posts a notice, and the bot leaves the call.
+9. **End it** with **Leave call** on the bar, **End this call** in [the call's details](#the-call-in-members), or `/meeting leave`. The room posts a notice, and the bot leaves the call.
 
 The call also ends by itself when the room is closed, when the connection to joinly drops, when joinly can't join, and when the broker stops. The room says which in a notice.
+
+## The call in Members
+
+While a call is on, Members lists it, after the people and the agents, under **Calls**. It is a member of the room, like an agent: a row you can open.
+
+1. **Open Members.** On a phone, tap the pill with the people icon in the room's header.
+2. **Find the call** under **Calls (1)**. The row has the platform's icon, its name (**Zoom call**, **Meet call** or **Teams call**), a dot, and where it runs: `Live · the server` for the bot you run next to switchboard. The dot is solid green while the bot is transcribing. While it joins, the dot is dashed and the row says `Joining… · the server`. The call counts in the number beside **Members**.
+
+    ![Members with the call under Calls: the Meet call's icon, a green dot and Live · the server](../media/ui/guide-meeting-members-light.png)
+
+3. **Open it.** Click the row, or Tab to it and press Enter. Its details open in the same pane an agent's details do. They show when the call went live (`Live since 14:02 · transcribing`), what runs it, who started it and whether voice is on.
+
+    ![The call's details: Meet call, live since 14:02, hosted on the server, started by alice, voice on, and End this call](../media/ui/guide-meeting-details-light.png)
+
+4. **End it from there**, if you may. **End this call** is at the bottom, and does what **Leave call** on the bar does. Anyone who can use **Leave call** sees it. If you may not end the call, the button is not shown. switchboard checks again on its side either way, so a button shown by mistake is refused in words.
+5. **Go back** with **Back**, or Esc on a desktop. Focus returns to the call's row. If the call ends while its details are open, they close by themselves.
+
+**The icons.** Zoom, Google and Microsoft don't allow their logos to be used without a licence, so switchboard doesn't ship them. Each call shows a small drawing of switchboard's own instead: a webcam for Zoom, a screen with a person in it for Meet, a group of three for Teams, and sound-wave bars for a call that doesn't say its platform. The platform's name is always beside it.
+
+**An admin can put the real ones in.** Open **Settings**, then **Appearance**. Under the agents' avatars, **Call icons** has a card each for Zoom, Meet and Teams. **Upload** takes a PNG or a WebP, up to 256 KB and 512 × 512 pixels, one for the light theme and one for the dark (with only one, it is used for both). The new icon shows in Members, the call's details and the bar within a moment, for everyone on the server. **Reset** brings switchboard's drawing back. An SVG is refused, because it can carry script. Only an admin can do this. It works the same as [the agents' avatars](../USAGE.md#web-ui-notes).
 
 ## Let agents speak
 
@@ -278,7 +298,7 @@ The link has the call's passcode in it, so the test refuses a file that others c
 
 - `/meeting` says whether this room is transcribing a call.
 - `/meeting <link>` joins a call.
-- `/meeting leave` leaves it. **Leave call** on the bar does the same.
+- `/meeting leave` leaves it. **Leave call** on the bar, and **End this call** in [the call's details](#the-call-in-members), do the same.
 - `/meeting voice on` and `/meeting voice off` turn speaking on and off for this call. The **Voice** switch on the bar does the same.
 - `/meeting snapshot` posts a picture of the shared screen. **Snapshot** on the bar does the same.
 
