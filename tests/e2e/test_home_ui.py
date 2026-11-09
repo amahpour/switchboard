@@ -1,6 +1,7 @@
 """The home page in a real browser (#626, DESIGN.md §55): it is the first screen, a question and a review
 board call are answered from their cards with the room showing the same result, it updates live, and it works
-on a phone and by keyboard alone. A hosted broker of its own with its admin signed in; the agents' messages are
+on a phone and by keyboard alone. A hosted broker of its own with its admin signed in; the agents' messages
+are
 posted by stand-ins that have left (the page follows the broker's frames, not the agents). Marker ``e2e``."""
 
 from __future__ import annotations
@@ -200,7 +201,8 @@ def test_home_is_the_first_screen_and_a_question_is_answered_from_its_card(
     page.keyboard.press("Control+Enter")
     expect(page.locator("#home .home-card", has_text=w.build)).to_have_count(0)
     page.wait_for_function(
-        "n => { const b = document.getElementById('home-badge'); return b.classList.contains('hidden') || Number(b.textContent) < n }",
+        "n => { const b = document.getElementById('home-badge');"
+        " return b.classList.contains('hidden') || Number(b.textContent) < n }",
         arg=before,
     )
     sent = [m for m in w.messages(w.build) if m["text"] == "Remove it."]
@@ -230,7 +232,8 @@ def test_a_review_board_call_is_made_from_its_card_and_the_room_shows_it(
     ui: UI, hosted: tuple[InProcBroker, str]
 ) -> None:
     """A question on a review board that needs a person is a card: Decide lists it with its options, an option
-    sends the board's own answer move, the card goes, and the room's board shows the question answered. Fails if
+    sends the board's own answer move, the card goes, and the room's board shows the question answered.
+    Fails if
     the move is not the board's, or the room does not show it."""
     w = World(hosted, "board")
     w.plant_board(w.build)

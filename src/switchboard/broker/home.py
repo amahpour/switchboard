@@ -20,6 +20,7 @@ from switchboard import reviews
 from switchboard.envelope import clean
 from switchboard.models import Message, Room
 
+BOARD_LINE = "Review board"  # how the board starts the lines it posts for an agent
 WAIT_DAYS = 7  # a question older than this is not "waiting": it is history
 FIRST_LOOK_S = 24 * 3600  # a person who never looked sees the last day of done work
 DAY_S = 24 * 3600
@@ -36,8 +37,10 @@ def seen_key(person_key: int) -> str:
 
 
 def _first_line(text: str, limit: int = TEXT_MAX) -> str:
+    """The first line with words in it, as plain text: a heading's ``#`` and a code span's backticks are
+    Markdown the card does not draw, so they are not shown."""
     for line in clean(text).splitlines():
-        line = line.strip()
+        line = line.strip().lstrip("#").replace("`", "").strip()
         if line:
             return line if len(line) <= limit else line[: limit - 1] + "…"
     return ""
@@ -187,8 +190,8 @@ def _done_turns(state: Any, room: Room, me: str, since: float, now: float) -> li
     message addressed to ``me`` waits under Waiting on you instead."""
     out: dict[str, Message] = {}
     for m in state.store.chat_after(room.id, 0, max(since, now - WAIT_DAYS * DAY_S), CANDIDATES):
-        if m.sender_kind != "agent":
-            continue
+        if m.sender_kind != "agent" or m.text.startswith(BOARD_LINE):
+            continue  # a move on the review board is the board's, and shows there
         if "humans" in m.mentions or me.lower() in {x.lower() for x in m.mentions if isinstance(x, str)}:
             continue
         out[m.sender_name] = m

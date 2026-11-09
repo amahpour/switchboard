@@ -150,7 +150,7 @@ def test_done_lists_what_agents_said_since_you_looked_and_seen_moves_only_forwar
     refused. Fails if a message that waits is also done, a line repeats, or the time can go back."""
     b, alice, _ = team
     agent_says(b, "#build", "first thing", [])
-    agent_says(b, "#build", "raised the upload limit\nsecond line", [])
+    agent_says(b, "#build", "## raised the `upload` limit\nsecond line", [])
     agent_says(b, "#build", "@alice a question", ["alice"])
     got = home(alice)
     assert [(d["kind"], d["who"], d["text"]) for d in got["done"]] == [
@@ -163,6 +163,18 @@ def test_done_lists_what_agents_said_since_you_looked_and_seen_moves_only_forwar
     assert home(alice)["done"] == []
     after = alice.post("/api/home/seen", {"at": now - 1000}).json()["seen"]
     assert after >= now
+    assert home(alice)["done"] == []
+
+
+def test_a_board_move_line_is_not_done_work_and_a_pass_leaves_no_line(
+    team: tuple[InProcBroker, Browser, Browser],
+) -> None:
+    """The lines the review board posts for an agent belong to the board, so they are not "done"; and an agent
+    that only passed said nothing, so it has no line at all (the maintainer's answer to #626's third
+    question).
+    Fails if a board line is listed, or a member that never spoke has a line."""
+    b, alice, _ = team
+    agent_says(b, "#build", 'Review board: F1 raised: Old path. review(action="show") shows the board.', [])
     assert home(alice)["done"] == []
 
 

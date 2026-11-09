@@ -6640,14 +6640,14 @@
   // how long ago, in the short words the mockups use: "now", "12 min", "3 h", "2 d"
   function waited(ts) {
     const s = Math.max(0, homeNow() - ts);
-    if (s < 45) return 'now';
+    if (s < 45) return 'just now';
     if (s < 5400) return Math.max(1, Math.round(s / 60)) + ' min';
     if (s < 129600) return Math.round(s / 3600) + ' h';
     return Math.round(s / 86400) + ' d';
   }
 
   function homeAge(ts, suffix) {
-    const t = el('span', 'hc-age', waited(ts) + (suffix || ''));
+    const t = el('span', 'hc-age', waited(ts) + (suffix && homeNow() - ts >= 45 ? suffix : ''));
     if (homeRefs) homeRefs.ages.push([t, ts, suffix || '']);
     return t;
   }
@@ -6739,7 +6739,7 @@
 
   function tickHomeAges() {
     if (!homeRefs) return;
-    for (const a of homeRefs.ages) a[0].textContent = waited(a[1]) + a[2];
+    for (const a of homeRefs.ages) a[0].textContent = waited(a[1]) + (a[1] && homeNow() - a[1] < 45 ? '' : a[2]);
   }
 
   function homeSay(text) {

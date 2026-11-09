@@ -4,6 +4,8 @@ When you open switchboard you land on Home. It answers three questions across al
 
 Open a link to one room (`/#build`) and you get that room, as before. Open switchboard with nothing after the address and you get Home, on a computer and on a phone. **Home** is also the first row in the sidebar, so you can come back to it. Its count is how many things wait on you.
 
+![Home: two things waiting on you, finished work, what is live, and the rooms](../media/ui/guide-home-light.png)
+
 ## What is on it
 
 1. **Waiting on you.** Things you can act on in place.

@@ -746,10 +746,13 @@ def test_the_owners_real_name_stays_editable_when_the_username_is_locked() -> No
 
 
 def test_opening_switchboard_shows_home_and_only_a_link_to_a_room_opens_a_room() -> None:
-    """#626: with no room in the address the page opens Home, not the first room: the Home row of the sidebar is
-    the current page and no room is, the heading and the tab title say Home, the four sections are there in order,
+    """#626: with no room in the address the page opens Home, not the first room: the Home row of the
+    sidebar is
+    the current page and no room is, the heading and the tab title say Home, the four sections are there in
+    order,
     the rooms are the most recently active first, and the Home count is what waits on the person. A link to a
-    room (#uploads) still opens that room, with Home hidden. Fails if the first room opens as it used to, a section
+    room (#uploads) still opens that room, with Home hidden. Fails if the first room opens as it used to, a
+    section
     is missing, or the rooms are in name order."""
     out = run("home_first_screen")
     assert out["shown"] and out["appHome"]
@@ -769,7 +772,8 @@ def test_opening_switchboard_shows_home_and_only_a_link_to_a_room_opens_a_room()
 def test_a_question_is_answered_from_its_card_as_a_reply_in_the_room() -> None:
     """#626: Reply opens a form on the card, a refresh with the same card leaves what was typed alone, Escape
     closes the form, and Send posts the text to the card's room as a reply to that message (the room's own
-    /say), after which the card and the Home count are gone. Fails if the draft is lost to a refresh, the reply
+    /say), after which the card and the Home count are gone. Fails if the draft is lost to a refresh, the
+    reply
     carries no reply_to, or the card stays after the answer."""
     out = run("home_reply_from_card")
     assert out["kept"] == "Remove it" and out["closedForms"] == 0
@@ -780,7 +784,8 @@ def test_a_question_is_answered_from_its_card_as_a_reply_in_the_room() -> None:
 
 def test_a_review_board_call_is_made_from_its_card_through_the_boards_own_moves() -> None:
     """#626: Decide lists what needs a person (a question, a contested finding, an unconfirmed fix) with the
-    moves each allows; choosing an option sends the board's answer move for that item and option; Drop without a
+    moves each allows; choosing an option sends the board's answer move for that item and option; Drop
+    without a
     reason sends nothing and says why; a move the broker refuses shows its reason on the card. Fails if a move
     goes to a different route than the room's board page uses, or a refusal is swallowed."""
     out = run("home_board_call")
