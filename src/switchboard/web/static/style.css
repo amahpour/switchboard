@@ -578,7 +578,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .side-label { padding: 0 10px 4px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; color: var(--muted); }
 .side-spacer { flex: 1; }
 
-.room {
+.room, .home-nav {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -594,12 +594,12 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   text-align: left;
   cursor: pointer;
 }
-.room .ic { width: 14px; height: 14px; color: var(--muted); }
-.room:hover { background: var(--row-sel); }
-.room[aria-current="page"] { background: var(--accent); color: var(--accent-fg); font-weight: 500; }
-.room[aria-current="page"] .ic { color: currentColor; }
-.room[aria-current="page"] .badge { background: rgba(255, 255, 255, .22); color: #ffffff; }
-.room .badge { background: var(--badge-bg); color: #ffffff; }
+.room .ic, .home-nav .ic { width: 14px; height: 14px; color: var(--muted); }
+.room:hover, .home-nav:hover { background: var(--row-sel); }
+.room[aria-current="page"], .home-nav[aria-current="page"] { background: var(--accent); color: var(--accent-fg); font-weight: 500; }
+.room[aria-current="page"] .ic, .home-nav[aria-current="page"] .ic { color: currentColor; }
+.room[aria-current="page"] .badge, .home-nav[aria-current="page"] .badge { background: rgba(255, 255, 255, .22); color: #ffffff; }
+.room .badge, .home-nav .badge { background: var(--badge-bg); color: #ffffff; }
 /* Quiet unread marker (#109): other agents talking, nothing addressed to you - a plain dot,
    not the red badge, so it doesn't read as more urgent than it is. */
 .room .dot.quiet { background: var(--muted); }
@@ -2517,7 +2517,7 @@ body.login {
     visibility: visible;
     transition: transform 260ms var(--ease), visibility 0s linear 0s;
   }
-  .room { height: 40px; font-size: calc(14.5px * var(--text-scale)); }
+  .room, .home-nav { height: 40px; font-size: calc(14.5px * var(--text-scale)); }
 
   .conv-head {
     display: grid;
@@ -3277,3 +3277,133 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   color: var(--fg); background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px;
   padding: 5px 8px; }
 .names-row .btn { flex: none; }
+
+/* ==== 17. Home (#626, DESIGN.md §55) ================================================= */
+/* The first screen: what waits on you, what got done, what is live, your rooms. One column, a
+   page of its own in place of the log, the composer and the members pane. */
+.app.home-open #log, .app.home-open #room-empty, .app.home-open #board, .app.home-open #composer,
+.app.home-open #pane, .app.home-open #pane-toggle, .app.home-open #buddy-toggle, .app.home-open .head-divider,
+.app.home-open #pins, .app.home-open #claim-board, .app.home-open .head-tools,
+.app.home-open .band:not(#banner-offline):not(#banner-test) { display: none; }
+.app.no-rooms #home { display: none; }
+.home {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 20px 40px;
+}
+.home.hidden { display: none; }
+.home > * { max-width: 760px; margin-inline: auto; }
+.home:focus { outline: none; }
+.home-sec { margin-top: 22px; }
+.home-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 600;
+}
+.home-count { color: var(--muted); font-weight: 500; }
+.home-seen { margin-left: auto; height: 28px; }
+.home-none { margin: 0; padding: 10px 2px; color: var(--muted); font-size: calc(13px * var(--text-scale)); }
+.home-list { list-style: none; margin: 0; padding: 0; }
+.home-list.cards { display: flex; flex-direction: column; gap: 10px; }
+.home-list.rows { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.home-list.rows > li + li { border-top: 1px solid var(--line); }
+.home-card {
+  border-radius: 12px;
+  background: var(--accent-tint);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  padding: 10px 12px;
+}
+.hc-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.hc-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.hc-title { font-size: calc(14px * var(--text-scale)); overflow-wrap: anywhere; }
+.hc-sub { color: var(--muted-2); font-size: calc(13px * var(--text-scale)); overflow-wrap: anywhere; }
+.hc-side { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.hc-age { color: var(--muted); font-size: calc(12.5px * var(--text-scale)); white-space: nowrap; }
+.home-av.avatar { flex-shrink: 0; }
+.hc-tile {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--chip-bg);
+  color: var(--green);
+}
+.home-row .hc-tile .ic { width: 16px; height: 16px; }
+.home-row.live { padding: 10px 12px; }
+.home-rowbtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.home-rowbtn:hover { background: var(--row-sel); }
+.home-rowbtn:focus-visible { outline-offset: -2px; }
+.home-rowbtn > .ic { width: 14px; height: 14px; color: var(--muted); flex-shrink: 0; }
+.hc-title.room-t { font-weight: 600; }
+.home-rowbtn .hc-body { display: flex; flex-direction: column; }
+.home-rowbtn .badge.danger { flex-shrink: 0; }
+.home-act, .home-go { height: 34px; }
+.home-form { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.home-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: calc(14px * var(--text-scale));
+  resize: vertical;
+}
+.home-input.line { flex: 1; min-width: 0; width: auto; resize: none; }
+.home-form-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.home-form-bar .hint { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
+.home-err { margin: 0; color: var(--danger); font-size: calc(13px * var(--text-scale)); }
+.home-err:empty { display: none; }
+.home-items { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.home-item { padding: 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+.hi-head { font-size: calc(14px * var(--text-scale)); overflow-wrap: anywhere; }
+.hi-meta { margin-top: 2px; color: var(--muted-2); font-size: calc(12.5px * var(--text-scale)); overflow-wrap: anywhere; }
+.hi-bar { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.home-opt { height: auto; min-height: 34px; padding: 6px 12px; white-space: normal; text-align: left; }
+.home-select {
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--input-border);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+}
+
+@media (max-width: 760px) {
+  .home { padding: 4px 16px calc(32px + env(safe-area-inset-bottom)); }
+  /* the card's answer buttons go under its words, as the phone mockup has them: nothing is cut off */
+  .hc-row { flex-wrap: wrap; row-gap: 8px; }
+  .home-card .hc-body { flex: 1 1 calc(100% - 48px); }
+  .home-card .hc-side, .home-row.live .hc-side { flex: 1 1 100%; justify-content: space-between; padding-left: 44px; }
+  .home-row.live .hc-body { flex: 1 1 calc(100% - 48px); }
+  .home-act, .home-go { min-height: 44px; padding: 0 16px; }
+  .home-opt { min-height: 44px; }
+  .home-rowbtn { min-height: 56px; }
+  .home-input { font-size: 16px; }
+  .home-seen { min-height: 36px; }
+}
