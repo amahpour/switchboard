@@ -76,6 +76,14 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
     )
     assert texts == ["<img onerror=alert(1)> is text"]
     assert frame.locator("img, a[href], iframe, object, embed").count() == 0
+    frame.locator("body").evaluate("""() => {
+        const a=window.sbBoard.api, t=a.getSceneElements().find(e=>e.type==='text');
+        a.updateScene({appState:{selectedElementIds:{[t.id]:true}}});
+    }""")
+    expect(frame.get_by_role("button", name="Add link", include_hidden=True)).to_be_hidden()
+    expect(
+        frame.locator("fieldset").filter(has=frame.locator('[data-testid="font-family-normal"]'))
+    ).to_be_hidden()
     agent = world._extra_named[("#" + room, "drawer")]
     picture = world._scripted(agent.raw("board", {"room": "#" + room, "action": "read", "text": "image"}))
     assert not picture.is_error and picture.content[0].type == "image"

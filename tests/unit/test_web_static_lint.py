@@ -427,8 +427,8 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("e32ce78b705dfec0983fba18d682d9a562cae60ad5346970b659bad61f03f520"),
-    "vendor/board/board.css": ("15edb741ea37aaf21cf666a70872706e3b1c6ea42b48e2ae76586c9498e138b5"),
+    "vendor/board/NOTICE": ("33d9eeb9aad442432c882d6de7c2019b61bbed36b132423af85847b5edf172b7"),
+    "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
     "vendor/board/board.js": ("363f7f58f882c7376a31de56f6780bac0f823a79e00e39c8a12cb27a34f88055"),
     "vendor/board/board.js.LEGAL.txt": ("7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"),
     "vendor/board/chunks/abnfDiagram-VCTEODGH-YG5Z4CC2.js": (
