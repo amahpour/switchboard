@@ -3200,6 +3200,8 @@ Caps, from the spike: 1,500 elements live and deleted together, 1,000,000 bytes,
 
 `board(room, action, …)` is one tool, the same shape as `review` (§37): the description is one line that names the actions, and the how-to is a `board` skill, the same file in the Claude Code, Codex and Cursor plugins. The actions are `note`, `box`, `connect`, `frame`, `move`, `edit`, `delete`, `read` and `draw_mermaid` (§56.9). The broker mints an id for a new shape. `read` returns the summary the spike measured (frames in reading order, shapes with ids, arrows as `start -> end`) by default; `text="image"` asks an open board page for a picture (§56.8). Leave `x` and `y` out and the broker places the shape.
 
+With `to` naming a frame, automatic placement starts inside it and skips occupied slots; the enclosing frame itself is not an obstacle.
+
 A change is rate-limited like a post and, when it is kept, shares that post's clock (`participants.last_say_at`). Inside the window the call is refused, not queued: a say can wait its turn, and a drawing that waited could land on top of a newer one. `read` is not limited. The tool list measured 3,653 before this tool and 4,165 after, and the cap is that size (`test_tool_list_fits_the_review_budget`). The maintainer's answer "1. Yes" to "Can I raise it and start #656 tonight" is the yes for that one tool and nothing else.
 
 An accepted change posts one notice, `{who} changed the board`, with none of the shape text in it. It is a notice, so it wakes nobody (§8: delivery runs for chat). The hub then fans the accepted elements out as kind `board`.
