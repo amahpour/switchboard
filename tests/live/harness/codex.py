@@ -75,7 +75,12 @@ def config_toml(server_url: str, ws: Path, hooks: list[dict[str, Any]], extra: s
         *[f"{f} = false" for f in OFF_FEATURES],
     ]
     for h in hooks:
-        out += ["", f"[hooks.state.{toml_str(h['key'])}]", f"trusted_hash = {toml_str(h['currentHash'])}"]
+        # 0.166.0's inventory joins the definition and content hashes with '/'; the state keeps
+        # them separately. Older inventories have only the definition hash (#635).
+        definition, _, content = h["currentHash"].partition("/")
+        out += ["", f"[hooks.state.{toml_str(h['key'])}]", f"trusted_hash = {toml_str(definition)}"]
+        if content:
+            out.append(f"trusted_content_hash = {toml_str(content)}")
     return "\n".join(out) + "\n"
 
 

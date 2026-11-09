@@ -14,6 +14,7 @@ import re
 import signal
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -263,6 +264,23 @@ def test_codex_runs_with_approvals_on_request_and_its_hooks_trusted_at_their_has
     assert codex.resume_id(
         "To continue this session, run:\n  codex resume 01a16105-984c-77f3-832d-84cb907730d0"
     )
+
+
+def test_codex_composite_hook_hash_trusts_both_definition_and_content() -> None:
+    """0.166.0 returns definition/content in currentHash. Writing that whole value as trusted_hash
+    leaves every hook modified: the TUI stops at review before the first join (#635). Each half must
+    reach its own state field, keeping distinct definitions and changed content distinct."""
+    hooks = [
+        {"key": "plugin:stop:0:0", "currentHash": "sha256:aa/sha256:cc"},
+        {"key": "plugin:post_tool_use:0:0", "currentHash": "sha256:bb/sha256:cc"},
+        {"key": "plugin:stop:1:0", "currentHash": "sha256:aa/sha256:dd"},
+    ]
+    cfg = tomllib.loads(codex.config_toml("http://switchboard.localhost:9", Path("/tmp/ws"), hooks))
+    assert cfg["hooks"]["state"] == {
+        "plugin:stop:0:0": {"trusted_hash": "sha256:aa", "trusted_content_hash": "sha256:cc"},
+        "plugin:post_tool_use:0:0": {"trusted_hash": "sha256:bb", "trusted_content_hash": "sha256:cc"},
+        "plugin:stop:1:0": {"trusted_hash": "sha256:aa", "trusted_content_hash": "sha256:dd"},
+    }
 
 
 def test_devins_project_config_is_the_plugins_with_its_path_and_nothing_imported() -> None:
