@@ -87,7 +87,7 @@ function makeWorld(rooms) {
         e.ownerDocument = document;
         // as index.html starts them
         if (['empty', 'closed-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'catchup-menu', 'insp-queue', 'passkeys-panel'].includes(id)) e.classList.add('hidden');
+             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);
@@ -112,6 +112,11 @@ function makeWorld(rooms) {
     calls: {},        // slug -> the call's details for this viewer (GET /api/rooms/{slug}/call), or none
     commands: [],     // every command text the page sent, in order
     said: [],         // every /say text the page sent, in order
+    saidBodies: [],   // every /say body (text and reply_to)
+    home: null,       // the body of GET /api/home (#626); an empty page when a scenario sets none
+    seen: [],         // every POST /api/home/seen body
+    homeGets: 0,      // how many times the page asked for GET /api/home
+    moves: [],        // every POST /api/rooms/{slug}/review body, with its room
   };
 
   function roomDict(r) {
@@ -131,6 +136,21 @@ function makeWorld(rooms) {
         const b = server.boards[decodeURIComponent(mr[1])];
         return [200, { boards: Array.isArray(b) ? b : b ? [b] : [] }];
       };
+    }
+    if (method === 'GET' && url === '/api/home') {
+      return function () {
+        server.homeGets += 1;
+        return [200, server.home || { now: TS, since: TS, waiting: [], waiting_total: 0, done: [], done_total: 0, live: [] }];
+      };
+    }
+    if (method === 'POST' && url === '/api/home/seen') {
+      server.seen.push(body);
+      return function () { return [200, { seen: body.at }]; };
+    }
+    const mv = /^\/api\/rooms\/([^/]+)\/review$/.exec(url);
+    if (method === 'POST' && mv) {
+      server.moves.push(Object.assign({ room: decodeURIComponent(mv[1]) }, body));
+      return function () { return [server.moveFails ? 400 : 200, server.moveFails ? { message: server.moveFails } : { ok: true, boards: [] }]; };
     }
     if (method === 'GET' && url === '/api/people') {
       return function () { return [200, { people: server.people || [] }]; };
@@ -154,6 +174,8 @@ function makeWorld(rooms) {
     const ms = /^\/api\/rooms\/([^/]+)\/say$/.exec(url);
     if (method === 'POST' && ms) {
       server.said.push(body.text);
+      server.saidBodies.push(body);
+      if (server.onSay) server.onSay(body);
       return function () { return [200, { ok: true }]; };
     }
     const ml = /^\/api\/rooms\/([^/]+)\/members$/.exec(url);
@@ -210,6 +232,10 @@ function makeWorld(rooms) {
   };
 
   const sockets = [];
+  const held = [];
+  let heldId = 0;
+  server.fireHome = function () { const fs = held.splice(0); for (const h of fs) h.f(); };
+  server.heldHome = function () { return held.length; };
   class WebSocket {
     constructor(url) {
       this.url = url;
@@ -237,7 +263,15 @@ function makeWorld(rooms) {
   const ctx = {
     document: document, location: location, history: history, fetch: fetch, WebSocket: WebSocket,
     console: console, Date: Date, JSON: JSON, Map: Map, Set: Set, Promise: Promise, Error: Error,
-    setTimeout: setTimeout, clearTimeout: clearTimeout,
+    // Home's two refresh delays (750 and 10100 ms, app.js) are held until a scenario calls fireHome(): no sleeping
+    setTimeout: function (f, ms) {
+      if (ms === 750 || ms === 10100) { held.push({ id: ++heldId, f: f }); return heldId; }
+      return setTimeout(f, ms);
+    },
+    clearTimeout: function (id) {
+      const i = held.findIndex(function (h) { return h.id === id; });
+      if (i >= 0) held.splice(i, 1); else clearTimeout(id);
+    },
     setInterval: function () { return 0; }, clearInterval: function () {},  // the ping and refresh timers
     encodeURIComponent: encodeURIComponent, decodeURIComponent: decodeURIComponent, URL: URL,
   };
@@ -382,6 +416,28 @@ function roomsBadge(w) {
 }
 
 // ---------------------------------------------------------------- scenarios
+
+const QUESTION_CARD = { kind: 'question', room: '#build', slug: 'build', id: 7, from: 'codex-1', from_kind: 'agent',
+  harness: 'codex', host: null, text: 'Keep the old upload endpoint, or remove it?', ts: TS - 720, more: 0 };
+const BOARD_CARD = { kind: 'board', room: '#build', slug: 'build', url: 'https://example.com/shop/pull/7', ts: TS - 3600, need: 3,
+  agents: ['claude-1', 'codex-1'], items: [
+    { label: 'Q1', kind: 'question', state: 'open', title: 'Keep v1?', raised_by: 'claude-1', owner: '', options: ['Keep it', 'Remove it'],
+      recommend: 1, moves: ['answer'], insist_line: '', updated_at: TS - 3600 },
+    { label: 'F2', kind: 'finding', state: 'contested', title: 'Limit is too low', raised_by: 'claude-1', owner: '', options: [],
+      recommend: null, moves: ['concede', 'drop'], insist_line: 'Insists: it breaks uploads', updated_at: TS - 3000 },
+    { label: 'F3', kind: 'finding', state: 'fixed', title: 'Old path', raised_by: 'claude-1', owner: 'codex-1', options: [],
+      recommend: null, moves: ['confirm'], insist_line: '', updated_at: TS - 2000 }] };
+
+function homeBody(over) {
+  return Object.assign({
+    now: TS, since: TS - 3600, waiting: [QUESTION_CARD], waiting_total: 1,
+    done: [{ kind: 'turn', room: '#uploads', slug: 'uploads', who: 'claude-1', harness: 'claude', ts: TS - 1200, id: 5,
+             text: 'raised the upload limit' }], done_total: 1,
+    live: [{ kind: 'agent', room: '#build', slug: 'build', agent: 'codex-1', harness: 'codex', host: '', busy: true,
+             note: 'Reviewing the upload fix', claim: null }],
+  }, over || {});
+}
+
 const SCENARIOS = {
   // Only a fixed item that someone has confirmed gets the card's check (#427): not a fix still
   // waiting for its raiser, and not any other state. A live frame that confirms one adds it.
@@ -1410,6 +1466,144 @@ const SCENARIOS = {
   },
 
   // First run: the Welcome form creates the room named in its field.
+  // ---------------------------------------------------------------- the home page (#626)
+  // Opening switchboard shows Home, in every case but a link to a room; its four sections are drawn
+  // from GET /api/home and the page's own rooms; the rooms are most recently active first.
+  async home_first_screen() {
+    const rooms = [{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#uploads', created_at: 101 }];
+    const w = makeWorld(rooms);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(10, 'claude-1', 'older line') });
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(20, 'codex-1', 'newer line', { mentions: ['alice'] }) });
+    await settle();
+    w.server.fireHome();
+    await settle();
+    const home = w.$('home');
+    const linked = makeWorld(rooms);
+    linked.location.hash = '#uploads';
+    await boot(linked);
+    return {
+      shown: !home.classList.contains('hidden'),
+      appHome: w.$('app').classList.contains('home-open'),
+      heading: w.$('room-title').textContent,
+      title: w.document.title,
+      current: w.$('home-nav').attrs['aria-current'] || null,
+      active: w.$('tabs').children.filter(function (c) { return c.attrs['aria-current']; }).length,
+      sections: findAll(home, function (n) { return n.tag === 'h2'; }).map(function (n) { return n.textContent; }),
+      roomRows: findAll(home, function (n) { return n.classList.contains('room-t'); }).map(function (n) { return n.textContent; }),
+      homeBadge: w.$('home-badge').textContent,
+      homeLabel: w.$('home-nav').attrs['aria-label'],
+      linked: { shown: !linked.$('home').classList.contains('hidden'), title: linked.document.title,
+                active: linked.$('tabs').children.filter(function (c) { return c.attrs['aria-current']; }).map(function (c) { return c.dataset.room; }) },
+    };
+  },
+
+  // A question card: Reply opens a form for it, Escape closes it, a reply goes to the room as a reply to that
+  // message, and the card is gone once the broker no longer lists it. A refresh while it is half typed keeps the text.
+  async home_reply_from_card() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    const home = w.$('home');
+    const reply = function () { return findAll(home, function (n) { return n.tag === 'button' && n.dataset.focus === 'reply-q:#build'; })[0]; };
+    click(reply());
+    const box = findAll(home, function (n) { return n.tag === 'textarea'; })[0];
+    box.value = 'Remove it';
+    box.dispatch('input', {});
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(30, 'codex-1', 'unrelated') });
+    await settle();
+    w.server.fireHome();  // a refresh, with the card unchanged
+    await settle();
+    const kept = findAll(home, function (n) { return n.tag === 'textarea'; })[0].value;
+    key(findAll(home, function (n) { return n.tag === 'textarea'; })[0], 'Escape');
+    const closed = findAll(home, function (n) { return n.tag === 'textarea'; }).length;
+    click(reply());
+    const again = findAll(home, function (n) { return n.tag === 'textarea'; })[0];
+    again.value = 'Remove it';
+    again.dispatch('input', {});
+    w.server.onSay = function () { w.server.home = homeBody({ waiting: [] }); };
+    findAll(home, function (n) { return n.tag === 'form'; })[0].dispatch('submit', { preventDefault() {} });
+    await settle();
+    return {
+      kept: kept, closedForms: closed, said: w.server.saidBodies, still: findAll(home, function (n) { return n.classList.contains('home-card'); }).length,
+      none: findAll(home, function (n) { return n.classList.contains('home-none'); }).map(function (n) { return n.textContent; }),
+      badge: w.$('home-badge').textContent, badgeHidden: w.$('home-badge').classList.contains('hidden'),
+    };
+  },
+
+  // A review-board card: Decide lists what needs a call, a question's option is the board's own answer move, a
+  // contested finding needs a reason to drop, and a refused move says why on its card.
+  async home_board_call() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody({ waiting: [BOARD_CARD] });
+    await boot(w);
+    const home = w.$('home');
+    const all = function (pred) { return findAll(home, pred); };
+    click(all(function (n) { return n.tag === 'button' && n.dataset.focus === 'decide-b:#build:https://example.com/shop/pull/7'; })[0]);
+    const items = all(function (n) { return n.classList.contains('home-item'); }).map(function (n) { return n.children[0].textContent; });
+    const options = all(function (n) { return n.classList.contains('home-opt'); }).map(function (n) { return n.textContent; });
+    const drop = all(function (n) { return n.classList.contains('home-opt') && n.textContent === 'Drop'; })[0];
+    click(drop);  // no reason yet
+    const noReason = all(function (n) { return n.classList.contains('home-err'); }).map(function (n) { return n.textContent; }).filter(Boolean);
+    click(all(function (n) { return n.classList.contains('home-opt') && n.textContent.startsWith('Remove'); })[0]);
+    await settle();
+    w.server.moveFails = 'Q1 is answered already';
+    click(all(function (n) { return n.classList.contains('home-opt') && n.textContent === 'Confirm the fix'; })[0]);
+    await settle();
+    const refused = all(function (n) { return n.classList.contains('home-err'); }).map(function (n) { return n.textContent; }).filter(Boolean);
+    return { items: items, options: options, noReason: noReason, moves: w.server.moves, refused: refused };
+  },
+
+  // Leaving Home for a room tells the broker what this page showed as done, so the next open starts after it; a
+  // done row opens its room.
+  async home_leave_marks_seen() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#uploads', created_at: 101 }]);
+    w.server.home = homeBody();
+    await boot(w);
+    const home = w.$('home');
+    const row = findAll(home, function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('raised the upload limit') >= 0; })[0];
+    click(row);
+    await settle();
+    return { seen: w.server.seen, shown: !home.classList.contains('hidden'), title: w.document.title,
+             current: w.$('home-nav').attrs['aria-current'] || null };
+  },
+
+  // With a room on screen, Home's count is refreshed only by a frame that can change it, and once however many
+  // come. Home opened with that slow refresh waiting is refreshed quickly instead.
+  async home_badge_refresh() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#uploads', created_at: 101 }]);
+    w.location.hash = '#build';
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    w.server.homeGets = 0;
+    const held = function () { return w.server.heldHome(); };
+    ws.deliver({ t: 'members', room: '#build', members: [MEMBERS[0]] });
+    ws.deliver({ t: 'room', room: '#build', settings: {} });
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(10, 'codex-1', 'chatter between agents') });
+    ws.deliver({ t: 'msg', room: '#build', msg: { id: 11, ts: TS, kind: 'join', from: 'codex-1', sender_kind: 'system', text: 'joined' } });
+    const quiet = held();
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(12, 'codex-1', 'hi', { mentions: ['alice'] }) });
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(13, 'codex-1', 'again', { mentions: ['alice'] }) });
+    const afterAddressed = held();
+    ws.deliver({ t: 'review', room: '#build', boards: [] });
+    const afterReview = held();
+    w.server.fireHome();
+    await settle();
+    const fetched = w.server.homeGets;
+    // a slow one waiting, then Home opened: the quick one replaces it
+    ws.deliver({ t: 'review', room: '#build', boards: [] });
+    click(w.$('home-nav'));
+    await settle();
+    w.server.homeGets = 0;
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(14, 'codex-1', 'on home') });
+    const onHome = held();
+    w.server.fireHome();
+    await settle();
+    return { quiet: quiet, afterAddressed: afterAddressed, afterReview: afterReview, fetched: fetched,
+             onHome: onHome, fetchedOnHome: w.server.homeGets };
+  },
+
   async welcome_create() {
     const w = makeWorld([]);
     const ws = await boot(w);

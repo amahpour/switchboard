@@ -251,7 +251,7 @@ sbx template save switchboard switchboard-golden:v1         # reset: sbx rm swit
 
 **Tart Linux VM** (written against Tart 2.22.4; [quick start](https://tart.run/quick-start/)): it has its own kernel and shares no host files unless you pass `--dir`.
 ```bash
-tart clone ghcr.io/cirruslabs/ubuntu:latest switchboard-golden && tart set switchboard-golden --cpu 6 --memory 8192
+tart clone ghcr.io/cirruslabs/ubuntu:latest@sha256:97166c84ea5f102be33d2959f70e83861a36bd749f1715ab669d93e6c9f31476 switchboard-golden && tart set switchboard-golden --cpu 6 --memory 8192
 tart clone switchboard-golden switchboard-run1 && tart run --no-graphics --no-clipboard switchboard-run1   # no --dir; stays in the foreground
 ssh -a admin@$(tart ip switchboard-run1)               # one per tab; default login is admin/admin: change it
 ssh -a -N -L 127.0.0.1:8765:127.0.0.1:8765 admin@$(tart ip switchboard-run1)   # UI; broker keeps its 127.0.0.1 bind

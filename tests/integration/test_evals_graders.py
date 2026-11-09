@@ -68,6 +68,29 @@ def alpha_delegates(name: str, items: list[Item]) -> Move:
     return Move(passes=True)
 
 
+def raises_the_finding(name: str, items: list[Item]) -> Move:
+    """The person opened a board and named this agent: raise the one finding, with the tool."""
+    person = _person(items)
+    if person is not None and person.to_you:
+        return Move(
+            review={
+                "action": "raise",
+                "title": "Discount is taken after tax",
+                "where": "shop/cart.py:40-58",
+                "detail": "Tax is added first.",
+            }
+        )
+    return Move(passes=True)
+
+
+def talks_like_a_raise(name: str, items: list[Item]) -> Move:
+    """Say the words a raise would post, and never call review. The check must fail."""
+    person = _person(items)
+    if person is not None and person.to_you:
+        return Move(say="Review board: F1 raised: Discount is taken after tax.", reply_to=person.id)
+    return Move(passes=True)
+
+
 def bravo_trades(name: str, items: list[Item]) -> Move:
     asks = [i for i in items if i.sender == "alpha" and i.to_you]
     if asks:
@@ -142,6 +165,16 @@ ROOMS = {
         "bystander",
         {"alpha": alpha_delegates, "bravo": bravo_trades, "charlie": answers("I can help")},
         {"alpha_and_bravo_trade": True, "charlie_posts_nothing": False},
+    ),
+    "review board, alpha raises the finding": (
+        "review-board",
+        {"alpha": raises_the_finding},
+        {"a_finding_was_raised": True},
+    ),
+    "review board, they only talk": (
+        "review-board",
+        {"alpha": talks_like_a_raise},
+        {"a_finding_was_raised": False},
     ),
 }
 

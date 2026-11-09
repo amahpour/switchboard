@@ -80,7 +80,7 @@ function Choose-Model([string]$asked, [string]$device) { # (model, what joinly i
     if ($device -eq 'cpu' -and $model -ceq 'base') { $told = '' }
     @{ Model = $model; Told = $told }
 }
-function Joinly-Image([string]$device) { if ($device -eq 'gpu') { 'ghcr.io/joinly-ai/joinly:v0.5.4-cuda' } else { 'ghcr.io/joinly-ai/joinly:v0.5.4' } }
+function Joinly-Image([string]$device) { if ($device -eq 'gpu') { 'ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e' } else { 'ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0' } }
 
 # ----------------------------------------------------------------------------------------- the data folder
 function ParentOf([int]$id) { # the pid of the process that started this one, or 0

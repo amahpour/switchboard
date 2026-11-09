@@ -125,7 +125,7 @@ spec:
         waits in ContainerCreating until it is done.
         */}}
         - name: joinly
-          image: "{{ .Values.meetings.image.repository }}:{{ include "switchboard.joinlyTag" . }}"
+          image: "{{ .Values.meetings.image.repository }}:{{ include "switchboard.joinlyTag" . }}@{{ include "switchboard.joinlyDigest" . }}"
           imagePullPolicy: {{ .Values.meetings.image.pullPolicy }}
           env:
             - name: JOINLY_SERVER_HOST

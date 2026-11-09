@@ -43,7 +43,7 @@ services:
   relay:
     # switchboard's image, at the release this plugin is. The script sets SB_RELAY_IMAGE only to try a build of
     # your own; docs/DEPLOY.md, "Meetings on your own machine". `.github/scripts/release.py` moves this tag.
-    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.53.0}
+    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.54.0}
     restart: "no"
     # run as you, so that the files you own (mode 0600) are readable to the relay and no one else's are
     user: "${SB_RELAY_USER:?the host script sets this}"
@@ -77,7 +77,7 @@ services:
   joinly:
     <<: *joinly
     profiles: [cpu]
-    image: ghcr.io/joinly-ai/joinly:v0.5.4   # a release, not :latest; the tag docs/DEPLOY.md runs (3.7 GB)
+    image: ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0   # a release, not :latest; the tag docs/DEPLOY.md runs (3.7 GB)
     volumes:
       # Two fixes that joinly 0.5.4 does not have yet, mounted over its own copies and pinned by sha256 in
       # meeting/fixes.pins: Zoom's speaker names (joinly-ai/joinly#187) and the first word of a line (#620).
@@ -87,7 +87,7 @@ services:
   joinly-gpu:
     <<: *joinly
     profiles: [gpu]
-    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release built for CUDA (about 6 GB to pull); move both together
+    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e   # the same release built for CUDA (about 6 GB to pull); move both together
     deploy:
       resources:
         reservations:

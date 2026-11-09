@@ -27,12 +27,15 @@ from evalkit.record import Tokens  # noqa: E402
 
 
 def test_the_shipped_scenarios_load_and_name_real_checks() -> None:
-    """The first slice's three scenarios (#480) read cleanly: three agents, a room, one message from the
-    person, and only checks that exist. Fails if a file has a typo in a grader or an agent name."""
+    """The shipped scenarios read cleanly: a room, one message from the person, and only checks that
+    exist. The first three (#480) have three agents; review-board (#629) has one, so the check is
+    the raise and not the concede a second agent is woken for.
+    Fails if a file has a typo in a grader or an agent name."""
     every = scenario.load_all()
-    assert sorted(every) == ["bystander", "nobody-named", "one-named"]
-    for sc in every.values():
-        assert sc.agents == ("alpha", "bravo", "charlie") and sc.room == "#build" and len(sc.steps) == 1
+    assert sorted(every) == ["bystander", "nobody-named", "one-named", "review-board"]
+    for name, sc in every.items():
+        expect = ("alpha",) if name == "review-board" else ("alpha", "bravo", "charlie")
+        assert sc.agents == expect and sc.room == "#build" and len(sc.steps) == 1
         assert sc.checks and all(c.step == 0 for c in sc.checks)
 
 

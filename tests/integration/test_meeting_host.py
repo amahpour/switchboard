@@ -39,6 +39,9 @@ from switchboard.meeting import keys
 
 ROOT = Path(__file__).resolve().parents[2]
 PLUGIN = ROOT / "plugins" / "claude"
+_COMPOSE = yaml.safe_load((PLUGIN / "meeting" / "compose.yaml").read_text(encoding="utf-8"))
+JOINLY_CPU = _COMPOSE["services"]["joinly"]["image"]
+JOINLY_GPU = _COMPOSE["services"]["joinly-gpu"]["image"]
 LINK = "https://zoom.us/j/123456789?pwd=hunter2hunter2"
 TOKEN = "sbat_" + "t" * 43
 LISTENER = "sbl_" + "ab" * 32
@@ -90,7 +93,7 @@ if argv[:1] == ["compose"]:
     sub, rest = argv[i], argv[i + 1:]
     if sub == "config" and "--images" in rest:
         print(env.get("SB_RELAY_IMAGE") or "ghcr.io/amahpour/switchboard:0.0.0")
-        print("ghcr.io/joinly-ai/joinly:v0.5.4" + ("-cuda" if "gpu" in profiles else ""))
+        print("{joinly_gpu}" if "gpu" in profiles else "{joinly_cpu}")
         sys.exit(0)
     call_dir = sb.get("SB_CALL_DIR", "")
     listing = {{}}
@@ -233,7 +236,10 @@ class Machine:
         chmod = shutil.which("chmod", path=REAL_PATH)
         if chmod:
             self.write_exe("chmod", CHMOD_WRAPPER.format(chmod=chmod))
-        self.write_exe("docker", FAKE_DOCKER.format(python=sys.executable))
+        self.write_exe(
+            "docker",
+            FAKE_DOCKER.format(python=sys.executable, joinly_cpu=JOINLY_CPU, joinly_gpu=JOINLY_GPU),
+        )
         curl = shutil.which("curl", path=REAL_PATH)
         if curl:
             self.write_exe("curl", CURL_WRAPPER.format(curl=curl))
@@ -396,11 +402,7 @@ def test_the_gpu_is_chosen_only_when_there_is_one_for_docker_to_use(
     try:
         got = plan(m, env=m.env(FAKE_DOCKER_RUNTIMES=runtimes))
         assert got["device"] == device and reason in got["reason"], got
-        want_model, want_image = (
-            ("large-v3-turbo", "ghcr.io/joinly-ai/joinly:v0.5.4-cuda")
-            if device == "gpu"
-            else ("base", "ghcr.io/joinly-ai/joinly:v0.5.4")
-        )
+        want_model, want_image = ("large-v3-turbo", JOINLY_GPU) if device == "gpu" else ("base", JOINLY_CPU)
         assert (got["model"], got["joinly"]) == (want_model, want_image)
     finally:
         m.close()
@@ -883,9 +885,10 @@ def test_a_missing_image_is_pulled_before_the_server_hears_of_the_call(machine: 
     the room's
     ten minutes run."""
     m = machine
-    r = m.start(env=m.env(FAKE_DOCKER_MISSING="switchboard:relay-test,ghcr.io/joinly-ai/joinly:v0.5.4"))
+    missing = f"switchboard:relay-test,{JOINLY_CPU}"
+    r = m.start(env=m.env(FAKE_DOCKER_MISSING=missing))
     assert r.returncode == 0, r.stderr
-    assert "Pulling: switchboard:relay-test ghcr.io/joinly-ai/joinly:v0.5.4" in r.stderr
+    assert f"Pulling: switchboard:relay-test {JOINLY_CPU}" in r.stderr
     kinds = [c["cmd"] for c in m.docker() if c["cmd"] in ("pull", "up")]
     assert kinds == ["pull", "up"]
     assert [c for c in m.docker() if c["cmd"] == "pull"][0]["profiles"] == ["cpu"]
@@ -981,7 +984,12 @@ def test_the_relays_compose_file_keeps_joinly_private_and_ties_its_life_to_the_r
         {"driver": "nvidia", "count": 1, "capabilities": ["gpu"]}
     ]
     cpu, gpu = services["joinly"]["image"], services["joinly-gpu"]["image"]
-    assert gpu == cpu + "-cuda" and cpu.startswith("ghcr.io/joinly-ai/joinly:v") and ":latest" not in cpu
+    cpu_name, cpu_digest = cpu.split("@", 1)
+    gpu_name, gpu_digest = gpu.split("@", 1)
+    # The CUDA image is its own digest. Appending ``-cuda`` to a digest-pinned name is not that image.
+    assert gpu_name == cpu_name + "-cuda" and cpu_digest != gpu_digest
+    assert cpu_name.startswith("ghcr.io/joinly-ai/joinly:v") and ":latest" not in cpu
+    assert cpu_digest.startswith("sha256:") and gpu_digest.startswith("sha256:")
     mounts = [v for s in ("joinly", "joinly-gpu") for v in services[s]["volumes"]]
     assert sum(v.endswith(":ro") for v in mounts) == 4  # the two fixes, in both
     models = [v for v in services["joinly-gpu"]["volumes"] if "huggingface" in v]

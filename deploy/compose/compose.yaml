@@ -29,7 +29,7 @@ name: switchboard
 
 services:
   switchboard:
-    image: ghcr.io/amahpour/switchboard:0.53.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+    image: ghcr.io/amahpour/switchboard:0.54.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
     restart: unless-stopped
     environment:
       # the address browsers use; the broker answers to no other
@@ -50,7 +50,7 @@ services:
   # connects, so it publishes no port: only the broker reaches it, as http://joinly:8000/mcp/ on this
   # project's network.
   joinly:
-    image: ghcr.io/joinly-ai/joinly:v0.5.4   # the tag DEPLOY.md runs; 3.7 GB, so the first pull takes a while
+    image: ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0   # the tag DEPLOY.md runs; 3.7 GB, so the first pull takes a while
     profiles: [meetings]
     restart: unless-stopped
     shm_size: "1gb"   # Chromium's shared memory; Docker's default 64 MB is known to crash it
@@ -72,7 +72,7 @@ services:
   # here. It is a service of its own, so the broker's address is http://joinly-gpu:8000/mcp/. Turn on one of the
   # two profiles, not both. As for the CPU bot, it publishes no port: only the broker reaches it.
   joinly-gpu:
-    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the `meetings` release with CUDA; move both together
+    image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e   # the `meetings` release with CUDA; move both together
     profiles: [meetings-gpu]
     restart: unless-stopped
     shm_size: "1gb"
@@ -92,7 +92,7 @@ services:
     #   - joinly-gpu-models:/home/app/.cache/huggingface
 
   caddy:
-    image: caddy:2.10-alpine
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     restart: unless-stopped
     environment:
       SWITCHBOARD_DOMAIN: ${SWITCHBOARD_DOMAIN:?set SWITCHBOARD_DOMAIN to your DNS name}

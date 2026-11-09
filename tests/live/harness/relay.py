@@ -28,7 +28,10 @@ from .world import REAL_PATH
 REPO = Path(__file__).resolve().parents[3]
 PINS = REPO / "plugins" / "claude" / "meeting" / "fixes.pins"
 LABEL = "com.switchboard.call"
-JOINLY_IMAGE = "ghcr.io/joinly-ai/joinly:v0.5.4"
+# One line: the digest scan needs the pin contiguous. The tag and digest are the compose file's.
+JOINLY_IMAGE = (
+    "ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0"  # noqa: E501
+)
 FIXES_ENV = "SWITCHBOARD_LIVE_FIXES_DIR"
 IMAGE_ENV = "SWITCHBOARD_LIVE_RELAY_IMAGE"
 
@@ -212,11 +215,15 @@ def running(project: str) -> bool:
     return any(c["state"] == "running" for c in projects().get(project, []))
 
 
-def logs(project: str, service: str = "relay", tail: int = 40) -> str:
+def logs(project: str, service: str = "relay", tail: int | None = 40) -> str:
+    """The service's log. ``tail`` is how many lines; ``None`` is the whole log (kept on a failure)."""
     cs = [c for c in projects().get(project, []) if c["service"] == service]
     if not cs:
         return ""
-    got = docker("logs", "--tail", str(tail), cs[0]["id"], timeout=60)
+    args = ["logs", cs[0]["id"]]
+    if tail is not None:
+        args[1:1] = ["--tail", str(tail)]
+    got = docker(*args, timeout=60)
     return (got.stdout or "") + (got.stderr or "")
 
 

@@ -36,6 +36,15 @@ def _container(pod: dict[str, Any], name: str) -> dict[str, Any]:
     return found
 
 
+def _assert_names_the_cuda_image(text: str, image: str) -> None:
+    """The CUDA build of the same release, with its own digest. Appending ``-cuda`` to a
+    digest-pinned CPU reference is not that image."""
+    name, digest = image.split("@", 1)
+    found = re.search(re.escape(f"{name}-cuda") + r"@sha256:[0-9a-f]{64}", text)
+    assert found, f"the cuda image of {name} is not named"
+    assert found.group(0).rsplit("@", 1)[1] != digest, "the cuda pin is the cpu digest"
+
+
 def test_joinly_listens_on_the_pods_localhost_and_is_offered_to_nobody() -> None:
     """The sidecar's only protection is that it is not reachable: its image listens on 0.0.0.0, which
     gives every pod in the cluster its port at the pod's IP with or without a Service. So the patch
@@ -172,7 +181,9 @@ def test_the_patch_pins_the_image_the_docs_run_and_the_base_has_no_joinly() -> N
     manifest that stays as it is for anyone who doesn't follow calls. Fails if the tags drift
     apart, or if joinly or its address creeps into the base."""
     image = _container(_pod(PATCH), "joinly")["image"]
-    assert re.fullmatch(r"ghcr\.io/joinly-ai/joinly:v\d+\.\d+\.\d+", image), "a release, not :latest"
+    assert re.fullmatch(r"ghcr\.io/joinly-ai/joinly:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", image), (
+        "a release pinned by digest, not :latest"
+    )
     assert image in (ROOT / "docs" / "DEPLOY.md").read_text()
     assert image in (ROOT / "docs" / "DESIGN.md").read_text()
     lines = (DEPLOY / "switchboard.yaml").read_text().splitlines()
@@ -188,8 +199,8 @@ def test_the_patch_tells_how_to_use_a_gpu_in_comments_and_asks_for_none_itself()
     follows. Fails if a GPU request, a selector or a toleration becomes live, or the comment drifts."""
     text = PATCH.read_text()
     image = _container(_pod(PATCH), "joinly")["image"]
+    _assert_names_the_cuda_image(text, image)
     for needle in (
-        f"{image}-cuda",
         "nvidia.com/gpu",
         "nodeSelector",
         "tolerations",
@@ -222,11 +233,11 @@ def test_the_deploy_guide_and_the_meetings_guide_name_the_model_the_gpu_and_the_
         "meetings.gpu.enabled",
         "meetings.sttModel",
         "nvidia.com/gpu",
-        f"{image}-cuda",
         "/home/app/.cache/huggingface",
         *STT_MODELS,
     )
     for needle in needles:
         assert needle in deploy, f"DEPLOY.md does not mention {needle}"
+    _assert_names_the_cuda_image(deploy, image)
     guide = (ROOT / "docs" / "guide" / "meetings.md").read_text()
     assert "stt_model" in guide and STT_MODEL_ENV in guide and "large-v3-turbo" in guide

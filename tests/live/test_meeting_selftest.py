@@ -22,9 +22,10 @@ it took (``harness/selftest.py`` writes them as JSON and a Markdown table):
 The link has the call's passcode in it. It is read from the file named by ``SWITCHBOARD_MEETING_URL_FILE``
 (mode 0600, refused otherwise), never from an argument; it is held as a ``SecretLink``; every error that
 might quote it is scrubbed first; and at the end the broker's database, its messages and its log are checked
-for any piece of it. Whatever happens, both bots leave and both containers are removed. A step that can't
-start because an earlier one failed is recorded as failed ("not attempted"), so a run is green only if all
-six passed.
+for any piece of it. Whatever happens, both bots leave and both containers are removed. A failed step keeps
+both containers' logs in the output folder, scrubbed of the link, and the report names the files; delete
+them after reading. A step that can't start because an earlier one failed is recorded as failed ("not
+attempted"), so a run is green only if all six passed.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ from fakes.fake_agent import FakeAgent
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from harness import selftest
+from harness.relay import JOINLY_IMAGE as IMAGE
 from harness.selftest import SecretLink, StepResult
 from harness.tmuxdrv import REAL_HOME
 from harness.world import REAL_PATH, live_set
@@ -76,7 +78,6 @@ if "meeting" not in live_set():
 
 LINK_ENV = "SWITCHBOARD_MEETING_URL_FILE"
 OUT_ENV = "SWITCHBOARD_SELFTEST_OUT"
-IMAGE = "ghcr.io/joinly-ai/joinly:v0.5.4"  # the tag DEPLOY.md and the Kubernetes patch run
 # On Zoom, both bots run with our speaker-name fix (joinly-ai/joinly#187), as DEPLOY.md says to: stock 0.5.4
 # can't open Zoom's participant list, so the speaker could neither see the bot arrive (and spoke before its
 # audio was up) nor see it leave. The file is the one DEPLOY.md pins, checked by its sha256.
@@ -98,7 +99,8 @@ PREROLL_FIX_SHA256 = "6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6
 CONTROLLER_PY = "/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py"
 STOCK_ENV = "SWITCHBOARD_SELFTEST_STOCK_JOINLY"
 # SWITCHBOARD_SELFTEST_LOGS=1 keeps each container's log, scrubbed of the link, in the output folder (0600),
-# for a failure that needs joinly's side of the story. Off by default: a log holds the call's participants.
+# on a pass as well. A failed step keeps them either way (#642): the run that failed is the one to read.
+# Off otherwise: a log holds the call's participants. Delete the files after reading them.
 LOGS_ENV = "SWITCHBOARD_SELFTEST_LOGS"
 SPEAKER_NAME = "switchboard self-test speaker"
 # SWITCHBOARD_SELFTEST_OBSERVER=1 adds a third joinly that only listens (#602). When a call-out doesn't wake
@@ -232,15 +234,11 @@ class Joinly:
                 raise RuntimeError(f"{self.name} did not answer /health within {HEALTH_S:.0f} s")
             time.sleep(0.5)
 
-    def save_log(self, out_dir: Path, pieces: list[str]) -> None:
+    def save_log(self, out_dir: Path, pieces: list[str]) -> Path:
         """The container's log, every piece of the link scrubbed, into ``out_dir`` (mode 0600)."""
         got = docker("logs", self.name, timeout=60.0)
-        text = selftest.scrub((got.stdout or "") + (got.stderr or ""), pieces)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"joinly-{self.label}.log"
-        path.touch(mode=0o600, exist_ok=True)
-        path.chmod(0o600)
-        path.write_text(text, encoding="utf-8")
+        text = (got.stdout or "") + (got.stderr or "")
+        return selftest.write_container_log(out_dir, f"joinly-{self.label}.log", text, pieces)
 
     def remove(self) -> str | None:
         """Remove the container, running or not. None when it is gone, else why not."""
@@ -251,6 +249,20 @@ class Joinly:
             if left.returncode == 0 and not left.stdout.strip()
             else f"container {self.name} is still there"
         )
+
+
+def kept_logs(
+    containers: dict[str, Joinly], out_dir: Path, pieces: list[str], steps: list[StepResult]
+) -> list[str]:
+    """The log files written for this run. A failed step keeps them; ``SWITCHBOARD_SELFTEST_LOGS=1``
+    keeps them on a pass too. Each name is what the report lists. Empty when nothing is kept."""
+    if not selftest.keep_container_logs(steps, os.environ.get(LOGS_ENV, "") == "1"):
+        return []
+    saved: list[str] = []
+    for box in containers.values():
+        with contextlib.suppress(Exception):
+            saved.append(box.save_log(out_dir, pieces).name)
+    return saved
 
 
 # ------------------------------------------------------------------- the speaker
@@ -762,6 +774,7 @@ async def test_every_meetings_feature_against_a_real_call(
         containers["observer"] = Joinly("observer")
     steps: list[StepResult] = []
     problems: list[str] = []
+    saved: list[str] = []
     stock = os.environ.get(STOCK_ENV, "") == "1"
     zoom_fix = link.platform == "zoom" and not stock
     preroll_fix = not stock
@@ -792,21 +805,15 @@ async def test_every_meetings_feature_against_a_real_call(
             except Exception as e:
                 problems.append(selftest.scrub(f"{type(e).__name__}: {e}", pieces)[:300])
     finally:
-        if os.environ.get(LOGS_ENV, "") == "1":
-            for box in containers.values():
-                with contextlib.suppress(Exception):
-                    box.save_log(out_dir, pieces)
-        # sync, so it also runs after an interrupt: no bot stays in the call once its container is gone
-        removed = [box.remove() for box in containers.values()]
+        try:
+            # Missing steps count as failed, and a failed step is what keeps the logs. Fill them
+            # before the containers go: docker logs needs the container, and --rm drops it on remove.
+            selftest.fill_unattempted(steps, selftest.step_specs(STEPS, PLATFORM_LABEL[link.platform]))
+            saved = kept_logs(containers, out_dir, pieces, steps)
+        finally:
+            # sync, so it also runs after an interrupt: no bot stays in the call once its container is gone
+            removed = [box.remove() for box in containers.values()]
     problems += [why for why in removed if why]
-    for n, (name, expected) in STEPS.items():
-        if all(s.n != n for s in steps):
-            steps.append(
-                StepResult.not_attempted(
-                    n, name, expected.format(platform=PLATFORM_LABEL[link.platform]), "the run stopped first"
-                )
-            )
-    steps.sort(key=lambda s: s.n)
     meta = {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "platform": link.platform,
@@ -819,6 +826,8 @@ async def test_every_meetings_feature_against_a_real_call(
         "containers_removed": not any(removed),
         "problems": problems,
     }
+    if saved:
+        meta["container_logs"] = ", ".join(saved)
     try:
         _, md = selftest.write_report(out_dir, steps, pieces, meta)
         print("\n" + md.read_text(encoding="utf-8"))

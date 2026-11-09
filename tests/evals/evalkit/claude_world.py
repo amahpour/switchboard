@@ -35,7 +35,7 @@ from harness.claude import ClaudeRun, project_dir_name  # noqa: E402
 from harness.tmuxdrv import REAL_HOME  # noqa: E402
 from harness.world import HUMAN, REAL_PATH, Broker  # noqa: E402
 
-from .record import Tokens  # noqa: E402
+from .record import Tokens, latest_human_message  # noqa: E402
 from .scenario import Scenario  # noqa: E402
 from .trial import HarnessError, Limits  # noqa: E402
 
@@ -251,6 +251,12 @@ class ClaudeWorld:
 
     def say(self, text: str) -> int:
         assert self.broker is not None
+        # The page sends a leading slash to the command route. ``/review`` opens a board; the say
+        # route would post the line as chat and open nothing. The command's reply has no message
+        # id, so the posted request is read back from the database.
+        if text.startswith("/"):
+            self.broker.command(text)
+            return latest_human_message(self.db_path, self.broker.room)
         return self.broker.say(text)
 
     def idle(self) -> bool:

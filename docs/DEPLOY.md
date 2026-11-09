@@ -24,7 +24,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:0.53.0
+  ghcr.io/amahpour/switchboard:0.54.0
 docker logs switchboard
 ```
 
@@ -59,7 +59,7 @@ docker restart switchboard
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:0.53.0`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:0.54.0`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -128,7 +128,7 @@ kubectl -n switchboard logs switchboard-0    # the admin's one-time password
 | `resources` | 100m and 192Mi requested, 512Mi limit | The broker container's. |
 | `meetings.enabled` | `false` | Adds joinly beside the broker ([below](#meetings-with-helm)). |
 | `meetings.maxCalls` | `1` | How many calls may run at once, 1 to 50. It sizes joinly. |
-| `meetings.image.tag` | `v0.5.4` | joinly's release. |
+| `meetings.image.tag`, `meetings.image.digest`, `meetings.image.cudaDigest` | `v0.5.4` and the two index digests | joinly's release. `digest` is the CPU image and `cudaDigest` is the CUDA image. Move all three together ([Upgrading](#upgrading)). |
 | `meetings.zoomFix.configMap` | (none) | A ConfigMap with the fixed `zoom.py`, mounted over joinly's copy. |
 | `meetings.prerollFix.configMap` | (none) | A ConfigMap with the fixed `transcription.py`, mounted over joinly's copy ([why](#a-meeting-bot)). |
 | `meetings.sttModel` | (unset) | `SWITCHBOARD_MEETING_STT_MODEL`: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Anything else fails at `helm template`. A name also gives joinly a folder to download into ([below](#meetings-with-helm)). |
@@ -214,7 +214,7 @@ meetings:
     configMap: joinly-zoom-fix
 ```
 
-Remove `zoomFix` once a joinly release has the fix, and move `meetings.image.tag` to that release.
+Remove `zoomFix` once a joinly release has the fix, and move `meetings.image.tag`, `meetings.image.digest` and `meetings.image.cudaDigest` to that release.
 
 **First words of a call line.** joinly 0.5.4 clips the first word of what it hears, and the fix ([joinly-ai/joinly#188](https://github.com/joinly-ai/joinly/pull/188)) is a second file ([why, and what it did](#a-meeting-bot)). Make its ConfigMap first, from the pinned file ([the commands](#meetings-on-kubernetes)), then name it. The pod can't start until it exists. joinly needs no setting for it, and the broker sends none, so a chart without `prerollFix` works as before.
 
@@ -243,7 +243,7 @@ meetings:
       - {key: nvidia.com/gpu, operator: Exists, effect: NoSchedule}
 ```
 
-- **The image is the CUDA build of the same release.** `v0.5.4` becomes `v0.5.4-cuda`, so moving `meetings.image.tag` to a newer release moves the GPU image with it. A tag that already ends in `-cuda` is kept as it is.
+- **The image is the CUDA build of the same release.** `v0.5.4` becomes `v0.5.4-cuda`, and the digest is `meetings.image.cudaDigest`, not the CPU digest. A tag that already ends in `-cuda` is kept as it is. Moving only the tag leaves the previous digest on the new tag, which is a different image: move `meetings.image.digest` and `meetings.image.cudaDigest` with the tag ([Upgrading](#upgrading)).
 - **joinly asks for one GPU, in its limits.** The count is fixed at one: one joinly serves every call. Memory and CPU are what `maxCalls` works out, as without a GPU. The cluster needs the NVIDIA device plugin (or the GPU Operator), or the pod stays `Pending`.
 - **The pod goes where the GPU is.** The broker shares the pod, so `nodeSelector` and `tolerations` are written into it as you give them, and only while `gpu.enabled` is true. Quote a label value that looks like a boolean (`"true"`), as above, or Kubernetes refuses it.
 - **A model you name gets a folder to be downloaded into:** a 4 GiB `emptyDir` at `/home/app/.cache/huggingface`, because joinly's root is read-only. It is gone when the pod is replaced, which every `helm upgrade` that changes the pod does, so the next pod downloads the model again and the first call waits for it (about 1.6 GB for `large-v3-turbo`). With `sttModel` unset, nothing is mounted, joinly uses the model in its image, and nothing is downloaded. A cache that outlives the pod is not in the chart: the claims of a StatefulSet are fixed once it exists, and the broker's volume is the broker's. The chart needs the bot on (`meetings.enabled`) for either value to render anything.
@@ -347,11 +347,18 @@ The broker reaches out to Google (`accounts.google.com`, `oauth2.googleapis.com`
 
 ## Upgrading
 
-1. Change the image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md) lists them), and deploy. With [the Helm chart](#helm), move to the new release's tag and run `helm upgrade`: the chart installs the image of its own release.
+1. Change switchboard's image tag in your compose file, manifest or Blueprint to the new release (the [CHANGELOG](https://github.com/amahpour/switchboard/blob/main/CHANGELOG.md) lists them), and deploy. With [the Helm chart](#helm), move to the new release's tag and run `helm upgrade`: the chart installs the image of its own release. That image stays a tag (`ghcr.io/amahpour/switchboard:X.Y.Z`). A release writes the tag before the image exists, so it has no digest yet.
 2. The platform stops the old container and starts the new one. The broker shuts down cleanly on SIGTERM (`docker stop`) and exits 0.
 3. If the new release changes the database's schema, the broker migrates it on start, after a verified backup copy next to it (`switchboard.db.v2.bak` for the passkeys release, `switchboard.db.v3.bak` for the people release, [DESIGN.md §27.6](DESIGN.md), [§31.2](DESIGN.md), [§32.2](DESIGN.md)). An older release refuses a newer database, so a rollback past a schema change means restoring a backup. The admin, people, passwords and passkeys are in the database, so an upgrade keeps them. The email sign-in release (schema 12, [DESIGN.md §39](DESIGN.md#39-identity-by-email-192)) keeps everyone signing in as before until you set their email in **Admin > People**; then they sign in with the email instead of their name, so tell them first.
 
-Pin releases rather than `:latest`, so an upgrade happens when you choose.
+Pin switchboard's releases by tag rather than `:latest`, so an upgrade happens when you choose.
+
+**Third-party images are `name:tag@sha256:<digest>`.** joinly (the CPU build and the CUDA build, each with its own digest), Caddy, the sandbox's Debian, the `busybox` probe and the Tart Ubuntu image are pinned that way. A moved tag cannot change what is pulled. To move one:
+
+1. Read the new tag's digest without pulling it: `docker buildx imagetools inspect <name:tag>`. Use the `Digest:` of the index (`application/vnd.oci.image.index.v1+json`, or a manifest list). That is the multi-platform pin, so a Mac and a Windows machine resolve the same image. If the tag is a single manifest rather than a list, that manifest's digest is the pin.
+2. Replace `name:tag@sha256:…` everywhere that image is named: the compose files, the Kubernetes manifest, the Helm values (`meetings.image.tag`, `meetings.image.digest` and `meetings.image.cudaDigest` move together; appending `-cuda` to a digest-pinned name is not the CUDA image), the host scripts and the docs.
+
+The CPU digest on the CUDA tag, or the other way round, is a different image. Do not copy one digest onto the other.
 
 ## Backups
 
@@ -376,7 +383,7 @@ A room can follow a Zoom, Meet or Teams call ([DESIGN.md §52](DESIGN.md#52-meet
 On one machine:
 
 ```bash
-docker run -d --name joinly -p 127.0.0.1:8010:8000 ghcr.io/joinly-ai/joinly:v0.5.4
+docker run -d --name joinly -p 127.0.0.1:8010:8000 ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
 ```
 
 Then in the broker's `config.toml`:
@@ -434,7 +441,7 @@ Without those two lines the bot doesn't start, and `/meeting` says how to set it
 curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5/joinly/providers/browser/platforms/zoom.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro" \
-  ghcr.io/joinly-ai/joinly:v0.5.4
+  ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
 ```
 
 Drop the mount once a joinly release has the fix, and move to that release. The file's sha256 is `9bf581c20a9a7911afb9f2ac1447a5d0800cdca24485dd215099d5d82afad6ff`; check it after you download it (`sha256sum zoom.py`), because a mount makes it run inside the bot.
@@ -445,7 +452,7 @@ Drop the mount once a joinly release has the fix, and move to that release. The 
 curl -fsSLo transcription.py https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro" \
-  ghcr.io/joinly-ai/joinly:v0.5.4
+  ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
 ```
 
 switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` argument has the fix as its default (0 turns it off), and a setting that stock joinly doesn't know would break every call for anyone who hasn't mounted the file. So a joinly without the file works as before, and with it the fix is on. As with the Zoom fix, drop the mount once a joinly release has it, and move to that release. The file's sha256 is `6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97`.
@@ -488,7 +495,7 @@ stt_model = "large-v3-turbo"
 
   ```bash
   docker run --rm -v joinly-models:/home/app/.cache/huggingface \
-    --entrypoint /app/.venv/bin/python ghcr.io/joinly-ai/joinly:v0.5.4 \
+    --entrypoint /app/.venv/bin/python ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0 \
     -c "from faster_whisper.utils import download_model; print(download_model('large-v3-turbo'))"
   ```
 
@@ -497,7 +504,7 @@ stt_model = "large-v3-turbo"
   ```bash
   docker run -d --name joinly -p 127.0.0.1:8010:8000 \
     -v joinly-models:/home/app/.cache/huggingface \
-    ghcr.io/joinly-ai/joinly:v0.5.4
+    ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
   ```
 
 - **Mount a cache only for a model you name.** A volume at that path takes the place of the image's own copy of its model, and with no model named joinly uses local files only.
@@ -505,12 +512,12 @@ stt_model = "large-v3-turbo"
 
 **Memory.** Every size on this page was measured with `base`. joinly loads a model for each call, so each live call holds its own copy. In the proof of concept a process holding `large-v3-turbo` peaked at about 1.7 GB, against 0.5 GB for `base`. A live call with a big model was not measured, so give joinly more than the tables say, and watch the first call. On a GPU the weights sit in the card's memory, one copy for each live call, and that was not measured at all.
 
-**A GPU.** joinly publishes a build for NVIDIA GPUs, `ghcr.io/joinly-ai/joinly:v0.5.4-cuda`. It is about 6 GB to pull, and for `amd64` only. It sets `JOINLY_DEVICE=cuda` itself, so nothing else is needed, and its own model is `distil-large-v3`, so name `large-v3-turbo`. The host needs an NVIDIA GPU, a driver recent enough for CUDA 12.6 (which the image is built on), and the NVIDIA Container Toolkit.
+**A GPU.** joinly publishes a build for NVIDIA GPUs, `ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e`. It is about 6 GB to pull, and for `amd64` only. It sets `JOINLY_DEVICE=cuda` itself, so nothing else is needed, and its own model is `distil-large-v3`, so name `large-v3-turbo`. The host needs an NVIDIA GPU, a driver recent enough for CUDA 12.6 (which the image is built on), and the NVIDIA Container Toolkit.
 
 ```bash
 docker run -d --name joinly --gpus 1 -p 127.0.0.1:8010:8000 \
   -v joinly-gpu-models:/home/app/.cache/huggingface \
-  ghcr.io/joinly-ai/joinly:v0.5.4-cuda
+  ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e
 ```
 
 Fetch the model first as above, with the `-cuda` image and this volume (that needs no `--gpus`). Give this image a volume of its own: it holds a different model than the CPU one.
@@ -632,7 +639,7 @@ spec:
             - name: SWITCHBOARD_MEETING_STT_MODEL
               value: large-v3-turbo
         - name: joinly
-          image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release, built for CUDA
+          image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e   # the same release, built for CUDA
           resources:
             limits:
               nvidia.com/gpu: 1
@@ -663,7 +670,7 @@ kubectl -n switchboard exec switchboard-0 -c joinly -- \
 The second command runs in the broker's container and reaches joinly on the pod's localhost. Then, in a room, `/meeting <a test meeting's link>`: the room says it is joining. `/meeting` with no link only says whether a call is live, so it doesn't tell you the broker found joinly. To see that nothing else can reach joinly, run a throwaway pod and fetch the broker pod's IP on port 8000, which must be refused:
 
 ```bash
-kubectl -n switchboard run probe --image=busybox:1.37 --restart=Never --rm -it -- \
+kubectl -n switchboard run probe --image=busybox:1.37@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec --restart=Never --rm -it -- \
   wget -T3 -qO- http://<pod-ip>:8000/health    # "Connection refused"; the same on :7419/healthz answers
 ```
 
@@ -682,7 +689,7 @@ What the file starts, and why it is built this way:
 - **The relay** is `switchboard meeting relay`, in [switchboard's own image](#the-image) (about 330 MB, the release the plugin is: `.github/scripts/release.py` moves the tag). It reads the call's key and the meeting link from files in the call's folder, mounted at `/call`, never from its arguments or environment. It runs as the person who started it, with a read-only root, no capability, and `no-new-privileges`. It reaches the server over HTTPS (a plain `http` address is refused unless `SWITCHBOARD_RELAY_ALLOW_HTTP=1`), trusting what the container's trust store trusts.
 - **joinly** is the same bot as [above](#a-meeting-bot), with the same two fixes mounted over its copies (below). It has no sign-in, so it has **no address of its own**: it shares the relay's network (`network_mode: service:relay`) and listens on that network's `127.0.0.1` (`JOINLY_SERVER_HOST`), as the broker's pod does for its own ([Meetings on Kubernetes](#meetings-on-kubernetes)). No port is published, and nothing else on the machine or the network can talk to it. It runs with the same restrictions as the Kubernetes patch gives it: a read-only root with `/tmp` writable, no capability, and `no-new-privileges`.
 - **joinly ends with the relay.** It also shares the relay's process namespace (`pid: service:relay`), so when the relay exits (End call, a revoked sign-in, `meeting-host stop`) the kernel ends every process in that namespace and joinly's container stops with it. Nothing is left running and nothing has to watch for it. The exited containers stay until the script removes them, at the next `start` or at `stop`.
-- **GPU or CPU is a Compose profile.** `gpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4-cuda` (about 6 GB to pull) with one NVIDIA device reserved (`deploy.resources.reservations.devices`) and a named volume, `switchboard-joinly-models-cuda`, that keeps the speech model (about 1.6 GB for `large-v3-turbo`) between calls, so only the first GPU call waits for the download. `cpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4` with joinly's own `base`, which is in the image, so nothing is downloaded and no volume is mounted (a volume at that path would hide the model the image holds). The script picks the profile: `nvidia-smi` sees a GPU, Docker has an `nvidia` runtime (the NVIDIA Container Toolkit), and the machine is not a Mac. It pulls nothing to find out, says which it chose and why, and `--gpu` or `--cpu` forces either. The GPU image needs the driver for CUDA 12.6 or newer.
+- **GPU or CPU is a Compose profile.** `gpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e` (about 6 GB to pull) with one NVIDIA device reserved (`deploy.resources.reservations.devices`) and a named volume, `switchboard-joinly-models-cuda`, that keeps the speech model (about 1.6 GB for `large-v3-turbo`) between calls, so only the first GPU call waits for the download. `cpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0` with joinly's own `base`, which is in the image, so nothing is downloaded and no volume is mounted (a volume at that path would hide the model the image holds). The script picks the profile: `nvidia-smi` sees a GPU, Docker has an `nvidia` runtime (the NVIDIA Container Toolkit), and the machine is not a Mac. It pulls nothing to find out, says which it chose and why, and `--gpu` or `--cpu` forces either. The GPU image needs the driver for CUDA 12.6 or newer.
 - **The two fixes are pinned by sha256.** `plugins/claude/meeting/fixes.pins` names each fix, its address (a commit, so it doesn't move) and its sha256, the same files as [above](#a-meeting-bot). The script keeps them in the plugin's data folder, checks both against the pins every time, fetches a missing one from its address, and refuses (and deletes) one whose hash differs, so a changed file never reaches joinly. The addresses are `raw.githubusercontent.com`, which the machine must reach the first time. Drop a line, and its mount, once a joinly release has the fix.
 - **Images.** A missing image is pulled before the script tells the server anything, so a call registered in the room is ready to start. To try a build of your own, `SWITCHBOARD_RELAY_IMAGE=my-switchboard:dev` (`docker build -f deploy/image/Dockerfile .`) names the relay's image, and nothing else changes.
 - **A server the containers can't resolve.** `--add-host NAME:IP` (or `host-gateway`) writes a second Compose file with `extra_hosts` for the relay, for a server whose name only this machine knows.
@@ -696,7 +703,7 @@ The key and the link are files in `calls/<fingerprint>/` of the plugin's data fo
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.53.0 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:0.54.0 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](https://github.com/amahpour/switchboard/blob/main/deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.

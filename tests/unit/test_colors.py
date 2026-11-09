@@ -1,4 +1,8 @@
-"""switchboard.colors (issue #28): when the CLI colours, and how."""
+"""switchboard.colors (issue #28): when the CLI colours, and how.
+
+These tests own ``NO_COLOR``, ``FORCE_COLOR``, ``CLICOLOR_FORCE`` and ``TERM`` (#650).
+``colors.enabled`` still honours a shell that sets them; the tests do not read that shell.
+"""
 
 from __future__ import annotations
 
@@ -7,9 +11,16 @@ import subprocess
 import sys
 
 import pytest
+from conftest import own_color_env
 
 from switchboard import colors
 from switchboard.colors import PLAIN, Paint, enabled, for_args, nick_colour
+
+
+@pytest.fixture(autouse=True)
+def _own_color_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shell's colour variables are not this test's. See ``own_color_env``."""
+    own_color_env(monkeypatch)
 
 
 class Tty(io.StringIO):
@@ -56,6 +67,23 @@ def test_default_stream_and_environment(monkeypatch: pytest.MonkeyPatch) -> None
     assert enabled() is True
     monkeypatch.setenv("NO_COLOR", "1")
     assert enabled() is False
+
+
+def test_a_disabling_shell_does_not_decide_these_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``NO_COLOR=1``, ``FORCE_COLOR=0`` and ``TERM=dumb`` are what some agent CLIs export.
+
+    ``enabled`` still turns colour off for that environment, so the rules themselves did not
+    change. Owning the variables, as the fixture does for every test here, turns a terminal
+    back on. Drop the ``own_color_env`` call and the second assertion fails: that is the
+    failure this module had when the shell set those three (#650).
+    """
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("FORCE_COLOR", "0")
+    monkeypatch.setenv("CLICOLOR_FORCE", "0")
+    monkeypatch.setenv("TERM", "dumb")
+    assert enabled("auto", Tty()) is False
+    own_color_env(monkeypatch)
+    assert enabled("auto", Tty()) is True
 
 
 def test_paint_off_is_the_identity() -> None:

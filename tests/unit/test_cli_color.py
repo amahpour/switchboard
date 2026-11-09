@@ -1,7 +1,11 @@
 """Coloured CLI output (issue #28): each command is plain when piped, with NO_COLOR,
 with ``--color never`` and with ``--json``, and coloured with ``--color always`` or on
 a terminal. Colour only ever adds switchboard's own codes: stripping them gives back
-the plain output exactly, and escape codes inside room text stay stripped."""
+the plain output exactly, and escape codes inside room text stay stripped.
+
+Each run owns ``NO_COLOR``, ``FORCE_COLOR``, ``CLICOLOR_FORCE`` and ``TERM`` (#650), then
+applies only the variables that case names. A shell that disables colour is not a result.
+"""
 
 from __future__ import annotations
 
@@ -13,12 +17,19 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import FakeClock
+from conftest import FakeClock, own_color_env
 from engine_world import World
 from test_cli_unit import Calls
 
 from switchboard import cli, report
 from switchboard.colors import Paint
+
+
+@pytest.fixture(autouse=True)
+def _own_color_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shell's colour variables are not this test's. See ``own_color_env``."""
+    own_color_env(monkeypatch)
+
 
 SGR = re.compile(r"\x1b\[[0-9;]*m")
 # every code switchboard itself emits: reset, bold, dim, the six colours, bold yellow
@@ -272,6 +283,9 @@ def test_colour_only_where_it_belongs(
         with monkeypatch.context() as m:
             if tty:
                 m.setattr(sys.stdout, "isatty", lambda: True, raising=False)
+            # A known baseline, then this case's overlay. ``env`` only names what it
+            # changes, so a shell's NO_COLOR or TERM=dumb must not stay in force.
+            own_color_env(m)
             for k, v in (env or {}).items():
                 m.setenv(k, v)
             cli.main([*argv, *extra])

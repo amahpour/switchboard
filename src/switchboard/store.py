@@ -714,6 +714,109 @@ class Store:
         ).fetchone()
         return int(r[0])
 
+    # ------------------------------------------------------------ the home page (#626, §55)
+    def home_lines(
+        self,
+        room_id: int,
+        me: str,
+        question_since: float,
+        done_since: float,
+        window: int,
+        skip_head: str,
+    ) -> tuple[list[tuple[Message, bool]], list[Message]]:
+        """What the home page reads from one room, in one pass over its newest ``window`` chat messages (the
+        index walks them from the end, so the cost does not grow with the room's history) and SQL doing the
+        finding, so only the few rows that matter are made into messages.
+
+        Returns ``(questions, done)``. ``questions`` are the messages after ``me``'s own last one
+        (in the window; one older than the window leaves them all) that name them or ``@humans``, or that
+        reply to something they said, as ``(message, replies_to_me)``, oldest first. The name test is on the
+        JSON text of ``mentions`` and is only a prefilter: the caller makes the exact check, so it never
+        shows more than before. ``done`` is each agent's latest message since ``done_since`` that does not
+        name ``me`` or ``@humans`` and does not start with ``skip_head`` (the review board's own lines)."""
+        mention = f'"{me.lower()}"'
+        rows = self.con.execute(
+            "WITH w AS (SELECT id, ts, sender_name, sender_kind, reply_to, lower(mentions) AS ment,"
+            " substr(text, 1, :hl) AS head FROM messages WHERE room_id=:room AND kind='chat'"
+            " ORDER BY id DESC LIMIT :n),"
+            " mine AS (SELECT COALESCE(MAX(id), 0) AS id FROM w WHERE sender_kind='human'"
+            "  AND lower(sender_name)=:me),"
+            " q AS (SELECT w.id, EXISTS (SELECT 1 FROM messages p WHERE p.id=w.reply_to"
+            "  AND p.room_id=:room AND p.sender_kind='human' AND lower(p.sender_name)=:me) AS to_me"
+            "  FROM w, mine WHERE w.id>mine.id AND w.ts>=:qs AND w.sender_kind!='meeting'"
+            "  AND (instr(w.ment, :mention)>0 OR instr(w.ment, '\"humans\"')>0"
+            "   OR (w.sender_kind!='human' AND w.reply_to IS NOT NULL))),"
+            " d AS (SELECT MAX(id) AS id FROM w WHERE sender_kind='agent' AND ts>=:ds"
+            "  AND head!=:board AND instr(ment, :mention)=0 AND instr(ment, '\"humans\"')=0"
+            "  GROUP BY sender_name)"
+            " SELECT 'q' AS tag, m.*, q.to_me FROM q JOIN messages m ON m.id=q.id"
+            " UNION ALL SELECT 'd', m.*, 0 FROM d JOIN messages m ON m.id=d.id"
+            " ORDER BY 2",
+            {
+                "room": room_id,
+                "n": max(1, min(int(window), 500)),
+                "me": me.lower(),
+                "mention": mention,
+                "qs": question_since,
+                "ds": done_since,
+                "board": skip_head,
+                "hl": len(skip_head),
+            },
+        ).fetchall()
+        questions = [(Message.from_row(r), bool(r["to_me"])) for r in rows if r["tag"] == "q"]
+        done = [Message.from_row(r) for r in rows if r["tag"] == "d"]
+        return questions, done
+
+    def live_agents(self, now: float) -> tuple[list[sqlite3.Row], list[sqlite3.Row], dict[int, int]]:
+        """What the home page's Live now needs from every room at once, in three queries: the members that
+        are busy or hold a live claim, the live claims, and how many members each room has. It leaves out what
+        ``members`` works out for the Members pane (queues, the wake time, the engine's parked state), none
+        of which Live shows."""
+        claim_rows = self.con.execute(
+            "SELECT c.room_id, c.key, c.membership_id, c.expires_at, c.note FROM claims c"
+            " JOIN memberships m ON m.id=c.membership_id WHERE c.expires_at>? AND m.left_at IS NULL"
+            " ORDER BY c.room_id, c.key",
+            (now,),
+        ).fetchall()
+        member_rows = self.con.execute(
+            "SELECT m.id AS membership_id, m.room_id, m.screen_name, p.harness, p.status, p.host,"
+            " p.status_line FROM memberships m JOIN participants p ON p.id=m.participant_id"
+            " WHERE m.left_at IS NULL AND (p.status='busy' OR m.id IN"
+            "  (SELECT c.membership_id FROM claims c WHERE c.expires_at>?))"
+            " ORDER BY m.room_id, m.joined_at, m.id",
+            (now,),
+        ).fetchall()
+        counts = {
+            int(r[0]): int(r[1])
+            for r in self.con.execute(
+                "SELECT room_id, COUNT(*) FROM memberships WHERE left_at IS NULL GROUP BY room_id"
+            ).fetchall()
+        }
+        return member_rows, claim_rows, counts
+
+    def meetings_ended_since(self, since: float) -> list[Meeting]:
+        """Calls that ended at or after ``since``, in any room (the caller filters by who may see)."""
+        rows = self.con.execute(
+            "SELECT * FROM meetings WHERE state='ended' AND ended_at>=? ORDER BY ended_at, id", (since,)
+        ).fetchall()
+        return [Meeting.from_row(r) for r in rows]
+
+    def meeting_lines(self, meeting_id: int) -> tuple[int, list[str]]:
+        """How many lines a call posted, and the members those lines addressed (who it woke)."""
+        rows = self.con.execute(
+            "SELECT mentions FROM messages WHERE meeting_id=? AND kind='chat'", (meeting_id,)
+        ).fetchall()
+        woke: list[str] = []
+        for (raw,) in rows:
+            try:
+                names = json.loads(raw or "[]")
+            except ValueError:
+                names = []
+            for n in names:
+                if isinstance(n, str) and n not in woke:
+                    woke.append(n)
+        return len(rows), woke
+
     # ------------------------------------------------------------ pinned decisions (#292, §48)
     def pins(self, room_id: int) -> list[Pin]:
         """A room's pins, in message order (the order they were said in)."""

@@ -14,6 +14,7 @@ import re
 import signal
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -275,6 +276,24 @@ def test_codex_live_config_exercises_the_installed_local_header_helper() -> None
     assert configured["mcp_servers"]["switchboard"]["http_headers_helper"] == (
         "sh " + shlex.quote(str(codex.plugin_dir() / "bin" / "headers"))
     )
+
+
+def test_codex_composite_hook_hash_trusts_both_definition_and_content() -> None:
+    """0.166.0 returns definition/content in currentHash. Writing that whole value as trusted_hash
+    leaves every hook modified: the TUI stops at review before the first join (#635). Each half must
+    reach its own state field, keeping distinct definitions and changed content distinct."""
+    hooks = [
+        {"key": "plugin:stop:0:0", "currentHash": "sha256:aa/sha256:cc"},
+        {"key": "plugin:post_tool_use:0:0", "currentHash": "sha256:bb/sha256:cc"},
+        {"key": "plugin:stop:1:0", "currentHash": "sha256:aa/sha256:dd"},
+    ]
+    cfg = tomllib.loads(codex.config_toml("http://switchboard.localhost:9", Path("/tmp/ws"), hooks))
+    assert cfg["hooks"]["state"] == {
+        "plugin:stop:0:0": {"trusted_hash": "sha256:aa", "trusted_content_hash": "sha256:cc"},
+        "plugin:post_tool_use:0:0": {"trusted_hash": "sha256:bb", "trusted_content_hash": "sha256:cc"},
+        "plugin:stop:1:0": {"trusted_hash": "sha256:aa", "trusted_content_hash": "sha256:dd"},
+    }
+
 
 def test_devins_project_config_is_the_plugins_with_its_path_and_nothing_imported() -> None:
     """Fails if a hook still points at the placeholder path, if another tool's config is imported, or if the
@@ -727,7 +746,7 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the ten live modules (eight harness runs, the meeting self-test and its
+    """With no ``SWITCHBOARD_LIVE`` the eleven live modules (nine harness runs, the meeting self-test and its
     hosted variant, which start containers and join a real call) are collected and skipped, each with the
     line that says how to run it, and nothing is run. (The hosted variant imports the self-test, whose skip
     it shares, so that line shows twice.) Fails if a live module starts a broker, a container or a CLI on
@@ -739,13 +758,14 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "10 skipped" in out and "passed" not in out and "failed" not in out, out
+    assert "11 skipped" in out and "passed" not in out and "failed" not in out, out
     for h in ("claude", "codex", "devin", "cursor", "opencode", "meeting"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
         "test_live_claude.py",
         "test_live_claude_host.py",
         "test_live_claude_long_wait.py",
+        "test_live_claude_mine.py",
         "test_live_claude_signin.py",
         "test_live_codex.py",
         "test_live_cursor.py",

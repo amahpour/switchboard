@@ -183,7 +183,10 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     expect(bob.locator("#app-dialog")).to_have_attribute("data-kind", "")
     expect(bob.locator("#me-settings")).to_be_focused()
 
-    # bob posts as himself; the admin's page shows it under his name
+    # bob posts as himself; the admin's page shows it under his name. Both pages open on Home (#626): each
+    # opens the room first
+    bob.locator('#tabs .room[data-room="#build"]').click()
+    page.locator('#tabs .room[data-room="#build"]').click()
     bob.fill("#input", "hello from bob")
     bob.keyboard.press("Enter")
     expect(page.locator("#log .line.k-chat").last).to_contain_text("hello from bob")
