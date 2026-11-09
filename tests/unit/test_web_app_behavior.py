@@ -814,6 +814,30 @@ def test_leaving_home_tells_the_broker_what_was_seen_and_a_done_row_opens_its_ro
     assert out["shown"] is False and out["title"] == "switchboard — #uploads" and out["current"] is None
 
 
+def test_opening_a_room_tells_the_broker_how_far_it_was_read_and_home_waits_for_that() -> None:
+    """#663: Go opens the room and posts the newest message id the page holds for it (only that room, once);
+    opening it again with nothing new sends nothing; leaving it for Home sends what arrived while it was open;
+    and Home asks for itself only after the mark is stored, so the card is gone when it is drawn. Fails if the
+    id is another room's, a repeat is sent, a message that arrived in the open room is not counted, or Home
+    asks first (the card would be drawn once more)."""
+    out = run("home_room_seen")
+    assert out["afterGo"] == [{"room": "build", "id": 7}]
+    assert out["afterHome"] == 1
+    assert out["all"] == [{"room": "build", "id": 7}, {"room": "build", "id": 11}]
+    assert out["trail"] == ["seen:build:11", "home"]
+
+
+def test_not_now_on_a_board_card_posts_the_board_and_the_card_goes_when_home_asks_again() -> None:
+    """#663: Not now sends the board's address to its room's route and, when the broker answers, Home asks
+    again and the card is gone; a refusal keeps the card and says why in the status line. Fails if the button
+    is missing, posts another board, or hides the card before the broker agreed."""
+    out = run("home_not_now")
+    assert out["before"] == 1
+    assert out["refused"]["cards"] == 1 and out["refused"]["status"].startswith("Could not hide it")
+    assert out["snoozes"] == [{"room": "build", "url": "https://example.com/shop/pull/7"}] * 2
+    assert out["cards"] == 0 and out["badgeHidden"] is True
+
+
 def test_a_room_on_screen_refreshes_the_home_count_only_for_what_can_change_it() -> None:
     """#649: with a room shown only the sidebar's Home count is on view, so only a frame that can change
     it asks

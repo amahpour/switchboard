@@ -40,7 +40,7 @@ def test_old_keys_remain_claudes_and_both_schemas_constrain_the_harness(
     path = tmp_path / "old.db"
     at_43(path, monkeypatch)
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 44
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 45
     row = con.execute("SELECT key_hash,session_id,harness FROM listener_keys").fetchone()
     assert tuple(row) == ("cd" * 32, "thread-1", "claude")
     fresh = db.open_db(tmp_path / "new.db")

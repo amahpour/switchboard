@@ -55,6 +55,7 @@
     homeTimerMs: 0,    // the delay the pending refresh was set with
     homeSkew: 0,       // the broker's clock minus this page's, so "12 min" is the broker's
     homeForms: new Map(),  // card key -> { open, text, ... }: what a person has half done survives a refresh
+    seenWait: new Set(),   // POST /api/rooms/{slug}/seen requests in flight: Home waits for them before it asks (#663)
     pinsOpen: false,   // the header's pinned list is open (#292)
     claimsOpen: false, // the header's claim board is open (#545)
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
@@ -1949,6 +1950,7 @@
     }
     state.active = name;
     const activeR = state.rooms.get(name);
+    markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
     activeR.unread = 0;
     activeR.quiet = false;
     if (location.hash !== '#' + state.rooms.get(name).slug) {
@@ -6669,6 +6671,7 @@
     const was = state.home;
     if (state.inspect) closeInspector(false);
     closePop();
+    if (state.active) markRoomSeen(state.rooms.get(state.active), false);  // what came while it was open was seen
     state.home = true;
     state.active = null;
     state.boardOpen = false;
@@ -6688,6 +6691,22 @@
     if (!was) loadHome();
     clearInterval(homeAgeTimer);
     homeAgeTimer = setInterval(tickHomeAges, HOME_AGE_MS);
+  }
+
+  // Tell the broker how far this person has read a room: the newest message this page holds (#663, §55.8). The
+  // broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
+  // has, so a stale or repeated post does nothing. A question card counts only messages after it. `refresh`: ask
+  // for Home again once it is stored, so the sidebar's count drops (Home itself waits for it in loadHome).
+  function markRoomSeen(r, refresh) {
+    if (!r || !r.lastId || (r.seenSent || 0) >= r.lastId) return;
+    const upto = r.lastId;
+    r.seenSent = upto;
+    const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
+    state.seenWait.add(p);
+    p.then(function () {}, function () { if (r.seenSent === upto) r.seenSent = 0; }).then(function () {
+      state.seenWait.delete(p);
+      if (refresh && state.homeData && !state.home) loadHome();
+    });
   }
 
   // Called by selectRoom: what was on Home has been looked at, so "since you last looked" moves
@@ -6738,6 +6757,7 @@
 
   async function loadHome() {
     const seq = ++state.homeSeq;
+    if (state.seenWait.size) await Promise.allSettled(Array.from(state.seenWait));  // a room just opened is read first
     let data;
     try {
       data = await api('GET', '/api/home');
@@ -6925,7 +6945,24 @@
       f.open = !f.open;
       renderHome(null, true, open.dataset.focus);
     });
-    side.append(homeAge(c.ts), open, homeGo('Open the review board in ' + c.room, function () {
+    const later = btn('btn home-act home-later', 'Not now');
+    later.setAttribute('aria-label', 'Not now: hide the calls on ' + c.room + "'s review board until it changes");
+    later.title = 'Hide this until something on the board changes';
+    later.dataset.focus = 'later-' + key;
+    later.addEventListener('click', async function () {
+      later.disabled = true;
+      try {
+        await api('POST', '/api/rooms/' + encodeURIComponent(c.slug) + '/home-snooze', { url: c.url });
+        state.homeForms.delete(key);
+        homeSay('Hidden until the review board in ' + c.room + ' changes.');
+        await loadHome();
+        focusAfterAnswer();
+      } catch (e) {
+        later.disabled = false;
+        homeSay('Could not hide it: ' + String(e.message || e));
+      }
+    });
+    side.append(homeAge(c.ts), open, later, homeGo('Open the review board in ' + c.room, function () {
       goToRoom(c.room, function () {
         const r = state.rooms.get(c.room);
         if (r && r.board) { state.boardOpen = true; renderBoard(); }

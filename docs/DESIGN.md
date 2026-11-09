@@ -224,7 +224,7 @@ src/switchboard/
   config.py              Config dataclasses; load(paths) -> Config
   clock.py               SystemClock (tests inject a FakeClock)
   guardrails.py          FORBIDDEN_* denylist constants (the only place forbidden strings may appear, §11)
-  db.py                  connect(path); tx(con) (BEGIN IMMEDIATE); migrate(con, backup_to) through every schema step; SCHEMA_VERSION=43
+  db.py                  connect(path); tx(con) (BEGIN IMMEDIATE); migrate(con, backup_to) through every schema step; SCHEMA_VERSION=45
   models.py              dataclasses and enums: Room, Participant, Membership, Message, Batch, Delivery, Release, Route, HookEvent, HookOut, Action
   store.py               Store: every SQL statement (§4); nothing else touches SQL
   envelope.py            sanitize(); render_batch(); render_join(); ROOM_RULES; TOKEN_RE; NONCE_RE; mac(batch_id, membership_id)
@@ -3112,7 +3112,7 @@ The timeouts are read from the broker's clock in a tick (`HostedCalls.tick`, eve
 
 ## 55. The home page (#626)
 
-The web UI opens on one page that answers three questions across every room the person can see: what is waiting on me, what got done while I was away, and what is live. Below them are the rooms, as the sidebar has them. It is a query and a view over what the broker already stores. There is one new row, a per-person "looked at" time, and no schema change.
+The web UI opens on one page that answers three questions across every room the person can see: what is waiting on me, what got done while I was away, and what is live. Below them are the rooms, as the sidebar has them. It is a query and a view over what the broker already stores. What it keeps is per person: a "looked at" time (§55.4) and, since #663, how far they have read each room and which board cards they set aside (§55.8).
 
 ### 55.1 What the maintainer decided
 
@@ -3125,8 +3125,8 @@ The web UI opens on one page that answers three questions across every room the 
 One answer for the signed-in person, from the stored rows, never for anyone else and never about a private room they are not in (§44; the rooms come from `RoomService.visible`).
 
 - **Waiting on you.** Two kinds of card, newest first, capped at 50 (`waiting_total` says how many there were).
-  - *A question:* the newest chat message in a room that is addressed to this person and that they have not answered. "Addressed" is the page's own unread test (§29): an @mention of them, `@humans`, or an agent's reply to something they said. Another person's message counts only when it names them or everyone, and a person's own message never counts. "Answered" means they said anything in that room later (`Store.home_lines`). One card a room, with the count of the others under it. Only the last seven days are looked at (`WAIT_DAYS`).
-  - *A review-board call:* each open board that has items a person must decide, by the board's own `needs_person` (§37.2: an open question, a contested finding the raiser can no longer answer, an unconfirmed fix). Each item carries the moves a person may make on it, which are the board page's: answer (with an option), concede (to an agent in the room) or drop (with a reason) a contested finding, confirm a fix.
+  - *A question:* the newest chat message in a room that is addressed to this person and that they have not answered. "Addressed" is the page's own unread test (§29): an @mention of them, `@humans`, or an agent's reply to something they said. Another person's message counts only when it names them or everyone, and a person's own message never counts. "Answered" means they said anything in that room later (`Store.home_lines`), and a message they have read no longer counts: only messages after the person's seen mark for the room are questions (§55.8). One card a room, with the count of the others under it. Only the last seven days are looked at (`WAIT_DAYS`).
+  - *A review-board call:* each open board that has items a person must decide, by the board's own `needs_person` (§37.2: an open question, a contested finding the raiser can no longer answer, an unconfirmed fix). A board the person set aside with **Not now** has no card until the board changes (§55.8). Each item carries the moves a person may make on it, which are the board page's: answer (with an option), concede (to an agent in the room) or drop (with a reason) a contested finding, confirm a fix.
 - **Done since you last looked.** Newest first, capped at 30: a board handed off (who posted the review), a board settled and waiting for its handoff, a call that ended (its line count and the members its lines addressed, from `messages.meeting_id`), and, for each agent in each room, its latest message since, when it is not addressed to the person (those wait above instead). "Since" is the person's stored time, at most seven days back, and the last day for someone who never looked. Not done work: a join, a leave, a notice, a pass.
 - **Live now.** The room's open call (`RoomService.call_detail`, so a private room's host is named only to its people), and each agent that is busy or holds a live claim (§47) with its status line and when the claim ends. An agent in two rooms is listed in each.
 - **Rooms** are drawn by the page from what it already holds (§29): most recently active first, their red counts and quiet dots.
@@ -3149,10 +3149,25 @@ The build runs on the broker's event loop inside the route, as every route does,
 
 ### 55.6 The page
 
-The sidebar's **Home** row is above the rooms and shows the count of cards. Home replaces the log, the composer and the members pane (`#app.home-open`). On a phone it is one column and the header's Rooms button opens the drawer; a card's buttons go under its words, at least 44 px tall, and nothing scrolls sideways. By keyboard: Tab runs the sidebar, then the cards in reading order; **Reply** and **Decide** open their form in place, Escape closes it and returns to the button, Ctrl+Enter (or Cmd+Enter) sends a reply; once a card is answered focus goes to the next card's button, or to the page when none is left. A polite status line says what was sent.
+The sidebar's **Home** row is above the rooms and shows the count of cards. Home replaces the log, the composer and the members pane (`#app.home-open`). On a phone it is one column and the header's Rooms button opens the drawer; a card's buttons go under its words, at least 44 px tall, and nothing scrolls sideways. By keyboard: Tab runs the sidebar, then the cards in reading order; **Reply** and **Decide** open their form in place, **Not now** on a board card hides it (§55.8), Escape closes it and returns to the button, Ctrl+Enter (or Cmd+Enter) sends a reply; once a card is answered focus goes to the next card's button, or to the page when none is left. A polite status line says what was sent.
 
 ### 55.7 Not in the first build
 
 An ambiguous call-out ("Someone said 'Claude'; this room has claude-1 and claude-2") is told to the room as a notice and answered by saying the number on the call. A card could not answer it the way the room does, so it is not a card. A pull request opened, as a line of done work, is not recognized either: switchboard does not read pull requests (§37.1), so a board handed off is the closest thing it knows.
 
-**Tests.** `tests/integration/test_home_page.py` (the routes), `tests/unit/test_web_app_behavior.py` (the page under node: first screen, a reply, a board call, leaving), `tests/e2e/test_home_ui.py` (the real page: phone, keyboard, the room showing the answer).
+### 55.8 Cards go away once seen (#663)
+
+The maintainer's decisions: opening a room counts as seeing its questions, and a review board's card stays until its items are decided, with **Not now** to hide it until the board changes. Both are kept on the server per person, so they hold across browsers and devices.
+
+**Schema 45** adds two tables, both empty after the step and both removed with a deleted room (`_ROOM_ROWS`, §28.6: a room's id is reused, and a mark left behind would hide a new room's first messages). `person_key` is `room_people`'s, 0 for the owner.
+
+- `home_seen(person_key, room_id, seen_id)`: the newest message id the person was shown in that room.
+- `home_snoozes(person_key, room_id, review_id, snoozed_at)`: a board they set aside, and when.
+
+**The seen mark.** `POST /api/rooms/{slug}/seen` with `{"id": n}` moves the signed-in person's mark in that room forward to `n` (`Store.home_mark_seen`, one transaction). It never moves back (a lower `n` changes nothing, and the answer is the mark as it stands) and is cut to the room's newest message id, so it can never hide a message that has not been written. Anything but a whole number from 0 up, or a body with another field, is a 400. A room the person cannot see is "no such room", as for every room route (§44), and stores nothing. A person can only move their own: the key is the session's, never in the body. `Store.home_lines` takes the mark and adds `id > mark` to the question part of its one SQL pass, so Home stays as cheap as in §55.5.1 (`tests/integration/test_home_perf.py` still holds it under 100 ms).
+
+The page posts the mark with the newest id it holds for a room (`r.lastId`) when the room is opened (`selectRoom`, so from **Go**, a done line, a room row or the sidebar) and when the person leaves the room for Home, which covers a question that arrived while they had it open. It posts at most once for the same id. Home waits for any mark in flight before it asks for itself, so the card is gone when it is drawn, and a room opened from another room refreshes the sidebar's count once the mark is stored.
+
+**Not now.** `POST /api/rooms/{slug}/home-snooze` with `{"url": board}` sets aside that room's open board for the signed-in person at the broker's clock (`Store.home_snooze`; pressing it again moves the moment forward). Only an open board of a room they can see can be named; anything else is a 404 and stores nothing. The board's card is left out of that person's Home while the board has not changed since: `board_changed_at` is the newest `updated_at` among its items, so a new item, or a move on one, is later than the moment and the card comes back by itself. Nobody else's Home is affected. A closed board's snooze is simply never read again.
+
+**Tests.** `tests/integration/test_home_page.py` (the routes, the seen mark and Not now), `tests/unit/test_db_migrate_v45.py` (schema 45), `tests/unit/test_web_app_behavior.py` (the page under node: first screen, a reply, a board call, leaving, the mark sent on opening a room, Not now), `tests/e2e/test_home_ui.py` (the real page: phone, keyboard, the room showing the answer, Go and back, Not now).

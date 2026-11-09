@@ -266,3 +266,84 @@ def test_leaving_home_moves_since_you_last_looked_forward(ui: UI, hosted: tuple[
     again = open_home(ui, w)
     expect(again.locator("#home")).to_contain_text("Rooms")
     expect(again.locator("#home .home-rowbtn", has_text="raised the upload limit")).to_have_count(0)
+
+
+def test_a_question_card_goes_once_the_room_is_opened_and_a_new_question_brings_it_back(
+    ui: UI, hosted: tuple[InProcBroker, str]
+) -> None:
+    """#663: press Go on a question card, read the room, come back to Home: the card is gone (and stays gone
+    after a reload, because the broker keeps the mark); a second question to the person is a card again, with
+    no "and more" under it for the one already seen. Fails if the card is still there after the room was
+    opened, comes back with the old question, or the new question does not show."""
+    w = World(hosted, "goseen")
+    w.agent_says(w.build, "planner", f"@{w.me} keep the old upload endpoint?", f"k-{w.build}-g")
+    page = open_home(ui, w)
+    card = page.locator("#home .home-card", has_text=w.build)
+    expect(card).to_have_count(1)
+    card.get_by_role("button", name=re.compile("^Open ")).click()
+    expect(page.locator("#log")).to_contain_text("keep the old upload endpoint")
+    page.locator("#home-nav").click()
+    expect(page.locator("#room-title")).to_have_text("Home")
+    expect(page.locator("#home .home-card", has_text=w.build)).to_have_count(0)
+    page.reload()
+    expect(page.locator("#room-title")).to_have_text("Home")
+    expect(page.locator("#home .home-card", has_text=w.build)).to_have_count(0)
+    w.agent_says(w.build, "scout", f"@{w.me} and the new endpoint?", f"k-{w.build}-h")
+    again = page.locator("#home .home-card", has_text=w.build)
+    expect(again).to_have_count(1)
+    expect(again).to_contain_text("and the new endpoint?")
+    expect(again).not_to_contain_text("more in this room")
+
+
+def test_not_now_hides_a_board_card_and_it_comes_back_when_the_board_changes(
+    ui: UI, hosted: tuple[InProcBroker, str]
+) -> None:
+    """#663: Not now takes a review board card off Home, by mouse and by keyboard (focus moves on, not into
+    nothing), and it stays off after a reload; a new item on that board brings the card back. Fails if the
+    card stays, returns on a reload with nothing changed, or never returns."""
+    w = World(hosted, "later")
+    w.plant_board(w.build)
+    w.agent_says(w.uploads, "builder", "poke", f"k-{w.uploads}-l")  # a frame, after the board is planted
+    page = open_home(ui, w)
+    title = "review board in " + w.build
+    card = page.locator("#home .home-card", has_text=title)
+    expect(card).to_have_count(1)
+    card.get_by_role("button", name=re.compile("^Not now")).focus()
+    ring = page.evaluate("getComputedStyle(document.activeElement).outlineStyle")
+    assert ring != "none"
+    page.keyboard.press("Enter")
+    expect(page.locator("#home .home-card", has_text=title)).to_have_count(0)
+    page.reload()
+    expect(page.locator("#room-title")).to_have_text("Home")
+    expect(page.locator("#home .home-card", has_text=title)).to_have_count(0)
+
+    def add_item() -> None:
+        store = w.b.state.store
+        r = store.get_room(w.build)
+        assert r is not None
+        rv = store.open_reviews(r.id)[0]
+        store.add_review_item(
+            rv["id"], "question", "open", title="And v2?", raised_by="claude-1", options=["a", "b"]
+        )
+
+    w.b.on_loop(add_item)
+    back = open_home(ui, w)
+    expect(back.locator("#home .home-card", has_text=title)).to_have_count(1)
+    expect(back.locator("#home .home-card", has_text=title)).to_contain_text("2 items to call")
+
+
+def test_a_board_card_with_not_now_fits_a_phone(ui: UI, hosted: tuple[InProcBroker, str]) -> None:
+    """#663: the board card has three buttons (Decide, Not now, Go); on a 390 px phone they wrap under the
+    card's words, each at least 44 px tall, and nothing is cut off or scrolls sideways. Fails if the third
+    button sticks out past the card's edge."""
+    w = World(hosted, "narrowboard")
+    w.plant_board(w.build)
+    w.agent_says(w.uploads, "builder", "poke", f"k-{w.uploads}-p")
+    page = open_home(ui, w, **PHONE)
+    card = page.locator("#home .home-card", has_text="review board in " + w.build)
+    expect(card).to_have_count(1)
+    no_sideways_scroll(page)
+    right = card.evaluate("c => c.getBoundingClientRect().right")
+    for b in card.locator("button").all():
+        box = b.bounding_box()
+        assert box is not None and box["x"] + box["width"] <= right + 0.5 and box["height"] >= 44
