@@ -427,15 +427,20 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("33e8fa48c505a2b53f5cf6c31a96f15fe4791a29e2eeaa1b13bbff9140b64adb"),
+    "vendor/board/NOTICE": ("5528a308ba4c68d1e5da41e6baf9bed7354db8ea39c85b8557776b1765b85183"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("967d8afb779292632fe1da3800aca944bde7381f1fcf5fab619de0010fe0b750"),
-    "vendor/board/board.js.LEGAL.txt": ("7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"),
+    "vendor/board/board.js": ("f509763d1d535bcba01449ea96efa4fd30c795e0de7aec23b3e68ba7fdafdd4e"),
     "vendor/board/chunks/chunk-42LTX363.js": (
         "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
     "vendor/board/chunks/chunk-42LTX363.js.LEGAL.txt": (
         "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31"
+    ),
+    "vendor/board/chunks/chunk-4RIBWQVO.js": (
+        "775c963eff6c9d40c6f799cbe3fe95b6bd89feb8341ef967a8663757cf72dbcf"
+    ),
+    "vendor/board/chunks/chunk-4RIBWQVO.js.LEGAL.txt": (
+        "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"
     ),
     "vendor/board/chunks/chunk-4Z55H5PS.js": (
         "44e90e32371b5a5887ae9eecdb46c22a0229b463229e934a0096f6346e5ea8ef"
@@ -499,6 +504,9 @@ BOARD_ASSETS = {
     ),
     "vendor/board/chunks/kab-KAB-ZGHBKWFO-Q33DF4M3.js": (
         "b225d106b118758ff58592eab973752d2ca82987b88b27e5e1f8a6fdc162a5b6"
+    ),
+    "vendor/board/chunks/mermaid-QKS2V2ZS.js": (
+        "5d3dac8d3a1eeeefb76960ef35ec905239361221564752f2c9e73c492fcc1835"
     ),
     "vendor/board/chunks/percentages-BXMCSKIN-YJSF5M2O.js": (
         "e10ec8a63d1747d594103ee30abc81da342ff2849b5350e902f492c6392c089b"

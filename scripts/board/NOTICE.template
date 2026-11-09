@@ -9,6 +9,8 @@ The small frame adapter and browser rules are switchboard's code; upstream code 
 Build scope: the AI/text-to-diagram UI and its unused converter are disabled; UI locales are English only.
 Unexposed font families have no downloadable faces. CJK uses installed system fallback fonts, like emoji.
 The esm.sh fallback is replaced by /board-assets/. No external host or runtime security guard is added.
+The bounded draw_mermaid action bundles @excalidraw/mermaid-to-excalidraw 2.2.2 as a lazy chunk.
+Its Mermaid engine is the already-pinned 11.17.2 asset, served only through the board asset route.
 The main app never loads this bundle; the board document loads it only when opened.
 Bundled license comments are retained in *.LEGAL.txt. Additional package notices follow.
 Fonts are unmodified npm bytes: Virgil, Cascadia and Assistant use the OFL notices below;

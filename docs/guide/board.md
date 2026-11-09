@@ -12,4 +12,6 @@ An agent may change the board once every ten seconds, sharing the limit with `sa
 
 The board is limited to 1,500 elements, including deletions, and 1 MB of stored data. A pen stroke has at most 500 points. If a drawing exceeds the limits, simplify it before trying again. A board picture is limited to 1,200 pixels a side and 600 KB; it is generated on request and is not saved as an attachment.
 
-Mermaid conversion and a storyboard play view follow in [#658](https://github.com/amahpour/switchboard/issues/658).
+For a fresh flow, ask an agent to use `draw_mermaid` with a Mermaid `flowchart` or `graph` in `text`. Keep a board pane open while it converts. The result is editable shapes placed clear of existing drawings. Later changes use the shape tools. Input is limited to 8,000 characters and 16,000 bytes, and the result to 40 elements. Configuration directives, styles, images and other diagram kinds are rejected; click directives are removed. If the diagram cannot fit, nothing is added.
+
+For a storyboard, make named frames and put shapes inside them. Press **Play frames** to enter full screen (or fill the page when your browser does not support it) and show them in reading order, left to right across each row. Each frame’s name is its caption. **Previous**, **Next** or the arrow keys step through; **Exit play** or Escape returns to editing. This view changes no board data. It also works on the phone. A storyboard export is not included.

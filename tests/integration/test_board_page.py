@@ -51,7 +51,7 @@ def test_board_exceptions_do_not_leak_to_other_responses_or_static_assets(
         assert response.headers["x-frame-options"] == "DENY", path
         assert response.headers["cross-origin-resource-policy"] == "same-origin", path
         assert "access-control-allow-origin" not in response.headers, path
-    for path in ("/board-assets/board.js", "/board-assets/board.css"):
+    for path in ("/board-assets/board.js", "/board-assets/board.css", "/board-assets/mermaid.min.js"):
         response = web.get(path, headers={"Origin": "null"})
         assert response.status_code == 200, path
         assert response.headers["access-control-allow-origin"] == "*"

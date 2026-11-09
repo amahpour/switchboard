@@ -36,7 +36,7 @@ AGENT_TYPES = frozenset({"rectangle", "ellipse", "diamond", "arrow", "text", "fr
 # A person's page can also send a line or a pen stroke. Anything else, including an image, fails closed.
 PERSON_TYPES = AGENT_TYPES | frozenset({"line", "freedraw"})
 NEVER_TYPES = frozenset({"image", "embeddable", "iframe", "magicframe"})
-ACTIONS = ("note", "box", "connect", "frame", "move", "edit", "delete", "read")
+ACTIONS = ("note", "box", "connect", "frame", "move", "edit", "delete", "read", "draw_mermaid")
 BOX_SHAPES = frozenset({"rectangle", "ellipse", "diamond"})
 _FILL = frozenset({"hachure", "cross-hatch", "solid", "zigzag"})
 _STROKE = frozenset({"solid", "dashed", "dotted"})
@@ -761,3 +761,92 @@ def _delete(
         raise Reject("unknown id")
     out = [_bump(c, now, new_nonce(), isDeleted=True) for c in _companions(elements, el, arrows=True)]
     return out, [el["id"]]
+
+
+def mermaid_source(value: Any) -> str:
+    """Only bounded fresh flows; diagram configuration cannot override the sandbox's renderer (§56.9)."""
+    if not isinstance(value, str) or len(value) > 8000 or len(value.encode(errors="replace")) > 16000:
+        raise Reject("Mermaid source exceeds 8000 characters or 16000 bytes")
+    source = value.strip()
+    if "%%{" in source or not re.match(r"^(?:flowchart|graph)\s+(?:TD|TB|BT|RL|LR)\b", source):
+        raise Reject("use a flowchart or graph without configuration directives")
+    source = re.sub(r"(?im)^\s*click\b[^\n]*", "", source).strip()
+    if re.search(r"\bclick\b", source, re.IGNORECASE):
+        raise Reject("put click directives on separate lines; they are removed")
+    if re.search(r"(?im)^\s*(?:style|classDef|linkStyle)\b|@\s*\{|!\[", source):
+        raise Reject("use plain flow shapes and labels without styles or images")
+    # Fullwidth punctuation is inert during Mermaid's temporary DOM layout. The element cleaner
+    # normalizes it back only after conversion, when labels are canvas text. Encoded tags stay inert too.
+    source = re.sub(r"&(?=[#a-z0-9])", "＆", source, flags=re.IGNORECASE)
+    source = re.sub(r"#(?=(?:[a-z]+|[0-9]+);)", "＃", source, flags=re.IGNORECASE)
+    return re.sub(r"<(?=[a-z/!])", "＜", source, flags=re.IGNORECASE)
+
+
+def _drawing_bounds(e: dict[str, Any]) -> tuple[float, float, float, float]:
+    """Include rotation and all line/pen points, even an inconsistent claimed bounding box."""
+    w, h = e["width"], e["height"]
+    cx, cy = e["x"] + w / 2, e["y"] + h / 2
+    angle = e.get("angle", 0)
+    c, s = math.cos(angle), math.sin(angle)
+    points = [(0, 0), (w, 0), (w, h), (0, h), *e.get("points", [])]
+    rotated = [
+        (cx + c * (x - w / 2) - s * (y - h / 2), cy + s * (x - w / 2) + c * (y - h / 2)) for x, y in points
+    ]
+    return (
+        min(x for x, y in rotated),
+        min(y for x, y in rotated),
+        max(x for x, y in rotated),
+        max(y for x, y in rotated),
+    )
+
+
+def mermaid_elements(current: list[dict[str, Any]], raw: Any, *, now: float) -> list[dict[str, Any]]:
+    """Validate a whole conversion, mint its ids, and place it clear of the latest live board."""
+    if not isinstance(raw, list) or not 0 < len(raw) <= MAX_CALL:
+        raise Reject("a diagram must have 1 to 40 elements")
+    elements = [clean_element(e, agent=True) for e in raw]
+    ids = {e["id"]: mint("m") for e in elements}
+    if len(ids) != len(elements) or any(e["isDeleted"] for e in elements):
+        raise Reject("duplicate or deleted diagram elements")
+    bounds = [_drawing_bounds(e) for e in elements]
+    left, top = min(b[0] for b in bounds), min(b[1] for b in bounds)
+    width, height = max(b[2] for b in bounds) - left, max(b[3] for b in bounds) - top
+    if max(width, height) > DIM_MAX:
+        raise Reject("diagram exceeds the drawing limits")
+    live = _live(current)
+    x, y = 0.0, 0.0
+    if live:
+        occupied = [_drawing_bounds(e) for e in live]
+        x = max(b[2] for b in occupied) + 80
+        if x + width > COORD:
+            x, y = 0.0, max(b[3] for b in occupied) + 80
+    if x + width > COORD or y + height > COORD:
+        raise Reject("no free space for this diagram")
+    groups: dict[str, str] = {}
+
+    def reference(value: str) -> str:
+        if value not in ids:
+            raise Reject("diagram refers to a shape outside itself")
+        return ids[value]
+
+    for e in elements:
+        e.update(
+            id=ids[e["id"]],
+            x=e["x"] - left + x,
+            y=e["y"] - top + y,
+            version=1,
+            versionNonce=nonce(),
+            updated=int(now * 1000),
+        )
+        for key in ("frameId", "containerId"):
+            if e.get(key):
+                e[key] = reference(e[key])
+        for key in ("startBinding", "endBinding"):
+            if e.get(key):
+                e[key]["elementId"] = reference(e[key]["elementId"])
+        for bound in e.get("boundElements") or []:
+            bound["id"] = reference(bound["id"])
+        e["groupIds"] = [groups.setdefault(g, mint("g")) for g in e.get("groupIds", [])]
+    if _nbytes(elements) > MAX_BYTES:
+        raise Reject("diagram exceeds the board byte limit")
+    return elements

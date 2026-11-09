@@ -3180,7 +3180,7 @@ The page posts the mark with the newest id it holds for a room (`r.lastId`) when
 
 ## 56. A room's whiteboard (#656)
 
-One whiteboard per room, shared by whoever can see the room. This section covers storage, merge, the agent tool and the sandboxed drawing pane (#657). Mermaid conversion and the storyboard play view follow in #658. Nothing here fetches a service or runs a browser: the elements are Excalidraw's own shape, the page renders them, and the broker builds agent shapes itself.
+One whiteboard per room, shared by whoever can see the room. This section covers storage, merge, the agent tool and the sandboxed drawing pane (#657). Mermaid conversion and the storyboard play view are §56.9 (#658). Nothing here fetches a service or runs a browser: the elements are Excalidraw's own shape, the page renders them, and the broker builds agent shapes itself.
 
 ### 56.1 What is stored (`store.py`, schema 46)
 
@@ -3196,7 +3196,7 @@ Caps, from the spike: 1,500 elements live and deleted together, 1,000,000 bytes,
 
 ### 56.3 One tool, and a skill
 
-`board(room, action, …)` is one tool, the same shape as `review` (§37): the description is one line that names the actions, and the how-to is a `board` skill, the same file in the Claude Code, Codex and Cursor plugins. The actions are `note`, `box`, `connect`, `frame`, `move`, `edit`, `delete` and `read`. The broker mints an id for a new shape. `read` returns the summary the spike measured (frames in reading order, shapes with ids, arrows as `start -> end`) by default; `text="image"` asks an open board page for a picture (§56.8). Leave `x` and `y` out and the broker places the shape.
+`board(room, action, …)` is one tool, the same shape as `review` (§37): the description is one line that names the actions, and the how-to is a `board` skill, the same file in the Claude Code, Codex and Cursor plugins. The actions are `note`, `box`, `connect`, `frame`, `move`, `edit`, `delete`, `read` and `draw_mermaid` (§56.9). The broker mints an id for a new shape. `read` returns the summary the spike measured (frames in reading order, shapes with ids, arrows as `start -> end`) by default; `text="image"` asks an open board page for a picture (§56.8). Leave `x` and `y` out and the broker places the shape.
 
 A change is rate-limited like a post and, when it is kept, shares that post's clock (`participants.last_say_at`). Inside the window the call is refused, not queued: a say can wait its turn, and a drawing that waited could land on top of a newer one. `read` is not limited. The tool list measured 3,653 before this tool and 4,165 after, and the cap is that size (`test_tool_list_fits_the_review_budget`). The maintainer's answer "1. Yes" to "Can I raise it and start #656 tonight" is the yes for that one tool and nothing else.
 
@@ -3219,9 +3219,9 @@ Shapes from outside are a claim, run through one allowlist (`clean_element`).
 - What another agent reads back is `sanitize`d with no message-length cut (the board's own caps bound it), so `<` cannot close a harness tag and the words are data.
 - A board that would pass the byte cap is refused. A page that sends one is told nothing changed; an agent is told the board is full.
 
-### 56.6 Not in this part
+### 56.6 Browser views
 
-Mermaid conversion and a storyboard play view (#658). The pane and optional picture are §56.8.
+The drawing pane and optional picture are §56.8; Mermaid conversion and storyboard playback are §56.9.
 
 ### 56.7 Assumptions
 
@@ -3249,3 +3249,16 @@ Mermaid conversion and a storyboard play view (#658). The pane and optional pict
 **The build.** Excalidraw 0.18.1, React/React DOM 18.3.1 and esbuild 0.25.12 are pinned by `scripts/board/package-lock.json`. `build.mjs` takes an output path and dependency folder, so the approved download folder stays outside the checkout. It bundles the frame adapter, copies the exposed unmodified local fonts, retains bundled license comments and writes a NOTICE with MIT and font licenses, package notices and the byte count. The unused built-in Mermaid/AI UI and non-English interface locales are excluded. Unexposed fonts have no downloadable faces, and CJK uses system fallbacks. Excalidraw's dist also carries excalidraw.com's own service settings: its Firebase browser config (a public Google API key, which GitHub's secret scanning flagged on this branch), and its share, collaboration, AI and Plus export settings. Nothing in the board reads them and its CSP allows no connection to them, so the build empties them and fails if the pinned chunk stops matching; `test_the_board_ships_none_of_excalidraw_coms_service_settings` keeps a rebuild from bringing them back. This keeps the source archive within the existing 4 MB packaging guard; no guard is raised. The static lint pins every emitted byte, and rebuilding twice is compared byte for byte. Built files are committed; `node_modules` never is. This follows §29.9's reviewed-asset model, not a CDN.
 
 Tests: `test_board_page.py` proves the exact policy and its isolation from existing responses; `test_board_browser.py` compares browser cleaning to the broker; `test_board_tool.py` checks pending PNG requests and room/byte/dimension guards; `test_board_ui.py` draws by pointer, follows agent tools live in light/dark/phone, verifies the opaque boundary and cookie-free document request, reads a PNG, and checks arrow endpoint geometry. The existing static guards still scan all handwritten page code and pin the complete vendor build.
+
+
+### 56.9 Fresh flows and storyboard playback (#658)
+
+`board(action="draw_mermaid", text=...)` adds a fresh flowchart, with no new tool or input fields. Its one-line description stays within the existing measured tool-list budget. Source is limited to 8,000 characters and 16,000 bytes. Only `flowchart` and `graph` are supported initially. Configuration directives, styles, images and unsupported diagram kinds are rejected; standalone click directives are removed. Markup punctuation is made inert before Mermaid's temporary DOM layout and normalized back only in the element cleaner, when labels are canvas text. Encoded markup is inert too.
+
+The broker asks an already-open pane to convert through the existing board hub frames. Requests have a random id bound to room and kind, expire after eight seconds and share the picture path's global cap of 16. An agent has at most one conversion pending. `@excalidraw/mermaid-to-excalidraw` 2.2.2 is a lazy chunk in the pinned board build. It uses the existing pinned Mermaid 11.17.2 asset through one exact board-asset alias with scoped CORS; the original static path's headers are unchanged. The same opaque document, CSP and postMessage checks as §56.8 apply. No new exception is needed.
+
+The page validates the converted elements before forwarding. The server validates every element as agent input, at most 40, remints every id and group, and remaps internal references. It cannot replace or bind to an existing shape. Placement uses the latest live scene's rotated bounds and all stroke points: to its right with an 80-unit gap, or below when the right side is full. If it cannot fit within the coordinate limits, or any element or board cap fails, the entire conversion is rejected. Membership and the shared post rate limit are checked again after conversion. One successful import writes one change, one notice and one hub delta. No page means a bounded error asking the person to open Whiteboard; no headless process is started.
+
+**Play frames** requests fullscreen on the parent panel, with a viewport-filling fallback when the browser does not support it. The view is read-only. Frames are ordered by their row (100-unit bands), then x, matching the summary's reading order. Each frame's name is its caption, drawn by the parent with textContent. Previous/Next, arrow keys and Escape/Exit play navigate without a server write. The sandbox displays only that frame and its children and fits its camera to them; updates still arrive live. Exiting restores the complete editable scene and focus to Play frames. Pending person edits are flushed before entering; image reads still export the complete board. The phone uses the same view and controls. Exporting a storyboard is outside this issue.
+
+Tests: `test_board_mermaid.py` checks source/type/byte/id/placement caps, including rotated shapes and long strokes; `test_board_conversion.py` drives the real MCP/WebSocket request and races it with leaving and posting; `test_board_story.py` converts hostile text without browser errors, edits a converted label and plays six frames on desktop and phone without changing stored data.

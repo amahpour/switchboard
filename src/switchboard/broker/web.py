@@ -361,6 +361,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.get("/board-assets/{asset:path}", include_in_schema=False)
     async def board_asset(asset: str) -> Response:
         # Only the pinned build's files, never room files or a prefix-wide CORS middleware.
+        if asset == "mermaid.min.js":
+            return FileResponse(
+                STATIC_DIR / "vendor" / "mermaid" / "mermaid.min.js",
+                headers={"cache-control": "no-cache", "access-control-allow-origin": "*"},
+            )
         root = STATIC_DIR / "vendor" / "board"
         target = (root / asset).resolve()
         if (
@@ -2459,7 +2464,8 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
         if set(frame) != {"t", "room", "request", "result"}:
             return False
         # A late or malformed picture is dropped, like a rejected element, without disconnecting a page.
-        state.room_board.image_result(room, frame["request"], frame["result"])
+        if not state.room_board.image_result(room, frame["request"], frame["result"]):
+            state.room_board.mermaid_result(room, frame["request"], frame["result"])
         return True
     if not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
         return False

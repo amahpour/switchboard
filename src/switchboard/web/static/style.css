@@ -3422,3 +3422,10 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 @media (max-width: 760px) { .whiteboard-bar button { min-height: 44px; } }
 #app.whiteboard-open #room-empty { display: none; }
 @media (max-width: 760px) { #whiteboard-toggle { min-width: 44px; min-height: 44px; } }
+
+/* The storyboard view fills the viewport; it changes only the local camera (§56.9). */
+#whiteboard-panel.whiteboard-playing { position: fixed; inset: 0; z-index: 100; background: var(--bg); display: flex; }
+.whiteboard-playing .whiteboard-bar { flex-wrap: wrap; gap: 8px; }
+.whiteboard-playing #whiteboard-status, .whiteboard-playing #whiteboard-close { display: none; }
+#whiteboard-caption { flex: 1; min-width: 100px; overflow-wrap: anywhere; font-size: calc(14px * var(--text-scale)); }
+.whiteboard-playing #whiteboard-host { min-height: 0; }

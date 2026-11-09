@@ -24,7 +24,8 @@ from switchboard.store import Conflict
 class RoomBoard:
     def __init__(self, state: Any) -> None:
         self.state = state
-        self._pending: dict[str, tuple[int, int, asyncio.Future[Any]]] = {}
+        self._converting: set[int] = set()
+        self._pending: dict[str, tuple[int, int, asyncio.Future[Any], str]] = {}
 
     async def image(self, room: Room) -> dict[str, Any]:
         """Ask an already-open board to rasterize. No browser is launched by the broker."""
@@ -33,7 +34,7 @@ class RoomBoard:
         seq, _elements = self.state.store.board_load(room.id)
         request = secrets.token_hex(16)
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._pending[request] = (room.id, seq, future)
+        self._pending[request] = (room.id, seq, future, "image")
         try:
             self.state.hub.room_board(room.name, {"task": {"id": request, "kind": "image", "seq": seq}})
             try:
@@ -59,7 +60,7 @@ class RoomBoard:
         ):
             return False
         pending = self._pending.get(request)
-        if pending is None or pending[0] != room.id or pending[2].done():
+        if pending is None or pending[0] != room.id or pending[2].done() or pending[3] != "image":
             return False
         try:
             raw = base64.b64decode(result, validate=True)
@@ -72,6 +73,55 @@ class RoomBoard:
             return False
         pending[2].set_result(result)
         return True
+
+    async def convert(self, room: Room, source: str, participant: int) -> list[Any]:
+        """Conversion runs only in an open board, with one request per agent and a global cap."""
+        if participant in self._converting or len(self._pending) >= 16:
+            raise ServiceError("busy", "a board conversion is already pending")
+        request = secrets.token_hex(16)
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[request] = (room.id, 0, future, "mermaid")
+        self._converting.add(participant)
+        try:
+            self.state.hub.room_board(
+                room.name, {"task": {"id": request, "kind": "mermaid", "source": source}}
+            )
+            try:
+                result = await asyncio.wait_for(future, 8.0)
+            except TimeoutError as e:
+                raise ServiceError("no_board_page", "open this room's whiteboard, then ask again") from e
+            if isinstance(result, dict):
+                raise ServiceError("bad_request", "cannot convert this flow within the board limits")
+            return result
+        finally:
+            self._pending.pop(request, None)
+            self._converting.discard(participant)
+
+    def mermaid_result(self, room: Room, request: Any, result: Any) -> bool:
+        if not isinstance(request, str):
+            return False
+        pending = self._pending.get(request)
+        if pending is None or pending[0] != room.id or pending[3] != "mermaid" or pending[2].done():
+            return False
+        if result == {"error": "cannot_convert"}:
+            pending[2].set_result(result)
+            return True
+        try:
+            board.mermaid_elements([], result, now=self.state.clock.now())
+        except board.Reject:
+            return False
+        pending[2].set_result(result)
+        return True
+
+    def imported(self, room: Room, actor: str, participant: int, raw: list[Any]) -> dict[str, Any]:
+        _, current = self.state.store.board_load(room.id)
+        try:
+            elements = board.mermaid_elements(current, raw, now=self.state.clock.now())
+        except board.Reject as e:
+            raise ServiceError("bad_request", e.reason) from e
+        return self._commit(
+            room, actor, participant, action="draw_mermaid", params=None, raw=elements, agent_raw=True
+        )
 
     def snapshot(self, room: Room) -> dict[str, Any]:
         """The whole board, for a page that just subscribed."""
@@ -104,6 +154,7 @@ class RoomBoard:
         action: str | None,
         params: dict[str, Any] | None,
         raw: list[Any] | None,
+        agent_raw: bool = False,
     ) -> dict[str, Any]:
         who = clean(actor).strip()[:100] or "someone"
         now = self.state.clock.now()
@@ -121,8 +172,12 @@ class RoomBoard:
                 agent = True
             else:
                 incoming = raw
-                agent = False
+                agent = agent_raw
+                if agent_raw:
+                    added = tuple(e["id"] for e in incoming)
             result = board.merge(elements, incoming, agent=agent)
+            if agent_raw and (len(result.taken) != len(incoming) or result.rejected):
+                raise ServiceError("bad_request", "the diagram does not fit on this board")
             if not result.taken:
                 why = result.rejected[0] if result.rejected else "the board kept a newer copy of that shape"
                 if raw is not None:

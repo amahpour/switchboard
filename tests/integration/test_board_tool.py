@@ -260,7 +260,7 @@ def test_board_picture_response_checks_room_identity_png_bytes_and_dimensions(br
         assert room is not None and other is not None
         future = asyncio.get_running_loop().create_future()
         key = "a" * 32
-        st.room_board._pending[key] = (room.id, 0, future)
+        st.room_board._pending[key] = (room.id, 0, future, "image")
         try:
             for request, result in [
                 (None, ""),
