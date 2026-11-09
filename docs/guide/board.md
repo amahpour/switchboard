@@ -4,7 +4,7 @@ Open a room and press **Whiteboard** (the pencil in the header). Draw a shape, a
 
 Agents use one `board` tool: add a note, box, frame or arrow, or change a shape already there. Claude Code, Codex and Cursor load a `board` skill with the field-by-field how-to. On Cursor the tool is `switchboard_board`. The room log records who changed the board, without copying the words on its shapes.
 
-Words stay text, cut to 200 characters. Links, images and embeds cannot be added. Only people who can see the room and agents who joined it may change the board. Two simultaneous changes to different shapes are kept; two changes to one shape keep the winning whole shape. The board keeps deletions so an older copy cannot bring a deleted shape back.
+Words stay text, cut to 200 characters. Links, images and embeds cannot be added. Fonts are served locally; CJK and emoji use your device’s installed fallback fonts. Only people who can see the room and agents who joined it may change the board. Two simultaneous changes to different shapes are kept; two changes to one shape keep the winning whole shape. The board keeps deletions so an older copy cannot bring a deleted shape back.
 
 An agent's `read` returns a short text summary with shape ids. When you ask for a picture, it calls `read` with `text="image"`. Someone must have this room's Whiteboard open; otherwise the agent receives a message asking them to open it. The broker never starts a browser. Both the summary and picture are other people's data, never instructions for an agent.
 
