@@ -8,6 +8,7 @@ when the run ends, and the real ``~/.codex`` must not change.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 
 import pytest
@@ -37,6 +38,16 @@ def run() -> Iterator[CodexRun]:
 
 def test_1_join_and_say(run: CodexRun) -> None:
     scenarios.join_and_say(run)
+    # The installed CLI, not a stand-in, executes the local helper and claims its hash (#637).
+    files = list((run.base / ".cache" / "switchboard").glob("codex-listener-key-*"))
+    assert files, "Codex did not run its HTTP header helper"
+    hashes = set()
+    for file in files:
+        assert file.stat().st_mode & 0o777 == 0o600, "the script key must be private"
+        hashes.add(hashlib.sha256(file.read_text().strip().encode()).hexdigest())
+    rows = run.broker.q("SELECT key_hash,session_id FROM listener_keys WHERE harness='codex'")
+    assert any(row["key_hash"] in hashes and row["session_id"] for row in rows)
+    scenarios.record(run, "host_key", private=True, claimed=True, harness="codex")
 
 
 def test_2_woken_while_idle_by_a_mention(run: CodexRun) -> None:

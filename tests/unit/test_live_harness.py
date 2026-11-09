@@ -265,6 +265,17 @@ def test_codex_runs_with_approvals_on_request_and_its_hooks_trusted_at_their_has
     )
 
 
+
+def test_codex_live_config_exercises_the_installed_local_header_helper() -> None:
+    """The real CLI must claim a process key, not just pass a synthetic header in broker tests (#637)."""
+    import shlex
+    import tomllib
+
+    configured = tomllib.loads(codex.config_toml("https://example.com", Path("/tmp/ws"), []))
+    assert configured["mcp_servers"]["switchboard"]["http_headers_helper"] == (
+        "sh " + shlex.quote(str(codex.plugin_dir() / "bin" / "headers"))
+    )
+
 def test_devins_project_config_is_the_plugins_with_its_path_and_nothing_imported() -> None:
     """Fails if a hook still points at the placeholder path, if another tool's config is imported, or if the
     allow list is wider than switchboard's own tools and the scratch script."""

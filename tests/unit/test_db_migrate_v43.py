@@ -98,7 +98,7 @@ def test_every_row_survives_a_platform_icon_can_be_stored_and_an_old_call_has_no
     assert counts["agent_icons"] == 10 and counts["meetings"] == 1
 
     con = db.open_db(path)  # through to the current version
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 43
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 44
     assert db.row_counts(con, db.tables_of(42)) == counts
     assert icons_of(con) == icons
     live = con.execute("SELECT state, live_at FROM meetings WHERE id=?", (call,)).fetchone()

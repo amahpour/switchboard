@@ -1,5 +1,8 @@
-"""Listener keys (DESIGN.md §49.11, #488): what lets Claude Code's helper scripts reach the server when
+"""Listener keys (DESIGN.md §49.11, #488, #637): what lets helper scripts reach the server when
 the agent signed in through the browser and holds no token a script can read.
+
+Codex's local HTTP header helper claims a key by the same header. It is pinned to its harness and first
+authenticated thread and can register that thread's hosted call only; it cannot listen or report a session.
 
 Claude Code keeps a browser sign-in's token to itself, so the plugin's command hooks (``bin/listen``,
 the idle wake, and ``bin/session``, the start and end of a session) have nothing to send. A plugin MCP
@@ -60,13 +63,23 @@ class Checked:
     why: str = ""
 
 
+@dataclass(frozen=True)
+class SessionScope:
+    """The harness and session the authenticated connection named, never a script's claim (§49.11)."""
+
+    harness: str
+    session_id: str
+
+
 class ListenerKeys:
     """The keys' rules over the store, with a small memory so a signed-in connection's every request
     (each carries the header) doesn't write each time."""
 
     def __init__(self, store: "Store", clock: Clock) -> None:
         self.store, self.clock = store, clock
-        self._claimed: OrderedDict[tuple[int, str], float] = OrderedDict()  # (token, hash) -> when written
+        self._claimed: OrderedDict[tuple[int, str, str], float] = (
+            OrderedDict()
+        )  # (token, hash, kind) -> written
         self._named: OrderedDict[tuple[int, str], str] = OrderedDict()  # (token, hash) -> its session
 
     @staticmethod
@@ -74,14 +87,15 @@ class ListenerKeys:
         """The key hash a request's header carries, if it is one (64 lowercase hex)."""
         return value if value is not None and HASH_RE.fullmatch(value) else None
 
-    def claim(self, token: AgentTokenRow, h: str) -> None:
+    def claim(self, token: AgentTokenRow, h: str, *, harness: str = "claude") -> None:
         """A request with a live token carried this key hash: the key is the token's. Written when it is
         new and then at most once a minute (its use)."""
         now = self.clock.now()
-        mark = (token.id, h)
+        harness = harness if harness in ("claude", "codex") else "unknown"
+        mark = (token.id, h, harness)
         if now - self._claimed.get(mark, float("-inf")) < TOUCH_S:
             return
-        if self.store.listener_key_claim(token.id, h, MAX_PER_TOKEN, IDLE_S):
+        if self.store.listener_key_claim(token.id, h, MAX_PER_TOKEN, IDLE_S, harness):
             self._remember(self._claimed, mark, now)
 
     def name_session(self, token: AgentTokenRow, h: str, session_id: str) -> None:
@@ -98,10 +112,25 @@ class ListenerKeys:
         """The session ``key`` is for, as the server already knows it (named by a hook of the connection,
         or pinned by the key's first request), or None when it is for none yet. The route that registers a
         hosted call (§54) takes the session from here and never from its request."""
-        got = self.store.listener_key(key_hash(key)) if KEY_RE.fullmatch(key) else None
-        return got[0].session_id if got is not None else None
+        scope = self.scope_of(key)
+        return scope.session_id if scope is not None else None
 
-    def check(self, key: str, session_id: str | None) -> Checked:
+    def scope_of(self, key: str) -> SessionScope | None:
+        """The stored harness and session. Unknown harnesses fail closed; a key with no session
+        cannot register a hosted call or choose its scope in that request."""
+        got = self.store.listener_key(key_hash(key)) if KEY_RE.fullmatch(key) else None
+        if got is None or got[0].session_id is None or got[0].harness not in ("claude", "codex"):
+            return None
+        return SessionScope(got[0].harness, got[0].session_id)
+
+    def name_codex_session(self, token: AgentTokenRow, h: str, session_id: str) -> None:
+        """A signed-in Codex request names its thread in MCP metadata. Pin only the first thread:
+        subagents on the same connection must not move the key away from its owner (#637)."""
+        # The row can have expired or been evicted since an earlier request. The conditional
+        # update writes only an empty binding; a process-local cache could outlive that row.
+        self.store.listener_key_name_codex_session(token.id, h, session_id)
+
+    def check(self, key: str, session_id: str | None, *, harness: str = "claude") -> Checked:
         """Whether ``key`` may act for ``session_id`` now. Nothing is said of why a key is unknown: a
         hash nobody claimed, a key idle too long and one that never was look the same."""
         if not KEY_RE.fullmatch(key):
@@ -115,7 +144,11 @@ class ListenerKeys:
         now = self.clock.now()
         if row.last_used_at < now - IDLE_S:
             return Checked(None, "unknown_key")
+        if row.harness not in ("claude", "codex"):
+            return Checked(None, "unknown_key")
         if session_id is not None:
+            if row.harness != harness or harness not in ("claude", "codex"):
+                return Checked(None, "wrong_session")
             bound = row.session_id or self.store.listener_key_bind(row.id, session_id)
             if bound != session_id:
                 return Checked(None, "wrong_session")
@@ -124,7 +157,7 @@ class ListenerKeys:
         return Checked(token)
 
     @staticmethod
-    def _remember(memory: "OrderedDict", mark: tuple[int, str], value: object) -> None:
+    def _remember(memory: "OrderedDict", mark: tuple[int, str] | tuple[int, str, str], value: object) -> None:
         memory[mark] = value
         memory.move_to_end(mark)
         while len(memory) > CACHE_MAX:

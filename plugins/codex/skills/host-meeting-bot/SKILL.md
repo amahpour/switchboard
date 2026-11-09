@@ -7,7 +7,7 @@ description: Host switchboard's meeting bot on this machine, or check or stop it
 
 This starts joinly and a relay in Docker here. The relay pushes the transcript and speaks agents' `@call` answers while voice is on. No model turn is spent per line.
 
-The shell needs `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` from the environment Codex was started in, and an agent on that token's device must already be in the room. Check that both variables are set without printing their values. **Browser sign-in alone cannot host a call:** Codex has no listener key for a shell command. If the token is missing, explain that hosting needs an agent token from Settings → Agents; stop here. Never read Codex's credential store or ask the user to paste a token in chat.
+The shell needs `SWITCHBOARD_URL` and this session must already be in the room. Authentication can use `SWITCHBOARD_AGENT_TOKEN`, or a browser sign-in with the plugin's `http_headers_helper` configured as in the meetings guide (Codex 0.166.0 or later, local HTTP MCP connection). Check environment-variable presence without printing values. The script finds its own process's private key and sends `CODEX_THREAD_ID` so another thread cannot borrow it. Run the script; never read the key or Codex's credential store yourself, and never ask the user to paste a token in chat. If the script reports missing authentication, explain the two setup choices and stop; do not edit the harness's configuration or search other processes for keys.
 
 Use the installed plugin's `bin/meeting-host`, two directories above this skill's folder. Resolve that path from this loaded skill's location; don't search another plugin for credentials. With that absolute path in place of `<plugin>`, run:
 

@@ -76,7 +76,7 @@ def test_the_old_call_and_line_are_kept_as_the_brokers_own_and_a_hosted_call_can
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 43
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 44
     assert db.row_counts(con, db.TABLES) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None

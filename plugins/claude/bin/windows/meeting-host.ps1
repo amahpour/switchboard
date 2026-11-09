@@ -157,7 +157,20 @@ function Read-Text([string]$path) { # a small file's text, shared so a helper ma
 }
 function Credential([string]$data) { # the agent token, else the listener key of this Claude Code; '' when there is neither
     if (Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')) {
-        return [string]$env:SWITCHBOARD_AGENT_TOKEN
+        if ($env:SWITCHBOARD_AGENT_TOKEN) { return [string]$env:SWITCHBOARD_AGENT_TOKEN }
+        if ($env:CODEX_THREAD_ID -cnotmatch '^[A-Za-z0-9_-]{1,128}\z') { return '' }
+        $id = $PID
+        for ($hops = 0; $hops -lt 32; $hops++) {
+            $id = ParentOf $id
+            if ($id -le 1) { return '' }
+            $file = Join-Path $data "codex-listener-key-$id"
+            if (Test-Path -LiteralPath $file) {
+                $k = Read-Text $file
+                if ($k -cmatch '^sbl_[0-9a-f]{64}\z') { return $k }
+                return ''
+            }
+        }
+        return ''
     }
     $t = First $env:SWITCHBOARD_AGENT_TOKEN $env:CLAUDE_PLUGIN_OPTION_TOKEN
     if ($t) { return $t }
@@ -351,7 +364,7 @@ function Cmd-Start([string[]]$rest) {
     [void][IO.Directory]::CreateDirectory($data)
     $cred = Credential $data
     if (-not $cred -and (Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin'))) {
-        Die 'no credential: hosting from Codex needs SWITCHBOARD_AGENT_TOKEN in its shell; browser sign-in alone cannot host a call'
+        Die 'no credential: hosting from Codex needs SWITCHBOARD_AGENT_TOKEN or browser sign-in with http_headers_helper configured and a current thread; see the Codex hosting guide'
     }
     if (-not $cred) { Die "no credential: this Claude Code has no agent token in its environment and no listener key in $data (listener-key-<its pid>); sign in to switchboard from Claude Code (/mcp, then Authenticate) or set the plugin's token, then ask again" }
     $forced = if ($o['--cpu']) { 'cpu' } elseif ($o['--gpu']) { 'gpu' } else { '' }
@@ -408,6 +421,9 @@ function Cmd-Start([string[]]$rest) {
     $link = ''
     $body = '{{"room": "#{0}", "key_hash": "{1}", "platform": "{2}", "model": "{3}"}}' -f $room, $hash, $platform, $m.Model
     if ($o['--from-room']) { $body = $body.Substring(0, $body.Length - 1) + ', "from_room": true}' }
+    if ((Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')) -and $cred.StartsWith('sbl_')) {
+        $body = $body.Substring(0, $body.Length - 1) + ', "session": "' + $env:CODEX_THREAD_ID + '"}'
+    }
     Add-Type -AssemblyName System.Net.Http
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $handler = New-Object Net.Http.HttpClientHandler

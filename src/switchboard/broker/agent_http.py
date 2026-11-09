@@ -135,6 +135,7 @@ SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as c
 SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
 SESSION_FIELDS = ("event", "session_id", "source", "reason", "permission_mode")  # all /mcp/session reads
 SESSION_BODY_MAX = 2048
+LISTENER_META_MAX = 8192  # inspect only a bounded handshake; the MCP body's own limits remain unchanged
 INPUT_SESSION = "switchboard_session_id"
 INPUT_USE = "switchboard_tool_use_id"
 PRETOOL_PATH = "/mcp/pretool"
@@ -245,6 +246,27 @@ def client_info(ctx: Context | None) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
     return {k: str(v)[:80] for k, v in raw.items() if k in ("name", "version")}
+
+
+def _listener_harness(raw: bytes) -> str:
+    """The existing initialize/discover client metadata, under an already checked agent token. An
+    unclassified key opens nothing; names and JSON shapes we do not recognize stay unknown (§49.11)."""
+    if len(raw) > LISTENER_META_MAX:
+        return "unknown"
+    try:
+        message = json.loads(raw)
+    except ValueError:
+        return "unknown"
+    params = message.get("params") if isinstance(message, dict) else None
+    if not isinstance(params, dict):
+        return "unknown"
+    info = params.get("clientInfo")
+    if not isinstance(info, dict):
+        meta = params.get("_meta")
+        info = meta.get(CLIENT_INFO_META_KEY) if isinstance(meta, dict) else None
+    name = info.get("name") if isinstance(info, dict) else None
+    harness = CLIENTS.get(name[:80]) if isinstance(name, str) else None
+    return harness if harness is not None and harness in ("claude", "codex") else "unknown"
 
 
 def _id(value: Any) -> str | None:
@@ -457,6 +479,10 @@ class HttpTools:
             thread = self._thread_of(ctx)
         key = scope.get("state", {}).get("listener_key")
         self._caller.set(Caller(token, harness, thread, conn, key if isinstance(key, str) else None))
+        if harness in ("claude", "codex") and isinstance(key, str):
+            self.state.listener_keys.claim(token, key, harness=harness)
+        if harness == "codex" and thread is not None and isinstance(key, str):
+            self.state.listener_keys.name_codex_session(token, key, thread)
         if harness == "codex" and thread is not None and self.session_auth is not None:
             sid = _header(scope, b"mcp-session-id")
             if sid is not None and scope.get("method") == "POST":
@@ -758,7 +784,9 @@ class AgentAuth:
         self.touch(row)
         return Door(row)
 
-    async def other_session(self, door: "Door", session_id: str | None, send: Send) -> bool:
+    async def other_session(
+        self, door: "Door", session_id: str | None, send: Send, *, harness: str = "claude"
+    ) -> bool:
         """A key is for one session: True, after answering 403 ``wrong_session``, when this one is another
         (or none). A token is for any of its device's sessions."""
         if door.key is None:
@@ -766,7 +794,7 @@ class AgentAuth:
         if session_id is None:
             await _reply(send, 400, {"error": "bad_request", "message": "a session id is needed"})
             return True
-        if self.state.listener_keys.check(door.key, session_id).token is None:
+        if self.state.listener_keys.check(door.key, session_id, harness=harness).token is None:
             await _reply(
                 send, 403, {"error": "wrong_session", "message": "the listener key is for another session"}
             )
@@ -842,8 +870,27 @@ class AgentAuth:
         h = listener_keys.ListenerKeys.hash_in(_header(scope, listener_keys.HEADER))
         if h is not None:
             # the signed-in connection carries the sha256 of the key its machine made: the key is its token's
-            self.state.listener_keys.claim(row, h)
+            self.state.listener_keys.claim(row, h, harness="unknown")
             scope["state"]["listener_key"] = h
+
+        captured = b""
+        inspect_client = h is not None
+
+        async def receive_claim() -> dict[str, Any]:
+            nonlocal captured, inspect_client
+            message = await receive()
+            if inspect_client and message["type"] == "http.request":
+                body = message.get("body", b"")
+                if len(captured) + len(body) > LISTENER_META_MAX:
+                    captured, inspect_client = b"", False
+                else:
+                    captured += body
+                    if not message.get("more_body"):
+                        kind = _listener_harness(captured)
+                        if h is not None and kind != "unknown":
+                            self.state.listener_keys.claim(row, h, harness=kind)
+                        captured, inspect_client = b"", False
+            return message
 
         response_status: int | None = None
 
@@ -856,7 +903,7 @@ class AgentAuth:
                         self.bind(v.decode("latin-1"), row.id)
             await send(message)
 
-        await self.app(scope, receive, send_binding)
+        await self.app(scope, receive_claim if h is not None else receive, send_binding)
         if sid is not None and scope.get("method") == "DELETE" and response_status in (200, 202, 204):
             # A resumed thread can use a newer MCP session before this old DELETE arrives.
             # Only the session that served it most recently may take it offline.

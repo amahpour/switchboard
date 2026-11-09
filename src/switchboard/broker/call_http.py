@@ -224,17 +224,17 @@ class MeetingHost:
             return
         session, harness = asked, None
         if door.key is not None:
-            session = self.state.listener_keys.session_of(door.key)
-            if session is None:
+            bound = self.state.listener_keys.scope_of(door.key)
+            if bound is None:
                 await _reply(
                     send,
                     409,
                     {"error": "no_session", "message": "the listener key is not for a session yet"},
                 )
                 return
-            if asked is not None and await auth.other_session(door, asked, send):
+            session, harness = bound.session_id, bound.harness
+            if asked is not None and await auth.other_session(door, asked, send, harness=harness):
                 return
-            harness = "claude"  # a listener key is Claude Code's alone
         try:
             res = self.state.hosted_calls.register(door.row, body, session=session, harness=harness)
         except Refused as e:

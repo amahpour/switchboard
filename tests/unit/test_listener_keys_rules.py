@@ -11,7 +11,7 @@ import pytest
 from conftest import FakeClock
 
 from switchboard import db
-from switchboard.broker import listener_keys
+from switchboard.broker import agent_http, listener_keys
 from switchboard.broker.listener_keys import IDLE_S, MAX_PER_TOKEN, TOUCH_S, ListenerKeys
 from switchboard.models import AgentTokenRow
 from switchboard.store import Store
@@ -54,6 +54,36 @@ def test_a_claimed_key_is_the_claiming_tokens_and_has_no_session_yet(
     row, owner = store.listener_key(listener_keys.key_hash(key(1)))  # type: ignore[misc]
     assert (owner.id, row.session_id) == (t.id, None)
     assert key(1) not in repr(row)
+
+
+def test_a_codex_key_is_pinned_to_its_first_thread_and_cannot_be_a_claude_key(
+    store: Store, keys: ListenerKeys, clock: FakeClock
+) -> None:
+    """A process's helper may serve several threads. Only its first authenticated thread owns the key;
+    another thread or a Claude session with the same id must not borrow it (#637)."""
+    t = token(store)
+    h = listener_keys.key_hash(key(1))
+    keys.claim(t, h, harness="codex")
+    keys.name_codex_session(t, h, SESSION_A)
+    assert keys.scope_of(key(1)).harness == "codex"
+    assert keys.session_of(key(1)) == SESSION_A
+    assert keys.check(key(1), SESSION_A, harness="codex").token == t
+    assert keys.check(key(1), SESSION_A).why == "wrong_session"
+    keys.name_codex_session(t, h, SESSION_B)
+    keys.name_session(t, h, SESSION_B)
+    assert keys.session_of(key(1)) == SESSION_A
+    assert keys.check(key(1), SESSION_B, harness="codex").why == "wrong_session"
+    # Retention can remove an old key while its authenticated MCP connection is still alive.
+    # A fresh authenticated claim must restore its binding, rather than trust a stale name cache.
+    for n in range(2, MAX_PER_TOKEN + 2):
+        keys.claim(t, listener_keys.key_hash(key(n)), harness="codex")
+    assert keys.scope_of(key(1)) is None
+    clock.advance(TOUCH_S + 1)
+    keys.claim(t, h, harness="codex")
+    keys.name_codex_session(t, h, SESSION_A)
+    assert keys.session_of(key(1)) == SESSION_A
+    store.agent_token_revoke(t.id, None)
+    assert keys.check(key(1), SESSION_A, harness="codex").why == "revoked"
 
 
 def test_the_first_session_a_key_presents_is_pinned_and_no_other_is_taken(
@@ -232,3 +262,52 @@ def test_what_the_rules_remember_stays_bounded(
     keys.claim(t, listener_keys.key_hash(key(0)))  # forgotten, and claimed again: still one row
     assert store.listener_key(listener_keys.key_hash(key(0))) is not None
     assert keys.check(key(0), SESSION_A).token == t
+
+
+def test_an_unclassified_key_cannot_pin_itself_before_its_authenticated_client_is_known(
+    store: Store, keys: ListenerKeys
+) -> None:
+    """A hash on an authenticated GET proves token ownership but no harness. The key must open nothing
+    until the authenticated MCP metadata identifies it; it must not default to Claude (#637)."""
+    t = token(store)
+    h = listener_keys.key_hash(key(1))
+    keys.claim(t, h, harness="unknown")
+    assert keys.check(key(1), None).why == "unknown_key"
+    assert keys.check(key(1), SESSION_A).why == "unknown_key"
+    assert keys.scope_of(key(1)) is None
+    keys.claim(t, h, harness="codex")
+    keys.name_codex_session(t, h, SESSION_A)
+    assert keys.check(key(1), SESSION_A, harness="codex").token == t
+
+
+@pytest.mark.parametrize(
+    ("raw", "want"),
+    [
+        (b'{"params":{"clientInfo":{"name":"codex-mcp-client"}}}', "codex"),
+        (b'{"params":{"_meta":{"io.modelcontextprotocol/clientInfo":{"name":"claude-code"}}}}', "claude"),
+        (b"{}", "unknown"),
+        (b"[]", "unknown"),
+        (b'{"params":[]}', "unknown"),
+        (b'{"params":{"clientInfo":{"name":[]}}}', "unknown"),
+        (b'{"params":{"clientInfo":{"name":"rmcp"}}}', "unknown"),
+        (b"{bad", "unknown"),
+        (b"\xff", "unknown"),
+        (b"x" * 8193, "unknown"),
+    ],
+    ids=[
+        "codex",
+        "claude",
+        "empty",
+        "array",
+        "bad-params",
+        "bad-name",
+        "unsupported",
+        "bad-json",
+        "bad-utf8",
+        "oversized",
+    ],
+)
+def test_listener_client_metadata_is_bounded_and_unknown_values_fail_closed(raw: bytes, want: str) -> None:
+    """Only the existing authenticated initialize/discover client names classify a script key. Bad JSON,
+    shape, unsupported names and an oversized body cannot accidentally turn an unknown key into Claude's."""
+    assert agent_http._listener_harness(raw) == want

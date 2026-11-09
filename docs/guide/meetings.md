@@ -110,11 +110,30 @@ The bot does not have to run next to the server. It can run on your laptop or wo
 
 You need:
 
-- **Claude Code or Codex with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Codex also needs `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` in its shell; browser sign-in alone cannot host a call. Update the server first and the plugin second: the plugin of this release talks to routes an older server doesn't have.
+- **Claude Code or Codex with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Codex also needs `SWITCHBOARD_URL` and either `SWITCHBOARD_AGENT_TOKEN` or the [browser-sign-in helper](#codex-with-browser-sign-in). Update the server first and the plugin second: the plugin of this release talks to routes an older server doesn't have.
 - **Docker with Compose** on that machine. The plugin installs nothing else: no `pip install`, no model to fetch by hand.
 - **An NVIDIA GPU, if you have one,** with its driver and the NVIDIA Container Toolkit. The script uses it by itself. Without one, or on a Mac, it runs on the CPU with a smaller model.
 
 Step by step:
+
+### Codex with browser sign-in
+
+With Codex 0.166.0 or later, a local HTTP MCP connection can make a private script key while using its saved browser sign-in. No agent token needs to be in the shell, and no script reads Codex's credential store.
+
+1. Upgrade the broker, then the plugin. Find the installed switchboard plugin's folder (the folder containing `.codex-plugin` and `bin`). In your existing `[mcp_servers.switchboard]` entry in Codex's `config.toml`, add this line, replacing the path with that installed folder:
+
+    ```toml
+    http_headers_helper = '"/path/to/installed/switchboard/bin/headers"'
+    ```
+
+    On native Windows, use the absolute path to `bin/headers.cmd` instead. Keep `url` and `tool_timeout_sec` from [USAGE.md](../USAGE.md#agents-over-https-a-preview). Leave `bearer_token_env_var` out for browser-only sign-in.
+
+2. Set the non-secret `SWITCHBOARD_URL` to your broker's address, without `/mcp`, in the environment that starts Codex. Sign in with `codex mcp login switchboard` if needed, then restart Codex and join the room from that session.
+3. Ask that session to host the call. The helper made `codex-listener-key-<pid>` under `~/.cache/switchboard`, mode 0600 (on Windows, an access list of your account alone). Only its hash travels over the signed-in connection. The host script finds the key through its own process ancestors and names `CODEX_THREAD_ID`; the broker checks that thread and its room membership. Never print or copy the key.
+
+The key is pinned to the first thread using that connection. It opens only the existing call-registration route for that thread, expires with the sign-in, and cannot call a tool, listen for messages, report a session, or act for another thread or harness. A subagent cannot borrow its parent's key. `SWITCHBOARD_AGENT_TOKEN` still works and takes precedence when set.
+
+The helper and host must use the same data folder. For a custom folder, pass it as the helper command's quoted second argument and as `meeting-host start --data DIR`, or start Codex with `SWITCHBOARD_PLUGIN_DATA` set to it. The helper supports local HTTP MCP connections; a remote execution environment needs the token path instead.
 
 ### Ask from the room without showing the link to a model
 
@@ -127,8 +146,7 @@ The broker keeps the link in memory, tied to you and this room, for at most ten 
 The script receives the link privately in the answer to its existing registration, only when its
 credential belongs to you and its device still has an agent in this room. It writes the same private file
 the relay uses for a link from stdin; it prints no link. With several of your agents, the first successful
-registration takes it. Another person cannot claim it. Codex still needs an agent token in its shell;
-browser sign-in alone cannot host.
+registration takes it. Another person cannot claim it. Codex can use an agent token or its own [browser-sign-in key](#codex-with-browser-sign-in).
 
 If you have no eligible agent in the room, the command says so and holds nothing. A repeated request
 replaces your previous request for that room. Expiry, room closure and broker restart discard it. A failed
@@ -344,7 +362,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 
 ## Troubleshooting
 
-- **Codex says hosting needs `SWITCHBOARD_AGENT_TOKEN`:** browser sign-in only authenticates its MCP connection, not its shell. Start Codex with the machine's agent token and `SWITCHBOARD_URL` set as in [USAGE.md](../USAGE.md#agents-over-https-a-preview), then join the room on that device. Do not copy credentials from Codex's private store.
+- **Codex reports no hosting credential:** use an agent token as in [USAGE.md](../USAGE.md#agents-over-https-a-preview), or configure the [browser-sign-in helper](#codex-with-browser-sign-in), restart Codex and join the room. Its shell needs `SWITCHBOARD_URL`; the helper and host must use the same data folder. A subagent cannot use its parent's key. Do not copy credentials from Codex's private store.
 
 - **`/meeting <link>` says "No meeting server is set":** the broker has no `[meeting] joinly_url` and no `SWITCHBOARD_JOINLY_URL`. Add one and restart the broker. See [Set it up](#set-it-up). (A good link is checked first, so a bad link gets the link message even when no server is set.) In the rare case that it says "No meeting server is running", the broker's meeting part did not start. Restart the broker, and look at its log.
 - **`/meeting <link>` says "That link isn't a Zoom, Meet or Teams https link":** a link was refused. Only `https` links on the listed hosts work, with a real path (`https://zoom.us/` alone is refused). Copy the whole invite link again. Put nothing after it, because a second word gives `usage: /meeting [<link>|leave|snapshot|voice on|voice off]`.
@@ -425,7 +443,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six step
 
 **The host script** (`meeting-host`, in either the Claude Code or Codex plugin's `bin`; your agent runs it):
 
-- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM` registers a call for `ROOM` and starts its two containers. Without `--from-room`, the meeting link is read from stdin, never from an argument. Claude Code's skill fills in `--server` and `--data` from the plugin's settings. Codex uses `SWITCHBOARD_URL` and its default data folder; its script requires `SWITCHBOARD_AGENT_TOKEN` and cannot use Codex's browser sign-in. `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--no-join` checks the setup without a call.
+- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM` registers a call for `ROOM` and starts its two containers. Without `--from-room`, the meeting link is read from stdin, never from an argument. Claude Code's skill fills in `--server` and `--data` from the plugin's settings. Codex uses `SWITCHBOARD_URL` and its default data folder; its script uses `SWITCHBOARD_AGENT_TOKEN` or its own [browser-sign-in key](#codex-with-browser-sign-in). `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--no-join` checks the setup without a call.
 - `meeting-host stop [FINGERPRINT]` stops this machine's hosted call (or the one with that fingerprint): both containers and their files.
 - `meeting-host status` lists the calls on this machine, the relay's last lines, and whether they run.
 - `meeting-host plan [--cpu|--gpu] [--model NAME]` prints the device, the model and the joinly image it would use, and starts nothing.

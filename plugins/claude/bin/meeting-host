@@ -21,8 +21,9 @@
 # prints: the link is read from stdin and written to a 0600 file by the shell itself, the key is made here, and
 # curl and the relay read them from files and from stdin. The credential it registers with is what the plugin's
 # other scripts hold (docs/DESIGN.md section 49.11): the agent token if there is one in the environment
-# (SWITCHBOARD_AGENT_TOKEN), else the listener key bin/headers made for this Claude Code in the plugin's data
-# folder (listener-key-<Claude Code's pid>), found from CLAUDE_PID, which a Bash command is given.
+# (SWITCHBOARD_AGENT_TOKEN), else the key bin/headers made for the current harness process in the plugin's
+# data folder: listener-key-<pid> for Claude Code, codex-listener-key-<pid> for Codex. Codex also sends its
+# CODEX_THREAD_ID so a subagent cannot borrow its parent's key to register for another thread.
 #
 # Exit codes: 0 done, 1 something is wrong (it says what), 2 a bad command line.
 # Git for Windows' sh (Git Bash) hands over to windows/meeting-host.ps1 (the PowerShell version).
@@ -176,8 +177,30 @@ claude_pid() { # Claude Code's pid: CLAUDE_PID, which a Bash command is given, e
 }
 credential() { # prints the credential, or nothing: the agent token, else the listener key of this Claude Code
   if [ -d "$plugin/.codex-plugin" ]; then
-    # Codex's browser credential belongs to its MCP client. Its shell has no listener key.
-    printf '%s' "${SWITCHBOARD_AGENT_TOKEN:-}"
+    if [ -n "${SWITCHBOARD_AGENT_TOKEN:-}" ]; then
+      printf '%s' "$SWITCHBOARD_AGENT_TOKEN"
+      return
+    fi
+    # The helper names this process's key. Shell tools may have several wrappers between them and
+    # Codex; walk only our own ancestors, never another process's files or a credential store.
+    thread=${CODEX_THREAD_ID:-}
+    case $thread in '' | *[!A-Za-z0-9_-]*) return ;; esac
+    [ "${#thread}" -le 128 ] || return
+    p=$PPID
+    hops=0
+    while [ "$p" -gt 1 ] 2>/dev/null && [ "$hops" -lt 32 ]; do
+      file=$data/codex-listener-key-$p
+      if [ -f "$file" ]; then
+        k=$(head -c 256 "$file" 2>/dev/null)
+        case $k in sbl_*) ;; *) return ;; esac
+        is_hex "${k#sbl_}" 64 || return
+        printf '%s' "$k"
+        return
+      fi
+      if [ -r "/proc/$p/status" ]; then p=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$p/status"); else p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' '); fi
+      case $p in '' | *[!0-9]*) return ;; esac
+      hops=$((hops + 1))
+    done
     return
   fi
   t=${SWITCHBOARD_AGENT_TOKEN:-${CLAUDE_PLUGIN_OPTION_TOKEN:-}}
@@ -404,7 +427,7 @@ cmd_start() {
   mkdir -p "$data" 2>/dev/null || die "cannot make $data"
   cred=$(credential)
   if [ -z "$cred" ] && [ -d "$plugin/.codex-plugin" ]; then
-    die "no credential: hosting from Codex needs SWITCHBOARD_AGENT_TOKEN in its shell; browser sign-in alone cannot host a call"
+    die "no credential: hosting from Codex needs SWITCHBOARD_AGENT_TOKEN or browser sign-in with http_headers_helper configured and a current thread; see the Codex hosting guide"
   fi
   [ -n "$cred" ] || die "no credential: this Claude Code has no agent token in its environment and no listener key in $data (listener-key-<its pid>); sign in to switchboard from Claude Code (/mcp, then Authenticate) or set the plugin's token, then ask again"
   choose_device "$force"
@@ -468,9 +491,13 @@ cmd_start() {
   fi
   link=
   # the relay runs as you, and the folder is yours: it may delete what is in it. Nothing else is readable.
+  host_session=''
+  if [ -d "$plugin/.codex-plugin" ]; then
+    case $cred in sbl_*) host_session=$(printf ', "session": "%s"' "$CODEX_THREAD_ID") ;; esac
+  fi
   handoff=''
   [ -z "$from_room" ] || handoff=', "from_room": true'
-  body=$(printf '{"room": "#%s", "key_hash": "%s", "platform": "%s", "model": "%s"%s}' "$room" "$hash" "$platform" "$model" "$handoff")
+  body=$(printf '{"room": "#%s", "key_hash": "%s", "platform": "%s", "model": "%s"%s}' "$room" "$hash" "$platform" "$model" "$handoff$host_session")
   resp=$(mktemp) || die "no temporary file"
   trap 'rm -f "$resp"' EXIT
   code=$(printf 'header = "Authorization: Bearer %s"\n' "$cred" |
