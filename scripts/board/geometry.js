@@ -24,3 +24,14 @@ export function attachArrows(elements) {
     return { ...e, x: start[0], y: start[1], width: Math.abs(end[0] - start[0]), height: Math.abs(end[1] - start[1]), points: [[0, 0], [end[0] - start[0], end[1] - start[1]]] };
   });
 }
+
+// Bound labels from the broker carry a rough one-line origin. Recenter their measured box,
+// without resizing a target or changing its stored version. Left/top person layouts stay as drawn.
+export function centerLabels(elements) {
+  const byId = new Map(elements.map(e => [e.id, e]));
+  return elements.map(e => {
+    const c = byId.get(e.containerId);
+    if (e.type !== 'text' || !c || !['rectangle','ellipse','diamond'].includes(c.type) || e.textAlign !== 'center' || e.verticalAlign !== 'middle') return e;
+    return { ...e, x: c.x + (c.width - e.width) / 2, y: c.y + (c.height - e.height) / 2, angle: c.angle || 0 };
+  });
+}

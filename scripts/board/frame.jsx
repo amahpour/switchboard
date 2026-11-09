@@ -1,6 +1,6 @@
 // The opaque board document (DESIGN §56.8). No cookie, socket, API or untrusted HTML.
 import './asset-path.js';
-import { attachArrows } from './geometry.js';
+import { attachArrows, centerLabels } from './geometry.js';
 import rules from '../../src/switchboard/web/static/board-rules.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
@@ -20,6 +20,7 @@ function flush() {
   dirty = false;
   if (!changed.length) return;
   changed.forEach(e => known.set(e.id, sig(e)));
+  fullScene = rules.merge(fullScene, changed);
   post('change', { elements: changed });
 }
 function apply(elements) {
@@ -31,7 +32,7 @@ function apply(elements) {
   const scene = local ? rules.merge(elements, local) : elements;
   fullScene = scene;
   const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;
-  api.updateScene({ elements: attachArrows(restoreElements(shown, null, { repairBindings: true, refreshDimensions: true })), captureUpdate: 'NEVER' });
+  api.updateScene({ elements: attachArrows(centerLabels(restoreElements(shown, null, { repairBindings: true, refreshDimensions: true }))), captureUpdate: 'NEVER' });
   applying = false;
   const count = scene.filter(e => !e.isDeleted).length;
   document.getElementById('board-count').textContent = `${count} ${count === 1 ? 'shape' : 'shapes'}`;
@@ -65,7 +66,7 @@ window.addEventListener('message', async ev => {
       post('converted', { request: m.request, elements });
     } catch { post('converted', { request: m.request, error: 'cannot_convert' }); }
   } else if (m.session === session && m.action === 'export' && typeof m.request === 'string') {
-    const blob = await exportToBlob({ elements: playing ? attachArrows(restoreElements(fullScene, null, { repairBindings: true, refreshDimensions: true })) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
+    const blob = await exportToBlob({ elements: playing ? attachArrows(centerLabels(restoreElements(fullScene, null, { repairBindings: true, refreshDimensions: true }))) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
     if (blob.size <= 600000) post('image', { request: m.request, bytes: await blob.arrayBuffer() });
   }
 });
@@ -73,6 +74,8 @@ document.addEventListener('pointerdown', () => { pointer = true; dirty = true; }
 document.addEventListener('keydown', () => { dirty = true; });
 document.addEventListener('input', () => { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 250); });
 document.addEventListener('pointerup', () => { pointer = false; timer = setTimeout(flush, 0); });
+// Font loading is asynchronous in a cold browser. Remeasure after its metrics are available.
+document.fonts.addEventListener('loadingdone', () => { if (api && session) apply(fullScene); });
 createRoot(document.getElementById('board-root')).render(
   <Excalidraw langCode="en" aiEnabled={false} excalidrawAPI={value => { api = value; window.sbBoard = { api, flush }; post('ready'); }}
     initialData={{ appState: { currentItemFontFamily: 1 }, elements: [] }}
