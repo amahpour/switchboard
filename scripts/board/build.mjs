@@ -60,4 +60,4 @@ async function bytes(dir) {
   }
   return n;
 }
-await writeFile(path.join(output, 'NOTICE'), notice + `\nBuilt assets excluding this NOTICE: ${await bytes(output)} bytes.\n` + licenses);
+await writeFile(path.join(output, 'NOTICE'), (notice + `\nBuilt assets excluding this NOTICE: ${await bytes(output)} bytes.\n` + licenses).split('\n').map(line => line.trimEnd()).join('\n'));

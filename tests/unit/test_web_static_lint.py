@@ -428,7 +428,7 @@ BOARD_ASSETS = {
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
     "vendor/board/NOTICE": (
-        "9213b3d1d4914cae2441b9b13c70575ec09195916c714a52608dd5a62525270b"
+        "e32ce78b705dfec0983fba18d682d9a562cae60ad5346970b659bad61f03f520"
     ),
     "vendor/board/board.css": (
         "15edb741ea37aaf21cf666a70872706e3b1c6ea42b48e2ae76586c9498e138b5"
