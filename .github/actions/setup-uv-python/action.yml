@@ -6,6 +6,7 @@
 # and the Python series. A hit makes the install run offline, so a stale cache fails loudly instead
 # of quietly downloading. It is a `pull_request` cache: GitHub scopes it to the PR's own ref, and
 # no workflow here uses `pull_request_target`, so a fork's PR can't write one that `main` reads.
+# setup-uv's own cache (`cache-python: false`) keeps only uv's package cache; this step owns the Python.
 name: uv and Python
 description: Install uv 0.7.13 and CPython 3.13 (managed, cached by exact version)
 
