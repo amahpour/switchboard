@@ -44,7 +44,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 46
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -319,6 +319,21 @@ CREATE TABLE home_snoozes(
   review_id INTEGER NOT NULL,
   snoozed_at REAL NOT NULL,
   PRIMARY KEY(person_key, room_id, review_id)) WITHOUT ROWID;
+
+CREATE TABLE room_boards(
+  room_id INTEGER PRIMARY KEY REFERENCES rooms(id),
+  seq INTEGER NOT NULL CHECK(seq >= 0),
+  elements TEXT NOT NULL CHECK(length(elements) <= 1000000),
+  updated_at REAL NOT NULL);
+CREATE TABLE room_board_changes(
+  id INTEGER PRIMARY KEY,
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  seq INTEGER NOT NULL CHECK(seq > 0),
+  actor TEXT NOT NULL CHECK(length(actor) BETWEEN 1 AND 100),
+  at REAL NOT NULL,
+  ids TEXT NOT NULL CHECK(length(ids) <= 8000),
+  n INTEGER NOT NULL CHECK(n >= 1));
+CREATE INDEX room_board_changes_room ON room_board_changes(room_id, seq);
 """
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
@@ -353,7 +368,8 @@ V32_TABLES = (*V31_TABLES, "agent_icons")  # before listener_keys (v33)
 V38_TABLES = (*V32_TABLES, "listener_keys")  # schemas 33 through 38, before meetings (v39)
 V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
 V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before home_seen (v45)
-TABLES = (*V44_TABLES, "home_seen", "home_snoozes")
+V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard (v46)
+TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -966,6 +982,27 @@ V44_TO_V45 = (
 )
 
 
+# v45 -> v46 (#656, DESIGN.md §56): one whiteboard per room, and a short record of each accepted
+# change (who, when, which ids). The elements are one JSON document; the change rows are not copies of it.
+V45_TO_V46 = (
+    "CREATE TABLE room_boards("
+    " room_id INTEGER PRIMARY KEY REFERENCES rooms(id),"
+    " seq INTEGER NOT NULL CHECK(seq >= 0),"
+    " elements TEXT NOT NULL CHECK(length(elements) <= 1000000),"
+    " updated_at REAL NOT NULL)",
+    "CREATE TABLE room_board_changes("
+    " id INTEGER PRIMARY KEY,"
+    " room_id INTEGER NOT NULL REFERENCES rooms(id),"
+    " seq INTEGER NOT NULL CHECK(seq > 0),"
+    " actor TEXT NOT NULL CHECK(length(actor) BETWEEN 1 AND 100),"
+    " at REAL NOT NULL,"
+    " ids TEXT NOT NULL CHECK(length(ids) <= 8000),"
+    " n INTEGER NOT NULL CHECK(n >= 1))",
+    "CREATE INDEX room_board_changes_room ON room_board_changes(room_id, seq)",
+    "UPDATE meta SET value='46' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1029,6 +1066,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         42: MigrationStep(43, V42_TO_V43, (), (("agent_icons", "'opencode','zoom','meet','teams')"),)),
         43: MigrationStep(44, V43_TO_V44, ()),
         44: MigrationStep(45, V44_TO_V45, ("home_seen", "home_snoozes")),
+        45: MigrationStep(46, V45_TO_V46, ("room_boards", "room_board_changes")),
     }
     out = []
     v = frm
@@ -1074,6 +1112,9 @@ def tables_of(version: int) -> tuple[str, ...]:
     if version == 39:
         return V39_TABLES
     if version <= 44:
+        return V44_TABLES
+    if version == 45:
+        return V45_TABLES
         return V44_TABLES
     return TABLES
 

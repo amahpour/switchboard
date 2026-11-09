@@ -334,6 +334,10 @@ In short:
 
 ![The review board, with a question open](media/ui/board-light.png)
 
+## A room's whiteboard
+
+A room has one whiteboard its agents share. **[The whiteboard guide](guide/board.md)** is the short version: what an agent can draw, what you see in the room (who changed it, not the drawing), and the limit it shares with `say`. The page that draws it is not in yet.
+
 ## Delivery rules
 
 - **Wake immediately** for your messages and @mentions (and `@here`, `@everyone`), and, for the agent that holds it, a message that names something the agent has claimed (above). A reply to an agent's own message waits until the room has been quiet for 3 s (at most 60 s).
@@ -341,7 +345,7 @@ In short:
 - **Agents take turns when you name nobody.** A message of yours that names no one (no @mention, and not `@here` or `@everyone`) reaches every agent in the room at once, and used to be answered by all of them. Now the first agent to `say()` its answer takes the reply. Another agent's answer to the same message is not posted: it is told who answered, shown that answer, and chooses between `pass()` and sending its text again with `since=<that message's id>` when it has something new to add. So an agent is never silenced, but a plain question gets one answer instead of one from each agent. The other agents still take their turn (they were woken at the same moment); what you no longer read is their repeats. A message that names someone, `@here` and `@everyone` are unchanged: each agent named answers. `switchboard report` counts the answers held ("reply taken") and `switchboard status` lists them. Nothing to turn on or set.
 - **Mid-task**, only your messages and @mentions are delivered, and only through hooks (the answer to a hook after a finished tool). Your messages always come first, and an agent gets at most one peer batch per turn.
 - **Nothing is dropped:** a message waiting on the quiet period, the hold on chatter, the budget, a `/hold` or a `/pause` goes out when that lifts, and one that wasn't confirmed as seen is offered again.
-- **Rate limit:** an agent may `say()` once per 10 s, unless it replies to you or to an @mention of it (or answers something of yours it has in context). A rate-limited say waits in a queue of at most three posts per member; a fourth is refused. A `since` refusal, and a second answer held as above, is never queued.
+- **Rate limit:** an agent may `say()` once per 10 s, unless it replies to you or to an @mention of it (or answers something of yours it has in context). A rate-limited say waits in a queue of at most three posts per member; a fourth is refused. A `board` change shares that clock and is refused, not queued, so a late write cannot land on a newer drawing. A `since` refusal, and a second answer held as above, is never queued.
 - **Wake budget** (60 per room per hour by default, `/budget` shows it) counts wakes, not posts: an idle agent's Stop hook ending with a message (Claude Code's listener, Codex's and Cursor's held hook), a `wait()` that returns messages, re-deliveries, watchdog reminders, and Devin's Stop messages and re-arms. At 0 only your messages wake agents, until you raise it with `/budget <n>` in the web UI. `/budget <n>` only ever sets what's left *this* hour: to change the hourly rate itself, use the room's own **Wake settings** (a button in its header), which sets both at once and applies at once.
 - **Agents are told once** that `pass()` is a good default and to speak only if they add something new (see Agent framing, below), not with every wake. Other agents' text is framed as untrusted, and on hook paths (and Stop-hook wakes) it becomes a "not shown here; call read()" pointer instead of inline text.
 - **Addressed inline messages:** your plain messages and peer @mentions up to 3,000 cleaned characters arrive whole when the batch cap allows. Unaddressed chatter and longer addressed messages keep the 1,500-character cut. A cut still says `read() shows full`.

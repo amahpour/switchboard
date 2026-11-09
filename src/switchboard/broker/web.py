@@ -1,9 +1,10 @@
-"""REST routes, static files and the read-only WebSocket (DESIGN.md §5.4, §5.5).
+"""REST routes, static files and the WebSocket (DESIGN.md §5.4, §5.5, §56).
 
 Every ``/api/*`` request needs the session cookie. Unsafe methods also pass
 ``HostOriginGuard`` (exact Origin + ``X-Switchboard: 1``). The WebSocket checks
-Origin and the cookie before ``accept()`` and only understands ``hello`` and
-``ping`` from the client.
+Origin and the cookie before ``accept()``. From the client it understands ``hello``,
+``ping``, and ``board`` (a signed-in person who can see the room, sending shapes).
+Anything else closes it.
 
 The Inspector (§29): ``GET /api/rooms/{slug}/members/{name}`` is one member's detail
 (times, session id, queued ids, delivery counts, a short delivery timeline) for the human's
@@ -64,7 +65,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from switchboard import __version__, build_info, db
+from switchboard import __version__, board, build_info, db
 from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
@@ -106,6 +107,7 @@ NO_STORE = {"Cache-Control": "no-store"}
 MAX_BODY = 64 * 1024
 WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
+WS_FRAME_MAX = 16384  # hello and ping; a board frame may be as large as the board itself
 BAD_TOKEN_EVENT_S = 60.0
 # the ceremony cookies (§31.3, §31.4): the claim's id, a sign-in's sealed state, an add's
 SETUP_COOKIE = "switchboard_setup"
@@ -2275,7 +2277,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                     break
                 text = msg.get("text")
                 frame = None
-                if isinstance(text, str) and len(text) <= 16384:
+                # A board frame carries elements, so it may be larger than a hello. Anything else
+                # over the small cap is closed without being parsed.
+                board_frame = isinstance(text, str) and _looks_like_board(text)
+                limit = board.MAX_BYTES if board_frame else WS_FRAME_MAX
+                if isinstance(text, str) and len(text) <= limit:
                     try:
                         frame = json.loads(text)
                     except ValueError:
@@ -2286,8 +2292,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 elif t == "hello" and isinstance(frame, dict):
                     if not _ws_hello(state, sub, frame):
                         break
+                elif t == "board" and isinstance(frame, dict):
+                    if not _ws_board(state, sub, frame):
+                        break
                 else:
-                    break  # read-only socket: anything else closes it
+                    break  # anything else closes it
         except WebSocketDisconnect:
             pass
         finally:
@@ -2397,4 +2406,33 @@ def _ws_hello(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
                 "members": state.service.members(name),
             }
         )
+        sub.offer({"t": "board", "room": name, **state.room_board.snapshot(room)})
+    return True
+
+
+def _looks_like_board(text: str) -> bool:
+    """True when a frame is large only because it is a board update. The check is the first
+    bytes, so a hello the size of a board is not parsed."""
+    head = text.lstrip()[:16]
+    return head.startswith('{"t":"board"') or head.startswith('{"t": "board"')
+
+
+def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) -> bool:
+    """One batch of elements from a signed-in page. False closes the socket: a room the person
+    cannot see, or a frame that is not a list of elements. A bad element is dropped by the merge;
+    it does not close the socket."""
+    raw_room = frame.get("room")
+    elements = frame.get("elements")
+    if not isinstance(raw_room, str) or not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
+        return False
+    try:
+        name = normalize_room(raw_room)
+    except InvalidName:
+        return False
+    room = state.store.get_room(name)
+    person = sub.person if sub.person is not None else -1
+    if room is None or not state.service.visible(room, person):
+        return False
+    who = state.service.person_name(person) or "someone"
+    state.room_board.from_page(room, who, elements)
     return True

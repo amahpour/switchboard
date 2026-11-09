@@ -108,12 +108,13 @@ def test_hello_backlog_settings_members_and_after(broker: InProcBroker, web: htt
     ws = ws_connect(broker, cookie_of(web))
     try:
         hello(ws, [room, "#nope", "bad name!"])
-        frames = [json.loads(ws.recv(timeout=5)) for _ in range(6)]  # notice + 3 msgs + room + members
+        frames = [json.loads(ws.recv(timeout=5)) for _ in range(7)]  # msgs, room, members, board
         kinds = [f["t"] for f in frames]
-        assert kinds == ["msg", "msg", "msg", "msg", "room", "members"]
+        assert kinds == ["msg", "msg", "msg", "msg", "room", "members", "board"]
         assert [f["msg"]["text"] for f in frames[:4]] == ["#build created by alice", "m0", "m1", "m2"]
         assert frames[4]["settings"]["budget_remaining"] == 60 and frames[4]["settings"]["test_mode"] is True
         assert frames[5]["members"] == []
+        assert frames[6] == {"t": "board", "room": room, "seq": 0, "elements": [], "full": True}
     finally:
         ws.close()
     ws = ws_connect(broker, cookie_of(web))

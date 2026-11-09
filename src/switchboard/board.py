@@ -1,0 +1,763 @@
+"""A room's whiteboard: Excalidraw elements, the merge, and what an agent may draw (DESIGN.md §56).
+
+Pure. The rows live in ``store.py`` and the broker applies them (``broker/room_board.py``). The
+merge is Excalidraw's own: per element, the higher ``version`` wins, a tie goes to the lower
+``versionNonce``, and a delete is a tombstone that stays in the list. Shapes from outside are a
+claim: known fields only, text cut, coordinates clamped, ``link`` forced null, and an image,
+embed or frame-of-a-page never stored.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import secrets
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+from switchboard.envelope import clean
+
+# The spike's caps (#622, question 7). Text is cut for everyone, so what an agent reads back
+# stays bounded; a person drawing by hand meets the same cut.
+MAX_TEXT = 200
+MAX_CALL = 40  # shapes one agent call may add or change
+MAX_ELEMENTS = 1500  # live and deleted, together
+MAX_BYTES = 1_000_000
+MAX_CHANGES = 200  # change records kept per room (who, when, which ids)
+MAX_POINTS = 500
+MAX_SHAPE_BYTES = 32_000
+COORD = 20_000
+DIM_MAX = 10_000
+NOT_PLACED = 1_000_000_000.0  # the tool's default for x and y: place it, don't use this number
+
+AGENT_TYPES = frozenset({"rectangle", "ellipse", "diamond", "arrow", "text", "frame"})
+# A person's page can also send a line or a pen stroke. Anything else, including an image, fails closed.
+PERSON_TYPES = AGENT_TYPES | frozenset({"line", "freedraw"})
+NEVER_TYPES = frozenset({"image", "embeddable", "iframe", "magicframe"})
+ACTIONS = ("note", "box", "connect", "frame", "move", "edit", "delete", "read")
+BOX_SHAPES = frozenset({"rectangle", "ellipse", "diamond"})
+_FILL = frozenset({"hachure", "cross-hatch", "solid", "zigzag"})
+_STROKE = frozenset({"solid", "dashed", "dotted"})
+_ALIGN = frozenset({"left", "center", "right"})
+_VALIGN = frozenset({"top", "middle", "bottom"})
+_ARROWHEADS = frozenset({"arrow", "bar", "dot", "triangle", "diamond", "triangle_outline"})
+_BOUND = frozenset({"arrow", "text"})
+_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+_INDEX = re.compile(r"^[A-Za-z0-9]{1,120}$")
+
+
+class Reject(Exception):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+@dataclass(frozen=True)
+class MergeResult:
+    elements: tuple[dict[str, Any], ...]
+    taken: tuple[dict[str, Any], ...]
+    rejected: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ActionResult:
+    """What one agent action does to the current elements, before the merge.
+
+    ``incoming`` is the elements to merge (new ones, or the old ones with a bumped version).
+    ``error`` set means nothing is merged.
+    """
+
+    incoming: tuple[dict[str, Any], ...] = ()
+    error: str = ""
+    summary: str = ""
+    added: tuple[str, ...] = ()
+
+
+def mint(prefix: str) -> str:
+    return f"{prefix}{secrets.token_hex(6)}"
+
+
+def nonce() -> int:
+    return secrets.randbits(31)
+
+
+def _finite(v: Any) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    n = float(v)
+    if not math.isfinite(n):
+        return None
+    return n
+
+
+def _clamp(v: Any, lo: float, hi: float) -> float | None:
+    n = _finite(v)
+    if n is None:
+        return None
+    return max(lo, min(hi, n))
+
+
+def _iint(v: Any, lo: int, hi: int) -> int | None:
+    if isinstance(v, bool) or not isinstance(v, int):
+        return None
+    if v < lo or v > hi:
+        return None
+    return v
+
+
+def _text(v: Any) -> str:
+    if not isinstance(v, str):
+        return ""
+    return clean(v)[:MAX_TEXT]
+
+
+def _ident(v: Any) -> str | None:
+    if isinstance(v, str) and _ID.fullmatch(v):
+        return v
+    return None
+
+
+def _color(v: Any) -> str | None:
+    if v == "transparent":
+        return v
+    if isinstance(v, str) and _COLOR.fullmatch(v):
+        return v
+    return None
+
+
+def _choice(v: Any, allowed: frozenset[str]) -> str | None:
+    if isinstance(v, str) and v in allowed:
+        return v
+    return None
+
+
+def _points(raw: Any) -> list[list[float]]:
+    if not isinstance(raw, list) or len(raw) > MAX_POINTS:
+        raise Reject("oversized")
+    out: list[list[float]] = []
+    for p in raw:
+        if not isinstance(p, (list, tuple)) or len(p) < 2:
+            raise Reject("bad points")
+        x, y = _clamp(p[0], -COORD, COORD), _clamp(p[1], -COORD, COORD)
+        if x is None or y is None:
+            raise Reject("bad points")
+        out.append([x, y])
+    return out
+
+
+def _binding(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    eid = _ident(raw.get("elementId"))
+    if eid is None:
+        return None
+    focus = _clamp(raw.get("focus", 0), -1, 1)
+    gap = _clamp(raw.get("gap", 0), 0, 100)
+    if focus is None or gap is None:
+        return None
+    return {"elementId": eid, "focus": focus, "gap": gap}
+
+
+def _bound_list(raw: Any) -> list[dict[str, str]] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) > MAX_CALL:
+        return None
+    out = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        bid, kind = _ident(item.get("id")), _choice(item.get("type"), _BOUND)
+        if bid is not None and kind is not None:
+            out.append({"id": bid, "type": kind})
+    return out
+
+
+def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
+    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all."""
+    if not isinstance(raw, dict):
+        raise Reject("not an element")
+    eid = _ident(raw.get("id"))
+    if eid is None:
+        raise Reject("bad id")
+    kind = raw.get("type")
+    if not isinstance(kind, str) or kind in NEVER_TYPES:
+        raise Reject("image" if kind in NEVER_TYPES else "unknown type")
+    allowed = AGENT_TYPES if agent else PERSON_TYPES
+    if kind not in allowed:
+        raise Reject("agent type" if agent else "unknown type")
+    x, y = _clamp(raw.get("x"), -COORD, COORD), _clamp(raw.get("y"), -COORD, COORD)
+    w, h = _clamp(raw.get("width"), 0, DIM_MAX), _clamp(raw.get("height"), 0, DIM_MAX)
+    if None in (x, y, w, h):
+        raise Reject("bad geometry")
+    version = _iint(raw.get("version"), 0, 1_000_000_000)
+    vn = _iint(raw.get("versionNonce"), -(2**31), 2**31 - 1)
+    if version is None or vn is None:
+        raise Reject("bad version")
+    deleted = raw.get("isDeleted", False)
+    if not isinstance(deleted, bool):
+        raise Reject("bad version")
+    el: dict[str, Any] = {
+        "id": eid,
+        "type": kind,
+        "x": x,
+        "y": y,
+        "width": w,
+        "height": h,
+        "version": version,
+        "versionNonce": vn,
+        "isDeleted": deleted,
+        "link": None,  # no clickable link, from anyone
+    }
+    angle = _clamp(raw.get("angle", 0), -100, 100)
+    if angle is not None:
+        el["angle"] = angle
+    for key in ("strokeColor", "backgroundColor"):
+        color = _color(raw.get(key))
+        if color is not None:
+            el[key] = color
+    fill, stroke = _choice(raw.get("fillStyle"), _FILL), _choice(raw.get("strokeStyle"), _STROKE)
+    if fill is not None:
+        el["fillStyle"] = fill
+    if stroke is not None:
+        el["strokeStyle"] = stroke
+    width = _clamp(raw.get("strokeWidth"), 0, 20)
+    if width is not None and "strokeWidth" in raw:
+        el["strokeWidth"] = width
+    rough = _clamp(raw.get("roughness"), 0, 3)
+    if rough is not None and "roughness" in raw:
+        el["roughness"] = rough
+    opacity = _iint(raw.get("opacity"), 0, 100) if "opacity" in raw else None
+    if opacity is not None:
+        el["opacity"] = opacity
+    if isinstance(raw.get("groupIds"), list):
+        ids = [i for i in (_ident(g) for g in raw["groupIds"][:16]) if i is not None]
+        el["groupIds"] = ids
+    frame = raw.get("frameId")
+    if frame is None or _ident(frame):
+        if "frameId" in raw:
+            el["frameId"] = frame if frame is None else _ident(frame)
+    if isinstance(raw.get("index"), str) and _INDEX.fullmatch(raw["index"]):
+        el["index"] = raw["index"]
+    rnd = raw.get("roundness")
+    if isinstance(rnd, dict) and _iint(rnd.get("type"), 1, 3) is not None:
+        el["roundness"] = {"type": rnd["type"]}
+    seed = _iint(raw.get("seed"), 0, 2**31 - 1)
+    if seed is not None:
+        el["seed"] = seed
+    bounds = _bound_list(raw.get("boundElements"))
+    if bounds is not None:
+        el["boundElements"] = bounds
+    updated = _iint(raw.get("updated"), 0, 10**15)
+    if updated is not None:
+        el["updated"] = updated
+    if isinstance(raw.get("locked"), bool):
+        el["locked"] = raw["locked"]
+    for key in ("text", "originalText", "name"):
+        if isinstance(raw.get(key), str):
+            el[key] = _text(raw[key])
+    size = _iint(raw.get("fontSize"), 8, 48)
+    if size is not None:
+        el["fontSize"] = size
+    family = _iint(raw.get("fontFamily"), 1, 3)
+    if family is not None:
+        el["fontFamily"] = family
+    align, valign = _choice(raw.get("textAlign"), _ALIGN), _choice(raw.get("verticalAlign"), _VALIGN)
+    if align is not None:
+        el["textAlign"] = align
+    if valign is not None:
+        el["verticalAlign"] = valign
+    container = raw.get("containerId")
+    if container is None and "containerId" in raw:
+        el["containerId"] = None
+    elif _ident(container):
+        el["containerId"] = container
+    if isinstance(raw.get("autoResize"), bool):
+        el["autoResize"] = raw["autoResize"]
+    lh = _clamp(raw.get("lineHeight"), 0.5, 3)
+    if lh is not None and "lineHeight" in raw:
+        el["lineHeight"] = lh
+    if kind in ("arrow", "line", "freedraw"):
+        el["points"] = _points(raw.get("points"))
+    if kind == "freedraw" and isinstance(raw.get("pressures"), list):
+        if len(raw["pressures"]) > MAX_POINTS:
+            raise Reject("oversized")
+        pressures = []
+        for p in raw["pressures"]:
+            n = _clamp(p, 0, 1)
+            if n is None:
+                raise Reject("bad points")
+            pressures.append(n)
+        el["pressures"] = pressures
+    if isinstance(raw.get("simulatePressure"), bool):
+        el["simulatePressure"] = raw["simulatePressure"]
+    for key in ("startBinding", "endBinding"):
+        if key in raw and raw[key] is not None:
+            bound = _binding(raw[key])
+            if bound is not None:
+                el[key] = bound
+    for key in ("startArrowhead", "endArrowhead"):
+        if raw.get(key) is None and key in raw:
+            el[key] = None
+        else:
+            head = _choice(raw.get(key), _ARROWHEADS)
+            if head is not None:
+                el[key] = head
+    if isinstance(raw.get("elbowed"), bool):
+        el["elbowed"] = raw["elbowed"]
+    if len(json.dumps(el, separators=(",", ":")).encode()) > MAX_SHAPE_BYTES:
+        raise Reject("oversized")
+    return el
+
+
+def _keeps(cur: dict[str, Any], inc: dict[str, Any]) -> bool:
+    """True when the stored element wins. A tie on version goes to the lower nonce, and an
+    equal nonce keeps what is already stored, so the same element sent twice changes nothing."""
+    if cur["version"] > inc["version"]:
+        return True
+    if cur["version"] == inc["version"] and cur["versionNonce"] <= inc["versionNonce"]:
+        return True
+    return False
+
+
+def _nbytes(elements: list[dict[str, Any]]) -> int:
+    return len(json.dumps(elements, separators=(",", ":"), ensure_ascii=False).encode())
+
+
+def merge(current: list[dict[str, Any]], incoming: list[Any], *, agent: bool) -> MergeResult:
+    """Merge ``incoming`` into ``current``. ``agent`` selects the type allowlist and the per-call cap."""
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for e in current:
+        if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"] not in by_id:
+            by_id[e["id"]] = e
+            order.append(e["id"])
+    cap = MAX_CALL if agent else MAX_ELEMENTS
+    taken: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    for i, raw in enumerate(incoming):
+        if i >= cap:
+            rejected.append("too many")
+            break
+        try:
+            el = clean_element(raw, agent=agent)
+        except Reject as e:
+            rejected.append(e.reason)
+            continue
+        cur = by_id.get(el["id"])
+        if cur is not None and _keeps(cur, el):
+            continue
+        if cur is None and len(by_id) >= MAX_ELEMENTS:
+            rejected.append("board full")
+            continue
+        trial = [by_id[n] for n in order]
+        if cur is None:
+            trial.append(el)
+        else:
+            trial = [el if e["id"] == el["id"] else e for e in trial]
+        if _nbytes(trial) > MAX_BYTES:
+            rejected.append("board full")
+            continue
+        if cur is None:
+            order.append(el["id"])
+        by_id[el["id"]] = el
+        taken.append(el)
+    return MergeResult(tuple(by_id[n] for n in order), tuple(taken), tuple(rejected))
+
+
+def _live(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [e for e in elements if not e.get("isDeleted")]
+
+
+def _label(elements: list[dict[str, Any]], el: dict[str, Any]) -> str:
+    if el["type"] == "text":
+        return str(el.get("text") or "")
+    for b in el.get("boundElements") or []:
+        if not isinstance(b, dict):
+            continue
+        t = next((e for e in elements if e["id"] == b.get("id")), None)
+        if t and t["type"] == "text" and t.get("containerId") == el["id"] and not t.get("isDeleted"):
+            return str(t.get("text") or "")
+    if el["type"] == "frame":
+        return str(el.get("name") or "")
+    return ""
+
+
+def summary(elements: list[dict[str, Any]], seq: int) -> str:
+    """The text an agent reads: frames in reading order, shapes with ids, arrows as ``a -> b``.
+
+    The same shape the spike measured. Tombstones are left out. The broker runs the result
+    through the envelope before an agent sees it, so this string is data, not instructions.
+    """
+    live = _live(elements)
+    frames = sorted((e for e in live if e["type"] == "frame"), key=lambda e: (round(e["y"] / 100), e["x"]))
+    shapes = [e for e in live if e["type"] in ("rectangle", "ellipse", "diamond")]
+    loose = [e for e in live if e["type"] == "text" and not e.get("containerId")]
+    arrows = [e for e in live if e["type"] == "arrow"]
+    lines = [
+        f"board rev {seq}: {len(frames)} frames, {len(shapes)} shapes, "
+        f"{len(arrows)} arrows, {len(loose)} loose texts"
+    ]
+    for i, f in enumerate(frames, 1):
+        lines.append(
+            f'frame {i} id={f["id"]} "{f.get("name") or ""}" at ({round(f["x"])},{round(f["y"])}) '
+            f"{round(f['width'])}x{round(f['height'])}"
+        )
+    for s in shapes:
+        where = f" in {s['frameId']}" if s.get("frameId") else ""
+        lines.append(
+            f'{s["type"]} id={s["id"]} "{_label(elements, s)}" at ({round(s["x"])},{round(s["y"])}) '
+            f"{round(s['width'])}x{round(s['height'])}{where}"
+        )
+    for t in loose:
+        lines.append(f'text id={t["id"]} "{t.get("text") or ""}" at ({round(t["x"])},{round(t["y"])})')
+    for a in arrows:
+        start = (a.get("startBinding") or {}).get("elementId")
+        end = (a.get("endBinding") or {}).get("elementId")
+        lines.append(f'arrow id={a["id"]} {start or "(free)"} -> {end or "(free)"} "{_label(elements, a)}"')
+    return "\n".join(lines)
+
+
+def _by_id(elements: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {e["id"]: e for e in elements if isinstance(e, dict) and isinstance(e.get("id"), str)}
+
+
+def _base(kind: str, eid: str, x: float, y: float, w: float, h: float, now: float, vn: int) -> dict[str, Any]:
+    return {
+        "id": eid,
+        "type": kind,
+        "x": x,
+        "y": y,
+        "width": w,
+        "height": h,
+        "angle": 0,
+        "strokeColor": "#1e1e1e",
+        "backgroundColor": "transparent",
+        "fillStyle": "solid",
+        "strokeWidth": 2,
+        "strokeStyle": "solid",
+        "roughness": 1,
+        "opacity": 100,
+        "seed": vn,
+        "version": 1,
+        "versionNonce": vn,
+        "isDeleted": False,
+        "link": None,
+        "locked": False,
+        "updated": int(now * 1000),
+    }
+
+
+def _text_el(
+    eid: str, container: str, text: str, x: float, y: float, w: float, now: float, vn: int, frame: str
+) -> dict[str, Any]:
+    el = _base("text", eid, x, y, max(w, 20), 25, now, vn)
+    el.update(
+        text=text,
+        originalText=text,
+        fontSize=16,
+        fontFamily=1,
+        textAlign="center",
+        verticalAlign="middle",
+        containerId=container,
+        autoResize=True,
+        lineHeight=1.25,
+    )
+    if frame:
+        el["frameId"] = frame
+    return el
+
+
+def _bump(el: dict[str, Any], now: float, vn: int, **kw: Any) -> dict[str, Any]:
+    return {**el, **kw, "version": int(el["version"]) + 1, "versionNonce": vn, "updated": int(now * 1000)}
+
+
+def _find(elements: list[dict[str, Any]], eid: str) -> dict[str, Any] | None:
+    el = _by_id(elements).get(eid)
+    if el is None or el.get("isDeleted"):
+        return None
+    return el
+
+
+def _companions(elements: list[dict[str, Any]], el: dict[str, Any], *, arrows: bool) -> list[dict[str, Any]]:
+    want = {el["id"]}
+    for b in el.get("boundElements") or []:
+        if isinstance(b, dict) and isinstance(b.get("id"), str):
+            want.add(b["id"])
+    out = []
+    for e in elements:
+        if e.get("isDeleted"):
+            continue
+        if e.get("containerId") == el["id"] or e["id"] in want:
+            out.append(e)
+            continue
+        if not arrows or e["type"] not in ("arrow", "line"):
+            continue
+        ends = {
+            (e.get("startBinding") or {}).get("elementId"),
+            (e.get("endBinding") or {}).get("elementId"),
+        }
+        if el["id"] in ends:
+            out.append(e)
+    return out
+
+
+def _free_slot(
+    elements: list[dict[str, Any]], w: float, h: float, frame: dict[str, Any] | None
+) -> tuple[float, float]:
+    boxes = [
+        (e["x"], e["y"], e["width"], e["height"])
+        for e in _live(elements)
+        if e["type"] not in ("arrow", "line", "text") and not e.get("containerId")
+    ]
+    if frame is not None:
+        x0, y0, cols, dx, dy = frame["x"] + 20, frame["y"] + 40, 2, 200, 120
+    else:
+        x0, y0, cols, dx, dy = 0, 0, 4, 260, 140
+    for i in range(200):
+        x, y = x0 + (i % cols) * dx, y0 + (i // cols) * dy
+        hit = any(
+            x < bx + bw + 10 and bx < x + w + 10 and y < by + bh + 10 and by < y + h + 10
+            for bx, by, bw, bh in boxes
+        )
+        if not hit:
+            return x, y
+    return x0, y0
+
+
+def _free_frame(elements: list[dict[str, Any]], w: float, h: float) -> tuple[float, float]:
+    n = len([e for e in _live(elements) if e["type"] == "frame"])
+    return (n % 3) * (w + 40), (n // 3) * (h + 40) + 400
+
+
+def _need_text(params: dict[str, Any]) -> str | None:
+    text = params.get("text", "")
+    if not isinstance(text, str):
+        return None
+    return _text(text).strip()
+
+
+def _coord(params: dict[str, Any], key: str) -> float | None:
+    """A placed coordinate, or None when the caller left it out. A bad value raises."""
+    if key not in params:
+        return None
+    v = params[key]
+    if v == NOT_PLACED:
+        return None
+    n = _finite(v)
+    if n is None:
+        raise Reject("bad geometry")
+    return n
+
+
+def apply_action(
+    elements: list[dict[str, Any]],
+    action: str,
+    params: dict[str, Any],
+    *,
+    now: float,
+    new_id: Callable[[str], str] = mint,
+    new_nonce: Callable[[], int] = nonce,
+) -> ActionResult:
+    """The elements one action wants merged. Unknown actions fail closed."""
+    if action not in ACTIONS:
+        return ActionResult(error="unknown action")
+    if action == "read":
+        return ActionResult(summary=summary(elements, 0))
+    try:
+        incoming, added = _act(elements, action, params, now=now, new_id=new_id, new_nonce=new_nonce)
+    except Reject as e:
+        return ActionResult(error=e.reason)
+    return ActionResult(incoming=tuple(incoming), added=tuple(added))
+
+
+def _act(
+    elements: list[dict[str, Any]],
+    action: str,
+    params: dict[str, Any],
+    *,
+    now: float,
+    new_id: Callable[[str], str],
+    new_nonce: Callable[[], int],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if action == "note":
+        return _add_box(elements, params, "rectangle", "#ffec99", True, now, new_id, new_nonce)
+    if action == "box":
+        shape = params.get("shape") or "rectangle"
+        if not isinstance(shape, str) or shape not in BOX_SHAPES:
+            raise Reject("unknown shape")
+        return _add_box(elements, params, shape, "#ffffff", False, now, new_id, new_nonce)
+    if action == "frame":
+        return _add_frame(elements, params, now, new_id, new_nonce)
+    if action == "connect":
+        return _connect(elements, params, now, new_id, new_nonce)
+    if action == "move":
+        return _move(elements, params, now, new_nonce)
+    if action == "edit":
+        return _edit(elements, params, now, new_nonce)
+    if action == "delete":
+        return _delete(elements, params, now, new_nonce)
+    raise Reject("unknown action")
+
+
+def _add_box(
+    elements: list[dict[str, Any]],
+    params: dict[str, Any],
+    kind: str,
+    fill: str,
+    require_text: bool,
+    now: float,
+    new_id: Callable[[str], str],
+    new_nonce: Callable[[], int],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    text = _need_text(params)
+    if text is None:
+        raise Reject("bad text")
+    if require_text and not text:
+        raise Reject("text is required")
+    frame_id = params.get("to") or ""
+    if not isinstance(frame_id, str):
+        raise Reject("unknown frame")
+    frame = _find(elements, frame_id) if frame_id else None
+    if frame_id and (frame is None or frame["type"] != "frame"):
+        raise Reject("unknown frame")
+    x, y = _coord(params, "x"), _coord(params, "y")
+    w = max(140, min(260, 9 * len(text) // 2 + 40)) if text else 160
+    h = 80
+    if x is None or y is None:
+        x, y = _free_slot(elements, w, h, frame)
+    sid, tid = new_id("n" if require_text else "b"), new_id("t")
+    vn = new_nonce()
+    shape = _base(kind, sid, x, y, w, h, now, vn)
+    shape["backgroundColor"] = fill
+    shape["roundness"] = {"type": 3}
+    if frame is not None:
+        shape["frameId"] = frame["id"]
+    out: list[dict[str, Any]] = [shape]
+    added = [sid]
+    if text:
+        label = _text_el(
+            tid, sid, text, x + 10, y + 28, w - 20, now, new_nonce(), frame["id"] if frame else ""
+        )
+        shape["boundElements"] = [{"id": tid, "type": "text"}]
+        out.append(label)
+        added.append(tid)
+    return out, added
+
+
+def _add_frame(
+    elements: list[dict[str, Any]],
+    params: dict[str, Any],
+    now: float,
+    new_id: Callable[[str], str],
+    new_nonce: Callable[[], int],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    title = _need_text(params)
+    if title is None:
+        raise Reject("bad text")
+    x, y = _coord(params, "x"), _coord(params, "y")
+    w, h = 600, 360
+    if x is None or y is None:
+        x, y = _free_frame(elements, w, h)
+    eid = new_id("f")
+    el = _base("frame", eid, x, y, w, h, now, new_nonce())
+    el["name"] = title
+    return [el], [eid]
+
+
+def _connect(
+    elements: list[dict[str, Any]],
+    params: dict[str, Any],
+    now: float,
+    new_id: Callable[[str], str],
+    new_nonce: Callable[[], int],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    a, b = params.get("id"), params.get("to")
+    if not isinstance(a, str) or not isinstance(b, str):
+        raise Reject("unknown id")
+    src, dst = _find(elements, a), _find(elements, b)
+    if src is None or dst is None or src["type"] == "arrow" or dst["type"] == "arrow":
+        raise Reject("unknown id")
+    label = _need_text(params)
+    if label is None:
+        raise Reject("bad text")
+    x = src["x"] + src["width"]
+    y = src["y"] + src["height"] / 2
+    dx = (dst["x"] + dst["width"] / 2) - x
+    dy = (dst["y"] + dst["height"] / 2) - y
+    eid = new_id("a")
+    vn = new_nonce()
+    arrow = _base("arrow", eid, x, y, abs(dx), abs(dy), now, vn)
+    arrow["points"] = [[0.0, 0.0], [dx, dy]]
+    arrow["startBinding"] = {"elementId": src["id"], "focus": 0.0, "gap": 8.0}
+    arrow["endBinding"] = {"elementId": dst["id"], "focus": 0.0, "gap": 8.0}
+    arrow["endArrowhead"] = "arrow"
+    out = [arrow]
+    added = [eid]
+    if label:
+        tid = new_id("t")
+        text = _text_el(tid, eid, label, x, y, 80, now, new_nonce(), "")
+        arrow["boundElements"] = [{"id": tid, "type": "text"}]
+        out.append(text)
+        added.append(tid)
+    return out, added
+
+
+def _move(
+    elements: list[dict[str, Any]], params: dict[str, Any], now: float, new_nonce: Callable[[], int]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    eid = params.get("id")
+    if not isinstance(eid, str):
+        raise Reject("unknown id")
+    el = _find(elements, eid)
+    if el is None or el["type"] in ("arrow", "line", "text"):
+        raise Reject("unknown id")
+    x, y = _coord(params, "x"), _coord(params, "y")
+    if x is None or y is None:
+        raise Reject("x and y are required")
+    dx, dy = x - el["x"], y - el["y"]
+    out = [_bump(el, now, new_nonce(), x=x, y=y)]
+    for c in _companions(elements, el, arrows=False):
+        if c["id"] == el["id"]:
+            continue
+        if c["type"] == "text":
+            out.append(_bump(c, now, new_nonce(), x=c["x"] + dx, y=c["y"] + dy))
+    return out, [el["id"]]
+
+
+def _edit(
+    elements: list[dict[str, Any]], params: dict[str, Any], now: float, new_nonce: Callable[[], int]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    eid = params.get("id")
+    if not isinstance(eid, str):
+        raise Reject("unknown id")
+    el = _find(elements, eid)
+    if el is None:
+        raise Reject("unknown id")
+    text = _need_text(params)
+    if text is None or not text:
+        raise Reject("text is required")
+    if el["type"] == "frame":
+        return [_bump(el, now, new_nonce(), name=text)], [el["id"]]
+    if el["type"] == "text":
+        return [_bump(el, now, new_nonce(), text=text, originalText=text)], [el["id"]]
+    for c in _companions(elements, el, arrows=False):
+        if c["type"] == "text" and c.get("containerId") == el["id"]:
+            return [_bump(c, now, new_nonce(), text=text, originalText=text)], [el["id"]]
+    raise Reject("that shape has no text")
+
+
+def _delete(
+    elements: list[dict[str, Any]], params: dict[str, Any], now: float, new_nonce: Callable[[], int]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    eid = params.get("id")
+    if not isinstance(eid, str):
+        raise Reject("unknown id")
+    el = _find(elements, eid)
+    if el is None:
+        raise Reject("unknown id")
+    out = [_bump(c, now, new_nonce(), isDeleted=True) for c in _companions(elements, el, arrows=True)]
+    return out, [el["id"]]

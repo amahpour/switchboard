@@ -335,7 +335,7 @@ def test_cursors_project_permissions_allow_switchboards_tools_and_the_scratch_sc
     assert [a for a in allow if a.startswith("Mcp(")] == [
         f"Mcp(switchboard-https:switchboard_{t})" for t in cursor.TOOLS
     ]
-    assert len(cursor.TOOLS) == 11 and {"join", "say", "wait", "status"} <= set(cursor.TOOLS)
+    assert len(cursor.TOOLS) == 12 and {"join", "say", "wait", "status", "board"} <= set(cursor.TOOLS)
     assert [a for a in allow if not a.startswith("Mcp(")] == ["Shell(sh hold.sh)"]
     assert not any("*" in a for a in allow), allow
     assert not {"--force", "--yolo", "--approve-mcps", "--sandbox"} & set(

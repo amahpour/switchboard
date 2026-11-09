@@ -37,6 +37,7 @@ from switchboard.broker.passkeys import (
 from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
 from switchboard.broker.reviews import Boards
+from switchboard.broker.room_board import RoomBoard
 from switchboard.broker.rpc import RpcServer
 from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.clock import Clock, SystemClock
@@ -74,6 +75,7 @@ class BrokerState:
     runner: Runner = None  # type: ignore[assignment]
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
+    room_board: Any = None  # the whiteboard (broker/room_board.py, §56)
     meetings: Any = None  # the call bridge (meeting/bridge.py, §52); None until the lifespan wires it
     # calls hosted on people's machines (meeting/hosted.py, §54); None until the lifespan wires it
     hosted_calls: Any = None
@@ -249,6 +251,7 @@ def create_app(
         state.agents = AgentService(state)
         state.boards = Boards(state)
         state.service.boards = state.boards
+        state.room_board = RoomBoard(state)
         from switchboard.meeting.bridge import MeetingBridge
         from switchboard.meeting.hosted import HostedCalls
 

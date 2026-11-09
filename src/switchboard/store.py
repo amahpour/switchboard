@@ -310,6 +310,8 @@ class Store:
         ),
         ("batches", f"batches WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("events", f"events WHERE room_id=? OR membership_id IN ({_ROOM_MEMBERSHIPS})", 2),
+        ("room_board_changes", "room_board_changes WHERE room_id=?", 1),
+        ("room_boards", "room_boards WHERE room_id=?", 1),
         ("pins", "pins WHERE room_id=?", 1),
         ("home_seen", "home_seen WHERE room_id=?", 1),
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
@@ -3177,6 +3179,78 @@ class Store:
             "SELECT COUNT(*) FROM events WHERE kind='codex_hold' AND ts>=? AND ts<=?", (since, until)
         ).fetchone()[0]
         return int(n)
+
+    # --------------------------------------------------------------- a room's whiteboard (#656, §56)
+    def board_load(self, room_id: int) -> tuple[int, list[dict[str, Any]]]:
+        """The room's board: its seq and elements. ``(0, [])`` when nobody has drawn yet.
+
+        A row that is not a list of objects is treated as empty. The document is one row, so a
+        reader never sees a half-written board."""
+        row = self.con.execute("SELECT seq, elements FROM room_boards WHERE room_id=?", (room_id,)).fetchone()
+        if row is None:
+            return 0, []
+        try:
+            els = json.loads(row["elements"])
+        except ValueError:
+            return int(row["seq"]), []
+        if not isinstance(els, list):
+            return int(row["seq"]), []
+        return int(row["seq"]), [e for e in els if isinstance(e, dict)]
+
+    def board_changes(self, room_id: int) -> list[dict[str, Any]]:
+        """Accepted changes, oldest first: who, when, and which element ids. The last
+        ``board.MAX_CHANGES`` only; older ones are dropped when a new one is written."""
+        rows = self.con.execute(
+            "SELECT seq, actor, at, ids, n FROM room_board_changes WHERE room_id=? ORDER BY seq, id",
+            (room_id,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                ids = json.loads(r["ids"])
+            except ValueError:
+                ids = []
+            out.append(
+                {
+                    "seq": int(r["seq"]),
+                    "actor": r["actor"],
+                    "at": r["at"],
+                    "ids": [i for i in ids if isinstance(i, str)],
+                    "n": int(r["n"]),
+                }
+            )
+        return out
+
+    def board_write(
+        self, room_id: int, seq: int, elements: list[dict[str, Any]], actor: str, ids: list[str]
+    ) -> None:
+        """Replace the room's board and append one change record. One transaction, so a reader
+        never sees the new elements without the record, or the record without the elements."""
+        from switchboard.board import MAX_BYTES, MAX_CHANGES
+
+        raw = json.dumps(elements, ensure_ascii=False, separators=(",", ":"))
+        if len(raw.encode()) > MAX_BYTES:
+            raise Conflict("board is full")
+        kept = [i for i in ids if isinstance(i, str)][:80]
+        ids_json = json.dumps(kept, ensure_ascii=False, separators=(",", ":"))
+        who = actor[:100]
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO room_boards(room_id, seq, elements, updated_at) VALUES(?,?,?,?)"
+                " ON CONFLICT(room_id) DO UPDATE SET seq=excluded.seq, elements=excluded.elements,"
+                " updated_at=excluded.updated_at",
+                (room_id, seq, raw, now),
+            )
+            self.con.execute(
+                "INSERT INTO room_board_changes(room_id, seq, actor, at, ids, n) VALUES(?,?,?,?,?,?)",
+                (room_id, seq, who, now, ids_json, max(1, len(ids))),
+            )
+            self.con.execute(
+                "DELETE FROM room_board_changes WHERE room_id=? AND id NOT IN ("
+                "SELECT id FROM room_board_changes WHERE room_id=? ORDER BY seq DESC, id DESC LIMIT ?)",
+                (room_id, room_id, MAX_CHANGES),
+            )
 
 
 def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:

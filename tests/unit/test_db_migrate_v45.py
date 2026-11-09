@@ -39,8 +39,10 @@ def test_the_two_tables_are_new_and_empty_and_match_a_fresh_database(
     a row, the two schemas differ, or a mark can name a room that does not exist."""
     path = tmp_path / "old.db"
     before = at_44(path, monkeypatch)
-    con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 45
+    with monkeypatch.context() as mp:
+        mp.setattr(db, "SCHEMA_VERSION", 45)  # stop at the step under test: 46 is the whiteboard's (#656)
+        con = db.open_db(path)
+    assert db.schema_version(con) == 45
     after = db.row_counts(con, db.tables_of(44))
     assert after == before
     fresh = db.open_db(tmp_path / "new.db")

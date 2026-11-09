@@ -48,7 +48,7 @@ The build runs unattended, so nothing may block on a human. Anything that needs 
  agents, on this machine or any other (started by you)                       browser
  ┌─────────────────────────────────────────────────────┐          http://switchboard.localhost:7419
  │ claude       codex       cursor-agent     devin     │                   │ cookie + Origin + X-Switchboard
- │   │ the tools: MCP over HTTPS, an agent token (§49) │                   │ (writes: REST only; WS is read-only)
+ │   │ the tools: MCP over HTTPS, an agent token (§49) │                   │ (writes: REST, and a board frame, §56)
  │   │ the plugin's hooks: curl and mcp_tool calls     │                   ▼
  └───┼─────────────────────────────────────────────────┘          ┌────────────────────────────┐
      └──── https://<broker>/mcp ──────────────────────────────────►│ broker (switchboard start) │
@@ -65,7 +65,7 @@ The build runs unattended, so nothing may block on a human. Anything that needs 
 | Component | What it is | Process |
 |---|---|---|
 | **Broker** | A single daemon: FastAPI on `127.0.0.1:<port>` (or behind a public URL, §30) plus an asyncio Unix-socket RPC server, in the same event loop. It is the only writer to SQLite, and it owns the delivery engine and the harness adapters. | `switchboard start` |
-| **Web UI** | Static HTML, JS and CSS served by the broker. Writes go through REST; live updates come over a read-only WebSocket. | browser |
+| **Web UI** | Static HTML, JS and CSS served by the broker. Writes go through REST. Live updates come over the WebSocket, which also accepts a `board` frame from a person who can see the room (§56). | browser |
 | **CLI** | `switchboard …`. Talks to the broker over the UDS. Human verbs must pass the peer-process check (§5.3), and verbs that raise activity need the web session (§10). | short-lived |
 | **Agents over HTTPS** | An agent's tools at `/mcp` (§6, §49.2) and its plugin's hooks (§7, §49.5), with an agent token (§49.1). Nothing of switchboard's runs on the agent's machine but the plugin. Until 0.37 each session also ran `switchboard mcp` and a hook script on the broker's machine; retired in 0.38.0 (#385). | the agent's harness, anywhere |
 | **Engine + runner** | `Engine` is a synchronous policy core over the store and a clock. It returns `Action`s. `Runner` is async: it carries out those actions and ticks the engine. | broker |
@@ -228,6 +228,7 @@ src/switchboard/
   models.py              dataclasses and enums: Room, Participant, Membership, Message, Batch, Delivery, Release, Route, HookEvent, HookOut, Action
   store.py               Store: every SQL statement (§4); nothing else touches SQL
   envelope.py            sanitize(); render_batch(); render_join(); ROOM_RULES; TOKEN_RE; NONCE_RE; mac(batch_id, membership_id)
+  board.py               a room's whiteboard: elements, the merge, what an agent may draw (§56)
   meeting/               a live call in a room: spoken names, line assembly, the joinly bridge, what is spoken back and seen (§52); the posting both a bot's and a hosted call's lines go through, a hosted call's key and the calls themselves (§54)
   delivery/rules.py      pure policy functions (§8), unit-tested with FakeClock
   delivery/engine.py     Engine: synchronous core returning list[Action] (§8.2)
@@ -237,14 +238,15 @@ src/switchboard/
   adapters/https.py      claude@https, codex@https, cursor@https, devin@https: how a session over HTTPS is woken and what its hooks mean (§9.2 to §9.5, §49)
   adapters/testagent.py  the scripted test agent (test mode, --ack modes, §9.6)
   broker/app.py          create_app(paths, cfg, peer_policy, test_mode) -> FastAPI (lifespan wires everything)
-  broker/web.py          REST routes (§5.5), static files, read-only WebSocket
+  broker/web.py          REST routes (§5.5), static files, the WebSocket (hello, ping, and a board frame, §56)
   broker/auth.py         LoginTokens, Sessions, HostOriginGuard (pure ASGI), SecurityHeaders
   broker/rpc.py          RpcServer: framing, roles, METHODS table (§5.2)
   broker/proc.py         ProcInfo; info(pid); argv_many(); ancestry(); alive(pid,start); tty(pid)
   broker/peer.py         peer_pid/peer_uid; AGENT_MATCHERS; is_agent_chain(); PeerPolicy; AllowAllHumans (the human CLI check, §5.3)
   broker/hub.py          fan-out to WebSocket clients and UDS tail subscribers
   broker/service.py      RoomService: rooms, history, human_say, commands, buddy list
-  broker/agents.py       AgentService: join/leave/say/read/wait/unwait/pass/away/who/status/claim and hook events, for a call over HTTPS (§49.3)
+  broker/agents.py       AgentService: join/leave/say/read/wait/unwait/pass/away/who/status/claim/board and hook events, for a call over HTTPS (§49.3)
+  broker/room_board.py   one room's whiteboard: store a change, post the notice, fan the elements out (§56)
   broker/agent_http.py   the /mcp endpoint: tokens, sessions, the hook tool, /mcp/listen, /mcp/session, /mcp/pretool, /mcp/event (§49.2)
   broker/agent_tokens.py agent tokens (§49.1)
   broker/call_http.py    a hosted call's routes: /mcp/meeting/host, where its host script registers it, and /mcp/meeting/push and /mcp/meeting/speech, which only its key opens (§54)
@@ -312,7 +314,7 @@ Workflow: `uv python pin 3.13`, `uv sync`, `uv run pytest`. Pin fastmcp exactly 
 
 ## 4. Data model (SQLite)
 
-M1 created the **whole schema** as `SCHEMA_VERSION=1`, and M2–M7 added store methods, not migrations. M8b (remote members) made it `SCHEMA_VERSION=2`: `participants.host`, `messages.sender_host`, the `participants_host_mcp` index and the `remotes` table. Every later version is a numbered step in `db.py` (the sections that add one say so), and **schema 29 (#385) dropped the `remotes` and `link_machines` tables** with the links they served (§27, §31.7), ending the sessions of those hosts, and **schema 30 (#385) ended every session that reached the broker another way than HTTPS and dropped the columns only that path used**: `participants.agent_pid`, `agent_start`, `mcp_pid`, `mcp_start`, `claude_socket`, `bind_state`, `bind_nonce`, `thread_proof`, `env_leak`, `last_loop_count`, `unconfirmed_followups` and `push_expiries`, the `participants_host_mcp` index, and `memberships.cred_hash`; and **schema 31 (#386) says how each agent token was made** (`agent_tokens.via`, `client_name`) **and adds `oauth_clients`**, the agents that registered to sign in through the browser (§49.10); **schema 32 (#498) adds `agent_icons`**, the avatars an admin uploads for each harness, kept in the database (§29.11); and **schema 33 (#488) adds `listener_keys`**, the hashes of the keys Claude Code's helper scripts present (§49.11); **schema 34 (#513) admits `opencode` in the participants harness CHECK** (§49.12); **schema 35 (#518) admits it in the `agent_icons` harness CHECK too**, so an admin can upload its avatar (§29.11). The `CREATE` below is the current schema; the rows of a migrated database are the ones every release wrote (§49.8). An older database is migrated once at broker start, after a verified 0600 backup (`switchboard.db.v<N>.bak`), in one transaction, with an integrity check and the row counts compared afterwards; a newer one is refused.
+M1 created the **whole schema** as `SCHEMA_VERSION=1`, and M2–M7 added store methods, not migrations. M8b (remote members) made it `SCHEMA_VERSION=2`: `participants.host`, `messages.sender_host`, the `participants_host_mcp` index and the `remotes` table. Every later version is a numbered step in `db.py` (the sections that add one say so), and **schema 29 (#385) dropped the `remotes` and `link_machines` tables** with the links they served (§27, §31.7), ending the sessions of those hosts, and **schema 30 (#385) ended every session that reached the broker another way than HTTPS and dropped the columns only that path used**: `participants.agent_pid`, `agent_start`, `mcp_pid`, `mcp_start`, `claude_socket`, `bind_state`, `bind_nonce`, `thread_proof`, `env_leak`, `last_loop_count`, `unconfirmed_followups` and `push_expiries`, the `participants_host_mcp` index, and `memberships.cred_hash`; and **schema 31 (#386) says how each agent token was made** (`agent_tokens.via`, `client_name`) **and adds `oauth_clients`**, the agents that registered to sign in through the browser (§49.10); **schema 32 (#498) adds `agent_icons`**, the avatars an admin uploads for each harness, kept in the database (§29.11); and **schema 33 (#488) adds `listener_keys`**, the hashes of the keys Claude Code's helper scripts present (§49.11); **schema 34 (#513) admits `opencode` in the participants harness CHECK** (§49.12); **schema 35 (#518) admits it in the `agent_icons` harness CHECK too**, so an admin can upload its avatar (§29.11); **schema 45 (#663) adds `home_seen` and `home_snoozes`**, what each person has seen on Home (§55.8); and **schema 46 (#656) adds `room_boards` and `room_board_changes`**, one whiteboard per room and a short record of each accepted change (§56). The `CREATE` below is the current schema; the rows of a migrated database are the ones every release wrote (§49.8). An older database is migrated once at broker start, after a verified 0600 backup (`switchboard.db.v<N>.bak`), in one transaction, with an integrity check and the row counts compared afterwards; a newer one is refused.
 
 **Connections.** `db.connect(path)` uses `sqlite3.connect(path, timeout=5.0, isolation_level=None, check_same_thread=False)` with the pragmas `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON` and `busy_timeout=5000`. Every write runs inside `with db.tx(con):`, which wraps `BEGIN IMMEDIATE … COMMIT/ROLLBACK`; Python's default isolation silently loses updates (F§10 S5). The broker is the only writer. It calls the store synchronously on the event loop (each statement takes under 1 ms) and runs `db.checkpoint(con)` (`PRAGMA wal_checkpoint(PASSIVE)`) every 60 s, and `db.checkpoint(con, "TRUNCATE")` once more at shutdown so nothing is left in the WAL for the next start to replay; `checkpoint` refuses any other mode. `db.connect_query_only(path)` (§12.6, #167) is the report's own connection: `mode=rw` plus `PRAGMA query_only`, which works whether the broker is running or stopped (not `mode=ro`, below).
 
@@ -517,7 +519,7 @@ Behind a public URL (`start --public-url`, §30), every `switchboard.localhost:<
   - Nothing logs the query string: uvicorn's access log is off, and a test asserts the token never appears in `broker.log`, even on a 421.
 - **Reads.** Every `/api/*` request, GET included, requires a session. `GET /` without a session serves a static "run `switchboard login`" page, which never contains a token.
 - **Writes.** Unsafe methods need the cookie, `Origin == http://switchboard.localhost:<port>` exactly, and `X-Switchboard: 1`. No write endpoint is unauthenticated; a test enumerates the routes.
-- **WebSocket.** `/ws` checks Host, Origin and the cookie **before** `accept()`, and closes with 1008 otherwise. It is read-only.
+- **WebSocket.** `/ws` checks Host, Origin and the cookie **before** `accept()`, and closes with 1008 otherwise. From the client it accepts `hello`, `ping`, and `board` (shapes, from a signed-in person who can see the room, §56). Anything else closes it.
 - **Logout.** `POST /logout` ends the current session. `POST /logout {"all": true}` and `switchboard logout --all` revoke every session.
 - **Port caveat (SECURITY.md).** Cookies ignore ports, so an agent's own server on `switchboard.localhost:<other port>` would receive `switchboard_session` if the browser visits it. Don't open links that agents post.
 
@@ -542,7 +544,7 @@ A **Closed (n)** row in the sidebar (hidden while no room is closed; before #19 
 
 `app.js` sends input that starts with a single `/` to `/command`. Input starting with `//` goes to `/say` with one `/` removed.
 
-**WebSocket, client to server:** only `{"t":"hello","rooms":["#build"],"after":{"#build":118}}` and `{"t":"ping"}`. Anything else closes the socket.
+**WebSocket, client to server:** `{"t":"hello","rooms":["#build"],"after":{"#build":118}}`, `{"t":"ping"}`, and `{"t":"board","room":"#build","elements":[…]}` from a signed-in person who can see the room (§56). A `board` frame larger than 16 KB has to start with `{"t":"board"`, so a hello the size of a board is not parsed. Anything else closes the socket.
 
 **Server to client:**
 - `{"t":"icons"}`: an agent's avatar was set or reset (§29.11): the page fetches `/api/agent-icons.css` again
@@ -552,9 +554,10 @@ A **Closed (n)** row in the sidebar (hidden while no room is closed; before #19 
 - `{"t":"notice","room":…,"level":"info|warn","text":…}` (`room` is null for broker-wide notices such as "new web login"; transient only: a notice that is also a room message goes out once, as the `msg` frame, §22)
 - `{"t":"rooms","rooms":[…]}` when a room is created (added in M1), closed, reopened or deleted (§28), so open tabs can subscribe with another `hello` (the page sends one for every tab on each such frame), and the page reloads its room list, prunes tabs by id and `created_at` and refreshes an open Closed panel
 - `{"t":"people","people":[…],"online":[…]}` on a hosted broker only (§44.8): every person's name, the owner's first, and those with a page open. Sent to every open page when one connects or closes and when a person is added, removed or renamed.
+- `{"t":"board","room":…,"seq":N,"elements":[…],"full":true|false}` (§56): the room's whiteboard. `full` is the whole board (the answer to `hello`); otherwise `elements` are the ones just accepted.
 - `{"t":"pong"}`
 
-A `hello` names at most 64 rooms (`WS_MAX_ROOMS`): a longer one closes the socket (1008), so a page with more rooms says hello in batches of 64, each adding its rooms (the page did not until #432, and a page with 65 rooms stayed disconnected). A `hello` subscribes the listed rooms (it is additive) and replays, per room, the messages after `after[room]` (or the newest 500 without `after`), then a `room` and a `members` frame. If more than 500 messages are newer than `after`, it replays the newest 500 after a notice saying how many were skipped, so the live stream never has a hole.
+A `hello` names at most 64 rooms (`WS_MAX_ROOMS`): a longer one closes the socket (1008), so a page with more rooms says hello in batches of 64, each adding its rooms (the page did not until #432, and a page with 65 rooms stayed disconnected). A `hello` subscribes the listed rooms (it is additive) and replays, per room, the messages after `after[room]` (or the newest 500 without `after`), then a `room`, a `members` frame and a `board` snapshot (§56). If more than 500 messages are newer than `after`, it replays the newest 500 after a notice saying how many were skipped, so the live stream never has a hole.
 
 The server sends a ping every 20 s.
 
@@ -591,6 +594,7 @@ FastMCP 4.0.9, server name `switchboard`. Every tool returns a compact JSON stri
 | `wait` | `room, timeout_s: int=50` | a batch, or `timeout`, `paused`, `kicked` or `superseded`. `timeout_s` is clamped to the harness cap, the one number the tool and the broker share: the adapter's `caps().wait_cap_s` (§9.1), set by `wait_cap_s` in the harness's `config.toml` section, so the config can raise it as well as lower it (#547), but never past what the harness's own client lets a call run (`CLIENT_WAIT_LIMIT_S`: claude 600, codex 86390, cursor 55, devin 100, opencode 50, and 50 for any other harness; #559). Defaults: claude 600, codex 280, cursor 55, opencode 50, devin 100 (600 in the config, held to 100 over HTTPS, §49.7), test and unknown 50. When that cap shortens the request, the result adds `capped_from` (what was asked) and `cap_s` (the cap that was applied), and a timeout says so: "no new messages within 600 s (capped from 1800 s)" (#547). | `readOnlyHint=True, openWorldHint=False` |
 | `pass` | `room: str="", note: str=""` (an empty room: every room) | "logged, not posted"; marks this member's `in_context` deliveries `handled`. **Refused** (`ok:false, code:"read_first"`, nothing handled) while the room has a peer @mention or a reply to the member that reached it only as a "call read()" stub (§24). Unaddressed chatter stubs do not refuse (#548). With no room, every room is tried and the refused ones are named | `destructiveHint=False, openWorldHint=False` |
 | `review` | `room, action`, then by action: `url, head` (open); `title, detail, where` (raise, e.g. `shop/cart.py:40-58`); `title, detail, options, recommend` (ask, `recommend` required; a raise may carry `options` and `recommend` too); `item, recommend` (concur, §37.12); `item, owner` (concede); `item, reason` (contest, insist, drop); `item, commit` (fix); nothing (show) | the board as text and `settled`; a refusal says what to fix (§37) | `destructiveHint=False, openWorldHint=False` |
+| `board` | `room, action`, then by action: `text` (note, and a box or frame's words); `shape` (`rectangle`, `ellipse`, `diamond`) and `to` (a frame) for a box; `id` and `to` to connect; `id`, `x`, `y` to move; `id`, `text` to edit; `id` to delete; nothing more to read. Leave `x` and `y` out and the broker places the shape (§56) | `{changed, ids, text}` or, for `read`, `{seq, text}` the summary, already through the envelope. A rate-limited change is `{changed:false, reason:"rate_limited"}` and is not queued | `destructiveHint=False, openWorldHint=False` |
 | `away` | `message: str=""` (empty clears it) | ok; sets or clears the away text (sanitized, max 80 chars) | `destructiveHint=False, openWorldHint=False, idempotentHint=True` |
 | `status` | `text: str` (empty clears it) | one line for the session in all joined rooms (sanitized, whitespace collapsed, max 160 chars); stale after 30 minutes | `destructiveHint=False, openWorldHint=False, idempotentHint=True` |
 | `claim` | `room, key, ttl, note: str=""` | an advisory hold on outside work (§47). `note` is the claim's state or a link, cleaned and cut to 160 characters; empty on a renewal keeps the stored note; `ttl=0` releases the claim and its note. A duplicate names the holder and changes nothing | `destructiveHint=False, openWorldHint=False` |
@@ -1102,7 +1106,7 @@ Neither command can change `budget_per_hour` itself, the rate the room's wake bu
 
 ## 11. Security model
 
-**Threat model.** Every agent runs as the same user as its harness, on its own machine. Some run with approvals off (Claude `bypassPermissions`, Codex `never`) on purpose, so room text can make those agents act. **Joining a room is the opt-in**, and the buddy list shows ⚠, or `?` when the mode is unknown. A room is also a **bridge**: work posted by a sandboxed or prompting member can be carried out by a ⚠ member. The UI banner (§5.5) and SECURITY.md say so. The real isolation is the sandbox (SECURITY.md, SANDBOX.md); switchboard's job is never to *add* authority.
+**Threat model.** Every agent runs as the same user as its harness, on its own machine. Some run with approvals off (Claude `bypassPermissions`, Codex `never`) on purpose, so room text can make those agents act. **Joining a room is the opt-in**, and the buddy list shows ⚠, or `?` when the mode is unknown. A room is also a **bridge**: work posted by a sandboxed or prompting member can be carried out by a ⚠ member. The UI banner (§5.5) and SECURITY.md say so. The real isolation is the sandbox (SECURITY.md, SANDBOX.md); switchboard's job is never to *add* authority. A room's whiteboard (§56) is shared state its members write and the others read: shapes are text, cut and clamped, with no link, image or script, and what an agent reads back goes through the envelope so it stays data.
 
 Since 0.38.0 (#385) an agent is a client of the broker over HTTPS with a token of its own (§49), and nothing of switchboard's runs on its machine but the plugin's hooks. That removed the largest part of this section's surface: a process on the broker's machine that had to be told apart from the human's (the MCP server's and the hook script's ancestry checks), a socket into Claude Code, a connection into the Codex app-server, and a hook script the agent could edit. §11.1 says what each used to guard.
 
@@ -1237,7 +1241,7 @@ evals/             evalkit/, scenarios/*.toml, run_evals.py (real agents graded 
   - the one-time token is single-use and never appears in `broker.log`;
   - cookie flags and 12 h sliding expiry; logout-all;
   - missing or wrong Origin, or missing `X-Switchboard`, gives 403; unauthenticated `/api/*` gives 401;
-  - the WebSocket is refused without a cookie or with a bad Origin, and a client write frame closes it;
+  - the WebSocket is refused without a cookie or with a bad Origin, and a client frame other than hello, ping or board closes it;
   - `/docs`, `/redoc` and `/openapi.json` give 404; CSP and nosniff are present;
   - route enumeration finds no unauthenticated writes.
 - **Fan-out:** 2 WebSocket clients and a UDS tail all receive the message (loose: < 1 s; perf: < 50 ms).
@@ -2690,7 +2694,7 @@ Live (Cursor Agent 2026.10.18, 2026-10-22, `tests/live/test_live_cursor.py`, §1
 
 **A refusal reads like a reply (#533).** Every tool advertises an `outputSchema` (`{"result": string}`), and Cursor 2026.10.22 replaces a reply without `structuredContent` by `MCP error -32600: ... has an output schema but did not return structured content`, so the agent never saw "this call has no matching session hook". The input check's two refusals (that one, and "use the Cursor switchboard tools") now carry `structuredContent` `{"result": <the same text>}` as well, the shape of a successful reply (`refusal()` in `broker/agent_http.py`). Devin goes through the same check. Tested in `tests/integration/test_agents_http_cursor.py` and `test_agents_http_devin.py`.
 
-**The review how-to (#629).** The plugin is 0.3.0 and ships `skills/review-board/SKILL.md`. A Cursor plugin discovers `skills/` when the manifest names no skills path. The tool a Cursor agent calls is `switchboard_review` (§37.4). The sentence above that the plugin is 0.2.0 is the #493 hook change.
+**The review how-to (#629).** The plugin was 0.3.0 and ships `skills/review-board/SKILL.md`. A Cursor plugin discovers `skills/` when the manifest names no skills path. The tool a Cursor agent calls is `switchboard_review` (§37.4). The sentence above that the plugin is 0.2.0 is the #493 hook change. **The whiteboard how-to (#656)** makes it 0.3.1 and adds `skills/board/SKILL.md`; the tool is `switchboard_board`.
 
 ### 49.7 Devin over HTTPS (#394)
 
@@ -3171,3 +3175,61 @@ The page posts the mark with the newest id it holds for a room (`r.lastId`) when
 **Not now.** `POST /api/rooms/{slug}/home-snooze` with `{"url": board}` sets aside that room's open board for the signed-in person at the broker's clock (`Store.home_snooze`; pressing it again moves the moment forward). Only an open board of a room they can see can be named; anything else is a 404 and stores nothing. The board's card is left out of that person's Home while the board has not changed since: `board_changed_at` is the newest `updated_at` among its items, so a new item, or a move on one, is later than the moment and the card comes back by itself. Nobody else's Home is affected. A closed board's snooze is simply never read again.
 
 **Tests.** `tests/integration/test_home_page.py` (the routes, the seen mark and Not now), `tests/unit/test_db_migrate_v45.py` (schema 45), `tests/unit/test_web_app_behavior.py` (the page under node: first screen, a reply, a board call, leaving, the mark sent on opening a room, Not now), `tests/e2e/test_home_ui.py` (the real page: phone, keyboard, the room showing the answer, Go and back, Not now).
+
+---
+
+## 56. A room's whiteboard (#656)
+
+One whiteboard per room, shared by whoever can see the room. This section is the storage, the merge and the agent tool. The page that draws it is a later change (#657), and so is a picture an agent can look at and a Mermaid drawing (#658). Nothing here fetches a service or runs a browser: the elements are Excalidraw's own shape, so that page can render them, and the broker builds them itself.
+
+### 56.1 What is stored (`store.py`, schema 46)
+
+`room_boards` is one row per room: a `seq` and one JSON list of elements, at most 1,000,000 bytes. `room_board_changes` is the last 200 accepted changes, oldest dropped as a new one is written: who, when, the seq, and which ids (at most 80 of them), not a copy of the drawing. Deleting the room deletes both (`Store._ROOM_ROWS`), or the row-count check on delete would fail.
+
+A reader sees a committed board or the previous one. The load and the write share one transaction.
+
+### 56.2 The merge (`board.py`)
+
+Excalidraw's own rule, per element. The higher `version` wins. A tie goes to the lower `versionNonce`, and an equal nonce keeps what is already stored, so the same element sent twice changes nothing. A delete is a tombstone (`isDeleted`) that stays in the list, so a later copy of that id cannot revive it by accident. The whole element is the unit: two people editing different fields of one shape at the same version can lose one of the edits. That is the rule the spike chose, and the agent tools send the smallest bumped change so a move does not also rewrite the words.
+
+Caps, from the spike: 1,500 elements live and deleted together, 1,000,000 bytes, 200 characters of text, 40 elements in one agent call, 500 points on a line. A coordinate is clamped to ±20,000. Text from a person is cut to the same 200, so what an agent reads back stays bounded.
+
+### 56.3 One tool, and a skill
+
+`board(room, action, …)` is one tool, the same shape as `review` (§37): the description is one line that names the actions, and the how-to is a `board` skill, the same file in the Claude Code, Codex and Cursor plugins. The actions are `note`, `box`, `connect`, `frame`, `move`, `edit`, `delete` and `read`. The broker mints an id for a new shape. `read` returns the summary the spike measured (frames in reading order, shapes with ids, arrows as `start -> end`) and no picture: a picture needs a browser, which is #657. Leave `x` and `y` out and the broker places the shape.
+
+A change is rate-limited like a post and, when it is kept, shares that post's clock (`participants.last_say_at`). Inside the window the call is refused, not queued: a say can wait its turn, and a drawing that waited could land on top of a newer one. `read` is not limited. The tool list measured 3,653 before this tool and 4,165 after, and the cap is that size (`test_tool_list_fits_the_review_budget`). The maintainer's answer "1. Yes" to "Can I raise it and start #656 tonight" is the yes for that one tool and nothing else.
+
+An accepted change posts one notice, `{who} changed the board`, with none of the shape text in it. It is a notice, so it wakes nobody (§8: delivery runs for chat). The hub then fans the accepted elements out as kind `board`.
+
+### 56.4 The socket
+
+`hello` ends with `{t:"board", room, seq, elements, full:true}`, after the `members` frame. A page sends `{t:"board", room, elements}` and, when the merge keeps something, every page on that room gets `{full:false, elements}` of just what was kept. A frame larger than 16 KB is parsed only when it starts with `{"t":"board"`. Anything else the client sends still closes the socket. A page frame is not rate-limited: the person can already post, and #657 should send a batch when a stroke ends, one notice per batch that changes something.
+
+`switchboard tail` does not print the shapes. Its subscription is messages and notices, and `board` is not one of those kinds.
+
+### 56.5 Security
+
+Shapes from outside are a claim, run through one allowlist (`clean_element`).
+
+- Text only. `link` is forced null, from an agent and from a person. A URL in the text stays characters.
+- An image, an embed, an iframe or a magic frame is refused. A person may also send a line or a pen stroke; an agent may not. Any other type fails closed, and so does an unknown action.
+- A field the allowlist does not name is dropped, so a script has nowhere to live. The page that draws this (#657) has to put the text in a text node, never HTML.
+- Only a member can change the board. For an agent that is the membership the other tools already require. For a page it is `RoomService.visible`: a private room the person is not in is no room, and the socket closes.
+- What another agent reads back is `sanitize`d with no message-length cut (the board's own caps bound it), so `<` cannot close a harness tag and the words are data.
+- A board that would pass the byte cap is refused. A page that sends one is told nothing changed; an agent is told the board is full.
+
+### 56.6 Not in this part
+
+The Excalidraw pane, its sandbox, and a raster the agent can see (#657). `draw_mermaid` and a saved view (#658). No route renders the board. The notice in the room log is the only thing a person sees.
+
+### 56.7 Assumptions
+
+- The history is the last 200 change records, not a snapshot per change.
+- Person and agent text share the 200-character cut.
+- A page may round-trip `line` and `freedraw` so #657 can. `image`, `embeddable`, `iframe` and `magicframe` cannot.
+- One notice per accepted page frame. A page that sends on every pointer move would fill the log; #657 should send when the stroke ends.
+- Schema 46: #663 took 45 first (§55.8).
+
+**Tests.** `tests/unit/test_room_board.py` (the merge, the caps, each action, the summary, the rows and a room delete, with a `FakeClock`), `tests/unit/test_db_migrate_v46.py`, `tests/unit/test_hub.py` (a `board` frame stays in its room), `tests/integration/test_board_tool.py` (the tool, the envelope, the rate limit, two sockets, a hostile element, a private room).
+
