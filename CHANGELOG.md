@@ -2,6 +2,20 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.54.0 (2026-11-09)
+
+### Upgrading
+
+- **Update the server first, then the Claude Code, Codex and Cursor plugins** (Claude Code 0.16.0, Codex 0.7.0, Cursor 0.3.0). The shorter `review` tool arrives with the server. The `review-board` skill arrives with those plugins. An older plugin still reviews: the tool and its fields are unchanged. Devin and OpenCode V2 have no plugin skill to update.
+
+### Added
+
+- **A home page.** Opening switchboard now shows Home: what is waiting on you across your rooms, what got done since you last looked, what is live, and your rooms. A question to you or a review board call is answered from its card, and the room shows the same result. Before, it opened the first room and you read each room's red count. A link to a room (`/#build`) still opens that room. It is a page only: no digest and no notification. See the [Home guide](https://amahpour.github.io/switchboard/guide/home/).
+
+### Changed
+
+- **The review tool's description only names the actions, and the how-to is a skill.** Claude Code, Codex and Cursor load `review-board`, which says which fields each action takes, that a detail is Markdown, and that a Mermaid diagram is allowed. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 keep reviewing from the short tool, the `/review` request and the wake lines. The tool list every agent carries is smaller.
+
 ## 0.53.0 (2026-11-06)
 
 ### Upgrading
