@@ -21,9 +21,9 @@ What it does, as ``ui_shots.py`` does for still pictures:
   the clicks between them. ``rename_room`` below is the worked example; a pull request's own
   scenario is a file given by path, pasted into the pull request, not added to this script.
   Every wait has a deadline; a timeout exits non-zero.
-- **The browser's own screencast frames,** each with the time it was drawn. Playwright's video
-  recorder says nothing about when its first frame was taken, so captions drifted seconds off
-  the picture; frames with their own clock line up exactly, and they are sharper.
+- **Timed Playwright screenshots,** including the browser's native full-screen top layer,
+  which Chromium's screencast omits. Samples, captions and clicks use this script's clock,
+  so screenshot latency does not accumulate into caption drift.
 - **Then ffmpeg:** the sign-in is cut off the front, each step's caption is shown in a bar above
   the page (never over it, and not under it, where a video player's controls cover it), and each
   click gets a ring where it landed, since a headless page has no mouse pointer to see.
@@ -37,7 +37,6 @@ keeps the behavior.
 from __future__ import annotations
 
 import argparse
-import base64
 import importlib.util
 import os
 import shutil
@@ -55,6 +54,7 @@ HERE = Path(__file__).resolve().parent
 DESKTOP: dict[str, Any] = {"viewport": {"width": 1280, "height": 800}}
 PHONE: dict[str, Any] = {"viewport": {"width": 390, "height": 844}, "is_mobile": True, "has_touch": True}
 FPS = 25
+CAPTURE_FPS = 10  # a ceiling: screenshot latency can make sampling slower
 GIF_FPS = 10
 GIF_WIDTH = 960  # a desktop GIF is shrunk to this; a narrower recording keeps its own width
 RING, RING_S = 44, 0.7  # a click mark's box and how long it shows
@@ -77,8 +77,8 @@ def shots() -> Any:
 @dataclass
 class Take:
     """One recording: the page, its frames, and when each caption and click happened. Every time
-    is seconds since the epoch on this machine's clock, which is the one the browser stamps its
-    frames with: the browser and this script run on the same machine."""
+    is seconds since the epoch on this script's clock, including each completed screenshot.
+    Sampling runs between actions, during reading pauses and while typing."""
 
     page: Any
     frames_dir: Path
@@ -88,30 +88,24 @@ class Take:
     steps: list[tuple[float, str]] = field(default_factory=list)
     clicks: list[tuple[float, float, float]] = field(default_factory=list)
     start: float = 0.0
-    cdp: Any = None
 
     def now(self) -> float:
         return time.time()
 
     def roll(self) -> None:
-        """Start the screencast: Chromium sends a frame each time the page is drawn."""
-        self.cdp = self.page.context.new_cdp_session(self.page)
+        """Take the first viewport sample; later actions and pauses keep sampling."""
+        self.capture()
 
-        def frame(ev: dict[str, Any]) -> None:
-            path = self.frames_dir / f"f{len(self.frames):05d}.jpg"
-            path.write_bytes(base64.b64decode(ev["data"]))
-            self.frames.append((float(ev["metadata"]["timestamp"]), path))
-            self.cdp.send("Page.screencastFrameAck", {"sessionId": ev["sessionId"]})
-
-        self.cdp.on("Page.screencastFrame", frame)
-        self.cdp.send(
-            "Page.startScreencast",
-            {"format": "jpeg", "quality": 92, "maxWidth": self.width, "maxHeight": self.height},
-        )
+    def capture(self) -> None:
+        """Read the composed viewport, including native fullscreen, on the caption clock."""
+        if self.frames and self.now() - self.frames[-1][0] < 1 / CAPTURE_FPS:
+            return
+        path = self.frames_dir / f"f{len(self.frames):05d}.jpg"
+        self.page.screenshot(path=str(path), type="jpeg", quality=92, scale="css")
+        self.frames.append((self.now(), path))
 
     def cut(self) -> None:
-        self.pause(0.3)  # the last frames arrive
-        self.cdp.send("Page.stopScreencast")
+        self.capture()
 
     def open(self, room: str) -> None:
         """Open a room from the sidebar, which on a phone is a drawer to open first. Call it before
@@ -129,6 +123,7 @@ class Take:
     def begin(self) -> None:
         """Everything before this (the sign-in, the first load) is cut off the front."""
         shots().settle(self.page)
+        self.capture()
         self.start = self.now()
 
     def step(self, caption: str) -> None:
@@ -137,7 +132,14 @@ class Take:
         self.steps.append((self.now(), caption))
 
     def pause(self, seconds: float) -> None:
-        self.page.wait_for_timeout(int(seconds * 1000))
+        """Reading time, sampled on the real clock rather than a fixed frame count."""
+        end = self.now() + seconds
+        while True:
+            self.capture()
+            remaining = end - self.now()
+            if remaining <= 0:
+                return
+            self.page.wait_for_timeout(max(1, round(min(1 / CAPTURE_FPS, remaining) * 1000)))
 
     def click(self, selector: str) -> None:
         """Click with a ring where it lands, after a beat so the eye gets there first."""
@@ -148,6 +150,7 @@ class Take:
         self.pause(BEFORE_CLICK_S)
         self.clicks.append((self.now(), box["x"] + box["width"] / 2, box["y"] + box["height"] / 2))
         target.click()
+        self.capture()
 
     def rest(self) -> None:
         """Move the pointer to the page's corner. After a click the layout can move a control
@@ -159,11 +162,15 @@ class Take:
         target = self.page.locator(selector)
         if clear:
             target.fill("")
-        target.press_sequentially(text, delay=KEY_DELAY_MS)
+        chunk = max(1, round(1000 / CAPTURE_FPS / KEY_DELAY_MS))
+        for i in range(0, len(text), chunk):
+            target.press_sequentially(text[i : i + chunk], delay=KEY_DELAY_MS)
+            self.capture()
 
     def press(self, key: str) -> None:
         self.pause(BEFORE_CLICK_S)
         self.page.keyboard.press(key)
+        self.capture()
 
 
 # ------------------------------------------------------------------ scenarios
@@ -220,7 +227,7 @@ def load_scenario(spec: str) -> tuple[str, Scenario]:
 
 # ------------------------------------------------------------------ recording
 def record(fn: Scenario, stem: Path, world: Any, browser: Any, scheme: str, device: dict[str, Any]) -> None:
-    """Run one scenario with the screencast rolling, then write the MP4, the GIF and the sheet."""
+    """Run one sampled scenario, then write the MP4, the GIF and the sheet."""
     raw = Path(tempfile.mkdtemp(prefix="sb-rec-"))
     ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme=scheme, **device)
     ctx.set_default_timeout(shots().WAIT_MS)
@@ -311,15 +318,17 @@ def ring_png(path: Path) -> None:
 def frame_list(frames: list[tuple[float, Path]], start: float, end: float) -> list[tuple[Path, float]]:
     """The frames to show and for how long: from ``start`` to ``end``, each held until the next
     one was drawn. The frame on screen at ``start`` comes first, counted from ``start``, so video
-    time 0 is ``start`` and a caption or click at browser time t is at video time t - start."""
+    time 0 is ``start`` and a caption or click at script time t is at video time t - start."""
     frames = [(t, f) for t, f in frames if t <= end]
-    assert frames, "the screencast sent no frames"
+    assert frames, "the recorder captured no frames"
     before = [i for i, (t, _) in enumerate(frames) if t <= start]
     frames = frames[before[-1] if before else 0 :]
     held = []
     for i, (t, f) in enumerate(frames):
         until = frames[i + 1][0] if i + 1 < len(frames) else end
-        held.append((f, max(0.02, until - max(t, start))))
+        duration = until - max(t, start)
+        if duration > 0:
+            held.append((f, duration))
     return held
 
 

@@ -164,6 +164,34 @@ def test_each_action_draws_the_smallest_change_and_an_unknown_one_does_nothing()
     )
 
 
+@pytest.mark.parametrize("origin", [(0, 0), (-400, 250)])
+def test_auto_placed_notes_stay_inside_their_frame_and_avoid_siblings(origin: tuple[int, int]) -> None:
+    """The enclosing frame is not an obstacle; its notes still occupy their own slots (#674)."""
+    new = ids()
+    result = board.apply_action(
+        [], "frame", {"text": "Plan", "x": origin[0], "y": origin[1]}, now=10, new_id=new
+    )
+    frame = result.incoming[0]
+    elements = list(result.incoming)
+    siblings: list[dict[str, Any]] = []
+    for text in ("first", "second", "third", "fourth"):
+        result = board.apply_action(elements, "note", {"to": frame["id"], "text": text}, now=10, new_id=new)
+        assert not result.error
+        note, label = result.incoming
+        assert note["frameId"] == label["frameId"] == frame["id"]
+        assert frame["x"] <= note["x"] <= frame["x"] + frame["width"] - note["width"]
+        assert frame["y"] <= note["y"] <= frame["y"] + frame["height"] - note["height"]
+        for sibling in siblings:
+            assert (
+                note["x"] >= sibling["x"] + sibling["width"] + 10
+                or sibling["x"] >= note["x"] + note["width"] + 10
+                or note["y"] >= sibling["y"] + sibling["height"] + 10
+                or sibling["y"] >= note["y"] + note["height"] + 10
+            )
+        siblings.append(note)
+        elements.extend(result.incoming)
+
+
 def test_the_summary_names_frames_shapes_and_arrows() -> None:
     """The text an agent reads, in the shape the spike measured. Tombstones are left out."""
     frame = el("f1", "frame", name="Plan", x=0, y=0, width=600, height=360)

@@ -511,7 +511,9 @@ def _free_slot(
     boxes = [
         (e["x"], e["y"], e["width"], e["height"])
         for e in _live(elements)
-        if e["type"] not in ("arrow", "line", "text") and not e.get("containerId")
+        if e["type"] not in ("arrow", "line", "text")
+        and not e.get("containerId")
+        and (frame is None or e["id"] != frame["id"])
     ]
     if frame is not None:
         x0, y0, cols, dx, dy = frame["x"] + 20, frame["y"] + 40, 2, 200, 120
