@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from playwright.sync_api import Page, expect
 from test_web_ui import PHONE, UI, no_horizontal_scroll, ui, world  # noqa: F401
-from ui_world import UIWorld
+from ui_world import UIWorld, wait_js
 
 pytestmark = pytest.mark.e2e
 
@@ -157,7 +157,7 @@ def test_bound_agent_text_wraps_to_its_container_without_changing_the_stored_sce
     """Restore must measure and wrap bound labels; trusting the broker's rough text box clips words."""
     world.create_room("board-label")
     b = world.broker
-    phrase = "Start with a shared goal"
+    phrase = "Ready for review"
     b.on_loop(
         lambda: b.state.room_board.agent(
             b.state.store.get_room("#board-label"), "drawer", {"action": "note", "text": phrase}, None
@@ -167,10 +167,16 @@ def test_bound_agent_text_wraps_to_its_container_without_changing_the_stored_sce
     page = ui.open("board-label")
     frame = open_board(page)
     frame.locator("body").evaluate("document.fonts.ready")
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements().some(e=>e.type==='text' && e.text.includes('\\n'))",
+    )
     elements = frame.locator("body").evaluate("window.sbBoard.api.getSceneElements()")
     text = next(e for e in elements if e["type"] == "text")
     container = next(e for e in elements if e["id"] == text["containerId"])
     assert "\n" in text["text"], "the rough one-line text box must be measured and wrapped"
+    assert abs(text["y"] + text["height"] / 2 - container["y"] - container["height"] / 2) < 1
     assert " ".join(text["text"].split()) == phrase and text["originalText"] == phrase
     assert container["width"] == before[1][0]["width"] and container["height"] == before[1][0]["height"]
     assert b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#board-label").id)) == before

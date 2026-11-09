@@ -1,12 +1,13 @@
 // The opaque board document (DESIGN §56.8). No cookie, socket, API or untrusted HTML.
 import './asset-path.js';
-import { attachArrows } from './geometry.js';
+import { attachArrows, centerLabels } from './geometry.js';
 import rules from '../../src/switchboard/web/static/board-rules.js';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Excalidraw, MainMenu, restoreElements, exportToBlob } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import './frame.css';
+let fullScene = [];
 let api = null, session = null, room = null, known = new Map(), applying = false, timer = null, pointer = false, dirty = false;
 const sig = e => `${e.version}:${e.versionNonce}`;
 const post = (action, extra = {}) => parent.postMessage({ t: 'sb-board', action, session, room, ...extra }, '*');
@@ -19,6 +20,7 @@ function flush() {
   dirty = false;
   if (!changed.length) return;
   changed.forEach(e => known.set(e.id, sig(e)));
+  fullScene = rules.merge(fullScene, changed);
   post('change', { elements: changed });
 }
 function apply(elements) {
@@ -28,7 +30,8 @@ function apply(elements) {
   // This preserves both arrow bindings and the existing targets' exact dimensions.
   const local = dirty ? rules.batch(api.getSceneElementsIncludingDeleted()) : null;
   const scene = local ? rules.merge(elements, local) : elements;
-  api.updateScene({ elements: attachArrows(restoreElements(scene, null, { repairBindings: true, refreshDimensions: true })), captureUpdate: 'NEVER' });
+  fullScene = scene;
+  api.updateScene({ elements: attachArrows(centerLabels(restoreElements(scene, null, { repairBindings: true, refreshDimensions: true }))), captureUpdate: 'NEVER' });
   applying = false;
   const count = scene.filter(e => !e.isDeleted).length;
   document.getElementById('board-count').textContent = `${count} ${count === 1 ? 'shape' : 'shapes'}`;
@@ -58,6 +61,8 @@ document.addEventListener('pointerdown', () => { pointer = true; dirty = true; }
 document.addEventListener('keydown', () => { dirty = true; });
 document.addEventListener('input', () => { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 250); });
 document.addEventListener('pointerup', () => { pointer = false; timer = setTimeout(flush, 0); });
+// Font loading is asynchronous in a cold browser. Remeasure after its metrics are available.
+document.fonts.addEventListener('loadingdone', () => { if (api && session) apply(fullScene); });
 createRoot(document.getElementById('board-root')).render(
   <Excalidraw langCode="en" aiEnabled={false} excalidrawAPI={value => { api = value; window.sbBoard = { api, flush }; post('ready'); }}
     initialData={{ appState: { currentItemFontFamily: 1 }, elements: [] }}
