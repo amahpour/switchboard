@@ -57,6 +57,98 @@ docker exec -u switchboard switchboard sh -c 'echo "human_name = \"ari\"" >> "$S
 docker restart switchboard
 ```
 
+## Sizing
+
+The broker is one process. Its busy request path uses one core; adding ingress
+replicas or proxies adds no broker capacity. Several brokers need a different
+design ([#35](https://github.com/amahpour/switchboard/issues/35)). Size memory for
+connected agents, and leave CPU headroom for hooks while agents work.
+
+Measured on 2026-11-09 with switchboard 0.56.1, Python 3.13.15 and an Intel Core
+Ultra 7 265: only the broker was pinned to one core (`taskset`); a separate
+process drove `FakeAgent` clients over loopback HTTP/MCP. Each row used a fresh
+test-mode broker and temporary database, with `rate_limit_s = 0` and
+`budget_per_hour = 1000000000`. Rooms held five agents. Each agent sent its next
+call as soon as the last returned. **One cloud vCPU may be slower.** These are
+achieved rates from one load-client process, not production capacity guarantees.
+
+| Load | Agents | Calls/s | p50 / p99 (ms) | Broker CPU (cores) |
+|---|---:|---:|---:|---:|
+| `read` (`limit=20`) | 20 | 1064 | 18 / 52 | 0.99 |
+| plugin hook (`PostToolUse`) | 20 | 1029 | 19 / 54 | 0.99 |
+| `say` (rooms of 5) | 20 | 391 | 41 / 525 | 0.99 |
+| `read` (`limit=20`) | 60 | 791 | 57 / 607 | 0.97 |
+| plugin hook (`PostToolUse`) | 60 | 847 | 54 / 652 | 0.98 |
+| `say` (rooms of 5) | 60 | 386 | 126 / 1062 | 0.99 |
+
+`read` polls with `limit=20` after seeding the room; repeated reads normally have
+no new messages. The hook is a synthetic `PostToolUse` through the same hidden
+MCP tool the plugins call, not a running model or plugin. `say` posts a short
+message and includes delivery classification for the other four room members.
+Latency includes the client and HTTP/MCP round trip. A larger agent count can
+add queueing without increasing throughput; use CPU and latency together when
+choosing how many agents may work at once. Delivery throttles normally keep chat
+traffic below these rates, but hooks arrive after every tool call.
+
+With agents holding `wait()` open, after checking that every agent was idle:
+
+| Agents holding `wait()` | Broker RSS (MiB) | Broker CPU (cores) | File descriptors |
+|---:|---:|---:|---:|
+| 0 | 105.8 | 0.002 | 13 |
+| 100 | 129.9 | 0.004 | 213 |
+| 500 | 221.9 | 0.008 | 1,013 |
+| 1,000 | 338.3 | 0.026 | 2,013 |
+
+This run added about **0.23 MiB and two file descriptors per connected agent**.
+For mostly waiting agents with enough file descriptors, memory is the first
+sizing constraint; for active agents, one core can run out first, as the
+throughput table shows. An RSS-only linear extrapolation from the measured 0-to-1,000 range reaches `512Mi` near
+1,750 waits and `1Gi` near 3,950. **Those larger counts were not tested, and are
+not safe connection quotas:** container memory includes more than RSS and active
+traffic needs additional headroom. The measurements support raising the default
+to 1Gi, rather than treating either estimate as an OOM threshold.
+
+The Helm chart and Kubernetes manifest now give the **broker container a `1Gi`
+memory limit** (formerly `512Mi`). This caps the broker's total charged container
+memory, including page cache; it is not a cap on the whole pod or the number of
+agents. `192Mi` memory and `100m` CPU remain the scheduling requests, not maximums.
+There is no broker CPU limit. For a busy deployment, raise requests to measured
+steady use so the scheduler reserves enough. joinly's meeting-bot container has
+its own much larger memory limit, sized separately from live calls ([below](#meetings-with-helm)).
+
+Watch these together:
+
+- **RSS and container memory versus the limit.** Alert before the limit, leaving
+  space for traffic bursts, file uploads and database cache.
+- **CPU and request latency.** Sustained use near one core and rising p99 indicate
+  request saturation. The measured machine's rate is not a cloud vCPU sizing target.
+- **Connected agents and open waits.** Track live connections alongside the active
+  members shown by `switchboard status` / `who`; memberships can outlive a connection.
+  Also watch the process's file-descriptor limit as connections grow.
+- **OOM restarts.** In Kubernetes, check restart counts and the last termination
+  reason (`OOMKilled`), for example with
+  `kubectl -n switchboard describe pod switchboard-0`. A restart clears waits and makes agents reconnect.
+
+Re-run the small harness from a Linux checkout with the test dependencies:
+
+```bash
+uv run --frozen python scripts/bench_broker.py --broker-cpu 0 \
+  --agents 20 60 --wait-agents 0 100 500 1000 --seconds 5
+```
+
+Choose a CPU allowed by the machine's affinity set, or omit `--broker-cpu` for an
+unpinned run. On a shared machine, take the same suite lock as the tests
+([CONTRIBUTING.md](https://github.com/amahpour/switchboard/blob/main/CONTRIBUTING.md)).
+The script prints JSON, measures the broker process alone through Linux `/proc`,
+and removes its brokers and homes afterward. It uses only the standard library,
+the installed broker dependencies and the repo's `tests/fakes` clients. It runs
+locally inside a cluster too; it does not send load to an existing broker.
+
+The five-second samples exclude TLS, browser WebSockets, long histories, large
+messages, file transfers, real plugin lifecycle traffic and meetings. RSS is a
+snapshot, not peak container memory. Measure a representative workload on your
+own storage and CPU before relying on either limit.
+
 ## Deploy it
 
 Each example pins a release (`ghcr.io/amahpour/switchboard:0.56.1`). Every release moves these pins, and `:latest` follows the newest release.
@@ -125,7 +217,7 @@ kubectl -n switchboard logs switchboard-0    # the admin's one-time password
 | `persistence.size`, `persistence.storageClass` | `20Gi`, the cluster's default | The claim. Use block storage (EBS, a persistent disk, Azure Disk), never NFS or EFS. |
 | `ingress.enabled`, `ingress.className`, `ingress.host`, `ingress.tls.enabled`, `ingress.tls.secretName` | on, `nginx`, `publicUrl`'s host, on, `switchboard-tls` | The Ingress. The broker answers to the public URL's host alone, so that is the default host. |
 | `ingress.annotations` | the three ingress-nginx ones | `proxy-read-timeout` and `proxy-send-timeout` of 960 s, which keep an agent's 15-minute wait open, and `proxy-body-size` of `26m`, one megabyte over `[files] max_mb` ([why](#kubernetes-eks-gke-aks)). |
-| `resources` | 100m and 192Mi requested, 512Mi limit | The broker container's. |
+| `resources` | 100m and 192Mi requested, 1Gi limit | The broker container's ([Sizing](#sizing)). |
 | `meetings.enabled` | `false` | Adds joinly beside the broker ([below](#meetings-with-helm)). |
 | `meetings.maxCalls` | `1` | How many calls may run at once, 1 to 50. It sizes joinly. |
 | `meetings.image.tag`, `meetings.image.digest`, `meetings.image.cudaDigest` | `v0.5.4` and the two index digests | joinly's release. `digest` is the CPU image and `cudaDigest` is the CUDA image. Move all three together ([Upgrading](#upgrading)). |
