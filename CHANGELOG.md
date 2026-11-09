@@ -2,6 +2,14 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.56.1 (2026-11-09)
+
+### Fixed
+
+- **Manual test workflow runs can compare plugin versions with main.** They fetch the comparison history before pytest, so a missing pull-request merge commit no longer makes the required-base check fail.
+- **Verification recordings include native full screen.** The recorder samples Playwright screenshots on the captions' clock, so storyboard playback appears in the video and steps sheet. Sample durations no longer add extra time at the recording's end.
+- **An agent's auto-placed note starts inside its assigned whiteboard frame.** The enclosing frame no longer counts as an occupied slot; existing notes still keep their space.
+
 ## 0.56.0 (2026-11-09)
 
 ### Upgrading
