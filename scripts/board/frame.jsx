@@ -31,7 +31,7 @@ function apply(elements) {
   const scene = local ? rules.merge(elements, local) : elements;
   fullScene = scene;
   const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;
-  api.updateScene({ elements: attachArrows(restoreElements(shown, null)), captureUpdate: 'NEVER' });
+  api.updateScene({ elements: attachArrows(restoreElements(shown, null, { repairBindings: true, refreshDimensions: true })), captureUpdate: 'NEVER' });
   applying = false;
   const count = scene.filter(e => !e.isDeleted).length;
   document.getElementById('board-count').textContent = `${count} ${count === 1 ? 'shape' : 'shapes'}`;
@@ -65,7 +65,7 @@ window.addEventListener('message', async ev => {
       post('converted', { request: m.request, elements });
     } catch { post('converted', { request: m.request, error: 'cannot_convert' }); }
   } else if (m.session === session && m.action === 'export' && typeof m.request === 'string') {
-    const blob = await exportToBlob({ elements: playing ? attachArrows(restoreElements(fullScene, null)) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
+    const blob = await exportToBlob({ elements: playing ? attachArrows(restoreElements(fullScene, null, { repairBindings: true, refreshDimensions: true })) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
     if (blob.size <= 600000) post('image', { request: m.request, bytes: await blob.arrayBuffer() });
   }
 });

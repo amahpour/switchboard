@@ -38,7 +38,7 @@ def test_mermaid_makes_editable_shapes_clear_of_existing_drawing_and_hostile_tex
     assert made.get("changed"), made
     elements = frame.locator("body").evaluate("window.sbBoard.api.getSceneElements()")
     imported = [e for e in elements if e["id"] in made["ids"]]
-    assert any("<img src=x onerror=alert(1)>" in e.get("text", "") for e in imported)
+    assert any("<img src=x onerror=alert(1)>" in e.get("originalText", e.get("text", "")) for e in imported)
     assert imported and all(e["type"] != "image" and e.get("link") is None for e in imported)
     original = next(e for e in elements if e["id"] == existing["ids"][0])
     assert min(e["x"] for e in imported) >= original["x"] + original["width"] + 80
