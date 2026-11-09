@@ -1,6 +1,7 @@
 """docs/media/ui_record.py, the screen recorder for a pull request's Verification (CONTRIBUTING.md,
-"Recording a change working"): the parts with no browser in them. Which frames a recording shows
-and for how long, how a caption breaks into lines, and where a scenario comes from.
+"Recording a change working"): the capture backend on a fake page and the parts with no browser
+in them. Which frames a recording shows and for how long, how a caption breaks into lines, and
+where a scenario comes from.
 
 The script is run by hand and never under pytest, so it is loaded here as a file. Nothing in
 these tests needs Playwright, ffmpeg or Pillow: the ``record`` group is not installed in CI."""
@@ -60,6 +61,12 @@ def test_no_frames_is_an_error_not_an_empty_video() -> None:
         rec.frame_list([(9.0, A)], start=1.0, end=2.0)
 
 
+def test_a_sample_at_the_end_adds_no_time_and_a_short_tail_keeps_its_duration() -> None:
+    """Padding short samples or the final screenshot pushes captions past the pixels they name."""
+    held = rec.frame_list([(1.0, A), (1.99, B), (2.0, C)], start=1.0, end=2.0)
+    assert held == [(A, pytest.approx(0.99)), (B, pytest.approx(0.01))]
+
+
 def test_a_caption_breaks_between_words() -> None:
     """A long caption wraps on a phone-width bar instead of running off both ends. Fails if a word
     is split, or a line is longer than fits while it still has a space to break at."""
@@ -94,3 +101,97 @@ def test_a_scenario_is_a_name_or_a_file(tmp_path: Path) -> None:
         rec.load_scenario("no-such-thing")
     with pytest.raises(SystemExit, match="not a scenario"):
         rec.load_scenario(str(tmp_path / "missing.py"))
+
+
+def test_the_capture_backend_records_fullscreen_pixels_on_the_caption_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CDP can keep sending the room under native fullscreen; screenshots see its top layer.
+
+    A fake page exposes those two different pixel sources. Capture time includes screenshot
+    latency, so captions cannot drift by assuming each sample took a fixed amount of time.
+    """
+    import base64
+
+    clock = [10.0]
+    samples: list[tuple[float, bytes]] = []
+    monkeypatch.setattr(rec.time, "time", lambda: clock[0])
+
+    class Page:
+        pixels = b"room"
+        context: Page
+
+        def __init__(self) -> None:
+            self.context = self
+
+        def new_cdp_session(self, page):
+            return CDP()
+
+        def wait_for_timeout(self, milliseconds):
+            clock[0] += milliseconds / 1000
+
+        def screenshot(self, *, path, type, quality, scale):
+            assert (type, quality, scale) == ("jpeg", 92, "css")
+            clock[0] += 0.03  # taking a screenshot costs time too
+            Path(path).write_bytes(self.pixels)
+            samples.append((clock[0], self.pixels))
+
+    class CDP:
+        def on(self, event, callback):
+            self.callback = callback
+
+        def send(self, method, params=None):
+            if method == "Page.startScreencast":
+                self.callback(
+                    {"data": base64.b64encode(b"room"), "metadata": {"timestamp": clock[0]}, "sessionId": 1}
+                )
+
+    page = Page()
+    take = rec.Take(page, tmp_path)
+    take.roll()
+    take.start = take.now()
+    take.steps.append((take.now(), "Play frames in full screen"))
+    page.pixels = b"native fullscreen with storyboard caption"
+    take.pause(0.36)
+    end = take.now()
+    take.cut()
+    assert take.frames[-1][1].read_bytes() == page.pixels
+    assert len(samples) >= 3
+    assert [t for t, _ in take.frames] == [t for t, _ in samples]
+    assert all(
+        path.read_bytes() == pixels for (_, path), (_, pixels) in zip(take.frames, samples, strict=True)
+    )
+    assert sum(seconds for _, seconds in rec.frame_list(take.frames, take.start, end)) == pytest.approx(
+        end - take.start
+    )
+
+
+def test_typing_is_sampled_before_the_whole_value_has_been_entered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Switching to screenshots must still show text as it is typed, including Unicode."""
+    clock, typed, pictures = [10.0], [""], []
+    monkeypatch.setattr(rec.time, "time", lambda: clock[0])
+
+    class Input:
+        def fill(self, text):
+            typed[0] = text
+
+        def press_sequentially(self, text, *, delay):
+            typed[0] += text
+            clock[0] += len(text) * delay / 1000
+
+    class Page:
+        def locator(self, selector):
+            return Input()
+
+        def screenshot(self, *, path, **kwargs):
+            Path(path).write_text(typed[0])
+            pictures.append(typed[0])
+
+    take = rec.Take(Page(), tmp_path)
+    take.type("#input", "Hello café 👋", clear=True)
+    assert typed[0] == "Hello café 👋"
+    assert len(pictures) > 1
+    assert pictures[0] and pictures[0] != typed[0]
+    assert pictures[-1] == typed[0]
