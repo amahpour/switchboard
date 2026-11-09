@@ -6,6 +6,8 @@ The words on a shape are ordinary text, cut at 200 characters. A link, a picture
 
 Claude Code, Codex and Cursor load a `board` skill with the field-by-field how-to. The tool's own description only names the actions. On Cursor the tool is `switchboard_board`.
 
+For a note inside a frame, the agent sets `to` to that frame's id. With no coordinates, the broker starts inside the frame and avoids existing shapes.
+
 An agent may change the board once every 10 seconds, the same limit as `say`. A call inside that window changes nothing. It is not queued, so a late write cannot land on top of a newer drawing.
 
 The page that draws the board, and a picture an agent can look at, are a later change.
