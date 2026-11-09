@@ -116,3 +116,26 @@ def run_codex_headers(machine: Machine) -> subprocess.CompletedProcess[str]:
             str(machine.data),
         ]
     return subprocess.run(argv, env=machine.env(), capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("command", ["plan", "status"])
+def test_codex_host_reports_a_missing_configured_headers_helper_without_showing_config(
+    machine: Machine, command: str
+) -> None:
+    """A removed versioned helper gets a useful diagnosis before hosting, without exposing config secrets."""
+    config = machine.home / ".codex"
+    config.mkdir()
+    missing = machine.home / "removed-plugin/bin/headers"
+    text = (
+        f"[mcp_servers.switchboard]\nhttp_headers_helper = '\"{missing}\"'\n"
+        "[mcp_servers.other]\nhttp_headers_helper = '\"/missing/other\"'\n"
+        f'secret = "{TOKEN}"\n'
+    )
+    (config / "config.toml").write_text(text)
+    result = machine.run([command], stdin="")
+    assert result.returncode == 0, result.stderr
+    assert "configured http_headers_helper is missing" in result.stderr
+    assert "headers-launcher" in result.stderr and "restart Codex" in result.stderr
+    assert TOKEN not in result.stdout + result.stderr
+    assert (config / "config.toml").read_text() == text
+    assert not machine.stub.requests and not machine.compose("up")

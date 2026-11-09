@@ -275,6 +275,11 @@ sweep() { # calls that ended (their containers exited) leave nothing behind
 }
 
 # ------------------------------------------------------------------------------------------------ commands
+check_headers() { # Codex-only read-only diagnosis; the Claude package has no such helper.
+  if [ -d "$plugin/.codex-plugin" ] && [ -f "$here/check-headers" ]; then
+    sh "$here/check-headers"
+  fi
+}
 cmd_plan() {
   force='' model_arg=''
   while [ $# -gt 0 ]; do
@@ -292,6 +297,7 @@ cmd_plan() {
   choose_device "$force"
   choose_model "$model_arg"
   print_plan
+  check_headers
 }
 
 cmd_status() {
@@ -307,6 +313,7 @@ cmd_status() {
     esac
   done
   set_data_dir
+  check_headers
   any=
   for d in "$data"/calls/*/; do
     [ -d "$d" ] || continue
