@@ -120,18 +120,28 @@ Step by step:
 
 With Codex 0.166.0 or later, a local HTTP MCP connection can make a private script key while using its saved browser sign-in. No agent token needs to be in the shell, and no script reads Codex's credential store.
 
-1. Upgrade the broker, then the plugin. Find the installed switchboard plugin's folder (the folder containing `.codex-plugin` and `bin`). In your existing `[mcp_servers.switchboard]` entry in Codex's `config.toml`, add this line, replacing the path with that installed folder:
+1. Upgrade the broker, then the plugin. From the installed plugin's `bin` folder, run its launcher once with an absolute path:
 
-    ```toml
-    http_headers_helper = '"/path/to/installed/switchboard/bin/headers"'
+    ```sh
+    "$HOME/.codex/plugins/cache/switchboard/switchboard/<version>/bin/headers-launcher" --install
     ```
 
-    On native Windows, use the absolute path to `bin/headers.cmd` instead. Keep `url` and `tool_timeout_sec` from [USAGE.md](../USAGE.md#agents-over-https-a-preview). Leave `bearer_token_env_var` out for browser-only sign-in.
+    This copies a small launcher to `~/.codex/plugins/cache/switchboard/codex-headers`, beside the versioned plugin folders. It does not edit Codex's configuration. In your existing `[mcp_servers.switchboard]` entry in `config.toml`, set its absolute path yourself (replace `/Users/someone` with your home):
+
+    ```toml
+    http_headers_helper = '"/Users/someone/.codex/plugins/cache/switchboard/codex-headers"'
+    ```
+
+    On native Windows, run the installed `bin/windows/headers-launcher.ps1 --install` with PowerShell. Set `http_headers_helper` to the quoted absolute path of `~/.codex/plugins/cache/switchboard/codex-headers.cmd` instead. Keep `url` and `tool_timeout_sec` from [USAGE.md](../USAGE.md#agents-over-https-a-preview). Leave `bearer_token_env_var` out for browser-only sign-in.
+
+    Keep the launcher beside the cache: it selects the highest installed release version, checks that the manifest names that version of switchboard, and rejects links, another owner and shared write access before running the helper. On Windows, SYSTEM and Administrators may also have write access. A plugin update can remove the old version without removing the launcher. Executable lookup uses the launcher's location, never an environment variable. This setup supports the normal personal `.codex/plugins/cache` layout; a custom `CODEX_HOME` cache needs an agent token instead.
 
 2. Set the non-secret `SWITCHBOARD_URL` to your broker's address, without `/mcp`, in the environment that starts Codex. Sign in with `codex mcp login switchboard` if needed, then restart Codex and join the room from that session.
 3. Ask that session to host the call. The helper made `codex-listener-key-<pid>` under `~/.cache/switchboard`, mode 0600 (on Windows, an access list of your account alone). Only its hash travels over the signed-in connection. The host script finds the key through its own process ancestors and names `CODEX_THREAD_ID`; the broker checks that thread and its room membership. Never print or copy the key.
 
 The key is pinned to the first thread using that connection. It opens only the existing call-registration route for that thread, expires with the sign-in, and cannot call a tool, listen for messages, report a session, or act for another thread or harness. A subagent cannot borrow its parent's key. `SWITCHBOARD_AGENT_TOKEN` still works and takes precedence when set.
+
+If you previously configured a versioned `bin/headers` path, replace it with the stable path above. `meeting-host plan` and `meeting-host status` warn when the configured helper is missing and explain how to repair it. The check reads only `config.toml`, never runs its command, and never prints its values. It recognizes the quoted literal-string form shown above; other command syntax gets a message asking you to use that form. Restart Codex after changing the setting.
 
 The helper and host must use the same data folder. For a custom folder, pass it as the helper command's quoted second argument and as `meeting-host start --data DIR`, or start Codex with `SWITCHBOARD_PLUGIN_DATA` set to it. The helper supports local HTTP MCP connections; a remote execution environment needs the token path instead.
 
