@@ -1832,6 +1832,39 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    # What a person has read of a room, and a board card they set aside (§55.8, #663). Both are
+    # the signed-in person's own rows, for a room they can see: a private room they are not in is "no
+    # such room", as everywhere else.
+    @app.post("/api/rooms/{slug}/seen")
+    async def room_seen(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) != {"id"}:
+                raise ServiceError("bad_request", "give id, a message id")
+            room = state.service.room_for(slug, viewer(request))
+            key = state.service.person_key(w.person_id)
+            return _ok({"seen": home.mark_room_seen(state, key, room, body["id"])})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.post("/api/rooms/{slug}/home-snooze")
+    async def home_snooze(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            if set(body) != {"url"}:
+                raise ServiceError("bad_request", "give url, a board's address")
+            room = state.service.room_for(slug, viewer(request))
+            key = state.service.person_key(w.person_id)
+            return _ok({"snoozed_at": home.snooze_board(state, key, room, body["url"])})
+        except ServiceError as e:
+            return _svc_err(e)
+
     @app.post("/api/rooms")
     async def create_room(request: Request) -> Response:
         w = who(request)

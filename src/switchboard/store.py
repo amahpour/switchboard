@@ -313,6 +313,8 @@ class Store:
         ("room_board_changes", "room_board_changes WHERE room_id=?", 1),
         ("room_boards", "room_boards WHERE room_id=?", 1),
         ("pins", "pins WHERE room_id=?", 1),
+        ("home_seen", "home_seen WHERE room_id=?", 1),
+        ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
         ("meetings", "meetings WHERE room_id=?", 1),
@@ -725,6 +727,7 @@ class Store:
         done_since: float,
         window: int,
         skip_head: str,
+        seen_id: int = 0,
     ) -> tuple[list[tuple[Message, bool]], list[Message]]:
         """What the home page reads from one room, in one pass over its newest ``window`` chat messages (the
         index walks them from the end, so the cost does not grow with the room's history) and SQL doing the
@@ -734,8 +737,9 @@ class Store:
         (in the window; one older than the window leaves them all) that name them or ``@humans``, or that
         reply to something they said, as ``(message, replies_to_me)``, oldest first. The name test is on the
         JSON text of ``mentions`` and is only a prefilter: the caller makes the exact check, so it never
-        shows more than before. ``done`` is each agent's latest message since ``done_since`` that does not
-        name ``me`` or ``@humans`` and does not start with ``skip_head`` (the review board's own lines)."""
+        shows more than before. ``seen_id`` is how far ``me`` has read the room (``home_seen``): only messages
+        after it are questions (#663). ``done`` is each agent's latest message since ``done_since`` that does
+        not name ``me`` or ``@humans`` and does not start with ``skip_head`` (the review board's lines)."""
         mention = f'"{me.lower()}"'
         rows = self.con.execute(
             "WITH w AS (SELECT id, ts, sender_name, sender_kind, reply_to, lower(mentions) AS ment,"
@@ -745,7 +749,7 @@ class Store:
             "  AND lower(sender_name)=:me),"
             " q AS (SELECT w.id, EXISTS (SELECT 1 FROM messages p WHERE p.id=w.reply_to"
             "  AND p.room_id=:room AND p.sender_kind='human' AND lower(p.sender_name)=:me) AS to_me"
-            "  FROM w, mine WHERE w.id>mine.id AND w.ts>=:qs AND w.sender_kind!='meeting'"
+            "  FROM w, mine WHERE w.id>mine.id AND w.id>:seen AND w.ts>=:qs AND w.sender_kind!='meeting'"
             "  AND (instr(w.ment, :mention)>0 OR instr(w.ment, '\"humans\"')>0"
             "   OR (w.sender_kind!='human' AND w.reply_to IS NOT NULL))),"
             " d AS (SELECT MAX(id) AS id FROM w WHERE sender_kind='agent' AND ts>=:ds"
@@ -763,11 +767,56 @@ class Store:
                 "ds": done_since,
                 "board": skip_head,
                 "hl": len(skip_head),
+                "seen": int(seen_id),
             },
         ).fetchall()
         questions = [(Message.from_row(r), bool(r["to_me"])) for r in rows if r["tag"] == "q"]
         done = [Message.from_row(r) for r in rows if r["tag"] == "d"]
         return questions, done
+
+    def home_seen_marks(self, person_key: int) -> dict[int, int]:
+        """How far a person has read each room (``room_id`` to the newest message id they were shown)."""
+        return {
+            int(r[0]): int(r[1])
+            for r in self.con.execute(
+                "SELECT room_id, seen_id FROM home_seen WHERE person_key=?", (person_key,)
+            ).fetchall()
+        }
+
+    def home_mark_seen(self, person_key: int, room_id: int, seen_id: int) -> int:
+        """Move a person's mark in a room forward to ``seen_id``, never back and never past the room's
+        newest message (the caller has checked they may see the room). Returns the mark now."""
+        with db.tx(self.con):
+            newest = self.last_message_id(room_id)
+            upto = max(0, min(int(seen_id), newest))
+            self.con.execute(
+                "INSERT INTO home_seen(person_key, room_id, seen_id) VALUES(?,?,?)"
+                " ON CONFLICT(person_key, room_id) DO UPDATE SET seen_id=excluded.seen_id"
+                " WHERE excluded.seen_id>home_seen.seen_id",
+                (person_key, room_id, upto),
+            )
+            r = self.con.execute(
+                "SELECT seen_id FROM home_seen WHERE person_key=? AND room_id=?", (person_key, room_id)
+            ).fetchone()
+        return int(r[0])
+
+    def home_snoozes(self, person_key: int) -> dict[tuple[int, int], float]:
+        """The boards a person set aside, ``(room_id, review_id)`` to when they pressed Not now."""
+        return {
+            (int(r[0]), int(r[1])): float(r[2])
+            for r in self.con.execute(
+                "SELECT room_id, review_id, snoozed_at FROM home_snoozes WHERE person_key=?", (person_key,)
+            ).fetchall()
+        }
+
+    def home_snooze(self, person_key: int, room_id: int, review_id: int, at: float) -> None:
+        """Set a board aside for a person as of ``at`` (pressing it again moves the moment forward)."""
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO home_snoozes(person_key, room_id, review_id, snoozed_at) VALUES(?,?,?,?)"
+                " ON CONFLICT(person_key, room_id, review_id) DO UPDATE SET snoozed_at=excluded.snoozed_at",
+                (person_key, room_id, review_id, at),
+            )
 
     def live_agents(self, now: float) -> tuple[list[sqlite3.Row], list[sqlite3.Row], dict[int, int]]:
         """What the home page's Live now needs from every room at once, in three queries: the members that

@@ -3401,7 +3401,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   /* the card's answer buttons go under its words, as the phone mockup has them: nothing is cut off */
   .hc-row { flex-wrap: wrap; row-gap: 8px; }
   .home-card .hc-body { flex: 1 1 calc(100% - 48px); }
-  .home-card .hc-side, .home-row.live .hc-side { flex: 1 1 100%; justify-content: space-between; padding-left: 44px; }
+  .home-card .hc-side, .home-row.live .hc-side { flex: 1 1 100%; flex-wrap: wrap; justify-content: space-between; padding-left: 44px; }
   .home-row.live .hc-body { flex: 1 1 calc(100% - 48px); }
   .home-act, .home-go { min-height: 44px; padding: 0 16px; }
   .home-opt { min-height: 44px; }

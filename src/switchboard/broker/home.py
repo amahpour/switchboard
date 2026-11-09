@@ -2,8 +2,9 @@
 what got done since they last looked, and what is live now.
 
 It is a query and a view over what the broker already stores (messages, the review boards, calls,
-members and claims), never a new kind of record. The one new row is a per-person "looked at"
-time, kept in ``meta``. Everything is for one viewer: nobody sees a private room they are not in,
+members and claims), never a new kind of record. What it keeps is per person: a "looked at" time in
+``meta``, how far they have read each room, and which boards they set aside (§55.8, #663). Everything is
+for one viewer: nobody sees a private room they are not in,
 and each person's "waiting on you" is their own. It never decides anything for an agent: a card
 only points at an answer the person gives through the routes the room already has (``say``, the
 board's person moves).
@@ -18,6 +19,7 @@ import re
 from typing import Any
 
 from switchboard import reviews
+from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
 from switchboard.models import Message, Room
 
@@ -109,14 +111,21 @@ def _question_cards(me: str, room: Room, questions: list[tuple[Message, bool]]) 
     ]
 
 
-def _board_cards(state: Any, room: Room) -> list[dict[str, Any]]:
+def _board_cards(
+    state: Any, room: Room, snoozed: dict[tuple[int, int], float] | None = None
+) -> list[dict[str, Any]]:
     """One card per open board with something for a person to call: the questions, contested findings
     and unconfirmed fixes that need them (``needs_person``, the board's own test), each with the
-    moves a person may make on it, which are the moves the room's board page offers."""
+    moves a person may make on it, which are the moves the room's board page offers. A board the person
+    set aside with Not now (``snoozed``: ``(room, board)`` to when) has no card until something on it
+    changes after that moment: a new item, or a move on one (#663)."""
     out = []
     for board in state.boards.boards(room):
         wait = [i for i in board["items"] if i["needs_person"]]
         if not wait:
+            continue
+        pressed = (snoozed or {}).get((room.id, board["id"]))
+        if pressed is not None and board_changed_at(state, board) <= pressed:
             continue
         items = []
         for i in wait:
@@ -156,6 +165,14 @@ def _board_cards(state: Any, room: Room) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def board_changed_at(state: Any, board: dict[str, Any]) -> float:
+    """When a board last changed: the newest ``updated_at`` among its items (a new item starts with one), or
+    when it was opened if it has none."""
+    return max(
+        (i.updated_at for i in state.store.review_items(board["id"])), default=float(board["opened_at"])
+    )
 
 
 def _done_boards(state: Any, room: Room, since: float) -> list[dict[str, Any]]:
@@ -297,6 +314,28 @@ def seen_at(state: Any, person_key: int) -> float | None:
         return None
 
 
+def mark_room_seen(state: Any, person_key: int, room: Room, upto: Any) -> int:
+    """Move a person's mark in a room forward to the message id ``upto`` (the caller has checked they may see
+    the room). A value that is not a whole number from 0 up is refused; one past the room's newest message
+    is cut to it, so the mark can never hide a message that has not been written yet."""
+    if isinstance(upto, bool) or not isinstance(upto, int) or not 0 <= upto < 2**53:
+        raise ServiceError("bad_request", "give id, a message id")
+    return state.store.home_mark_seen(person_key, room.id, upto)
+
+
+def snooze_board(state: Any, person_key: int, room: Room, url: Any) -> float:
+    """Set aside the room's open board at ``url`` for this person until it changes. Only an open board of
+    this room can be (the caller has checked they may see the room); anything else is "no such board"."""
+    if not isinstance(url, str) or not 0 < len(url) <= 500:
+        raise ServiceError("bad_request", "give url, a board's address")
+    for rv in state.store.open_reviews(room.id):
+        if rv["url"] == url:
+            at = state.clock.now()
+            state.store.home_snooze(person_key, room.id, rv["id"], at)
+            return at
+    raise ServiceError("not_found", "no such board in this room")
+
+
 def mark_seen(state: Any, person_key: int, at: float | None) -> float:
     """Move this person's "looked at" time forward to ``at`` (never into the future, never back)."""
     now = state.clock.now()
@@ -315,16 +354,18 @@ def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str
     rooms = [r for r in state.store.list_rooms() if state.service.visible(r, key)]
     visible = {r.id: r for r in rooms}
     seen = seen_at(state, key)
+    read = state.store.home_seen_marks(key)
+    snoozed = state.store.home_snoozes(key)
     since = max(seen if seen is not None else now - FIRST_LOOK_S, now - WAIT_DAYS * DAY_S)
 
     waiting: list[dict[str, Any]] = []
     done: list[dict[str, Any]] = []
     for room in rooms:
         questions, turns = state.store.home_lines(
-            room.id, name, now - WAIT_DAYS * DAY_S, since, CANDIDATES, BOARD_LINE
+            room.id, name, now - WAIT_DAYS * DAY_S, since, CANDIDATES, BOARD_LINE, read.get(room.id, 0)
         )
         waiting += _question_cards(name, room, questions)
-        waiting += _board_cards(state, room)
+        waiting += _board_cards(state, room, snoozed)
         done += _done_boards(state, room, since)
         done += _done_turns(room, turns)
     live = _live(state, visible, person_id, admin, now)

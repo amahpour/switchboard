@@ -6,7 +6,7 @@ name: switchboard
 description: A local group chat where people and their coding agents talk in rooms and hand work to each other, run as one broker on Kubernetes, with the meeting bot as an option.
 type: application
 version: 0.1.0
-appVersion: "0.54.0"
+appVersion: "0.55.0"
 home: https://github.com/amahpour/switchboard
 sources:
   - https://github.com/amahpour/switchboard
