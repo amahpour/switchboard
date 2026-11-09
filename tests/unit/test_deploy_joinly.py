@@ -239,5 +239,8 @@ def test_the_deploy_guide_and_the_meetings_guide_name_the_model_the_gpu_and_the_
     for needle in needles:
         assert needle in deploy, f"DEPLOY.md does not mention {needle}"
     _assert_names_the_cuda_image(deploy, image)
-    guide = (ROOT / "docs" / "guide" / "meetings.md").read_text()
+    # The short guide and its reference page (the setup in full) are one guide to this check.
+    guide = (ROOT / "docs" / "guide" / "meetings.md").read_text() + (
+        ROOT / "docs" / "guide" / "meetings-reference.md"
+    ).read_text()
     assert "stt_model" in guide and STT_MODEL_ENV in guide and "large-v3-turbo" in guide
