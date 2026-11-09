@@ -116,6 +116,9 @@ function makeWorld(rooms) {
     home: null,       // the body of GET /api/home (#626); an empty page when a scenario sets none
     seen: [],         // every POST /api/home/seen body
     homeGets: 0,      // how many times the page asked for GET /api/home
+    trail: [],        // 'home' for each GET /api/home and 'seen:<slug>:<id>' for each room's seen mark, as answered (#663)
+    roomSeen: [],     // every POST /api/rooms/{slug}/seen body, with its room
+    snoozes: [],      // every POST /api/rooms/{slug}/home-snooze body, with its room
     moves: [],        // every POST /api/rooms/{slug}/review body, with its room
   };
 
@@ -140,12 +143,29 @@ function makeWorld(rooms) {
     if (method === 'GET' && url === '/api/home') {
       return function () {
         server.homeGets += 1;
+        server.trail.push('home');
         return [200, server.home || { now: TS, since: TS, waiting: [], waiting_total: 0, done: [], done_total: 0, live: [] }];
       };
     }
     if (method === 'POST' && url === '/api/home/seen') {
       server.seen.push(body);
       return function () { return [200, { seen: body.at }]; };
+    }
+    const mseen = /^\/api\/rooms\/([^/]+)\/seen$/.exec(url);
+    if (method === 'POST' && mseen) {
+      server.roomSeen.push(Object.assign({ room: decodeURIComponent(mseen[1]) }, body));
+      return function () {
+        server.trail.push('seen:' + decodeURIComponent(mseen[1]) + ':' + body.id);
+        return [200, { seen: body.id }];
+      };
+    }
+    const msnooze = /^\/api\/rooms\/([^/]+)\/home-snooze$/.exec(url);
+    if (method === 'POST' && msnooze) {
+      server.snoozes.push(Object.assign({ room: decodeURIComponent(msnooze[1]) }, body));
+      return function () {
+        if (server.onSnooze) server.onSnooze(body);
+        return [server.snoozeFails ? 404 : 200, server.snoozeFails ? { message: server.snoozeFails } : { snoozed_at: TS }];
+      };
     }
     const mv = /^\/api\/rooms\/([^/]+)\/review$/.exec(url);
     if (method === 'POST' && mv) {
@@ -1553,6 +1573,56 @@ const SCENARIOS = {
     await settle();
     const refused = all(function (n) { return n.classList.contains('home-err'); }).map(function (n) { return n.textContent; }).filter(Boolean);
     return { items: items, options: options, noReason: noReason, moves: w.server.moves, refused: refused };
+  },
+
+  // Opening a room tells the broker how far it has been read (#663): the newest message the page holds, once
+  // however often the room is opened again; leaving the room for Home sends what came while it was open, and
+  // Home asks for itself only after that is stored, so the card is gone when it is drawn.
+  async home_room_seen() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#uploads', created_at: 101 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'Keep the old upload endpoint?', { mentions: ['alice'] }) });
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(9, 'claude-1', 'other room') });
+    await settle();
+    const go = findAll(w.$('home'), function (n) { return n.tag === 'button' && n.classList.contains('home-go'); })[0];
+    w.server.trail.length = 0;
+    click(go);
+    await settle();
+    const afterGo = w.server.roomSeen.slice();
+    click(w.$('home-nav'));  // nothing new in #build: nothing is sent again
+    await settle();
+    const afterHome = w.server.roomSeen.length;
+    click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'a later one', { mentions: ['alice'] }) });
+    w.server.trail.length = 0;
+    click(w.$('home-nav'));
+    await settle();
+    return { afterGo: afterGo, afterHome: afterHome, all: w.server.roomSeen, trail: w.server.trail };
+  },
+
+  // Not now on a board card posts the board's address to the room's route, and the card is gone once Home asks
+  // again; a refusal leaves the card and says so.
+  async home_not_now() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody({ waiting: [BOARD_CARD] });
+    await boot(w);
+    const home = w.$('home');
+    const later = function () { return findAll(home, function (n) { return n.tag === 'button' && n.textContent === 'Not now'; }); };
+    const before = later().length;
+    w.server.snoozeFails = 'no such board in this room';
+    click(later()[0]);
+    await settle();
+    const refused = { cards: findAll(home, function (n) { return n.classList.contains('home-card'); }).length,
+      status: findAll(home, function (n) { return n.tag === 'p' && n.attrs.role === 'status'; })[0].textContent };
+    w.server.snoozeFails = '';
+    w.server.onSnooze = function () { w.server.home = homeBody({ waiting: [] }); };
+    click(later()[0]);
+    await settle();
+    return { before: before, refused: refused, snoozes: w.server.snoozes,
+      cards: findAll(home, function (n) { return n.classList.contains('home-card'); }).length,
+      badgeHidden: w.$('home-badge').classList.contains('hidden') };
   },
 
   // Leaving Home for a room tells the broker what this page showed as done, so the next open starts after it; a

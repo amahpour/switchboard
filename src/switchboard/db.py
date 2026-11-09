@@ -22,7 +22,8 @@ holds, the one-time grants that upload or download them, and a broker setting fo
 files are kept (§53); 41 (#593) lets a call be a file's uploader; 42 (#623) lets a call be hosted on a
 person's machine, with a key per call, and stores each line it pushes with that call (§54); 43 (#623)
 records when a call went live and lets an admin upload the icon of each platform a call can be on, in
-``agent_icons`` (§29.11); 44 (#637) binds script keys to their harness (§49.11).
+``agent_icons`` (§29.11); 44 (#637) binds script keys to their harness (§49.11); 45 (#663) adds what
+each person has seen of each room and which board cards they set aside, for the home page (§55.8).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -43,7 +44,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -307,6 +308,17 @@ CREATE TABLE file_grants(
   used_at REAL,
   membership_id INTEGER);
 CREATE INDEX file_grants_file ON file_grants(file_id);
+CREATE TABLE home_seen(
+  person_key INTEGER NOT NULL CHECK(person_key >= 0),
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  seen_id INTEGER NOT NULL CHECK(seen_id >= 0),
+  PRIMARY KEY(person_key, room_id)) WITHOUT ROWID;
+CREATE TABLE home_snoozes(
+  person_key INTEGER NOT NULL CHECK(person_key >= 0),
+  room_id INTEGER NOT NULL REFERENCES rooms(id),
+  review_id INTEGER NOT NULL,
+  snoozed_at REAL NOT NULL,
+  PRIMARY KEY(person_key, room_id, review_id)) WITHOUT ROWID;
 """
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
@@ -340,7 +352,8 @@ V31_TABLES = (*V30_TABLES, "oauth_clients")  # before agent_icons (v32)
 V32_TABLES = (*V31_TABLES, "agent_icons")  # before listener_keys (v33)
 V38_TABLES = (*V32_TABLES, "listener_keys")  # schemas 33 through 38, before meetings (v39)
 V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
-TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")
+V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before home_seen (v45)
+TABLES = (*V44_TABLES, "home_seen", "home_snoozes")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -932,6 +945,26 @@ V43_TO_V44 = (
     "UPDATE meta SET value='44' WHERE key='schema_version'",
 )
 
+# v44 -> v45 (#663, DESIGN.md §55.8): the home page remembers, for each person, how far they have read each
+# room (``home_seen``: the newest message id they were shown, which only moves forward) and which review
+# boards they set aside with "Not now" (``home_snoozes``: when they pressed it; a board that changes after
+# that comes back). ``person_key`` is ``room_people``'s: 0 for the owner. Both are new, so empty, and both
+# follow a deleted room (§28.6).
+V44_TO_V45 = (
+    "CREATE TABLE home_seen("
+    " person_key INTEGER NOT NULL CHECK(person_key >= 0),"
+    " room_id INTEGER NOT NULL REFERENCES rooms(id),"
+    " seen_id INTEGER NOT NULL CHECK(seen_id >= 0),"
+    " PRIMARY KEY(person_key, room_id)) WITHOUT ROWID",
+    "CREATE TABLE home_snoozes("
+    " person_key INTEGER NOT NULL CHECK(person_key >= 0),"
+    " room_id INTEGER NOT NULL REFERENCES rooms(id),"
+    " review_id INTEGER NOT NULL,"
+    " snoozed_at REAL NOT NULL,"
+    " PRIMARY KEY(person_key, room_id, review_id)) WITHOUT ROWID",
+    "UPDATE meta SET value='45' WHERE key='schema_version'",
+)
+
 
 class MigrationStep(NamedTuple):
     to: int
@@ -995,6 +1028,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         41: MigrationStep(42, V41_TO_V42, (), (("meetings", "'zoom','meet','teams','unknown')"),)),
         42: MigrationStep(43, V42_TO_V43, (), (("agent_icons", "'opencode','zoom','meet','teams')"),)),
         43: MigrationStep(44, V43_TO_V44, ()),
+        44: MigrationStep(45, V44_TO_V45, ("home_seen", "home_snoozes")),
     }
     out = []
     v = frm
@@ -1039,6 +1073,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V38_TABLES
     if version == 39:
         return V39_TABLES
+    if version <= 44:
+        return V44_TABLES
     return TABLES
 
 

@@ -148,7 +148,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     con.set_trace_callback(None)
     con.close()
     alters = [ok for sql, ok in seen if sql.lstrip().upper().startswith(("ALTER", "CREATE TABLE"))]
-    # ALTERs and CREATEs per step, v2 to v44 (29 drops two tables and alters none; 30 drops thirteen columns;
+    # ALTERs and CREATEs per step, v2 to v45 (29 drops two tables and alters none; 30 drops thirteen columns;
     # 31 adds two columns and a table; 32 and 33 each add a table; 36, 37 and 38 each add one column;
     # 39 adds the meetings table. The CHECK edits are sqlite_master updates and count as none.)
     per_step = [3, 5, 1, 1, 2, 2, 2, 1, 1, 1, 2, 2, 2, 1, 2, 1, 2, 1, 1, 1, 1, 5, 1, 1, 1, 3, 13, 3, 1, 1]
@@ -158,6 +158,7 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     per_step += [8]  # 42: seven columns on meetings and one on messages (#623)
     per_step += [1]  # 43: one column on meetings, when a call went live (#623); the CHECK edit counts as none
     per_step += [1]  # 44: the harness a script key belongs to (#637)
+    per_step += [2]  # 45: home_seen and home_snoozes (#663)
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
