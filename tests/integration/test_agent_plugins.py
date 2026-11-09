@@ -1298,6 +1298,59 @@ def test_the_version_check_sees_a_changed_file_and_a_new_one_and_accepts_a_bump(
     assert unbumped_plugins(repo, base) == []
 
 
+def test_manual_ci_fetch_restores_a_base_and_still_rejects_an_unbumped_plugin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detached, depth-two branch needs its older fork point, even after main diverges (#672).
+
+    Execute the workflow's fetch in that checkout. The required-base check must then catch a
+    plugin edit older than the shallow history, and accept it only after a version bump.
+    """
+    workflow = (ROOT / ".github/workflows/test.yml").read_text().split("\n  test:\n", 1)[1]
+    match = re.search(
+        r"      - name: Fetch the manual run's comparison base\n"
+        r"        if: github.event_name == 'workflow_dispatch'\n"
+        r"        run: (.+)\n",
+        workflow,
+    )
+    assert match is not None, "manual runs must fetch their comparison base before pytest"
+    assert match.start() < workflow.index("uv run --frozen pytest")
+    source, repo = tmp_path / "source", tmp_path / "checkout"
+    source.mkdir()
+    assert vcs(source, "init", "-q", "-b", "main") is not None
+    plugin = source / "plugins/claude/.claude-plugin/plugin.json"
+    plugin.parent.mkdir(parents=True)
+    plugin.write_text('{"version":"1.0.0"}')
+    ident = ["-c", "user.name=alice", "-c", "user.email=alice@example.com"]
+
+    def commit(message: str) -> None:
+        assert vcs(source, "add", "-A") is not None
+        assert vcs(source, *ident, "commit", "-qm", message) is not None
+
+    commit("start")
+    fork = (vcs(source, "rev-parse", "HEAD") or "").strip()
+    assert vcs(source, "branch", "topic") is not None
+    (source / "README.md").write_text("main moved on")
+    commit("main changed")
+    assert vcs(source, "checkout", "-q", "topic") is not None
+    (source / "plugins/claude/hooks.json").write_text("{}")
+    commit("plugin changed without a bump")
+    for i in range(3):
+        (source / "README.md").write_text(f"branch change {i}")
+        commit(f"branch change {i}")
+    assert vcs(tmp_path, "clone", "-q", "--depth=2", "--branch=topic", source.as_uri(), str(repo)) is not None
+    assert vcs(repo, "checkout", "-q", "--detach") is not None
+    assert base_commit(repo) is None
+    subprocess.run(["sh", "-ec", match[1]], cwd=repo, env=child_env(), check=True, timeout=20)
+    assert base_commit(repo) == fork
+    monkeypatch.setitem(globals(), "ROOT", repo)
+    monkeypatch.setenv("SWITCHBOARD_REQUIRE_GIT_BASE", "1")
+    with pytest.raises(AssertionError, match="plugins/claude"):
+        test_a_change_to_a_plugin_bumps_its_version()
+    (repo / "plugins/claude/.claude-plugin/plugin.json").write_text('{"version":"1.0.1"}')
+    test_a_change_to_a_plugin_bumps_its_version()
+
+
 def run_session(
     b: InProcBroker | None,
     token: str,

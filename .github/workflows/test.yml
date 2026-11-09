@@ -133,7 +133,8 @@ jobs:
       # skip where node is missing; here a missing node fails the run instead
       SWITCHBOARD_REQUIRE_NODE: "1"
       # the plugin version check (tests/integration/test_agent_plugins.py) needs the history
-      # fetch-depth: 2 brings; here a missing base fails it instead of skipping
+      # fetch-depth: 2 brings for a PR; manual runs fetch main and the missing history below.
+      # A missing base fails the check instead of skipping.
       SWITCHBOARD_REQUIRE_GIT_BASE: "1"
       # the Windows scripts' tests (tests/integration/test_agent_plugins.py) run under pwsh, which
       # GitHub's runners have; where it is missing they skip, and here that fails the run instead
@@ -143,6 +144,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2   # the PR's merge commit and main (its first parent), for the plugin version check
+      # A dispatch checks out the branch itself, not a PR merge commit. Fetch main and the
+      # full history so the plugin check can find their fork point even on a long-lived branch.
+      - name: Fetch the manual run's comparison base
+        if: github.event_name == 'workflow_dispatch'
+        run: git fetch --no-tags --unshallow origin +refs/heads/main:refs/remotes/origin/main
       - uses: ./.github/actions/setup-uv-python
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
