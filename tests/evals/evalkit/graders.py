@@ -52,6 +52,15 @@ def agents_do_not_post(rec: RunRecord, asked: int, *, agents: list[str]) -> Resu
     )
 
 
+def finding_raised(rec: RunRecord, asked: int) -> Result:
+    """A finding was raised on a board after the message. Fails when the agents only talked or passed:
+    the check reads the board's items, so a chat line that looks like a raise does not pass it."""
+    ts = rec.ts_of(asked)
+    raised = [i for i in rec.review_items if i.kind == "finding" and i.created_at >= ts]
+    who = _names([i.raised_by for i in raised])
+    return Result(bool(raised), f"raised after the message: {who}")
+
+
 def a_post_matches(rec: RunRecord, asked: int, *, pattern: str) -> Result:
     """Some agent's post after the message matches the regular expression (case-insensitive): the answer
     is the right one, so a room where somebody posted something else doesn't pass 'somebody answered'."""
@@ -63,5 +72,5 @@ def a_post_matches(rec: RunRecord, asked: int, *, pattern: str) -> Result:
 
 
 GRADERS: dict[str, Callable[..., Result]] = {
-    fn.__name__: fn for fn in (poster_count, agents_post, agents_do_not_post, a_post_matches)
+    fn.__name__: fn for fn in (poster_count, agents_post, agents_do_not_post, finding_raised, a_post_matches)
 }

@@ -107,6 +107,18 @@ class Event:
 
 
 @dataclass(frozen=True)
+class ReviewItem:
+    """One card on a room's board. ``raised_by`` is who called ``review``, which is what a review
+    check reads: a chat line that only looks like a raise is not one of these."""
+
+    kind: str  # finding | question
+    state: str
+    title: str
+    raised_by: str
+    created_at: float
+
+
+@dataclass(frozen=True)
 class RunRecord:
     room: str
     agents: tuple[str, ...]
@@ -114,6 +126,7 @@ class RunRecord:
     messages: tuple[Message, ...]
     deliveries: tuple[Delivery, ...]
     events: tuple[Event, ...]
+    review_items: tuple[ReviewItem, ...]
     report: dict[str, Any]
     tokens: dict[str, Tokens] = field(default_factory=dict)
     asked: tuple[int, ...] = ()  # the id of each message the person posted, in the order of the steps
@@ -197,10 +210,36 @@ def read_record(
                 (rid,),
             )
         )
+        review_items = tuple(
+            ReviewItem(r["kind"], r["state"], r["title"], r["raised_by"], float(r["created_at"]))
+            for r in con.execute(
+                "SELECT i.kind, i.state, i.title, i.raised_by, i.created_at FROM review_items i"
+                " JOIN reviews v ON v.id = i.review_id WHERE v.room_id = ? ORDER BY i.id",
+                (rid,),
+            )
+        )
         rep = report.build(con, room)
     finally:
         con.close()
-    return RunRecord(room, agents, human, messages, deliveries, events, rep, tokens, asked)
+    return RunRecord(room, agents, human, messages, deliveries, events, review_items, rep, tokens, asked)
+
+
+def latest_human_message(db_path: str | Path, room: str) -> int:
+    """The newest chat message from a person in ``room``. A slash command posts that request and
+    the command route does not return its id, so a trial that sent one reads it back from here."""
+    con = report.open_ro(db_path)
+    try:
+        row = con.execute(
+            "SELECT m.id FROM messages m JOIN rooms r ON r.id = m.room_id"
+            " WHERE r.name = ? AND m.sender_kind = 'human' AND m.kind = 'chat'"
+            " ORDER BY m.id DESC LIMIT 1",
+            (room,),
+        ).fetchone()
+    finally:
+        con.close()
+    if row is None:
+        raise LookupError(f"no human message in {room}")
+    return int(row["id"])
 
 
 def _json_list(raw: Any) -> list[str]:

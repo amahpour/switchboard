@@ -1,0 +1,11 @@
+name = "review-board"
+about = "The person opens a review board. The one agent raises the finding the note names, which is a review() call, not a chat line that only looks like one. A second agent is left out: a raise wakes it to concede or contest, and that chain does not settle inside a trial."
+room = "#build"
+agents = ["alpha"]
+
+[[steps]]
+say = "/review https://github.com/example/shop/pull/7 The discount is applied after tax in shop/cart.py lines 40-58. Raise that one finding if nobody has, then stop. If it is already raised, pass. Do not fetch the pull request and do not edit files."
+
+[[checks]]
+id = "a_finding_was_raised"
+grader = "finding_raised"

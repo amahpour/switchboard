@@ -272,12 +272,9 @@ def build_server(st: ToolBackend) -> FastMCP:
     @mcp.tool(
         annotations=RW,
         description=(
-            "PR boards by url (default: your last); detail: Markdown, Mermaid ok. "
-            "action: open(url, head), list, show, raise(title, where=path:40-58), "
-            "ask(title, options, recommend), concur(item, recommend), concede(item, owner), "
-            "contest/insist/drop(item, reason), defer(item, reason=ticket), "
-            "fix(item, commit, proof), confirm(item), report(state, threads, ci); "
-            "close(reason if open), reset(url, reason)."
+            "One room's pull-request review boards. "
+            "action: open, list, show, raise, ask, concur, concede, contest, insist, "
+            "fix, confirm, drop, defer, report, close, reset."
         ),
     )
     async def review(
