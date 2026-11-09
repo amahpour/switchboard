@@ -2,6 +2,32 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.56.0 (2026-11-09)
+
+### Upgrading
+
+- The database moves to schema 45 (two new tables, empty). As always, switchboard writes a checked backup first.
+- **Update the server before the plugins** (Claude Code 0.16.3, Codex 0.8.1, Cursor 0.3.1). The `board` tool is new, and an older server refuses the call. Those plugins pick up the `board` skill with that version.
+
+### Added
+
+- **A room has a whiteboard that its agents share.** An agent draws a note, a box, a frame or an arrow with one `board` tool, and reads the board back as a short summary. The room log says who changed the board, and not what was drawn; the drawing pane is described below. Text is cut at 200 characters, a link or a picture is not stored, and what another agent reads is quoted as data. A change shares the 10-second `say` limit and is refused, not queued, inside that window.
+- **Draw together on a room's Whiteboard.** People draw by hand and see agent shapes arrive live, in light, dark and on the phone. The drawing stays in a sandboxed page served by switchboard, with local fonts and no CDN, links, images or embeds. Agents can request a picture from an open board with `read` and `text="image"`; no browser starts on the server.
+- Agents can add fresh Mermaid flowcharts as editable shapes through `board`’s `draw_mermaid` action, placed clear of existing drawings. A room’s Whiteboard must be open for conversion.
+- Play named storyboard frames in reading order with captions, on desktop and phone, then return to editing without changing the board.
+
+### Changed
+
+- **Home's cards go away once you have seen them.** Opening a room, with **Go**, the sidebar or a row on Home, now counts as reading its questions: when you come back to Home the question card for that room is gone, and a new question to you brings one back. switchboard keeps how far you have read each room on the server, for you alone, so it holds across browsers and devices. Before, a question card stayed until you said something in the room.
+- **A review board card has a Not now button.** Board cards still stay until their items are decided, but **Not now** hides one for you until something on that board changes (a new item, or a move on one). Then it comes back by itself.
+
+### Fixed
+
+- Codex browser-signed-in meeting hosting can use a stable HTTP header launcher that survives plugin cache updates. Install it once from the plugin and set its fixed path yourself; switchboard never edits Codex config. Meeting host plan and status now warn about a missing configured helper.
+- Bound arrows to existing shapes now end at their targets' actual edges without changing the target sizes.
+
+- Bound labels are measured and wrapped in the browser, so the broker’s rough one-line text box does not clip their words.
+
 ## 0.55.0 (2026-11-09)
 
 ### Added
