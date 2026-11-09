@@ -62,9 +62,8 @@ def _first_line(text: str, limit: int = TEXT_MAX) -> str:
 
 def _question_text(text: str, me: str) -> str:
     """The card's line for a message to ``me``, without the @mention it opens with: the card already says
-    it is
-    for them. Only the viewer's own mention and ``@humans``, and only at the start; a message that is nothing
-    else keeps it."""
+    it is for them. Only the viewer's own mention and ``@humans``, and only at the start; a message that is
+    nothing else keeps it."""
     line = _first_line(text)
     out = line
     while (m := MENTION_LEAD.match(out)) and m.group(1).lower() in (me.lower(), "humans"):
@@ -85,29 +84,11 @@ def addressed_to(m: Message, me: str, parent_from_me: bool) -> bool:
     return m.sender_kind != "human" and parent_from_me
 
 
-def _question_cards(state: Any, room: Room, me: str, now: float) -> list[dict[str, Any]]:
+def _question_cards(me: str, room: Room, questions: list[tuple[Message, bool]]) -> list[dict[str, Any]]:
     """The newest message addressed to ``me`` in ``room`` that they have not answered since, with how
-    many more are waiting under it. Saying anything in the room answers all of them."""
-    mine = state.store.last_message_id_of_human(room.id, me)
-    candidates = state.store.chat_after(room.id, mine, now - WAIT_DAYS * DAY_S, CANDIDATES)
-    parents: dict[int, bool] = {}
-
-    def from_me(message_id: int) -> bool:
-        if message_id not in parents:
-            p = state.store.get_message(message_id)
-            parents[message_id] = (
-                p is not None
-                and p.room_id == room.id
-                and p.sender_kind == "human"
-                and p.sender_name.lower() == me.lower()
-            )
-        return parents[message_id]
-
-    found = [
-        m
-        for m in candidates
-        if m.sender_kind != "meeting" and addressed_to(m, me, m.reply_to is not None and from_me(m.reply_to))
-    ]
+    many more are waiting under it. Saying anything in the room answers all of them. ``questions`` is
+    what ``Store.home_lines`` found: the SQL only narrows, and the page's own test decides here."""
+    found = [m for m, to_me in questions if addressed_to(m, me, to_me)]
     if not found:
         return []
     m = found[-1]
@@ -210,17 +191,11 @@ def _done_boards(state: Any, room: Room, since: float) -> list[dict[str, Any]]:
     return out
 
 
-def _done_turns(state: Any, room: Room, me: str, since: float, now: float) -> list[dict[str, Any]]:
-    """What each agent said in the room since ``since``, its latest message only. A turn that ended
-    with a ``pass`` said nothing, so it is not here: only a result someone can read is a line. A
-    message addressed to ``me`` waits under Waiting on you instead."""
-    out: dict[str, Message] = {}
-    for m in state.store.chat_after(room.id, 0, max(since, now - WAIT_DAYS * DAY_S), CANDIDATES):
-        if m.sender_kind != "agent" or m.text.startswith(BOARD_LINE):
-            continue  # a move on the review board is the board's, and shows there
-        if "humans" in m.mentions or me.lower() in {x.lower() for x in m.mentions if isinstance(x, str)}:
-            continue
-        out[m.sender_name] = m
+def _done_turns(room: Room, done: list[Message]) -> list[dict[str, Any]]:
+    """What each agent said in the room since the person looked, its latest message only. A turn that ended
+    with a ``pass`` said nothing, so it is not here: only a result someone can read is a line. A message
+    addressed to the person waits under Waiting on you instead, and a review board line is the board's;
+    ``Store.home_lines`` has left both out."""
     return [
         {
             "kind": "turn",
@@ -232,7 +207,7 @@ def _done_turns(state: Any, room: Room, me: str, since: float, now: float) -> li
             "id": m.id,
             "text": _first_line(m.text, 140),
         }
-        for m in out.values()
+        for m in done
     ]
 
 
@@ -257,11 +232,19 @@ def _done_calls(state: Any, visible: dict[int, Room], since: float) -> list[dict
     return out
 
 
-def _live(state: Any, room: Room, w_person: int | None, admin: bool) -> list[dict[str, Any]]:
+def _live(
+    state: Any, rooms: dict[int, Room], person_id: int | None, admin: bool, now: float
+) -> list[dict[str, Any]]:
+    """Calls and agents at work in the person's rooms. Three queries for every room's agents and one for the
+    open calls, and ``call_detail`` only for a room that has one (it is what keeps a private room's host
+    from being named to someone outside it)."""
     out: list[dict[str, Any]] = []
-    detail = state.service.call_detail(room, w_person, admin)
-    members = state.service.members(room.name)
-    if detail is not None:
+    member_rows, claim_rows, counts = state.store.live_agents(now)
+    for call in state.store.open_meetings():
+        room = rooms.get(call.room_id)
+        detail = state.service.call_detail(room, person_id, admin) if room is not None else None
+        if room is None or detail is None:
+            continue
         out.append(
             {
                 "kind": "call",
@@ -272,19 +255,24 @@ def _live(state: Any, room: Room, w_person: int | None, admin: bool) -> list[dic
                 "state": detail["state"],
                 "source": detail["source"],
                 "started_by": detail.get("started_by"),
-                "agents": len(members),
+                "agents": counts.get(room.id, 0),
             }
         )
-    for m in members:
-        claim = min(m["claims"], key=lambda c: c["expires_at"]) if m["claims"] else None
-        if m["status"] != "busy" and claim is None:
+    claims: dict[int, dict[str, Any]] = {}
+    for c in claim_rows:  # the one that ends first, as the Members pane shows
+        if c["membership_id"] not in claims or c["expires_at"] < claims[c["membership_id"]]["expires_at"]:
+            claims[c["membership_id"]] = c
+    for m in member_rows:
+        room = rooms.get(m["room_id"])
+        if room is None:
             continue
+        claim = claims.get(m["membership_id"])
         out.append(
             {
                 "kind": "agent",
                 "room": room.name,
                 "slug": room.slug,
-                "agent": m["name"],
+                "agent": m["screen_name"],
                 "harness": m["harness"],
                 "host": m["host"],
                 "busy": m["status"] == "busy",
@@ -331,13 +319,15 @@ def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str
 
     waiting: list[dict[str, Any]] = []
     done: list[dict[str, Any]] = []
-    live: list[dict[str, Any]] = []
     for room in rooms:
-        waiting += _question_cards(state, room, name, now)
+        questions, turns = state.store.home_lines(
+            room.id, name, now - WAIT_DAYS * DAY_S, since, CANDIDATES, BOARD_LINE
+        )
+        waiting += _question_cards(name, room, questions)
         waiting += _board_cards(state, room)
         done += _done_boards(state, room, since)
-        done += _done_turns(state, room, name, since, now)
-        live += _live(state, room, person_id, admin)
+        done += _done_turns(room, turns)
+    live = _live(state, visible, person_id, admin, now)
     done += _done_calls(state, visible, since)
     waiting.sort(key=lambda c: -c["ts"])
     done.sort(key=lambda c: -c["ts"])

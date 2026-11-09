@@ -52,6 +52,7 @@
     homeData: null,    // the last GET /api/home
     homeSeq: 0,        // only the newest answer is applied
     homeTimer: null,
+    homeTimerMs: 0,    // the delay the pending refresh was set with
     homeSkew: 0,       // the broker's clock minus this page's, so "12 min" is the broker's
     homeForms: new Map(),  // card key -> { open, text, ... }: what a person has half done survives a refresh
     pinsOpen: false,   // the header's pinned list is open (#292)
@@ -3322,7 +3323,9 @@
     const r = f.room ? state.rooms.get(f.room) : null;
     const ins = state.inspect;
     // anything that can change what waits, got done or is live: the home page asks again (#626)
-    if (f.t === 'msg' || f.t === 'room' || f.t === 'members' || f.t === 'review' || f.t === 'rooms') scheduleHome();
+    if (f.t === 'msg' || f.t === 'room' || f.t === 'members' || f.t === 'review' || f.t === 'rooms') {
+      scheduleHome(homeFrameMatters(f, r));
+    }
     if (f.t === 'msg' && f.msg) {
       if (!r) return;
       appendMsg(r, f.msg);
@@ -6629,7 +6632,7 @@
   // (say, the review board's person moves), so the room shows the same result. Nothing here
   // approves anything for an agent, and nothing is kept in the page except a half-typed reply.
   const HOME_REFRESH_MS = 750;       // after a frame, while Home is shown (the node harness holds this delay and the next one)
-  const HOME_BADGE_MS = 3100;        // after a frame, while a room is shown: only the Home count
+  const HOME_BADGE_MS = 10100;       // after a frame, while a room is shown: only the Home count
   const HOME_AGE_MS = 30000;         // "12 min" is redrawn this often
   let homeRefs = null;               // { root, status, ages: [[node, ts, suffix]], seen }
   let homeSig = '';
@@ -6703,12 +6706,34 @@
     }
   }
 
-  function scheduleHome() {
-    if (!state.me || state.homeTimer) return;
+  // Whether a frame can change what Home shows while a room is on screen, where only the sidebar's count of
+  // what waits on this person is on view: a message addressed to them (the page's own test) or from them (it may
+  // answer a card), or a board's move. Members, settings and the rest of the room's chatter cannot change it.
+  function homeFrameMatters(f, r) {
+    if (f.t === 'review' || f.t === 'rooms') return true;
+    if (f.t !== 'msg' || !f.msg || !r) return false;
+    const m = f.msg;
+    if (m.kind !== 'chat') return false;
+    if (m.sender_kind === 'human' && state.me && m.from === state.me.human) return true;
+    return addressedToMe(r, m);
+  }
+
+  // While Home is shown, a frame asks again after HOME_REFRESH_MS. While a room is shown, only a frame that can
+  // change the Home count does, and no more than once in HOME_BADGE_MS, so a busy room does not make the broker
+  // build Home for every open tab all the time. Opening Home with a slow one waiting replaces it with a quick one.
+  function scheduleHome(matters) {
+    if (!state.me) return;
+    const quick = state.home;
+    if (!quick && !matters) return;
+    if (state.homeTimer) {
+      if (!quick || state.homeTimerMs <= HOME_REFRESH_MS) return;
+      clearTimeout(state.homeTimer);
+    }
+    state.homeTimerMs = quick ? HOME_REFRESH_MS : HOME_BADGE_MS;
     state.homeTimer = setTimeout(function () {
       state.homeTimer = null;
       loadHome();
-    }, state.home ? HOME_REFRESH_MS : HOME_BADGE_MS);
+    }, state.homeTimerMs);
   }
 
   async function loadHome() {
