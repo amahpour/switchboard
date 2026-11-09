@@ -28,7 +28,7 @@ function apply(elements) {
   // This preserves both arrow bindings and the existing targets' exact dimensions.
   const local = dirty ? rules.batch(api.getSceneElementsIncludingDeleted()) : null;
   const scene = local ? rules.merge(elements, local) : elements;
-  api.updateScene({ elements: attachArrows(restoreElements(scene, null)), captureUpdate: 'NEVER' });
+  api.updateScene({ elements: attachArrows(restoreElements(scene, null, { repairBindings: true, refreshDimensions: true })), captureUpdate: 'NEVER' });
   applying = false;
   const count = scene.filter(e => !e.isDeleted).length;
   document.getElementById('board-count').textContent = `${count} ${count === 1 ? 'shape' : 'shapes'}`;

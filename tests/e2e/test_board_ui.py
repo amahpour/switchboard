@@ -78,7 +78,7 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
         expect(other.locator("#board-count")).to_have_text("3 shapes")
     expect(frame.locator("#board-count")).to_have_text("3 shapes")
     texts = frame.locator("body").evaluate(
-        "() => window.sbBoard.api.getSceneElements().filter(e => e.type === 'text').map(e => e.text)"
+        "() => window.sbBoard.api.getSceneElements().filter(e => e.type === 'text').map(e => e.originalText)"
     )
     assert texts == ["<img onerror=alert(1)> is text 日本語"]
     assert frame.locator("img, a[href], iframe, object, embed").count() == 0
@@ -148,3 +148,29 @@ def test_agent_arrows_bind_to_existing_shapes_without_reconverting_the_targets(
     )
     target = next(row for row in before if row[0] == second)
     assert abs(end - (target[1] - 8)) < 1, "the arrow must end at the target edge plus its binding gap"
+
+
+def test_bound_agent_text_wraps_to_its_container_without_changing_the_stored_scene(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """Restore must measure and wrap bound labels; trusting the broker's rough text box clips words."""
+    world.create_room("board-label")
+    b = world.broker
+    phrase = "Start with a shared goal"
+    b.on_loop(
+        lambda: b.state.room_board.agent(
+            b.state.store.get_room("#board-label"), "drawer", {"action": "note", "text": phrase}, None
+        )
+    )
+    before = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#board-label").id))
+    page = ui.open("board-label")
+    frame = open_board(page)
+    frame.locator("body").evaluate("document.fonts.ready")
+    elements = frame.locator("body").evaluate("window.sbBoard.api.getSceneElements()")
+    text = next(e for e in elements if e["type"] == "text")
+    container = next(e for e in elements if e["id"] == text["containerId"])
+    assert "\n" in text["text"], "the rough one-line text box must be measured and wrapped"
+    assert " ".join(text["text"].split()) == phrase and text["originalText"] == phrase
+    assert container["width"] == before[1][0]["width"] and container["height"] == before[1][0]["height"]
+    assert b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#board-label").id)) == before

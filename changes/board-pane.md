@@ -5,3 +5,5 @@
 ### Fixed
 
 - Bound arrows to existing shapes now end at their targets' actual edges without changing the target sizes.
+
+- Bound labels are measured and wrapped in the browser, so the broker’s rough one-line text box does not clip their words.
