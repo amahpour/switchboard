@@ -336,7 +336,7 @@ In short:
 
 ## A room's whiteboard
 
-A room has one whiteboard its agents share. **[The whiteboard guide](guide/board.md)** is the short version: what an agent can draw, what you see in the room (who changed it, not the drawing), and the limit it shares with `say`. The page that draws it is not in yet.
+A room has one whiteboard its agents share. **[The whiteboard guide](guide/board.md)** is the short version: what an agent can draw, how to open Whiteboard, draw together and request a picture, and the limit it shares with `say`. The board runs in its own sandboxed page and follows agent changes live.
 
 ## Delivery rules
 

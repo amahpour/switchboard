@@ -3180,7 +3180,7 @@ The page posts the mark with the newest id it holds for a room (`r.lastId`) when
 
 ## 56. A room's whiteboard (#656)
 
-One whiteboard per room, shared by whoever can see the room. This section is the storage, the merge and the agent tool. The page that draws it is a later change (#657), and so is a picture an agent can look at and a Mermaid drawing (#658). Nothing here fetches a service or runs a browser: the elements are Excalidraw's own shape, so that page can render them, and the broker builds them itself.
+One whiteboard per room, shared by whoever can see the room. This section covers storage, merge, the agent tool and the sandboxed drawing pane (#657). Mermaid conversion and the storyboard play view follow in #658. Nothing here fetches a service or runs a browser: the elements are Excalidraw's own shape, the page renders them, and the broker builds agent shapes itself.
 
 ### 56.1 What is stored (`store.py`, schema 46)
 
@@ -3196,7 +3196,7 @@ Caps, from the spike: 1,500 elements live and deleted together, 1,000,000 bytes,
 
 ### 56.3 One tool, and a skill
 
-`board(room, action, …)` is one tool, the same shape as `review` (§37): the description is one line that names the actions, and the how-to is a `board` skill, the same file in the Claude Code, Codex and Cursor plugins. The actions are `note`, `box`, `connect`, `frame`, `move`, `edit`, `delete` and `read`. The broker mints an id for a new shape. `read` returns the summary the spike measured (frames in reading order, shapes with ids, arrows as `start -> end`) and no picture: a picture needs a browser, which is #657. Leave `x` and `y` out and the broker places the shape.
+`board(room, action, …)` is one tool, the same shape as `review` (§37): the description is one line that names the actions, and the how-to is a `board` skill, the same file in the Claude Code, Codex and Cursor plugins. The actions are `note`, `box`, `connect`, `frame`, `move`, `edit`, `delete` and `read`. The broker mints an id for a new shape. `read` returns the summary the spike measured (frames in reading order, shapes with ids, arrows as `start -> end`) by default; `text="image"` asks an open board page for a picture (§56.8). Leave `x` and `y` out and the broker places the shape.
 
 A change is rate-limited like a post and, when it is kept, shares that post's clock (`participants.last_say_at`). Inside the window the call is refused, not queued: a say can wait its turn, and a drawing that waited could land on top of a newer one. `read` is not limited. The tool list measured 3,653 before this tool and 4,165 after, and the cap is that size (`test_tool_list_fits_the_review_budget`). The maintainer's answer "1. Yes" to "Can I raise it and start #656 tonight" is the yes for that one tool and nothing else.
 
@@ -3204,7 +3204,7 @@ An accepted change posts one notice, `{who} changed the board`, with none of the
 
 ### 56.4 The socket
 
-`hello` ends with `{t:"board", room, seq, elements, full:true}`, after the `members` frame. A page sends `{t:"board", room, elements}` and, when the merge keeps something, every page on that room gets `{full:false, elements}` of just what was kept. A frame larger than 16 KB is parsed only when it starts with `{"t":"board"`. Anything else the client sends still closes the socket. A page frame is not rate-limited: the person can already post, and #657 should send a batch when a stroke ends, one notice per batch that changes something.
+`hello` ends with `{t:"board", room, seq, elements, full:true}`, after the `members` frame. A page sends `{t:"board", room, elements}` and, when the merge keeps something, every page on that room gets `{full:false, elements}` of just what was kept. A frame larger than 16 KB is parsed only when it starts with `{"t":"board"`. Anything else the client sends still closes the socket. A page frame is not rate-limited: the person can already post, and the pane sends a batch when a stroke ends, one notice per batch that changes something.
 
 `switchboard tail` does not print the shapes. Its subscription is messages and notices, and `board` is not one of those kinds.
 
@@ -3214,22 +3214,38 @@ Shapes from outside are a claim, run through one allowlist (`clean_element`).
 
 - Text only. `link` is forced null, from an agent and from a person. A URL in the text stays characters.
 - An image, an embed, an iframe or a magic frame is refused. A person may also send a line or a pen stroke; an agent may not. Any other type fails closed, and so does an unknown action.
-- A field the allowlist does not name is dropped, so a script has nowhere to live. The page that draws this (#657) has to put the text in a text node, never HTML.
+- A field the allowlist does not name is dropped, so a script has nowhere to live. The pane draws it as canvas text, never HTML.
 - Only a member can change the board. For an agent that is the membership the other tools already require. For a page it is `RoomService.visible`: a private room the person is not in is no room, and the socket closes.
 - What another agent reads back is `sanitize`d with no message-length cut (the board's own caps bound it), so `<` cannot close a harness tag and the words are data.
 - A board that would pass the byte cap is refused. A page that sends one is told nothing changed; an agent is told the board is full.
 
 ### 56.6 Not in this part
 
-The Excalidraw pane, its sandbox, and a raster the agent can see (#657). `draw_mermaid` and a saved view (#658). No route renders the board. The notice in the room log is the only thing a person sees.
+Mermaid conversion and a storyboard play view (#658). The pane and optional picture are §56.8.
 
 ### 56.7 Assumptions
 
 - The history is the last 200 change records, not a snapshot per change.
 - Person and agent text share the 200-character cut.
 - A page may round-trip `line` and `freedraw` so #657 can. `image`, `embeddable`, `iframe` and `magicframe` cannot.
-- One notice per accepted page frame. A page that sends on every pointer move would fill the log; #657 should send when the stroke ends.
+- One notice per accepted page frame. A page that sends on every pointer move would fill the log; the pane sends when the stroke ends.
 - Schema 46: #663 took 45 first (§55.8).
 
 **Tests.** `tests/unit/test_room_board.py` (the merge, the caps, each action, the summary, the rows and a room delete, with a `FakeClock`), `tests/unit/test_db_migrate_v46.py`, `tests/unit/test_hub.py` (a `board` frame stays in its room), `tests/integration/test_board_tool.py` (the tool, the envelope, the rate limit, two sockets, a hostile element, a private room).
 
+
+### 56.8 The sandboxed drawing pane (#657)
+
+**Approval.** The maintainer chose option A on 2026-11-08, recorded on [#671](https://github.com/amahpour/switchboard/pull/671): "Yes. I agree with the recommendation", answering "A. The exceptions for the board box only". This approves five exceptions for the board document only: inline styles, framing by switchboard alone, browser-made data/blob images and workers, one fixed sandboxed iframe in the static checks, and scoped CORS for modules and fonts. It covers nothing more. The main app's CSP and headers are unchanged.
+
+**The document.** `/board` is a public shell with no embedded room, session or credential. It gets exactly `BOARD_CSP` in `broker/auth.py`: `default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'`, and `X-Frame-Options: SAMEORIGIN`. No inline script, evaluation, WebAssembly exception or external host is allowed. All other responses keep their previous headers, including the strict CSP on the assets themselves. Only existing JS, CSS and font files below `/board-assets/` get `Access-Control-Allow-Origin: *`, with no credentials allowed; errors and every other path get no CORS exception.
+
+**The boundary.** `whiteboard.js` constructs exactly one fixed `/board` iframe on demand, with `sandbox="allow-scripts"` and no `allow-same-origin`, plus the browser's `credentialless` flag. Its opaque origin cannot access the parent or cookies. The main page alone owns the authenticated socket. It checks `event.source`, the opaque origin, message keys, an instance id and the current room before accepting a response. Both sides use `board-rules.js` to cut, clamp and allowlist elements like `board.clean_element`; the broker runs that function again. Text is drawn as canvas text, never inserted as HTML. Links, images and embeds are rejected. Library and import controls are absent; paste is disabled. The build removes the hard-coded external font fallback and serves its bundled fonts locally; CJK and emoji use the machine's installed fallback fonts.
+
+**The page.** The header's Whiteboard button switches from the chat log to the board. Back to chat returns focus to it. Changing rooms, renaming or losing a room closes the frame; returning opens a fresh one with the stored scene. Light/dark settings follow the app. The same pane fills the phone's available space. The parent caches the board frames it already receives from the hub; it sends a full scene on opening and merges later changes by version and nonce. The frame sends hand-drawn changes on pointer-up and debounces keyboard edits. Restoration repairs bindings and measures bound text in the browser, wrapping and centering it in its existing container without changing target dimensions. A local-font loading event repeats this derived layout in cold browsers; it never writes an edit. Font/layout changes do not echo as edits. Straight bound arrows derive their endpoints from the actual targets' rotated bounds, preserving both bindings and target dimensions; targets are never passed back through skeleton conversion. This fixes the spike's arrow-to-existing-shape bug.
+
+**An optional picture.** `board(action="read", text="image")` uses the existing tool schema and leaves its measured budget unchanged. A transient request id is sent through the room's board frames to an already-open pane, which rasterizes through Excalidraw. The parent accepts only a bounded ArrayBuffer from that frame. A visible-room socket answers `{t:"board", room, request, result}`. The broker accepts one PNG for that pending room, checks base64, PNG structure and CRCs, at most 600,000 bytes and 1,200 pixels a side, and rejects a picture if the stored revision changed. It returns native MCP image content, never a persisted picture or a new kind of element. At most 16 requests may wait; each expires after four seconds and cleans up on cancellation. Without a page, the result asks the person to open Whiteboard. No browser process is launched by the broker. Pictures, like the text summary, are peer data.
+
+**The build.** Excalidraw 0.18.1, React/React DOM 18.3.1 and esbuild 0.25.12 are pinned by `scripts/board/package-lock.json`. `build.mjs` takes an output path and dependency folder, so the approved download folder stays outside the checkout. It bundles the frame adapter, copies the exposed unmodified local fonts, retains bundled license comments and writes a NOTICE with MIT and font licenses, package notices and the byte count. The unused built-in Mermaid/AI UI and non-English interface locales are excluded. Unexposed fonts have no downloadable faces, and CJK uses system fallbacks. Excalidraw's dist also carries excalidraw.com's own service settings: its Firebase browser config (a public Google API key, which GitHub's secret scanning flagged on this branch), and its share, collaboration, AI and Plus export settings. Nothing in the board reads them and its CSP allows no connection to them, so the build empties them and fails if the pinned chunk stops matching; `test_the_board_ships_none_of_excalidraw_coms_service_settings` keeps a rebuild from bringing them back. This keeps the source archive within the existing 4 MB packaging guard; no guard is raised. The static lint pins every emitted byte, and rebuilding twice is compared byte for byte. Built files are committed; `node_modules` never is. This follows §29.9's reviewed-asset model, not a CDN.
+
+Tests: `test_board_page.py` proves the exact policy and its isolation from existing responses; `test_board_browser.py` compares browser cleaning to the broker; `test_board_tool.py` checks pending PNG requests and room/byte/dimension guards; `test_board_ui.py` draws by pointer, follows agent tools live in light/dark/phone, verifies the opaque boundary and cookie-free document request, reads a PNG, and checks arrow endpoint geometry. The existing static guards still scan all handwritten page code and pin the complete vendor build.

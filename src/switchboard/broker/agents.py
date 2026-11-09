@@ -671,7 +671,7 @@ class AgentService:
             )
         return res
 
-    def board(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+    def board(self, conn: "HttpConn", params: dict[str, Any]) -> Any:
         """One action on the room's whiteboard (DESIGN.md §56). A change is rate-limited like a post
         and, when it is kept, shares that post's clock. A read is not. The text an agent reads back
         is already run through the envelope."""
@@ -686,6 +686,8 @@ class AgentService:
                     "retry_after_s": retry,
                     "error": f"rate limited: try again in about {retry:.0f} s",
                 }
+        if action == "read" and params.get("text") == "image":
+            return self.state.room_board.image(room)
         return self.state.room_board.agent(room, m.screen_name, params, p.id if action != "read" else None)
 
     def _hand_back(

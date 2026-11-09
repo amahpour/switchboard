@@ -7,9 +7,14 @@ kept posts one notice that names who, not what was drawn, and the hub fans the n
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
+import secrets
 from typing import Any
 
 from switchboard import board, db
+from switchboard.broker.agent_icons import PNG_SIGNATURE, IconError, png_size
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean, sanitize
 from switchboard.models import Room
@@ -19,6 +24,54 @@ from switchboard.store import Conflict
 class RoomBoard:
     def __init__(self, state: Any) -> None:
         self.state = state
+        self._pending: dict[str, tuple[int, int, asyncio.Future[Any]]] = {}
+
+    async def image(self, room: Room) -> dict[str, Any]:
+        """Ask an already-open board to rasterize. No browser is launched by the broker."""
+        if len(self._pending) >= 16:
+            raise ServiceError("busy", "too many board picture requests")
+        seq, _elements = self.state.store.board_load(room.id)
+        request = secrets.token_hex(16)
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[request] = (room.id, seq, future)
+        try:
+            self.state.hub.room_board(room.name, {"task": {"id": request, "kind": "image", "seq": seq}})
+            try:
+                data = await asyncio.wait_for(future, 4.0)
+            except TimeoutError as e:
+                raise ServiceError(
+                    "no_board_page", "open this room's whiteboard in a browser, then ask again"
+                ) from e
+            current, _elements = self.state.store.board_load(room.id)
+            if current != seq:
+                raise ServiceError("board_changed", "the board changed while drawing its picture; ask again")
+            return {"image": data, "seq": seq}
+        finally:
+            self._pending.pop(request, None)
+
+    def image_result(self, room: Room, request: Any, result: Any) -> bool:
+        """Only a bounded PNG for this room's outstanding request may answer an image read."""
+        if (
+            not isinstance(request, str)
+            or len(request) != 32
+            or not isinstance(result, str)
+            or len(result) > 800000
+        ):
+            return False
+        pending = self._pending.get(request)
+        if pending is None or pending[0] != room.id or pending[2].done():
+            return False
+        try:
+            raw = base64.b64decode(result, validate=True)
+            if not raw.startswith(PNG_SIGNATURE) or len(raw) > 600000:
+                return False
+            width, height = png_size(raw)
+            if max(width, height) > 1200:
+                return False
+        except (ValueError, binascii.Error, IconError):
+            return False
+        pending[2].set_result(result)
+        return True
 
     def snapshot(self, room: Room) -> dict[str, Any]:
         """The whole board, for a page that just subscribed."""

@@ -1,0 +1,11 @@
+html, body, #board-root { margin: 0; height: 100%; width: 100%; overflow: hidden; }
+/* No external libraries, links, embeds or file import/export in a room board. */
+.excalidraw .library-button, .excalidraw .default-sidebar-trigger,
+.excalidraw [data-testid="toolbar-embeddable"], .excalidraw [data-testid="toolbar-magicframe"],
+.excalidraw [data-testid="image"], .excalidraw .hyperlink-popup { display: none !important; }
+#board-count { position: absolute; bottom: 6px; left: 8px; pointer-events: none; font: 11px sans-serif; color: #777; }
+
+/* Keep the UI within the room's element contract: no link editor or unsupported font families. */
+.excalidraw button[aria-label="Add link"],
+.excalidraw fieldset:has([data-testid="font-family-normal"]),
+.excalidraw .help-icon, .excalidraw .main-menu-trigger { display: none !important; }
