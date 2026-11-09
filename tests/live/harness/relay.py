@@ -28,7 +28,10 @@ from .world import REAL_PATH
 REPO = Path(__file__).resolve().parents[3]
 PINS = REPO / "plugins" / "claude" / "meeting" / "fixes.pins"
 LABEL = "com.switchboard.call"
-JOINLY_IMAGE = "ghcr.io/joinly-ai/joinly:v0.5.4"
+# One line: the digest scan needs the pin contiguous. The tag and digest are the compose file's.
+JOINLY_IMAGE = (
+    "ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0"  # noqa: E501
+)
 FIXES_ENV = "SWITCHBOARD_LIVE_FIXES_DIR"
 IMAGE_ENV = "SWITCHBOARD_LIVE_RELAY_IMAGE"
 

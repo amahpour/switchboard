@@ -11,7 +11,7 @@ The mocks in `tests/integration/` show that the broker does the right thing with
 Asking for the self-test is the person's yes to **one** Zoom meeting, made and then deleted. It is not a yes to anything else in their Zoom account.
 
 1. **Check what it needs.**
-   - `docker version` answers, and `docker image inspect ghcr.io/joinly-ai/joinly:v0.5.4` finds the image. It is 3.7 GB, so if it is missing, say so and ask before `docker pull` (the tag is the one [DEPLOY.md](../../../docs/DEPLOY.md) runs).
+   - `docker version` answers, and `docker image inspect ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0` finds the image. It is 3.7 GB, so if it is missing, say so and ask before `docker pull` (the tag is the one [DEPLOY.md](../../../docs/DEPLOY.md) runs).
    - For a Zoom meeting: the **Zoom connector** is connected, and its `meeting_create` and `meeting_delete` tools are in your tool list (they may be deferred: load them first). If they are not there, stop and say the connector is missing. Don't try another way into Zoom.
    - For a Meet or Teams link from the person: nothing to check here. See "A Meet or Teams link" below.
    - Nothing else is running the suite: take the machine's lock for step 4, and read [CONTRIBUTING.md](../../../CONTRIBUTING.md) ("Sharing a machine") if the machine is shared.

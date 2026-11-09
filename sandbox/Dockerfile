@@ -4,7 +4,7 @@
 # context switchboard-src (the repo; compose.yaml passes it) during the build, so the
 # running box needs no host mount and an upgrade is a rebuild. Build with
 # `docker compose build`, or: docker build --build-context switchboard-src=. sandbox
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 
 ARG TARGETARCH
 ARG UV_VERSION=0.7.13

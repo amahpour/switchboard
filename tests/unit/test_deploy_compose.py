@@ -21,7 +21,9 @@ def test_the_meeting_bot_is_opt_in_and_reachable_by_the_broker_alone() -> None:
     bot = COMPOSE["services"]["joinly"]
     assert bot["profiles"] == ["meetings"]
     assert "ports" not in bot and "expose" not in bot and "network_mode" not in bot
-    assert bot["image"].startswith("ghcr.io/joinly-ai/joinly:v") and not bot["image"].endswith(":latest")
+    name, digest = bot["image"].split("@", 1)
+    assert name.startswith("ghcr.io/joinly-ai/joinly:v") and not name.endswith(":latest")
+    assert digest.startswith("sha256:") and len(digest) == len("sha256:") + 64
     assert bot["shm_size"] == "1gb"
 
 
@@ -52,8 +54,12 @@ def test_the_gpu_bot_is_the_same_release_with_cuda_on_a_profile_of_its_own() -> 
     gpu = COMPOSE["services"]["joinly-gpu"]
     assert cpu["profiles"] == ["meetings"] and gpu["profiles"] == ["meetings-gpu"]
     assert "deploy" not in cpu, "a machine with no GPU must still start the CPU bot"
-    assert gpu["image"] == cpu["image"] + "-cuda", "the same release, built for CUDA"
-    assert gpu["image"].startswith("ghcr.io/joinly-ai/joinly:v") and gpu["image"].endswith("-cuda")
+    cpu_name, cpu_digest = cpu["image"].split("@", 1)
+    gpu_name, gpu_digest = gpu["image"].split("@", 1)
+    # Same release, two images: appending ``-cuda`` after ``@sha256`` is not the CUDA build.
+    assert gpu_name == cpu_name + "-cuda" and cpu_digest != gpu_digest
+    assert gpu_name.startswith("ghcr.io/joinly-ai/joinly:v") and gpu_name.endswith("-cuda")
+    assert cpu_digest.startswith("sha256:") and gpu_digest.startswith("sha256:")
     assert "ports" not in gpu and "expose" not in gpu and "network_mode" not in gpu
     assert gpu["shm_size"] == "1gb"
     assert gpu["deploy"]["resources"]["reservations"]["devices"] == [

@@ -9,7 +9,7 @@
 # The build context is the repo root; the root .dockerignore keeps .venv, .git
 # and caches out. Nothing from the host is mounted at run time
 # unless you add the read-only /src/switchboard mount shown in SANDBOX.md.
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 
 ARG TARGETARCH
 ARG UV_VERSION=0.7.13
