@@ -87,7 +87,7 @@ def test_a_question_to_you_waits_until_you_say_anything_in_that_room(
     assert [(c["kind"], c["room"], c["id"], c["from"]) for c in got["waiting"]] == [
         ("question", "#build", qid, "claude-1")
     ]
-    assert got["waiting"][0]["text"].startswith("@alice keep the old upload endpoint")
+    assert got["waiting"][0]["text"] == "keep the old upload endpoint, or remove it?"  # not "@alice ..."
     assert home(bob)["waiting"] == []
     sent = alice.post("/api/rooms/build/say", {"text": "Remove it.", "reply_to": qid})
     assert sent.status_code == 200
@@ -154,7 +154,7 @@ def test_done_lists_what_agents_said_since_you_looked_and_seen_moves_only_forwar
     agent_says(b, "#build", "@alice a question", ["alice"])
     got = home(alice)
     assert [(d["kind"], d["who"], d["text"]) for d in got["done"]] == [
-        ("turn", "claude-1", "raised the upload limit")
+        ("turn", "claude-1", "raised the upload limit: second line")
     ]
     assert alice.post("/api/home/seen", {"at": "soon"}).status_code == 400
     assert alice.post("/api/home/seen", {"nope": 1}).status_code == 400

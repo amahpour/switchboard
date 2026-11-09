@@ -14,6 +14,7 @@ Text that agents wrote (a message, a finding's title) is cut to a length here an
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from switchboard import reviews
@@ -21,6 +22,8 @@ from switchboard.envelope import clean
 from switchboard.models import Message, Room
 
 BOARD_LINE = "Review board"  # how the board starts the lines it posts for an agent
+LIST_MARK = re.compile(r"^(?:[-*+]|\d+[.)])\s+")
+MENTION_LEAD = re.compile(r"@([A-Za-z0-9_-]+)[\s,:;-]*")
 WAIT_DAYS = 7  # a question older than this is not "waiting": it is history
 FIRST_LOOK_S = 24 * 3600  # a person who never looked sees the last day of done work
 DAY_S = 24 * 3600
@@ -36,14 +39,37 @@ def seen_key(person_key: int) -> str:
     return f"home_seen:{person_key}"
 
 
+def _plain(line: str) -> tuple[str, bool]:
+    """A line as plain text, and whether it was a Markdown heading: a heading's ``#`` and a code span's
+    backticks are Markdown the card does not draw, so they are not shown."""
+    line = line.strip()
+    return line.lstrip("#").replace("`", "").strip(), line.startswith("#")
+
+
 def _first_line(text: str, limit: int = TEXT_MAX) -> str:
-    """The first line with words in it, as plain text: a heading's ``#`` and a code span's backticks are
-    Markdown the card does not draw, so they are not shown."""
-    for line in clean(text).splitlines():
-        line = line.strip().lstrip("#").replace("`", "").strip()
-        if line:
-            return line if len(line) <= limit else line[: limit - 1] + "…"
-    return ""
+    """What a card says of a message: its first line with words in it, as plain text. A heading, or a lead-in
+    that ends with a colon, says nothing alone ("Two issues:"), so it is joined to the next line with words
+    before the cut to ``limit``."""
+    lines = [x for x in (_plain(raw) for raw in clean(text).splitlines()) if x[0]]
+    if not lines:
+        return ""
+    line, heading = lines[0]
+    if len(lines) > 1 and (heading or line.endswith(":")):
+        under = LIST_MARK.sub("", lines[1][0])  # a list's "- " or "1. " is not part of what it says
+        line = f"{line}: {under}" if heading and not line.endswith(":") else f"{line} {under}"
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _question_text(text: str, me: str) -> str:
+    """The card's line for a message to ``me``, without the @mention it opens with: the card already says
+    it is
+    for them. Only the viewer's own mention and ``@humans``, and only at the start; a message that is nothing
+    else keeps it."""
+    line = _first_line(text)
+    out = line
+    while (m := MENTION_LEAD.match(out)) and m.group(1).lower() in (me.lower(), "humans"):
+        out = out[m.end() :]
+    return out or line
 
 
 def addressed_to(m: Message, me: str, parent_from_me: bool) -> bool:
@@ -95,7 +121,7 @@ def _question_cards(state: Any, room: Room, me: str, now: float) -> list[dict[st
             "from_kind": m.sender_kind,
             "harness": m.sender_harness,
             "host": m.sender_host,
-            "text": _first_line(m.text),
+            "text": _question_text(m.text, me),
             "ts": m.ts,
             "more": len(found) - 1,
         }

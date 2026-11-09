@@ -3398,11 +3398,12 @@ def shoot_home(browser: Any, out: Path, world: Any) -> None:
         shot(page, out, "home-dark.png")
     finally:
         page.context.close()
-    page = home(PHONE, "light")
-    try:
-        shot(page, out, "home-phone-light.png")
-    finally:
-        page.context.close()
+    for scheme in ("light", "dark"):
+        page = home(PHONE, scheme)
+        try:
+            shot(page, out, f"home-phone-{scheme}.png")
+        finally:
+            page.context.close()
 
 
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names`` and ``admins`` need a

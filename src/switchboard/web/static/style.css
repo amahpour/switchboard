@@ -3395,6 +3395,8 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 }
 
 @media (max-width: 760px) {
+  /* the phone header packs the room's # against its name (1px); the house gets the desktop's gap */
+  .app.home-open .head-title { column-gap: 6px; }
   .home { padding: 4px 16px calc(32px + env(safe-area-inset-bottom)); }
   /* the card's answer buttons go under its words, as the phone mockup has them: nothing is cut off */
   .hc-row { flex-wrap: wrap; row-gap: 8px; }
