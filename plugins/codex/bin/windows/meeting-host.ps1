@@ -292,17 +292,28 @@ function Parse([string[]]$rest, [string[]]$valued, [string[]]$flags) { # {name: 
     $got
 }
 
+function Check-Headers {
+    $check = Join-Path $PSScriptRoot 'check-headers.ps1'
+    if ((Test-Path -LiteralPath (Join-Path $plugin '.codex-plugin')) -and (Test-Path -LiteralPath $check)) {
+        # A child process keeps its exit 0 from ending the host script.
+        $shell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        & $shell -NoProfile -NonInteractive -File $check
+    }
+}
+
 function Cmd-Plan([string[]]$rest) {
     $o = Parse $rest @('--model') @('--cpu', '--gpu')
     $forced = if ($o['--cpu']) { 'cpu' } elseif ($o['--gpu']) { 'gpu' } else { '' }
     $d = Choose-Device $forced
     $m = Choose-Model $o['--model'] $d.Device
     Say "device=$($d.Device)"; Say "reason=$($d.Why)"; Say "model=$($m.Model)"; Say "joinly=$(Joinly-Image $d.Device)"
+    Check-Headers
 }
 
 function Cmd-Status([string[]]$rest) {
     $o = Parse $rest @('--data') @()
     $data = Data-Dir $o['--data']
+    Check-Headers
     $any = $false
     foreach ($id in Call-Dirs $data) {
         $any = $true

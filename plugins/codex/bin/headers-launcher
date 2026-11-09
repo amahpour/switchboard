@@ -1,0 +1,74 @@
+#!/bin/sh
+# Stable Codex HTTP helper (§49.11, #665). Install beside the versioned cache, never into config.toml.
+# Executables are resolved from this file's location alone, not HOME, CODEX_HOME or plugin variables.
+set -u
+umask 077
+fail() { printf 'codex-headers: %s\n' "$*" >&2; exit 1; }
+none() { printf 'codex-headers: no checked switchboard helper in the plugin cache; update the plugin\n' >&2; printf '{}\n'; exit 0; }
+uid=$(id -u) || exit 1
+safe() { # no links, another owner, or write access for another account
+  [ -e "$1" ] && [ ! -L "$1" ] || return 1
+  info=$(stat -c '%u %a' "$1" 2>/dev/null) || info=$(stat -f '%u %Lp' "$1" 2>/dev/null) || return 1
+  [ "${info%% *}" = "$uid" ] || return 1
+  mode=${info#* }
+  case $mode in *[!0-7]*|'') return 1 ;; esac
+  [ "$((0$mode & 022))" -eq 0 ]
+}
+# Require the documented cache layout. Moving the configured launcher elsewhere fails closed.
+case $0 in /*) ;; *) fail 'use an absolute path to the launcher' ;; esac
+[ ! -L "$0" ] || fail 'the launcher must not be a symbolic link'
+dir=${0%/*}
+install=''
+if [ "${1:-}" = --install ]; then
+  install=1
+  case $dir in */switchboard/*/bin) cache=${dir%/switchboard/*/bin} ;; *) fail 'run the launcher from the installed plugin cache' ;; esac
+else
+  cache=$dir
+fi
+case $cache in */.codex/plugins/cache/switchboard) ;; *) fail 'expected the personal .codex plugin cache' ;; esac
+home_dir=${cache%/.codex/plugins/cache/switchboard}
+# Check every component down from the home, so neither a parent link nor a shared directory redirects a run.
+p=$dir
+while :; do
+  safe "$p" || fail 'the plugin cache must be owned by you, without links or shared write access'
+  [ "$p" = "$home_dir" ] && break
+  p=${p%/*}
+  [ -n "$p" ] || fail 'invalid cache path'
+done
+[ "$(cd "$dir" && pwd -P)" = "$dir" ] || fail 'the plugin cache must not traverse links'
+safe "$0" || fail 'the launcher must be owned by you without shared write access'
+if [ -n "$install" ]; then
+  dest=$cache/codex-headers
+  [ ! -L "$dest" ] || fail 'refusing a linked launcher destination'
+  [ ! -e "$dest" ] || safe "$dest" || fail 'unsafe launcher destination'
+  tmp=$(mktemp "$cache/.codex-headers.XXXXXX") || exit 1
+  trap 'rm -f "$tmp"' EXIT
+  if ! { cat "$0" >"$tmp" && chmod 700 "$tmp" && mv -f "$tmp" "$dest"; }; then
+    fail 'could not install launcher'
+  fi
+  printf 'Installed stable helper: %s\nAdd its quoted absolute path to http_headers_helper yourself; restart Codex.\n' "$dest"
+  exit 0
+fi
+safe "$cache/switchboard" || none
+# Only release versions, sorted numerically (0.10.0 follows 0.9.0). Metadata must agree with the folder.
+versions=$(for d in "$cache"/switchboard/*; do
+  v=${d##*/}
+  printf '%s\n' "$v" | grep -Eq '^[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}$' && printf '%s\n' "$v"
+done | sort -t . -k1,1nr -k2,2nr -k3,3nr)
+chosen=''
+for v in $versions; do
+  root=$cache/switchboard/$v
+  manifest=$root/.codex-plugin/plugin.json
+  helper=$root/bin/headers
+  if ! { safe "$root" && safe "$root/.codex-plugin" && safe "$manifest" && safe "$root/bin" && safe "$helper"; }; then
+    continue
+  fi
+  [ -f "$manifest" ] && [ -f "$helper" ] && [ -x "$helper" ] || continue
+  [ "$(wc -c <"$manifest")" -le 16384 ] || continue
+  grep -Eq '"name"[[:space:]]*:[[:space:]]*"switchboard"' "$manifest" || continue
+  grep -Eq "\"version\"[[:space:]]*:[[:space:]]*\"${v%%.*}[.]$(printf '%s' "$v" | cut -d . -f 2)[.]${v##*.}\"" "$manifest" || continue
+  chosen=$helper
+  break
+done
+[ -n "$chosen" ] || none
+exec "$chosen" "$@"

@@ -1,0 +1,18 @@
+#!/bin/sh
+# Read only the helper setting, never credentials, and never evaluate a command from config (§49.11, #665).
+config=${CODEX_HOME:-${HOME:-/nonexistent}/.codex}/config.toml
+[ -f "$config" ] || exit 0
+# Accept the guide's literal TOML string holding a double-quoted absolute executable path.
+# Unknown command syntax is reported, never run or printed (it could contain a credential).
+setting=$(head -c 1048576 "$config" | awk '
+  /^[[:space:]]*\[/ { server = ($0 ~ /^[[:space:]]*\[mcp_servers\.switchboard\][[:space:]]*(#.*)?$/) }
+  server && /^[[:space:]]*http_headers_helper[[:space:]]*=/ { print; exit }
+')
+[ -n "$setting" ] || exit 0
+helper=$(printf '%s\n' "$setting" | sed -n "s/^[^=]*=[[:space:]]*'\"\([^\"]*\)\".*'.*$/\1/p")
+case $helper in
+  /*) [ -f "$helper" ] && exit 0
+    printf 'meeting-host: configured http_headers_helper is missing; run the installed bin/headers-launcher --install, set its stable path in config.toml yourself, then restart Codex (see the meetings guide)\n' >&2 ;;
+  *) printf 'meeting-host: cannot check http_headers_helper command syntax; use the quoted stable launcher from the meetings guide\n' >&2 ;;
+esac
+exit 0
