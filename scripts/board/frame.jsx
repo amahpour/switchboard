@@ -7,12 +7,13 @@ import { createRoot } from 'react-dom/client';
 import { Excalidraw, MainMenu, restoreElements, exportToBlob } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import './frame.css';
+let playing = null, fullScene = [];
 let api = null, session = null, room = null, known = new Map(), applying = false, timer = null, pointer = false, dirty = false;
 const sig = e => `${e.version}:${e.versionNonce}`;
 const post = (action, extra = {}) => parent.postMessage({ t: 'sb-board', action, session, room, ...extra }, '*');
 function flush() {
   clearTimeout(timer);
-  if (!api || applying || pointer || !session || !dirty) return;
+  if (!api || applying || pointer || !session || !dirty || playing) return;
   const cleaned = rules.batch(api.getSceneElementsIncludingDeleted());
   if (!cleaned) { post('error', { text: 'The drawing exceeds the board limits.' }); return; }
   const changed = cleaned.filter(e => known.get(e.id) !== sig(e));
@@ -28,7 +29,9 @@ function apply(elements) {
   // This preserves both arrow bindings and the existing targets' exact dimensions.
   const local = dirty ? rules.batch(api.getSceneElementsIncludingDeleted()) : null;
   const scene = local ? rules.merge(elements, local) : elements;
-  api.updateScene({ elements: attachArrows(restoreElements(scene, null)), captureUpdate: 'NEVER' });
+  fullScene = scene;
+  const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;
+  api.updateScene({ elements: attachArrows(restoreElements(shown, null)), captureUpdate: 'NEVER' });
   applying = false;
   const count = scene.filter(e => !e.isDeleted).length;
   document.getElementById('board-count').textContent = `${count} ${count === 1 ? 'shape' : 'shapes'}`;
@@ -49,8 +52,20 @@ window.addEventListener('message', async ev => {
     if (elements) apply(elements);
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
+  } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {
+    if (!playing) { flush(); fullScene = rules.batch(api.getSceneElementsIncludingDeleted()) || fullScene; }
+    dirty = false; playing = m.id;
+    api.updateScene({ appState: { viewModeEnabled: !!playing, selectedElementIds: {} } });
+    apply(fullScene);
+    api.scrollToContent(undefined, { fitToContent: true, viewportZoomFactor: 0.85 });
+  } else if (m.session === session && m.room === room && m.action === 'convert' && typeof m.request === 'string' && /^[0-9a-f]{32}$/.test(m.request)) {
+    try {
+      const { convert } = await import('./mermaid.js');
+      const elements = await convert(m.source);
+      post('converted', { request: m.request, elements });
+    } catch { post('converted', { request: m.request, error: 'cannot_convert' }); }
   } else if (m.session === session && m.action === 'export' && typeof m.request === 'string') {
-    const blob = await exportToBlob({ elements: api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
+    const blob = await exportToBlob({ elements: playing ? attachArrows(restoreElements(fullScene, null)) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
     if (blob.size <= 600000) post('image', { request: m.request, bytes: await blob.arrayBuffer() });
   }
 });
@@ -68,3 +83,5 @@ createRoot(document.getElementById('board-root')).render(
     <MainMenu />
   </Excalidraw>
 );
+
+document.addEventListener('keydown', ev => { if (playing && ['ArrowRight','ArrowLeft','Escape'].includes(ev.key)) { ev.preventDefault(); post('navigate', { key: ev.key }); } });

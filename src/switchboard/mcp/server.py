@@ -343,7 +343,7 @@ def build_server(st: ToolBackend) -> FastMCP:
 
     @mcp.tool(
         annotations=RW,
-        description=("One room's whiteboard. action: note, box, connect, frame, move, edit, delete, read."),
+        description=("Board's actions: note, box, connect, frame, move, edit, delete, read, draw_mermaid."),
     )
     async def board(
         room: str,

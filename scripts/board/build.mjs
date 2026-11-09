@@ -16,6 +16,8 @@ let fontPatchSeen = false;
 const scope = {
   name: 'room-board-scope',
   setup(build) {
+    build.onResolve({ filter: /^mermaid$/ }, () => ({ path: "existing-mermaid", namespace: "board-mermaid" }));
+    build.onLoad({ filter: /.*/, namespace: "board-mermaid" }, () => ({ contents: "export default window.mermaid;" }));
     // Excalidraw's built-in text-to-diagram UI is disabled. #658 supplies its own bounded action.
     build.onResolve({ filter: /^@excalidraw\/mermaid-to-excalidraw$/ }, args =>
       args.importer.includes('/@excalidraw/excalidraw/') ? { path: 'disabled', namespace: 'board-only' } : undefined);
