@@ -812,3 +812,19 @@ def test_leaving_home_tells_the_broker_what_was_seen_and_a_done_row_opens_its_ro
     out = run("home_leave_marks_seen")
     assert out["seen"] == [{"at": 1790000000}]
     assert out["shown"] is False and out["title"] == "switchboard — #uploads" and out["current"] is None
+
+
+def test_a_room_on_screen_refreshes_the_home_count_only_for_what_can_change_it() -> None:
+    """#649: with a room shown only the sidebar's Home count is on view, so only a frame that can change
+    it asks
+    the broker to build Home again: a message to this person or from them, or a board's move; members,
+    settings,
+    a join line and other agents' chatter do not, and the ones that do are one request, not one each.
+    Opening Home
+    while that slow refresh waits replaces it with the quick one. Fails if every frame schedules a build (the
+    broker was building Home for each open tab after every message), or Home waits for the slow timer."""
+    out = run("home_badge_refresh")
+    assert out["quiet"] == 0
+    assert out["afterAddressed"] == 1 and out["afterReview"] == 1  # two messages and a review: one refresh
+    assert out["fetched"] == 1
+    assert out["onHome"] == 1 and out["fetchedOnHome"] == 1

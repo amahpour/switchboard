@@ -115,6 +115,7 @@ function makeWorld(rooms) {
     saidBodies: [],   // every /say body (text and reply_to)
     home: null,       // the body of GET /api/home (#626); an empty page when a scenario sets none
     seen: [],         // every POST /api/home/seen body
+    homeGets: 0,      // how many times the page asked for GET /api/home
     moves: [],        // every POST /api/rooms/{slug}/review body, with its room
   };
 
@@ -138,6 +139,7 @@ function makeWorld(rooms) {
     }
     if (method === 'GET' && url === '/api/home') {
       return function () {
+        server.homeGets += 1;
         return [200, server.home || { now: TS, since: TS, waiting: [], waiting_total: 0, done: [], done_total: 0, live: [] }];
       };
     }
@@ -231,7 +233,9 @@ function makeWorld(rooms) {
 
   const sockets = [];
   const held = [];
-  server.fireHome = function () { const fs = held.splice(0); for (const f of fs) f(); };
+  let heldId = 0;
+  server.fireHome = function () { const fs = held.splice(0); for (const h of fs) h.f(); };
+  server.heldHome = function () { return held.length; };
   class WebSocket {
     constructor(url) {
       this.url = url;
@@ -259,12 +263,15 @@ function makeWorld(rooms) {
   const ctx = {
     document: document, location: location, history: history, fetch: fetch, WebSocket: WebSocket,
     console: console, Date: Date, JSON: JSON, Map: Map, Set: Set, Promise: Promise, Error: Error,
-    // Home's two refresh delays (750 and 3100 ms, app.js) are held until a scenario calls fireHome(): no sleeping
+    // Home's two refresh delays (750 and 10100 ms, app.js) are held until a scenario calls fireHome(): no sleeping
     setTimeout: function (f, ms) {
-      if (ms === 750 || ms === 3100) { held.push(f); return 0; }
+      if (ms === 750 || ms === 10100) { held.push({ id: ++heldId, f: f }); return heldId; }
       return setTimeout(f, ms);
     },
-    clearTimeout: clearTimeout,
+    clearTimeout: function (id) {
+      const i = held.findIndex(function (h) { return h.id === id; });
+      if (i >= 0) held.splice(i, 1); else clearTimeout(id);
+    },
     setInterval: function () { return 0; }, clearInterval: function () {},  // the ping and refresh timers
     encodeURIComponent: encodeURIComponent, decodeURIComponent: decodeURIComponent, URL: URL,
   };
@@ -1560,6 +1567,41 @@ const SCENARIOS = {
     await settle();
     return { seen: w.server.seen, shown: !home.classList.contains('hidden'), title: w.document.title,
              current: w.$('home-nav').attrs['aria-current'] || null };
+  },
+
+  // With a room on screen, Home's count is refreshed only by a frame that can change it, and once however many
+  // come. Home opened with that slow refresh waiting is refreshed quickly instead.
+  async home_badge_refresh() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }, { id: 2, name: '#uploads', created_at: 101 }]);
+    w.location.hash = '#build';
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    w.server.homeGets = 0;
+    const held = function () { return w.server.heldHome(); };
+    ws.deliver({ t: 'members', room: '#build', members: [MEMBERS[0]] });
+    ws.deliver({ t: 'room', room: '#build', settings: {} });
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(10, 'codex-1', 'chatter between agents') });
+    ws.deliver({ t: 'msg', room: '#build', msg: { id: 11, ts: TS, kind: 'join', from: 'codex-1', sender_kind: 'system', text: 'joined' } });
+    const quiet = held();
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(12, 'codex-1', 'hi', { mentions: ['alice'] }) });
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(13, 'codex-1', 'again', { mentions: ['alice'] }) });
+    const afterAddressed = held();
+    ws.deliver({ t: 'review', room: '#build', boards: [] });
+    const afterReview = held();
+    w.server.fireHome();
+    await settle();
+    const fetched = w.server.homeGets;
+    // a slow one waiting, then Home opened: the quick one replaces it
+    ws.deliver({ t: 'review', room: '#build', boards: [] });
+    click(w.$('home-nav'));
+    await settle();
+    w.server.homeGets = 0;
+    ws.deliver({ t: 'msg', room: '#uploads', msg: chat(14, 'codex-1', 'on home') });
+    const onHome = held();
+    w.server.fireHome();
+    await settle();
+    return { quiet: quiet, afterAddressed: afterAddressed, afterReview: afterReview, fetched: fetched,
+             onHome: onHome, fetchedOnHome: w.server.homeGets };
   },
 
   async welcome_create() {
