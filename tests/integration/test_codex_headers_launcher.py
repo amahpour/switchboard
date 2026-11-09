@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 @pytest.fixture
 def cache(tmp_path: Path, impl: str) -> Path:  # noqa: F811
     """An owned cache, independent of a real harness home."""
-    base = tmp_path / "home with spaces/.codex/plugins/cache/switchboard"
+    base = tmp_path.resolve() / "home with spaces/.codex/plugins/cache/switchboard"
     base.mkdir(parents=True)
     return base
 
