@@ -13,6 +13,7 @@ if (output === path.parse(output).root || output === here || output === deps || 
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 let fontPatchSeen = false;
+let envPatchSeen = false;
 const scope = {
   name: 'room-board-scope',
   setup(build) {
@@ -40,10 +41,26 @@ const scope = {
       // CJK uses the machine's installed fallback fonts, like Helvetica and emoji. No font fetches.
       return { contents: localCjk, loader: 'js' };
     });
+    // Excalidraw's dist carries excalidraw.com's own service settings: a Firebase browser config (a Google API
+    // key that secret scanners flag), and its share, collaboration, AI and Plus addresses. Nothing in the
+    // board reads them, and its CSP allows no connection to them, so the build ships them empty.
+    build.onLoad({ filter: /chunk-ZUYEQ4TG\.js$/ }, async args => {
+      let source = await readFile(args.path, 'utf8');
+      envPatchSeen = true;
+      for (const key of ['BACKEND_V2_GET_URL', 'BACKEND_V2_POST_URL', 'PLUS_LP', 'PLUS_APP', 'AI_BACKEND',
+        'WS_SERVER_URL', 'FIREBASE_CONFIG', 'PLUS_EXPORT_PUBLIC_KEY']) {
+        const emptied = source.replace(new RegExp(`VITE_APP_${key}:(?:"[^"]*"|'[^']*'|\`[^\`]*\`)`), `VITE_APP_${key}:""`);
+        if (emptied === source) throw new Error(`service settings patch no longer matches pinned Excalidraw: ${key}`);
+        source = emptied;
+      }
+      if (/AIza|firebase|oss-collab|oss-ai/.test(source)) throw new Error('excalidraw.com service settings remain');
+      return { contents: source, loader: 'js' };
+    });
   },
 };
 const built = await build({ plugins: [scope], metafile: true, absWorkingDir: here, nodePaths: [path.join(deps, 'node_modules')], entryPoints: [path.join(here, 'frame.jsx')], outdir: output, entryNames: 'board', chunkNames: 'chunks/[name]-[hash]', bundle: true, minify: true, format: 'esm', splitting: true, conditions: ['production'], define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false}' }, loader: { '.woff2': 'file', '.woff': 'file' }, legalComments: 'linked' });
 if (!fontPatchSeen) throw new Error('the pinned font registration chunk is missing');
+if (!envPatchSeen) throw new Error('the pinned service settings chunk is missing');
 for (const name of ['Excalifont', 'Virgil', 'Assistant', 'Cascadia']) {
   await cp(path.join(deps, 'node_modules/@excalidraw/excalidraw/dist/prod/fonts', name), path.join(output, 'fonts', name), { recursive: true });
 }

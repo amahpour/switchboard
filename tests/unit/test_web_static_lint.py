@@ -427,23 +427,29 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("c5bce606d20a756feec033439eddbc69525835a2ede8c67048cd93e6d3c53eeb"),
+    "vendor/board/NOTICE": ("5528a308ba4c68d1e5da41e6baf9bed7354db8ea39c85b8557776b1765b85183"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("bc1833486d7b0545088d6efbc6310d5c349298efdbbd9e92ffe16dd5e32d3228"),
-    "vendor/board/chunks/chunk-4JAQT6U6.js": (
-        "988030bea8bac85d1c60ec5c4066c4f35b693c8298f8bff7de5e82d78ad1adca"
+    "vendor/board/board.js": ("f509763d1d535bcba01449ea96efa4fd30c795e0de7aec23b3e68ba7fdafdd4e"),
+    "vendor/board/chunks/chunk-42LTX363.js": (
+        "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
-    "vendor/board/chunks/chunk-4JAQT6U6.js.LEGAL.txt": (
+    "vendor/board/chunks/chunk-42LTX363.js.LEGAL.txt": (
         "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31"
+    ),
+    "vendor/board/chunks/chunk-4RIBWQVO.js": (
+        "775c963eff6c9d40c6f799cbe3fe95b6bd89feb8341ef967a8663757cf72dbcf"
+    ),
+    "vendor/board/chunks/chunk-4RIBWQVO.js.LEGAL.txt": (
+        "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"
+    ),
+    "vendor/board/chunks/chunk-4Z55H5PS.js": (
+        "44e90e32371b5a5887ae9eecdb46c22a0229b463229e934a0096f6346e5ea8ef"
     ),
     "vendor/board/chunks/chunk-HND5NSDJ.js": (
         "fe5e24252868ff71bd3c229af9f795f4b5110f9db260c57cda816a28074e9046"
     ),
     "vendor/board/chunks/chunk-MHJOTOFG.js": (
         "98493c79e7b44af7574873770b563b282a90a30b858c1d2cf4a65a0f7d91a7cc"
-    ),
-    "vendor/board/chunks/chunk-O7YFOXTE.js": (
-        "9d6a3fbe6595bf0d6aa9f1e4f67caf1032ce34821bab6f901fab67984c121bbc"
     ),
     "vendor/board/chunks/chunk-PBMPNUCO.js": (
         "812e63e7c40364b8a4f69cb9fdd9540051e7668676ce30b8b420e20d914aa350"
@@ -456,12 +462,6 @@ BOARD_ASSETS = {
     ),
     "vendor/board/chunks/chunk-UVDIT6BP.js": (
         "877135e8c1db4a50db3a4d65e7f7de238b47864c9dfba6c2cf2f887ee57bf834"
-    ),
-    "vendor/board/chunks/chunk-XICEK5C7.js": (
-        "9a17d5b337c1581a5a4d184190dadb6b248a54155607649fe46942f1847a6be5"
-    ),
-    "vendor/board/chunks/chunk-XICEK5C7.js.LEGAL.txt": (
-        "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"
     ),
     "vendor/board/chunks/directory-open-01563666-BCF2OQHL.js": (
         "a1dcd4ed8ae5083cbc201d276c66461b5956139ea0ec697a2c6ce4da396ef22f"
@@ -490,8 +490,8 @@ BOARD_ASSETS = {
     "vendor/board/chunks/file-save-745eba88-7UR3GB4E.js": (
         "974f609a4b4a89fb18bd0985bf165a6fabae8835bac81dae33d12291f67ea69b"
     ),
-    "vendor/board/chunks/image-GAAHSSAO-D244MI5J.js": (
-        "79d91d6a0ab54acd891c96a20cc3dcfa6d69ce8c10d242d78884b8f5c259b46a"
+    "vendor/board/chunks/image-GAAHSSAO-MYOD2TFX.js": (
+        "bbdace880cb9addd75a996d6a0739a7f341eb6d4ad5cfd7dfce1cd992f88e75c"
     ),
     "vendor/board/chunks/image-blob-reduce.esm-OS2VLHZ6.js": (
         "2ef12a35eb45b63bab38cb6b82ae40d2430c22a29cbf7d4a2befac13715ee5e2"
@@ -505,8 +505,8 @@ BOARD_ASSETS = {
     "vendor/board/chunks/kab-KAB-ZGHBKWFO-Q33DF4M3.js": (
         "b225d106b118758ff58592eab973752d2ca82987b88b27e5e1f8a6fdc162a5b6"
     ),
-    "vendor/board/chunks/mermaid-S4CFZIUH.js": (
-        "7e93f6d520f0a277545a2b00f0b24426a30c0800122c6911165eefee66096ab5"
+    "vendor/board/chunks/mermaid-QKS2V2ZS.js": (
+        "5d3dac8d3a1eeeefb76960ef35ec905239361221564752f2c9e73c492fcc1835"
     ),
     "vendor/board/chunks/percentages-BXMCSKIN-YJSF5M2O.js": (
         "e10ec8a63d1747d594103ee30abc81da342ff2849b5350e902f492c6392c089b"
@@ -520,11 +520,11 @@ BOARD_ASSETS = {
     "vendor/board/chunks/roundRect-BHUCBQ67.js": (
         "9be43f9137fc3bf967dd9450c578d270d94d31a8b3454e0faf9a99cb07f4711a"
     ),
-    "vendor/board/chunks/subset-shared.chunk-JKOXT53P.js": (
-        "e2f7979fa57524d3da903c3a7135af7c39a878d97a56b550460c88d8b7909d58"
+    "vendor/board/chunks/subset-shared.chunk-5R72Z2CK.js": (
+        "fcddca5b7f2c475bed4b8965d9f2da3d0e9f93dda28e248239bb94c782a6ae88"
     ),
-    "vendor/board/chunks/subset-worker.chunk-NFGOYKBR.js": (
-        "b3be2833a07874e7c57b4756be11cc37c544d0490d7784c2a2e19933904f3337"
+    "vendor/board/chunks/subset-worker.chunk-QIVNYH6E.js": (
+        "6bcc6dfe75fc43dd5c399e5cec5f26872ae3eb6145f2b67cf04d6b9a82ced4df"
     ),
     "vendor/board/fonts/Assistant/Assistant-Bold.woff2": (
         "e0cdd332ce039770e93ec44336b6db65f931940f42b0342aad35a06e7f991d29"
@@ -577,3 +577,25 @@ def test_board_assets_are_exactly_the_reviewed_bytes_with_notices() -> None:
     for file in (STATIC / "vendor/board").rglob("*.js"):
         text = file.read_text()
         assert "https://esm.sh/" not in text
+
+
+def test_the_board_ships_none_of_excalidraw_coms_service_settings() -> None:
+    """Excalidraw's dist carries excalidraw.com's own Firebase browser config and service addresses. The
+    board uses none of them, and GitHub's secret scanning flagged the Google API key in it, so the build
+    empties them. Fails if a rebuild brings back the key, the Firebase project, the collaboration, AI or
+    share address, or the Plus export key."""
+    google_api_key = re.compile(r"AIza[0-9A-Za-z_-]{35}")
+    for file in (STATIC / "vendor/board").rglob("*"):
+        if not file.is_file() or file.suffix in (".woff", ".woff2"):
+            continue
+        text = file.read_text()
+        has_key = google_api_key.search(text) is not None  # a bool, so a failure never prints the key
+        assert not has_key, file.name
+        for setting in (
+            "firebase",
+            "oss-collab.",
+            "oss-ai.",
+            "json.excalidraw.com",
+            "MIIBIjANBgkqhkiG9w0BAQEF",
+        ):
+            assert setting not in text, (file.name, setting)
