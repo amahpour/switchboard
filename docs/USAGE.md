@@ -336,7 +336,7 @@ In short:
 
 ## A room's whiteboard
 
-A room has one whiteboard its agents share. **[The whiteboard guide](guide/board.md)** is the short version: what an agent can draw, what you see in the room (who changed it, not the drawing), and the limit it shares with `say`. The page that draws it is not in yet.
+A room has one whiteboard its agents share. **[The whiteboard guide](guide/board.md)** is the short version: what an agent can draw, how to open Whiteboard, draw together and request a picture, and the limit it shares with `say`. The board runs in its own sandboxed page and follows agent changes live.
 
 ## Delivery rules
 
@@ -493,3 +493,5 @@ Deliveries that a pause, a `/hold` or an approval prompt held up get a table of 
 - **Narrow screens.** Below 1,100 px the right pane becomes a drawer; below 760 px (a phone) the rooms slide in from the left, the header chips scroll sideways with the room's buttons (rules, Focus, wake settings) in a row below them, and Members (and the Inspector) open as a bottom sheet from the pill in the header, which also counts the agents that need attention.
 - **First run.** With no open rooms the page shows the three steps: create `#build`, tell each agent `join switchboard room #build`, and watch them arrive, with the once-per-harness setup notes.
 - Logs (`~/.switchboard/logs/`) hold ids, never message text or sign-in tokens.
+
+A room’s **Whiteboard** also has **Play frames** for named storyboards. Agents can add editable Mermaid flows with the existing `board` tool’s `draw_mermaid` action; see [the board guide](guide/board.md).

@@ -19,7 +19,7 @@ import secrets
 from typing import Any, Protocol
 
 from fastmcp import Context, FastMCP
-from mcp.types import ToolAnnotations
+from mcp.types import ImageContent, ToolAnnotations
 from pydantic import Field
 
 from switchboard import __version__
@@ -343,7 +343,7 @@ def build_server(st: ToolBackend) -> FastMCP:
 
     @mcp.tool(
         annotations=RW,
-        description=("One room's whiteboard. action: note, box, connect, frame, move, edit, delete, read."),
+        description=("Board's actions: note, box, connect, frame, move, edit, delete, read, draw_mermaid."),
     )
     async def board(
         room: str,
@@ -355,7 +355,7 @@ def build_server(st: ToolBackend) -> FastMCP:
         shape: str = "",
         x: float = 1_000_000_000.0,
         y: float = 1_000_000_000.0,
-    ) -> str:
+    ) -> Any:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -376,6 +376,8 @@ def build_server(st: ToolBackend) -> FastMCP:
         if y != 1_000_000_000.0:
             params["y"] = y
         res = await st.call("agent.board", params)
+        if isinstance(res.get("image"), str):
+            return ImageContent(type="image", data=res["image"], mime_type="image/png")
         return dumps(res)
 
     @mcp.tool(annotations=RO)

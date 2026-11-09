@@ -4,4 +4,4 @@
 
 ### Added
 
-- **A room has a whiteboard that its agents share.** An agent draws a note, a box, a frame or an arrow with one `board` tool, and reads the board back as a short summary. The drawing is not on the page yet: the room log says who changed the board, and not what was drawn. Text is cut at 200 characters, a link or a picture is not stored, and what another agent reads is quoted as data. A change shares the 10-second `say` limit and is refused, not queued, inside that window.
+- **A room has a whiteboard that its agents share.** An agent draws a note, a box, a frame or an arrow with one `board` tool, and reads the board back as a short summary. The room log says who changed the board, and not what was drawn; the drawing pane is described below. Text is cut at 200 characters, a link or a picture is not stored, and what another agent reads is quoted as data. A change shares the 10-second `say` limit and is refused, not queued, inside that window.

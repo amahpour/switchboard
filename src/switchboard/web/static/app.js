@@ -24,6 +24,35 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   const roomTitleButton = $('room-title-button');
+  const whiteboard = window.SBWhiteboard;
+  let whiteboardOpen = false;
+  function closeWhiteboard() {
+    if (!whiteboard) return;
+    whiteboard.close(); whiteboardOpen = false;
+    $('whiteboard-panel').classList.add('hidden');
+    $('app').classList.remove('whiteboard-open');
+    $('whiteboard-toggle').setAttribute('aria-pressed', 'false');
+  }
+  if (whiteboard) {
+    whiteboard.configure({ host: $('whiteboard-host'), status: $('whiteboard-status'), result: function (room, request, result) {
+      if (state.wsOpen && state.active === room) state.ws.send(JSON.stringify({ t: 'board', room, request, result }));
+    }, send: function (room, elements) {
+      if (!state.wsOpen || !state.ws || state.active !== room) return false;
+      state.ws.send(JSON.stringify({ t: 'board', room, elements }));
+      return true;
+    } });
+    $('whiteboard-toggle').addEventListener('click', function () {
+      if (whiteboardOpen) { closeWhiteboard(); return; }
+      if (!state.active) return;
+      state.boardOpen = false; renderBoard();
+      whiteboardOpen = true;
+      $('app').classList.add('whiteboard-open');
+      $('whiteboard-panel').classList.remove('hidden');
+      $('whiteboard-toggle').setAttribute('aria-pressed', 'true');
+      whiteboard.open(state.active);
+    });
+    $('whiteboard-close').addEventListener('click', function () { closeWhiteboard(); $('whiteboard-toggle').focus(); });
+  }
   const MAX_LINES = 2000;
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
   const REFETCH_MS = 800;          // Inspector refetch debounce
@@ -1948,6 +1977,7 @@
       state.boardOpen = false;
       state.boardSel = null;
     }
+    if (state.active !== name) closeWhiteboard();
     state.active = name;
     const activeR = state.rooms.get(name);
     markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
@@ -3342,6 +3372,11 @@
       m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
       m.files.push(f.file);
       if (r.name === state.active) refreshMsgText(m);
+    } else if (f.t === 'board') {
+      if (r && whiteboard) {
+        if (f.task) whiteboard.task(f.room, f.task);
+        else whiteboard.receive(f.room, f.elements, f.full === true);
+      }
     } else if (f.t === 'members') {
       if (!r) return;
       r.members = f.members || [];
@@ -3934,6 +3969,7 @@
           const result = await api('PUT', '/api/me/preferences', { theme: value });
           state.me.preferences = result.preferences;
           document.documentElement.dataset.theme = result.preferences.theme;
+          if (whiteboard) whiteboard.theme();
           window.dispatchEvent(new Event('switchboard-theme-change'));
           for (const button of choices.children) {
             button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + result.preferences.theme));
@@ -4942,6 +4978,7 @@
         me.preferences = state.me.preferences;
       } else if (me.preferences.theme !== themeAtOpen) {
         document.documentElement.dataset.theme = me.preferences.theme;
+        if (whiteboard) whiteboard.theme();
         window.dispatchEvent(new Event('switchboard-theme-change'));
         for (const button of document.querySelectorAll('.settings-theme-option')) {
           button.setAttribute('aria-pressed', String(button.id === 'settings-theme-' + me.preferences.theme));
@@ -6673,6 +6710,7 @@
     closePop();
     if (state.active) markRoomSeen(state.rooms.get(state.active), false);  // what came while it was open was seen
     state.home = true;
+    closeWhiteboard();
     state.active = null;
     state.boardOpen = false;
     state.boardSel = null;
@@ -7511,6 +7549,7 @@
     $('room-wake').addEventListener('click', openRoomWake);
     if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
     $('board-toggle').addEventListener('click', function () {
+      closeWhiteboard();
       state.boardOpen = !state.boardOpen;
       state.boardSel = null;
       renderBoard();
@@ -7591,6 +7630,7 @@
         r.slug = l.slug;
         state.rooms.set(l.name, r);
         if (state.active === old) {
+          closeWhiteboard();
           state.active = l.name;
           history.replaceState(null, '', '#' + l.slug);
           composerPlaceholder();
@@ -7621,7 +7661,7 @@
     }
     const was = state.active;
     const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned
-    if (pruned) state.active = null;
+    if (pruned) { closeWhiteboard(); state.active = null; }
     if (state.inspect && gone.has(state.inspect.room)) closeInspector(false);
     renderTabs();
     renderClosedButton();
@@ -7667,6 +7707,7 @@
       return;
     }
     document.documentElement.dataset.theme = (state.me.preferences || {}).theme || 'system';
+    if (whiteboard) whiteboard.theme();
     document.documentElement.dataset.textSize = (state.me.preferences || {}).text_size || 'default';
     // Show the broker's build, with a release link and the full revision in the tooltip (§1.1).
     if (state.me && state.me.version) {

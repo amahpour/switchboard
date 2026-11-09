@@ -198,3 +198,97 @@ def test_a_private_room_refuses_a_board_from_anyone_else() -> None:
         assert len(els) == 1 and els[0]["link"] is None and "script" not in els[0]
     finally:
         stop(hosted)
+
+
+@pytest.mark.parametrize("stale", [False, True])
+async def test_board_image_is_returned_only_for_its_pending_room_request(
+    broker: InProcBroker, stale: bool
+) -> None:
+    """A bounded PNG answers one read; unsolicited responses, wrong rooms and stale pictures fail."""
+    import asyncio
+    import base64
+
+    from fakes.pictures import png
+
+    web = broker.web_client()
+    ws = ws_connect(broker, cookie_of(web))
+    try:
+        ws.send(json.dumps({"t": "hello", "rooms": ["#build"], "after": {}}))
+        recv_until(ws, lambda f: f.get("t") == "board")
+        async with FakeAgent(broker.home, "viewer") as viewer:
+            await viewer.join("#build", "viewer")
+            pending = asyncio.create_task(
+                viewer.raw("board", {"room": "#build", "action": "read", "text": "image"})
+            )
+            request = await asyncio.to_thread(recv_until, ws, lambda f: f.get("t") == "board" and "task" in f)
+            task = request["task"]
+            payload = base64.b64encode(png()).decode()
+            if stale:
+                broker.on_loop(
+                    lambda: broker.state.room_board.from_page(
+                        broker.state.store.get_room("#build"), "alice", [page_shape()]
+                    )
+                )
+            ws.send(json.dumps({"t": "board", "room": "#build", "request": task["id"], "result": payload}))
+            result = await pending
+            assert not result.is_error
+            image = result.content[0]
+            if stale:
+                assert image.type == "text" and json.loads(image.text)["code"] == "board_changed"
+            else:
+                assert image.type == "image" and image.data == payload
+                assert image.mime_type == "image/png"
+            assert broker.on_loop(lambda: len(broker.state.room_board._pending)) == 0
+    finally:
+        ws.close()
+        web.close()
+
+
+def test_board_picture_response_checks_room_identity_png_bytes_and_dimensions(broker: InProcBroker) -> None:
+    """Only the pending room can answer; encoded junk, huge pictures, invalid CRCs and replay are refused."""
+    import asyncio
+    import base64
+
+    from fakes.pictures import png
+
+    broker.call("room.create", {"name": "#other"})
+
+    def check() -> None:
+        st = broker.state
+        room = st.store.get_room("#build")
+        other = st.store.get_room("#other")
+        assert room is not None and other is not None
+        future = asyncio.get_running_loop().create_future()
+        key = "a" * 32
+        st.room_board._pending[key] = (room.id, 0, future, "image")
+        try:
+            for request, result in [
+                (None, ""),
+                (key, None),
+                ("b" * 32, ""),
+                (key, "x" * 800001),
+                (key, "!"),
+                (key, base64.b64encode(b"not a picture").decode()),
+                (key, base64.b64encode(png(1201, 1)).decode()),
+                (key, base64.b64encode(png()[:-2]).decode()),
+            ]:
+                assert not st.room_board.image_result(room, request, result)
+                assert not future.done()
+            good = base64.b64encode(png()).decode()
+            assert not st.room_board.image_result(other, key, good)
+            assert st.room_board.image_result(room, key, good)
+            assert not st.room_board.image_result(room, key, good)
+        finally:
+            st.room_board._pending.clear()
+
+    broker.on_loop(check)
+
+
+async def test_image_read_with_no_open_page_times_out_and_cleans_up(broker: InProcBroker) -> None:
+    """No headless browser is launched: the read explains which page to open and leaves no pending request."""
+    async with FakeAgent(broker.home, "viewer") as viewer:
+        await viewer.join("#build", "viewer")
+        result = await viewer.call("board", room="#build", action="read", text="image")
+        assert not result["ok"] and result["code"] == "no_board_page"
+        assert "open" in result["error"]
+        assert broker.on_loop(lambda: len(broker.state.room_board._pending)) == 0
