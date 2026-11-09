@@ -1,0 +1,3 @@
+html,body{margin:0;height:100%;font:14px system-ui,sans-serif}
+#bar{height:32px;line-height:32px;padding:0 12px;border-bottom:1px solid #ccc;display:flex;gap:12px}
+#board{display:block;width:100%;height:calc(100% - 33px);border:0}
