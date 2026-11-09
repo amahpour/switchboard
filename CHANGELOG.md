@@ -6,7 +6,7 @@ Notes for what's merged but not released yet are in [changes/](changes/README.md
 
 ### Upgrading
 
-- The database moves to schema 45 (two new tables, empty). As always, switchboard writes a checked backup first.
+- The database moves to schema 46 (four new tables, empty: two for Home, two for the room whiteboard). As always, switchboard writes a checked backup first.
 - **Update the server before the plugins** (Claude Code 0.16.3, Codex 0.8.1, Cursor 0.3.1). The `board` tool is new, and an older server refuses the call. Those plugins pick up the `board` skill with that version.
 
 ### Added
