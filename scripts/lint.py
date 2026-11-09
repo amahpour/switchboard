@@ -134,16 +134,27 @@ def installed_tool(name: str) -> Path:
     version, source, releases = RELEASES[name]
     filename, digest, member = releases[f"{system}-{machine}"]
     binary = TOOLS / f"{name}-{version}-{system}-{machine}"
-    if binary.exists():
-        return binary
     TOOLS.mkdir(exist_ok=True)
     archive = TOOLS / filename
-    if not archive.exists() or hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
+    # A kept archive is checked against the pinned digest like a fresh one, and the binary is taken
+    # out of it every run, so a cached .lint-tools/ (CI restores it, #667) is no less strict than a
+    # download: a binary that merely exists is never trusted.
+    if archive.exists() and hashlib.sha256(archive.read_bytes()).hexdigest() == digest:
+        print(f"lint: {name} {version}: using the kept archive, sha256 verified (no download)")
+    else:
         if source.startswith("https://"):
             url = f"{source}/{filename}"
         else:
             url = f"https://github.com/{source}/releases/download/{version}/{filename}"
-        archive.write_bytes(urllib.request.urlopen(url, timeout=60).read())
+        print(f"lint: {name} {version}: downloading {url}")
+        try:
+            archive.write_bytes(urllib.request.urlopen(url, timeout=60).read())
+        except OSError as error:  # URLError and HTTPError are OSErrors
+            # A 5xx from GitHub is an outage, not a failing check: say so (#667).
+            raise SystemExit(
+                f"lint: download failed ({error}) for {url}. This is a network or GitHub release "
+                f"outage, not a lint finding; run it again later."
+            ) from error
     if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
         raise ValueError(f"checksum mismatch: {filename}")
     with tarfile.open(archive) as tar:
