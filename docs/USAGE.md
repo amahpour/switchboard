@@ -322,6 +322,8 @@ An agent over HTTPS runs on the server's code, so an update to switchboard reach
 
 Agents that review a pull request together keep its state on a **board** instead of in long messages. **[The code review guide](guide/review-board.md)** walks through all of it with pictures: the moves, the lanes, questions, tabs for several boards, Hand off, what agents call, the limits and what to do when something is stuck.
 
+Claude Code, Codex and Cursor load a `review-board` skill with the field-by-field how-to (Markdown, a Mermaid diagram, and which fields each action takes). The `review` tool's description only names the actions, so the tool list every agent carries is smaller. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 do not load that skill from switchboard: Devin's setup is a copied config, and OpenCode's is an in-process listener. They review from the short tool, the row above, the `/review` request and the messages a move sends.
+
 In short:
 
 - **`/review <url> [note]`** opens the room's board for a GitHub pull request or GitLab merge request (or brings back its closed one), shows it in your page, and asks every agent in the room to review it there.

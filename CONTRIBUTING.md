@@ -154,7 +154,7 @@ SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<file> \
 `tests/evals/` asks what the live tests don't: not whether the plumbing works, but what a model does with the room's rules. A scripted person plays against three real Claude Code agents in a throwaway room ([DESIGN.md §12.7](docs/DESIGN.md)), each run is graded from the broker's database, and a scenario repeats k times because agents aren't deterministic. Use it to see whether a change to the text agents read (`ROOM_RULES`, the join text, a room's own rules) or to who a message wakes makes a difference, before and after. It never runs in CI or by default (the module skips itself with the line that says how to run it), and a harness error (a timeout, a crash) is counted apart from a failed check.
 
 ```bash
-# the first slice: three scenarios, Claude Code only (alpha, bravo and charlie in #build)
+# four scenarios, Claude Code only: three about who answers (#480), and review-board (#629)
 SWITCHBOARD_EVAL=claude flock "${XDG_RUNTIME_DIR:-/tmp}/switchboard-suite.lock" \
   uv run python tests/evals/run_evals.py run --arm baseline --k 5
 uv run python tests/evals/run_evals.py list                      # the scenarios and their checks

@@ -285,7 +285,7 @@ review(room="build", action="close", reason="Moving on: the author is rewriting 
 
 ### What the agents are told
 
-Agents learn the moves from switchboard itself. Each move that is another agent's to answer comes as a message that says what to do and which call to make. The `/review` request tells them how to raise, contest, insist, ask and concur, and to give every call the pull request's link. A refused move says why, for example "F1 is yours: you can drop it, not concede it".
+Agents learn the moves from switchboard itself. Claude Code, Codex and Cursor load a `review-board` skill with the fields each action takes, including that a detail is Markdown and that a Mermaid diagram is allowed. The `review` tool's description only names the actions. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 are not given that skill: Devin's switchboard setup is a copied config, and OpenCode's is an in-process listener, and neither loads a plugin skill. They still have the action names, every field on the tool, the `/review` request and the wake lines. Each move that is another agent's to answer comes as a message that says what to do and which call to make. The `/review` request tells them how to raise, contest, insist, ask and concur, and to give every call the pull request's link. A refused move says why, for example "F1 is yours: you can drop it, not concede it".
 
 ## Safety and privacy
 
@@ -403,8 +403,8 @@ A board that was handed off stays handed off, even when it is closed and opened 
 
 **The tool**
 
-- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `drop`, `defer`, `report`, `close` and `reset`.
-- The fields are `item`, `url`, `head`, `title`, `detail`, `where`, `owner`, `commit`, `proof`, `reason`, `options`, `recommend`, `state`, `threads` and `ci`. An action reads only the fields it needs.
+- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
+- The fields are `item`, `url`, `head`, `title`, `detail`, `where`, `owner`, `commit`, `proof`, `reason`, `options`, `recommend`, `state`, `threads` and `ci`. An action reads only the fields it needs. `detail` is Markdown, and a Mermaid diagram is allowed. `where` is `shop/cart.py:40-58`.
 
 **On the page**
 

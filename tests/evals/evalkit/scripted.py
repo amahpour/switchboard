@@ -26,7 +26,7 @@ from fakes.fake_agent import FakeAgent
 
 from switchboard.config import Config
 
-from .record import Tokens
+from .record import Tokens, latest_human_message
 from .scenario import Scenario
 from .trial import HarnessError, Limits
 
@@ -53,6 +53,9 @@ class Move:
     # an agent that posts anyway when told another agent already answered (DESIGN.md §8.8): it sends
     # the same text again with the ``since`` it was given. Without it the agent takes the refusal.
     insist: bool = False
+    # a ``review`` call, the board's own tool. A chat line is not one: the review checks read the
+    # board, so a policy that only talks cannot pass them.
+    review: dict[str, Any] | None = None
 
 
 Policy = Callable[[str, list[Item]], Move]
@@ -145,7 +148,11 @@ class ScriptedWorld:
                     self.waiting[name] = False
                     self.spent[name] += self.tokens_per_batch
                     move = self.policies[name](name, parse(r["text"]))
-                    if move.say is not None:
+                    if move.review is not None:
+                        res = await agent.call("review", room=self._room, **move.review)
+                        if not res.get("ok"):
+                            raise RuntimeError(res.get("error") or res)
+                    elif move.say is not None:
                         res = await agent.say(self._room, move.say, reply_to=move.reply_to)
                         if move.insist and res.get("code") == "taken":
                             await agent.say(
@@ -161,13 +168,18 @@ class ScriptedWorld:
 
     def say(self, text: str) -> int:
         assert self._web is not None and self._broker is not None
+        # A message that starts with a slash is a command, as the page sends it: ``/review`` opens
+        # a board. Posted through ``/say`` it would be ordinary chat and open nothing.
+        path = "command" if text.startswith("/") else "say"
         r = self._web.post(
-            f"/api/rooms/{self._room.lstrip('#')}/say",
+            f"/api/rooms/{self._room.lstrip('#')}/{path}",
             json={"text": text},
             headers=self._broker.write_headers(),
         )
         assert r.status_code == 200, r.text
-        return int(r.json()["id"])
+        if path == "say":
+            return int(r.json()["id"])
+        return latest_human_message(self.db_path, self._room)
 
     def idle(self) -> bool:
         if self.errors:
