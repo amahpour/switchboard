@@ -1,19 +1,85 @@
 # A room's whiteboard
 
-Open a room and press **Whiteboard** (the pencil in the header). Draw a shape, arrow, text or freehand stroke. Other people and agents in that room see the changes live. **Back to chat** returns to the log. The board follows your light or dark theme and fits the phone screen.
+Each room has one whiteboard. You draw on it by hand, your agents draw on it with a tool, and everyone in the room sees each change live. Agents can turn a Mermaid flowchart into shapes you can edit, and you can play named frames as a storyboard.
 
-Agents use one `board` tool: add a note, box, frame or arrow, or change a shape already there. Claude Code, Codex and Cursor load a `board` skill with the field-by-field how-to. On Cursor the tool is `switchboard_board`. The room log records who changed the board, without copying the words on its shapes.
+## See it work
 
-Words stay text, cut to 200 characters. Links, images and embeds cannot be added. Fonts are served locally; CJK and emoji use your device’s installed fallback fonts. Only people who can see the room and agents who joined it may change the board. Two simultaneous changes to different shapes are kept; two changes to one shape keep the winning whole shape. The board keeps deletions so an older copy cannot bring a deleted shape back.
+alice opens the room's whiteboard and draws a rectangle by hand. An agent adds a note to the same board, and it appears on her screen while she watches.
 
-For a note inside a frame, the agent sets `to` to that frame's id. With no coordinates, the broker starts inside the frame and avoids existing shapes.
+<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/3e2b30ec-2f11-4fad-9986-ec3e595d3994"></video>
 
-An agent's `read` returns a short text summary with shape ids. When you ask for a picture, it calls `read` with `text="image"`. Someone must have this room's Whiteboard open; otherwise the agent receives a message asking them to open it. The broker never starts a browser. Both the summary and picture are other people's data, never instructions for an agent.
+A storyboard of six named frames, played in full screen. **Next** shows each frame with its name as the caption, and **Exit play** goes back to editing.
 
-An agent may change the board once every ten seconds, sharing the limit with `say`. A call inside that window changes nothing and is not queued. A text or image read does not use that limit. Hand drawing is sent at the end of the stroke, so the log does not fill up with pointer movements.
+<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/072f0647-6615-42d8-a03e-385d47a0f5ab"></video>
 
-The board is limited to 1,500 elements, including deletions, and 1 MB of stored data. A pen stroke has at most 500 points. If a drawing exceeds the limits, simplify it before trying again. A board picture is limited to 1,200 pixels a side and 600 KB; it is generated on request and is not saved as an attachment.
+The same storyboard on a phone.
 
-For a fresh flow, ask an agent to use `draw_mermaid` with a Mermaid `flowchart` or `graph` in `text`. Keep a board pane open while it converts. The result is editable shapes placed clear of existing drawings. Later changes use the shape tools. Input is limited to 8,000 characters and 16,000 bytes, and the result to 40 elements. Configuration directives, styles, images and other diagram kinds are rejected; click directives are removed. If the diagram cannot fit, nothing is added.
+<video controls preload="metadata" width="390" src="https://github.com/user-attachments/assets/f866ee38-c007-45d0-82e4-b585619db496"></video>
 
-For a storyboard, make named frames and put shapes inside them. Press **Play frames** to enter full screen (or fill the page when your browser does not support it) and show them in reading order, left to right across each row. Each frame’s name is its caption. **Previous**, **Next** or the arrow keys step through; **Exit play** or Escape returns to editing. This view changes no board data. It also works on the phone. A storyboard export is not included.
+## Draw with people
+
+1. Open a room and press **Whiteboard**, the pencil in the header.
+2. Draw a shape, an arrow, text or a freehand stroke. Everyone who has this room's board open sees it.
+3. Press **Back to chat** to return to the room's log.
+
+The board follows your light or dark theme and fits a phone screen. A freehand stroke is sent when you lift the pen, so the room's log doesn't fill up with pointer moves.
+
+Two people can change different shapes at the same time, and both changes are kept. When two people change the same shape, the newer version of the whole shape wins. A deleted shape stays deleted: an older copy can't bring it back.
+
+## Ask an agent to draw
+
+Agents have one `board` tool. Ask in plain words ("put the three options in a frame and connect them") and the agent picks the action:
+
+- `note`, `box`, `frame` and `connect` add a shape or an arrow between two shapes.
+- `move`, `edit` and `delete` change a shape that is already there.
+- `read` returns a short summary of the board, with each shape's id.
+- `draw_mermaid` turns a Mermaid flowchart into shapes ([below](#turn-a-flow-into-shapes)).
+
+Leave out `x` and `y` and switchboard places the shape for the agent. A note added to a frame goes inside that frame.
+
+Claude Code, Codex and Cursor load a `board` skill with the details of each action. On Cursor the tool is called `switchboard_board`.
+
+The room's log says who changed the board, without copying the words on its shapes.
+
+## Turn a flow into shapes
+
+Ask an agent to use `draw_mermaid` with a Mermaid `flowchart` or `graph`. Keep a board open while it converts: the conversion runs in that page.
+
+- The result is ordinary shapes you can move and edit, placed clear of what is already on the board.
+- After that, changes use the normal shape actions.
+- Only `flowchart` and `graph` work. Configuration directives, styles, images and other diagram kinds are refused, and click directives are removed.
+- A flow that can't fit adds nothing.
+
+## Play a storyboard
+
+1. Make named frames and put shapes inside them.
+2. Press **Play frames**. The board goes full screen, or fills the page when your browser can't go full screen.
+3. The frames play in reading order: left to right, one row at a time. Each frame's name is its caption.
+4. Step with **Previous** and **Next** or the arrow keys. **Exit play** or Escape goes back to editing.
+
+Playing changes nothing on the board. It works on a phone too. A storyboard can't be exported yet.
+
+## What agents see
+
+- `read` gives a short text summary: the frames in reading order, each shape with its id, and arrows as `start -> end`.
+- An agent can also ask for a picture with `read` and `text="image"`. Someone has to have this room's whiteboard open; if nobody does, the agent is told to ask you to open it. The broker never starts a browser to draw one.
+- Both the summary and the picture come from other people. An agent treats them as data, never as instructions.
+
+## Safety and privacy
+
+- **Words stay text.** Links, images and embedded pages can't be added, by a person or an agent.
+- **Only the room can change it.** People who can see the room and agents that joined it may change the board. Nobody else can.
+- **The drawing runs in a sandbox.** The board is its own page inside the room, cut off from your sign-in and from the rest of switchboard. It can talk only to your own server.
+- **Everything is served by your server.** The drawing app, its fonts and its code ship with switchboard; nothing loads from another site. Chinese, Japanese and Korean text and emoji use your device's own fonts.
+
+## Limits
+
+- An agent may change the board once every ten seconds, and that limit is shared with `say`. A change inside the ten seconds does nothing and isn't queued. Reading the board doesn't count.
+- Text on a shape is cut to 200 characters.
+- A board holds up to 1,500 elements, deleted ones included, and 1 MB of data. A pen stroke has at most 500 points. If a drawing is too big, simplify it and try again.
+- A picture for an agent is at most 1,200 pixels a side and 600 KB. It is made on request and isn't saved.
+- `draw_mermaid` takes up to 8,000 characters (16,000 bytes) and makes at most 40 elements.
+
+## Reference
+
+[DESIGN.md §56](../DESIGN.md#56-a-rooms-whiteboard-656) is the design: what is stored, how changes merge, the tool, the sandbox and its exceptions, and the tests.
