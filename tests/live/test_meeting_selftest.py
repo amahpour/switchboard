@@ -57,6 +57,7 @@ from fakes.fake_agent import FakeAgent
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from harness import selftest
+from harness.relay import JOINLY_IMAGE as IMAGE
 from harness.selftest import SecretLink, StepResult
 from harness.tmuxdrv import REAL_HOME
 from harness.world import REAL_PATH, live_set
@@ -77,7 +78,6 @@ if "meeting" not in live_set():
 
 LINK_ENV = "SWITCHBOARD_MEETING_URL_FILE"
 OUT_ENV = "SWITCHBOARD_SELFTEST_OUT"
-IMAGE = "ghcr.io/joinly-ai/joinly:v0.5.4"  # the tag DEPLOY.md and the Kubernetes patch run
 # On Zoom, both bots run with our speaker-name fix (joinly-ai/joinly#187), as DEPLOY.md says to: stock 0.5.4
 # can't open Zoom's participant list, so the speaker could neither see the bot arrive (and spoke before its
 # audio was up) nor see it leave. The file is the one DEPLOY.md pins, checked by its sha256.

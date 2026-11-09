@@ -86,3 +86,16 @@ outright keeps working with the GPU on or off.
 {{- $tag -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+joinly's image digest. The CUDA build is a different image, so a tag that ends in -cuda (the GPU
+switch above, or a values file that names that tag) uses cudaDigest. Appending -cuda to the CPU
+reference does not select it.
+*/}}
+{{- define "switchboard.joinlyDigest" -}}
+{{- if hasSuffix "-cuda" (include "switchboard.joinlyTag" .) -}}
+{{- .Values.meetings.image.cudaDigest -}}
+{{- else -}}
+{{- .Values.meetings.image.digest -}}
+{{- end -}}
+{{- end }}

@@ -33,7 +33,7 @@ Where the bot runs (``SWITCHBOARD_SELFTEST_HOSTED``):
   script's own requests and once on Docker's bridge address for the relay's container. That machine needs
   this checkout (or the plugin), Docker with Compose, ``curl``, the joinly image, and switchboard's image
   (``docker build -f deploy/image/Dockerfile .``, or the release that has the relay). For the GPU it also
-  needs the NVIDIA Container Toolkit and ``ghcr.io/joinly-ai/joinly:v0.5.4-cuda``. The device the script
+  needs the NVIDIA Container Toolkit and the CUDA joinly image pinned in DEPLOY.md. The device the script
   picks, GPU or CPU, is in the report. If the broker is better reached by address than by a tunnel, it
   would need ``--listen`` and ``--public-url``, and a plain-http public URL is only taken for
   ``localhost``, ``*.localhost``, ``*.test`` and ``127.0.0.1`` (DESIGN.md §30), so it would be a name in

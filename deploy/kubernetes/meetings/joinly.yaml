@@ -63,7 +63,7 @@
 #               - name: SWITCHBOARD_MEETING_STT_MODEL
 #                 value: large-v3-turbo
 #           - name: joinly
-#             image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda   # the same release, built for CUDA
+#             image: ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e   # the same release, built for CUDA
 #             resources:
 #               limits:
 #                 nvidia.com/gpu: 1
@@ -91,7 +91,7 @@ spec:
             - name: SWITCHBOARD_JOINLY_URL
               value: http://127.0.0.1:8000/mcp/   # the broker's `[meeting] joinly_url`: beside it, in the pod
         - name: joinly
-          image: ghcr.io/joinly-ai/joinly:v0.5.4   # a release, not :latest; the tag DEPLOY.md's `docker run` uses
+          image: ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0   # a release, not :latest; the tag DEPLOY.md's `docker run` uses
           env:
             - name: JOINLY_SERVER_HOST
               value: 127.0.0.1                     # the pod's localhost only; the image's own default is 0.0.0.0

@@ -123,9 +123,9 @@ def test_update_pins() -> None:
     assert rel.update_pins(image, "0.5.0") == image.replace(":0.4.0", ":0.5.0")
     for other in (
         "ghcr.io/amahpour/switchboard:latest",
-        "ghcr.io/other/switchboard:0.4.0",
+        "ghcr.io/x/switchboard:0.4.0@sha256:abababababababababababababababababababababababababababababababab",
         "ghcr.io/amahpour/switchboard:0.4.0-rc1",
-        "python:3.13-slim",
+        "python:3.13-slim-trixie@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
     ):
         assert rel.update_pins(other, "0.5.0") == other  # not a release pin of this image
 

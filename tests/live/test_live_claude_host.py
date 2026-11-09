@@ -23,8 +23,8 @@ exact Bash command the model ran, taken from its transcript, and the key file th
 recorded payloads are ``tests/fixtures/payloads/claude/PostToolUse_bash_plugin_env.json`` (a Bash
 command's variables) and ``PostToolUse_bash_plugin_skill.json`` (a skill's text, filled in).
 
-It needs ``claude`` logged in, ``tmux``, Docker with Compose, the joinly image
-(``ghcr.io/joinly-ai/joinly:v0.5.4``, never pulled by the test), a headless Chromium for the consent card,
+It needs ``claude`` logged in, ``tmux``, Docker with Compose, the joinly image pinned in
+``plugins/claude/meeting/compose.yaml`` (never pulled by the test), a headless Chromium for the consent card,
 and switchboard's own image, which it builds from the checkout (or ``SWITCHBOARD_LIVE_RELAY_IMAGE`` names
 one). The two joinly fixes the script wants are fetched from their pinned addresses and checked by sha256
 unless ``SWITCHBOARD_LIVE_FIXES_DIR`` names a folder that already has the two pinned files (the test

@@ -23,7 +23,7 @@ switchboard {{ include "switchboard.imageTag" . }} is starting at {{ include "sw
    and the broker allows {{ .Values.meetings.maxCalls }} call{{ if ne (int .Values.meetings.maxCalls) 1 }}s{{ end }} at once (meetings.maxCalls). joinly's memory is
    {{ include "switchboard.joinlyMemoryMi" . }}Mi requested, {{ add (include "switchboard.joinlyMemoryMi" . | int) 512 }}Mi at most.
 {{- if .Values.meetings.gpu.enabled }}
-   joinly runs on one GPU ({{ .Values.meetings.image.repository }}:{{ include "switchboard.joinlyTag" . }}): the pod stays Pending until a node offers nvidia.com/gpu (the NVIDIA device plugin) and fits the pod's nodeSelector and tolerations. The image is about 6 GB.
+   joinly runs on one GPU ({{ .Values.meetings.image.repository }}:{{ include "switchboard.joinlyTag" . }}@{{ include "switchboard.joinlyDigest" . }}): the pod stays Pending until a node offers nvidia.com/gpu (the NVIDIA device plugin) and fits the pod's nodeSelector and tolerations. The image is about 6 GB.
 {{- end }}
 {{- if .Values.meetings.sttModel }}
    It transcribes with {{ .Values.meetings.sttModel }}, which it downloads on the first call (docs/DEPLOY.md, "Meetings with Helm"): the first call waits for it, and a new pod downloads it again.

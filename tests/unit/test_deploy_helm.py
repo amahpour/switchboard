@@ -110,7 +110,7 @@ def test_the_values_say_what_the_manifests_say() -> None:
         c for c in _patch("joinly.yaml")["spec"]["template"]["spec"]["containers"] if c["name"] == "joinly"
     ]
     pinned = values["meetings"]["image"]
-    assert f"{pinned['repository']}:{pinned['tag']}" == joinly["image"]
+    assert f"{pinned['repository']}:{pinned['tag']}@{pinned['digest']}" == joinly["image"]
     assert values["meetings"]["enabled"] is False, "the broker alone is the default"
     assert "replicas" not in values, "one broker on one volume: there is nothing to scale (issue #35)"
 
@@ -423,8 +423,10 @@ def test_the_gpu_variant_asks_for_the_cuda_image_and_one_gpu(render: Callable[..
     cpu = render(*SET_BASE, "meetings.enabled=true", "meetings.maxCalls=2")
     gpu = render(*SET_BASE, "meetings.enabled=true", "meetings.maxCalls=2", "meetings.gpu.enabled=true")
     assert gpu.returncode == 0, gpu.stderr
-    assert cpu.container("joinly")["image"] == f"{values['repository']}:{values['tag']}"
-    assert gpu.container("joinly")["image"] == f"{values['repository']}:{values['tag']}-cuda"
+    assert cpu.container("joinly")["image"] == (f"{values['repository']}:{values['tag']}@{values['digest']}")
+    assert gpu.container("joinly")["image"] == (
+        f"{values['repository']}:{values['tag']}-cuda@{values['cudaDigest']}"
+    )
     limits = gpu.container("joinly")["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == 1
     assert "nvidia.com/gpu" not in gpu.container("joinly")["resources"]["requests"]
@@ -470,19 +472,27 @@ def test_gpu_node_selector_and_tolerations_reach_the_pod_only_with_the_gpu_on(
 
 @needs_helm
 def test_the_cuda_tag_is_not_added_twice_and_the_gpu_needs_the_bot(render: Callable[..., Rendered]) -> None:
-    """``meetings.image.tag`` follows joinly's releases, and the GPU image is that tag with ``-cuda``, so a
-    newer release is one value. A tag that already says ``-cuda`` is left alone, GPU on or off. Without the
-    bot the GPU value renders nothing. Fails if a tag becomes ``v0.5.4-cuda-cuda``."""
+    """``meetings.image.tag`` follows joinly's releases, and the GPU image is that tag with ``-cuda``.
+    The digest does not follow the tag: ``digest`` is the CPU index and ``cudaDigest`` is the CUDA
+    image's own index, so a new release is those three values together. A tag that already says
+    ``-cuda`` is left alone, GPU on or off, and then the CUDA digest is the one appended. Without the
+    bot the GPU value renders nothing. Fails if a tag becomes ``v0.5.4-cuda-cuda`` or the digest is dropped.
+    """
+    pinned = _yaml(CHART / "values.yaml")["meetings"]["image"]
     named = render(*SET_BASE, "meetings.enabled=true", "meetings.image.tag=v0.5.4-cuda")
-    assert named.container("joinly")["image"].endswith(":v0.5.4-cuda")
+    assert named.container("joinly")["image"] == (
+        f"{pinned['repository']}:v0.5.4-cuda@{pinned['cudaDigest']}"
+    )
     both = render(
         *SET_BASE, "meetings.enabled=true", "meetings.image.tag=v0.5.4-cuda", "meetings.gpu.enabled=true"
     )
-    assert both.container("joinly")["image"].endswith(":v0.5.4-cuda")
+    assert both.container("joinly")["image"] == (f"{pinned['repository']}:v0.5.4-cuda@{pinned['cudaDigest']}")
     later = render(
         *SET_BASE, "meetings.enabled=true", "meetings.image.tag=v0.6.0", "meetings.gpu.enabled=true"
     )
-    assert later.container("joinly")["image"].endswith(":v0.6.0-cuda")
+    assert later.container("joinly")["image"] == (
+        f"{pinned['repository']}:v0.6.0-cuda@{pinned['cudaDigest']}"
+    )
     off = render(*SET_BASE, "meetings.gpu.enabled=true")
     assert off.returncode == 0, off.stderr
     assert "joinly" not in json.dumps(off.docs) and "nvidia.com/gpu" not in json.dumps(off.docs)
@@ -668,18 +678,22 @@ def test_persistence_image_and_name_values_reach_the_pod(render: Callable[..., R
     """The volume's size and class, the image and its tag, and the admin's name reach the StatefulSet; the
     class is left out when empty (the cluster's default) and the admin's name is not set when empty (so
     Settings can rename). Fails if a value is read from the wrong place or an empty one is rendered."""
+    mirror, tag = "registry.example.com/sb", "1.2.3"
     chart = render(
         f"publicUrl={PUBLIC_URL}",
         "persistence.size=50Gi",
         "persistence.storageClass=gp3",
-        "image.repository=registry.example.com/sb",
-        "image.tag=1.2.3",
+        "image.repository=" + mirror,
+        "image.tag=" + tag,
         "image.pullPolicy=Always",
     )
     claim = chart.docs["StatefulSet"]["spec"]["volumeClaimTemplates"][0]["spec"]
     assert claim["resources"]["requests"]["storage"] == "50Gi" and claim["storageClassName"] == "gp3"
     broker = chart.container("switchboard")
-    assert broker["image"] == "registry.example.com/sb:1.2.3" and broker["imagePullPolicy"] == "Always"
+    # The broker's own image stays tag-only, including a mirror: the release pins the tag before the
+    # image exists, so the chart does not append a digest.
+    assert broker["image"] == f"{mirror}:{tag}" and "@sha256:" not in broker["image"]
+    assert broker["imagePullPolicy"] == "Always"
     default = render(f"publicUrl={PUBLIC_URL}")
     assert "storageClassName" not in default.docs["StatefulSet"]["spec"]["volumeClaimTemplates"][0]["spec"]
     assert [e["name"] for e in default.container("switchboard")["env"]] == ["SWITCHBOARD_PUBLIC_URL"]
