@@ -1,9 +1,10 @@
 """The meeting self-test's pure parts, without a call (DESIGN.md §12.4, §52).
 
 ``tests/live/test_meeting_selftest.py`` joins a real call with two joinly bots and runs only on request.
-What decides whether a step passed, what keeps the call's link out of every output, and what the report
-holds is in ``tests/live/harness/selftest.py`` and is checked here on every run. Each test names the mistake
-that would make it fail.
+What decides whether a step passed, what keeps the call's link out of every output, when a failed step
+keeps the containers' logs, and what the report holds is in ``tests/live/harness/selftest.py`` and is
+checked here on every run. Each test names the mistake that would make it fail. No call, no joinly, no
+Docker.
 """
 
 from __future__ import annotations
@@ -135,6 +136,44 @@ def test_scrub_removes_the_link_its_pieces_and_any_address() -> None:
     assert clean.count(selftest.REDACTED) >= 3
     assert selftest.scrub("The purple elephant, 1 of 5.", secrets) == "The purple elephant, 1 of 5."
     assert selftest.scrub("pwd=something else", []) == f"{selftest.REDACTED} else"
+
+
+def test_a_failed_step_keeps_the_logs_and_a_pass_does_not() -> None:
+    """The run that failed is the one whose logs are worth reading (#642). ``SWITCHBOARD_SELFTEST_LOGS=1``
+    still keeps them on a pass. Fails if a green run keeps logs, or a failed step (including one that
+    was not attempted, once the missing steps are filled in) does not."""
+    ok = [selftest.StepResult(1, "the bar goes live", True, "live", "state=live", 1.0)]
+    failed = [selftest.StepResult(2, "the speaker joins", False, "a line", "the speaker could not join", 1.0)]
+    assert selftest.keep_container_logs(ok, requested=False) is False
+    assert selftest.keep_container_logs(ok, requested=True) is True
+    assert selftest.keep_container_logs(failed, requested=False) is True
+    specs = {1: ("the bar goes live", "live"), 2: ("the speaker joins", "a line")}
+    stopped = list(ok)
+    selftest.fill_unattempted(stopped, specs)
+    assert selftest.keep_container_logs(stopped, requested=False) is True
+    assert any(not step.attempted for step in stopped)
+    assert selftest.keep_container_logs([], requested=False) is False
+
+
+def test_a_kept_log_has_no_link_and_the_report_names_it(tmp_path: Path) -> None:
+    """Joinly's log can quote the link. The file that is kept must not, and the report names that file.
+    Fails if the link, its passcode, the meeting id or another address is in the file, or the report
+    does not say the file's name (#642)."""
+    secrets = selftest.secret_parts(LINK)
+    raw = f"joining {LINK}\nparticipant alice\npwd={PASSCODE}\nsee https://x.example/y id {ID}\n"
+    path = selftest.write_container_log(tmp_path, "joinly-speaker.log", raw, secrets)
+    text = path.read_text(encoding="utf-8")
+    assert LINK not in text and PASSCODE not in text and ID not in text
+    assert "zoom.us" not in text and "x.example" not in text
+    assert "participant alice" in text
+    assert oct(path.stat().st_mode & 0o777) == oct(0o600)
+    failed = [selftest.StepResult(2, "the speaker joins", False, "a line", "the speaker could not join", 1.0)]
+    _, md = selftest.write_report(
+        tmp_path, failed, secrets, {"container_logs": "joinly-switchboard.log, joinly-speaker.log"}
+    )
+    report = md.read_text(encoding="utf-8")
+    assert "joinly-switchboard.log" in report and "joinly-speaker.log" in report
+    assert LINK not in report and PASSCODE not in report and ID not in report
 
 
 def test_leaks_names_the_blob_and_never_what_it_found() -> None:
