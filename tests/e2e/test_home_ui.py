@@ -330,3 +330,20 @@ def test_not_now_hides_a_board_card_and_it_comes_back_when_the_board_changes(
     back = open_home(ui, w)
     expect(back.locator("#home .home-card", has_text=title)).to_have_count(1)
     expect(back.locator("#home .home-card", has_text=title)).to_contain_text("2 items to call")
+
+
+def test_a_board_card_with_not_now_fits_a_phone(ui: UI, hosted: tuple[InProcBroker, str]) -> None:
+    """#663: the board card has three buttons (Decide, Not now, Go); on a 390 px phone they wrap under the card's
+    words, each at least 44 px tall, and nothing is cut off or scrolls sideways. Fails if the third button
+    sticks out past the card's edge."""
+    w = World(hosted, "narrowboard")
+    w.plant_board(w.build)
+    w.agent_says(w.uploads, "builder", "poke", f"k-{w.uploads}-p")
+    page = open_home(ui, w, **PHONE)
+    card = page.locator("#home .home-card", has_text="review board in " + w.build)
+    expect(card).to_have_count(1)
+    no_sideways_scroll(page)
+    right = card.evaluate("c => c.getBoundingClientRect().right")
+    for b in card.locator("button").all():
+        box = b.bounding_box()
+        assert box is not None and box["x"] + box["width"] <= right + 0.5 and box["height"] >= 44
