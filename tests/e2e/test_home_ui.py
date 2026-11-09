@@ -19,6 +19,7 @@ from conftest import InProcBroker, make_tmp_home, sanitize_env
 from fakes.fake_agent import FakeAgent
 from playwright.sync_api import Browser, Page, expect
 from test_web_ui import PHASE_REPORTS, PHONE, UI
+from ui_world import wait_js
 
 from switchboard.broker.auth import WebOrigin
 from switchboard.models import session_key
@@ -200,10 +201,11 @@ def test_home_is_the_first_screen_and_a_question_is_answered_from_its_card(
     expect(page.locator("#home textarea")).to_have_value("Remove it.")
     page.keyboard.press("Control+Enter")
     expect(page.locator("#home .home-card", has_text=w.build)).to_have_count(0)
-    page.wait_for_function(
+    wait_js(
+        page,
         "n => { const b = document.getElementById('home-badge');"
         " return b.classList.contains('hidden') || Number(b.textContent) < n }",
-        arg=before,
+        before,
     )
     sent = [m for m in w.messages(w.build) if m["text"] == "Remove it."]
     assert len(sent) == 1 and sent[0]["reply_to"] == ask

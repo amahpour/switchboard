@@ -3404,6 +3404,6 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   .home-act, .home-go { min-height: 44px; padding: 0 16px; }
   .home-opt { min-height: 44px; }
   .home-rowbtn { min-height: 56px; }
-  .home-input { font-size: 16px; }
+  .home-input { font-size: max(16px, calc(14px * var(--text-scale))); }  /* 16px: no zoom on focus in iOS */
   .home-seen { min-height: 36px; }
 }
