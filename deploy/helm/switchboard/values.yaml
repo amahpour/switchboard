@@ -52,10 +52,11 @@ ingress:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "960"
     nginx.ingress.kubernetes.io/proxy-body-size: "26m"
 
-# The broker's own. A starting point; the joinly container's are worked out from meetings.maxCalls.
+# The broker container's own limit, not the pod's. See docs/DEPLOY.md#sizing for measured
+# connection costs and headroom. The joinly container's are worked out from meetings.maxCalls.
 resources:
   requests: {cpu: 100m, memory: 192Mi}
-  limits: {memory: 512Mi}
+  limits: {memory: 1Gi}
 
 # Following live calls (DESIGN.md §52): joinly, the meeting bot, as a second container in the broker's
 # pod. Off by default, so the pod is the broker alone.

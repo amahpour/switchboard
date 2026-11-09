@@ -88,6 +88,17 @@ def test_the_chart_installs_the_release_it_is_part_of() -> None:
     assert "latest" not in json.dumps(values), "a release, never :latest"
 
 
+def test_broker_memory_limit_leaves_room_for_connected_agents() -> None:
+    """Both deployment paths give the broker 1Gi; scheduling requests stay unchanged (#690).
+
+    Comparing the chart and manifest alone misses accidentally reverting both to 512Mi.
+    """
+    resources = {"requests": {"cpu": "100m", "memory": "192Mi"}, "limits": {"memory": "1Gi"}}
+    assert _yaml(CHART / "values.yaml")["resources"] == resources
+    containers = _manifest()["StatefulSet"]["spec"]["template"]["spec"]["containers"]
+    assert next(c for c in containers if c["name"] == "switchboard")["resources"] == resources
+
+
 def test_the_values_say_what_the_manifests_say() -> None:
     """The chart's defaults are the manifests' numbers and strings: the Ingress's timeout and body-size
     annotations (what keeps an agent's 15-minute wait open, #384), the broker's resources, the 20 GiB claim,

@@ -2020,6 +2020,15 @@ One value, `WebOrigin` (scheme and host), replaces every hard-coded `switchboard
 - **Stopping:** uvicorn handles SIGTERM with a graceful shutdown, then raises the signal again for the handler it replaced. `run_foreground` installs a no-op handler there, so the broker's own cleanup runs (the pidfile, the lock) and the exit status is 0. `docker stop` takes well under a second.
 - **Publishing:** test.yml's `image` job builds the image for linux/amd64 on every PR that runs the tests, and runs `tests/image` against it. After a release, release.yml's `publish-image` calls `.github/workflows/image.yml`. It builds the release's tag for linux/amd64 and linux/arm64 (QEMU), and pushes `ghcr.io/amahpour/switchboard:<version>` with a provenance attestation (`mode=max`) and an SBOM. It also pushes `:latest` when the version is the newest tag, so rebuilding an old release never moves `latest` back. `release.py` moves the image pins in the deployment examples and docs/DEPLOY.md together with the install pins.
 
+The broker's Kubernetes and Helm memory limit is `1Gi` (#690), with the scheduling
+requests unchanged at `192Mi` and `100m` CPU. This limit belongs to the broker
+container; joinly is sized separately. [DEPLOY.md, Sizing](DEPLOY.md#sizing) records
+measurements and their limits. `scripts/bench_broker.py` runs fresh test-mode
+brokers and FakeAgent clients in temporary homes, with delivery throttles off,
+and measures HTTP/MCP calls and the broker's RSS/CPU while agents hold waits.
+`tests/integration/test_bench_broker.py` exercises every phase with two agents;
+the chart tests pin both deployment defaults to `1Gi`.
+
 ### 30.6 Tests
 - **Unit** (`test_web_origin.py`): `WebOrigin.parse`, with good URLs and every kind of bad one; `web_settings` and its refusals, which happen before the home exists; the config keys; the flags and their variables; a port range; `start` passing the settings to its child and printing the reported URL; `tcp_listener`. Also, in `test_proc.py`, Linux tty names and a real session leader in a pty (named as `ps` names it, where there is a `ps`).
 - **Integration** (`test_public_url.py`), a broker behind `https://sb.example.com`, reached as the proxy reaches it: Host (421 for everything else, the local name included), the sign-in link and the Secure cookie (with its refresh and its deletion), writes that need the public Origin, the CSP, the WebSocket's Host, Origin and cookie, `status` and `ping`, and `/healthz` in both modes with every near miss. There are also real broker processes, one with `--public-url --log-stdout` and one without, each stopped by SIGTERM with exit status 0.
