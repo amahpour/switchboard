@@ -48,6 +48,12 @@
     // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {},
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
+    home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
+    homeData: null,    // the last GET /api/home
+    homeSeq: 0,        // only the newest answer is applied
+    homeTimer: null,
+    homeSkew: 0,       // the broker's clock minus this page's, so "12 min" is the broker's
+    homeForms: new Map(),  // card key -> { open, text, ... }: what a person has half done survives a refresh
     pinsOpen: false,   // the header's pinned list is open (#292)
     claimsOpen: false, // the header's claim board is open (#545)
     closed: 0,         // how many closed rooms there are (GET /api/rooms), for the Closed row
@@ -477,6 +483,9 @@
     // for them. The name is always written beside the tile, and an admin can upload another image (§29.11).
     call: 'M3 6.2v3.6M6 4.2v7.6M10 4.2v7.6M13 6.2v3.6',
     plus: 'M8 3v10M3 8h10',
+    // the Home page (#626): a house; and a board's three columns, for a review-board card
+    home: 'M2.5 7.5 8 3l5.5 4.5M4 6.7V13h8V6.7M6.7 13V9.5h2.6V13',
+    board: rr(2, 2.5, 12, 11, 1.5) + 'M6 2.5v11M10 2.5v11',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
     laptop: rr(3, 3.5, 10, 7, 1.2) + 'M1.5 12.5h13',
@@ -1414,10 +1423,17 @@
   function updateTitle() {
     let unread = 0;
     state.rooms.forEach(function (r) { if (r.name !== state.active) unread += r.unread; });
-    const base = state.active ? 'switchboard — ' + state.active : 'switchboard';
+    const base = state.home ? 'switchboard — Home' : state.active ? 'switchboard — ' + state.active : 'switchboard';
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
     const heading = $('room-title');
+    if (state.home) {
+      heading.textContent = 'Home';
+      $('room-sub').textContent = '';
+      const homeGlyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
+      if (homeGlyph) homeGlyph.setAttribute('d', ICONS.home);
+      return;
+    }
     if (r && roomTitleButton) {
       roomTitleButton.textContent = r.name.replace(/^#/, '');
       if (roomTitleButton.parentNode !== heading) heading.replaceChildren(roomTitleButton);
@@ -1923,6 +1939,7 @@
 
   function selectRoom(name) {
     if (!state.rooms.has(name)) return;
+    if (state.home) leaveHome();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
     if (state.active !== name) {
@@ -3304,6 +3321,8 @@
   function onFrame(f) {
     const r = f.room ? state.rooms.get(f.room) : null;
     const ins = state.inspect;
+    // anything that can change what waits, got done or is live: the home page asks again (#626)
+    if (f.t === 'msg' || f.t === 'room' || f.t === 'members' || f.t === 'review' || f.t === 'rooms') scheduleHome();
     if (f.t === 'msg' && f.msg) {
       if (!r) return;
       appendMsg(r, f.msg);
@@ -6603,6 +6622,568 @@
     }
   }
 
+  // ------------------------------------------------------------ home (#626, DESIGN.md §55)
+  // The first screen: what waits on this person across their rooms, what got done since they
+  // last looked, what is live, then the rooms. The broker answers GET /api/home (a read of what
+  // it stores, for this person); this draws it. A card answers through the routes a room has
+  // (say, the review board's person moves), so the room shows the same result. Nothing here
+  // approves anything for an agent, and nothing is kept in the page except a half-typed reply.
+  const HOME_REFRESH_MS = 750;       // after a frame, while Home is shown (the node harness holds this delay and the next one)
+  const HOME_BADGE_MS = 3100;        // after a frame, while a room is shown: only the Home count
+  const HOME_AGE_MS = 30000;         // "12 min" is redrawn this often
+  let homeRefs = null;               // { root, status, ages: [[node, ts, suffix]], seen }
+  let homeSig = '';
+  let homeAgeTimer = null;
+
+  function homeNow() { return Date.now() / 1000 + state.homeSkew; }
+
+  // how long ago, in the short words the mockups use: "now", "12 min", "3 h", "2 d"
+  function waited(ts) {
+    const s = Math.max(0, homeNow() - ts);
+    if (s < 45) return 'just now';
+    if (s < 5400) return Math.max(1, Math.round(s / 60)) + ' min';
+    if (s < 129600) return Math.round(s / 3600) + ' h';
+    return Math.round(s / 86400) + ' d';
+  }
+
+  function homeAge(ts, suffix) {
+    const t = el('span', 'hc-age', waited(ts) + (suffix && homeNow() - ts >= 45 ? suffix : ''));
+    if (homeRefs) homeRefs.ages.push([t, ts, suffix || '']);
+    return t;
+  }
+
+  function homeForm(key) {
+    let f = state.homeForms.get(key);
+    if (!f) {
+      f = { open: false, text: '', focus: false, error: '' };
+      state.homeForms.set(key, f);
+    }
+    return f;
+  }
+
+  function showHome() {
+    if (!state.rooms.size) return;
+    const was = state.home;
+    if (state.inspect) closeInspector(false);
+    closePop();
+    state.home = true;
+    state.active = null;
+    state.boardOpen = false;
+    state.boardSel = null;
+    $('app').classList.add('home-open');
+    $('app').classList.remove('sheet-open');
+    $('home').classList.remove('hidden');
+    if (location.hash) history.replaceState(null, '', location.pathname);
+    renderTabs();
+    renderLog();
+    renderBuddies();
+    renderStatus();
+    renderBoard();
+    updateTitle();
+    $('home-nav').setAttribute('aria-current', 'page');
+    renderHome();
+    if (!was) loadHome();
+    clearInterval(homeAgeTimer);
+    homeAgeTimer = setInterval(tickHomeAges, HOME_AGE_MS);
+  }
+
+  // Called by selectRoom: what was on Home has been looked at, so "since you last looked" moves
+  // forward to what this page last showed. The next open starts after it.
+  function leaveHome() {
+    state.home = false;
+    clearInterval(homeAgeTimer);
+    homeAgeTimer = null;
+    $('app').classList.remove('home-open');
+    $('home').classList.add('hidden');
+    unsetAttr($('home-nav'), 'aria-current');
+    const d = state.homeData;
+    if (d && d.done && d.done.length) {
+      api('POST', '/api/home/seen', { at: d.now }).catch(function () {});
+      d.done = [];
+    }
+  }
+
+  function scheduleHome() {
+    if (!state.me || state.homeTimer) return;
+    state.homeTimer = setTimeout(function () {
+      state.homeTimer = null;
+      loadHome();
+    }, state.home ? HOME_REFRESH_MS : HOME_BADGE_MS);
+  }
+
+  async function loadHome() {
+    const seq = ++state.homeSeq;
+    let data;
+    try {
+      data = await api('GET', '/api/home');
+    } catch (e) {
+      if (state.home && !state.homeData) renderHome(e);
+      return;
+    }
+    if (seq !== state.homeSeq) return;
+    state.homeData = data;
+    state.homeSkew = typeof data.now === 'number' ? data.now - Date.now() / 1000 : 0;
+    renderHomeNav();
+    if (state.home) renderHome();
+  }
+
+  // the sidebar's Home row: its count is what waits on this person, as the page last heard
+  function renderHomeNav() {
+    const d = state.homeData;
+    const n = d && d.waiting ? d.waiting.length : 0;
+    const b = $('home-badge');
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.classList.toggle('hidden', n === 0);
+    $('home-nav').setAttribute('aria-label', n ? 'Home, ' + plural(n, 'thing waiting on you', 'things waiting on you') : 'Home');
+  }
+
+  function tickHomeAges() {
+    if (!homeRefs) return;
+    for (const a of homeRefs.ages) a[0].textContent = waited(a[1]) + (a[1] && homeNow() - a[1] < 45 ? '' : a[2]);
+  }
+
+  function homeSay(text) {
+    if (homeRefs && homeRefs.status) homeRefs.status.textContent = text;
+  }
+
+  // a harness's avatar for a card; a person's initial; a call's platform logo
+  function homeAvatar(c) {
+    if (c.kind === 'call') return callAvatar(c.platform, 'home-av', c.state === 'live');
+    if (c.kind === 'board') {
+      const a = el('span', 'avatar sys home-av');
+      a.append(icon('board'));
+      a.setAttribute('aria-hidden', 'true');
+      return a;
+    }
+    return avatar(c.from_kind === 'human' ? null : c.harness, c.from_kind === 'human' ? 'human' : 'agent',
+      c.from || c.agent || c.who, 'home-av');
+  }
+
+  function homeGo(label, run) {
+    const b = btn('btn home-go', null);
+    b.append(icon('chev-right'), el('span', null, 'Go'));
+    b.setAttribute('aria-label', label);
+    b.addEventListener('click', run);
+    return b;
+  }
+
+  function goToRoom(name, after) {
+    if (!state.rooms.has(name)) return;
+    selectRoom(name);
+    if (after) after();
+  }
+
+  function homeSection(refs, id, title, count, danger) {
+    const sec = el('section', 'home-sec');
+    sec.setAttribute('aria-labelledby', 'home-h-' + id);
+    const h = el('h2', 'home-h');
+    h.id = 'home-h-' + id;
+    h.append(el('span', null, title));
+    if (count !== null && count !== undefined) {
+      h.append(el('span', danger ? 'badge danger' : 'home-count', danger ? String(count) : '· ' + count));
+    }
+    sec.append(h);
+    return sec;
+  }
+
+  function homeEmpty(text) { return el('p', 'home-none', text); }
+
+  // ---- Waiting on you
+  function questionCard(c) {
+    const key = 'q:' + c.room;
+    const f = homeForm(key);
+    const li = el('li', 'home-card waiting');
+    const row = el('div', 'hc-row');
+    const asks = /\?\s*$/.test(c.text) ? 'asked you a question' : (c.from_kind === 'human' ? 'mentioned you' : 'wrote to you');
+    const body = el('div', 'hc-body');
+    const t = el('div', 'hc-title');
+    t.append(el('b', null, c.from), ' ' + asks + ' in ' + c.room);
+    body.append(t, el('div', 'hc-sub', c.text + (c.more ? ' (and ' + plural(c.more, 'more', 'more') + ' in this room)' : '')));
+    const side = el('div', 'hc-side');
+    const reply = btn('btn home-act', f.open ? 'Cancel' : 'Reply');
+    reply.setAttribute('aria-expanded', String(f.open));
+    reply.setAttribute('aria-label', (f.open ? 'Cancel the reply to ' : 'Reply to ') + c.from + ' in ' + c.room);
+    reply.dataset.focus = 'reply-' + key;
+    reply.addEventListener('click', function () {
+      f.open = !f.open;
+      f.focus = f.open;
+      f.error = '';
+      renderHome(null, true, reply.dataset.focus);
+    });
+    side.append(homeAge(c.ts), reply, homeGo('Open ' + c.room + ' at this message', function () {
+      goToRoom(c.room, function () { jumpTo(c.id); });
+    }));
+    row.append(homeAvatar(c), body, side);
+    li.append(row);
+    if (f.open) li.append(replyForm(c, key, f, reply));
+    return li;
+  }
+
+  function replyForm(c, key, f, opener) {
+    const form = el('form', 'home-form');
+    const lab = el('label', 'sr-only', 'Reply to ' + c.from + ' in ' + c.room);
+    const ta = el('textarea', 'home-input');
+    ta.id = 'home-reply-' + c.room.replace(/[^a-z0-9]/gi, '-');
+    lab.setAttribute('for', ta.id);
+    ta.rows = 2;
+    ta.maxLength = 4000;
+    ta.value = f.text;
+    ta.placeholder = 'Reply in ' + c.room;
+    ta.dataset.focus = 'text-' + key;
+    const send = btn('btn-primary home-send', 'Send');
+    send.type = 'submit';
+    const err = el('p', 'home-err', f.error);
+    err.setAttribute('role', 'alert');
+    ta.addEventListener('input', function () { f.text = ta.value; });
+    ta.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') {
+        ev.stopPropagation();
+        f.open = false;
+        renderHome(null, true, opener.dataset.focus);
+      } else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) {
+        ev.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    form.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      const text = ta.value.trim();
+      if (!text) return;
+      send.disabled = true;
+      try {
+        await api('POST', '/api/rooms/' + encodeURIComponent(c.room.replace(/^#/, '')) + '/say',
+          { text: text, reply_to: c.id });
+        state.homeForms.delete(key);
+        homeSay('Sent to ' + c.room + '.');
+        await loadHome();
+        focusAfterAnswer();
+      } catch (e) {
+        f.error = String(e.message || e);
+        send.disabled = false;
+        err.textContent = f.error;
+      }
+    });
+    const bar = el('div', 'home-form-bar');
+    bar.append(send, el('span', 'hint', 'Ctrl+Enter sends. Esc closes.'));
+    form.append(lab, ta, bar, err);
+    if (f.focus) {
+      // focused as soon as the page is drawn, not a tick later: a person types straight after Enter
+      f.focus = false;
+      if (homeRefs) homeRefs.focusNow = ta;
+    }
+    return form;
+  }
+
+  // After a card is answered it is gone: focus goes to the first thing still waiting, or the heading
+  function focusAfterAnswer() {
+    if (!homeRefs) return;
+    const next = homeRefs.firstAction;
+    if (next && typeof next.focus === 'function') next.focus();
+    else if (homeRefs.root) homeRefs.root.focus();
+  }
+
+  function boardCard(c) {
+    const key = 'b:' + c.room + ':' + c.url;
+    const f = homeForm(key);
+    const li = el('li', 'home-card waiting');
+    const row = el('div', 'hc-row');
+    const body = el('div', 'hc-body');
+    const t = el('div', 'hc-title');
+    t.append(el('b', null, plural(c.need, 'item', 'items')), ' to call on the review board in ' + c.room);
+    body.append(t, el('div', 'hc-sub', c.items[0].label + ': ' + c.items[0].title));
+    const side = el('div', 'hc-side');
+    const open = btn('btn home-act', f.open ? 'Close' : 'Decide');
+    open.setAttribute('aria-expanded', String(f.open));
+    open.setAttribute('aria-label', (f.open ? 'Close the calls on ' : 'Decide on ') + c.room + "'s review board");
+    open.dataset.focus = 'decide-' + key;
+    open.addEventListener('click', function () {
+      f.open = !f.open;
+      renderHome(null, true, open.dataset.focus);
+    });
+    side.append(homeAge(c.ts), open, homeGo('Open the review board in ' + c.room, function () {
+      goToRoom(c.room, function () {
+        const r = state.rooms.get(c.room);
+        if (r && r.board) { state.boardOpen = true; renderBoard(); }
+      });
+    }));
+    row.append(homeAvatar(c), body, side);
+    li.append(row);
+    if (f.open) {
+      const list = el('ul', 'home-items');
+      for (const it of c.items) list.append(boardItem(c, it, key));
+      li.append(list);
+    }
+    return li;
+  }
+
+  async function homeBoardMove(c, body) {
+    try {
+      await api('POST', '/api/rooms/' + encodeURIComponent(c.room.replace(/^#/, '')) + '/review',
+        Object.assign({ url: c.url }, body));
+      homeSay(body.item + ' ' + (body.action === 'answer' ? 'answered' : body.action + ' done') + ' in ' + c.room + '.');
+      await loadHome();
+      focusAfterAnswer();
+      return '';
+    } catch (e) {
+      return String(e.message || e);
+    }
+  }
+
+  function boardItem(c, it, key) {
+    const li = el('li', 'home-item');
+    const head = el('div', 'hi-head');
+    head.append(el('b', null, it.label), ' ' + it.title);
+    li.append(head);
+    const meta = it.kind === 'question' ? 'Asked by ' + it.raised_by
+      : it.state === 'contested' ? 'Raised by ' + it.raised_by + ', contested' + (it.insist_line ? '. ' + it.insist_line : '')
+        : 'Fixed by ' + (it.owner || 'an agent') + ', waiting for a check';
+    li.append(el('div', 'hi-meta', meta));
+    const err = el('p', 'home-err', '');
+    err.setAttribute('role', 'alert');
+    const run = async function (button, body) {
+      button.disabled = true;
+      const bad = await homeBoardMove(c, Object.assign({ item: it.label }, body));
+      if (bad) { err.textContent = bad; button.disabled = false; }
+    };
+    const bar = el('div', 'hi-bar');
+    if (it.moves.indexOf('answer') >= 0) {
+      it.options.forEach(function (o, i) {
+        const b = btn('btn home-opt', o + (it.recommend === i ? ' (recommended)' : ''));
+        b.addEventListener('click', function () { run(b, { action: 'answer', option: i }); });
+        bar.append(b);
+      });
+    }
+    if (it.moves.indexOf('confirm') >= 0) {
+      const b = btn('btn home-opt', 'Confirm the fix');
+      b.addEventListener('click', function () { run(b, { action: 'confirm' }); });
+      bar.append(b);
+    }
+    li.append(bar);
+    if (it.moves.indexOf('concede') >= 0) {
+      const f = homeForm(key + ':' + it.label);
+      const row = el('div', 'hi-bar');
+      const sel = el('select', 'home-select');
+      const id = 'home-own-' + key.replace(/[^a-z0-9]/gi, '-') + it.label;
+      sel.id = id;
+      const lab = el('label', 'sr-only', 'Owner of ' + it.label);
+      lab.setAttribute('for', id);
+      for (const a of c.agents) {
+        if (a === it.raised_by && c.agents.length > 1) continue;
+        const o = el('option', null, a);
+        o.value = a;
+        sel.append(o);
+      }
+      if (f.owner) sel.value = f.owner;
+      sel.addEventListener('change', function () { f.owner = sel.value; });
+      const b = btn('btn home-opt', 'Concede to');
+      b.addEventListener('click', function () { run(b, { action: 'concede', owner: sel.value }); });
+      row.append(b, lab, sel);
+      li.append(row);
+    }
+    if (it.moves.indexOf('drop') >= 0) {
+      const f = homeForm(key + ':' + it.label);
+      const row = el('div', 'hi-bar');
+      const id = 'home-why-' + key.replace(/[^a-z0-9]/gi, '-') + it.label;
+      const lab = el('label', 'sr-only', 'Why drop ' + it.label);
+      lab.setAttribute('for', id);
+      const inp = el('input', 'home-input line');
+      inp.id = id;
+      inp.type = 'text';
+      inp.maxLength = 300;
+      inp.placeholder = 'Why drop it?';
+      inp.value = f.reason || '';
+      inp.addEventListener('input', function () { f.reason = inp.value; });
+      const b = btn('btn home-opt', 'Drop');
+      b.addEventListener('click', function () {
+        if (!inp.value.trim()) { err.textContent = 'Say why: dropping needs a reason.'; return; }
+        run(b, { action: 'drop', reason: inp.value.trim() });
+      });
+      row.append(lab, inp, b);
+      li.append(row);
+    }
+    li.append(err);
+    return li;
+  }
+
+  // ---- Done since you last looked
+  const DONE_ICON = { turn: 'check', board: 'board', review: 'check', call: 'call' };
+
+  function doneRow(d) {
+    const li = el('li', 'home-row');
+    const b = btn('home-rowbtn', null);
+    const tile = el('span', 'hc-tile');
+    tile.append(icon(DONE_ICON[d.kind] || 'check'));
+    tile.setAttribute('aria-hidden', 'true');
+    const body = el('span', 'hc-body');
+    const t = el('span', 'hc-title');
+    if (d.kind === 'call') {
+      t.append('A call in ' + d.room + ' ended: ' + plural(d.lines, 'line', 'lines'));
+      if (d.woke.length) t.append(', woke ', el('b', null, d.woke.join(', ')));
+    } else if (d.kind === 'board') {
+      t.append(d.text);
+    } else if (d.kind === 'review') {
+      t.append(el('b', null, d.who), ' ' + d.text);
+    } else {
+      t.append(el('b', null, d.who), ' ' + d.text);
+    }
+    body.append(t, el('span', 'hc-sub', d.room));
+    b.append(tile, body, homeAge(d.ts, ' ago'), icon('chev-right'));
+    b.setAttribute('aria-label', (d.kind === 'call' ? 'A call in ' + d.room + ' ended' : (d.who ? d.who + ' ' : '') + d.text) + ', in ' + d.room);
+    b.addEventListener('click', function () {
+      goToRoom(d.room, function () { if (d.id) jumpTo(d.id); });
+    });
+    li.append(b);
+    return li;
+  }
+
+  // ---- Live now
+  function liveRow(x) {
+    const li = el('li', 'home-row live');
+    const row = el('div', 'hc-row');
+    const body = el('div', 'hc-body');
+    const t = el('div', 'hc-title');
+    const sub = [];
+    if (x.kind === 'call') {
+      t.append('A ' + (meetingLabel(x.platform) ? meetingLabel(x.platform) + ' ' : '') + 'call in ' + x.room);
+      sub.push(plural(x.agents, 'agent', 'agents') + ' in the room');
+      sub.push(x.state === 'live' ? 'live' : 'joining');
+      if (x.source === 'hosted') sub.push(x.started_by ? "on " + x.started_by + "'s machine" : 'on a person\'s machine');
+      else sub.push("by the server's bot");
+    } else {
+      t.append(el('b', null, x.agent), x.busy ? ' is working in ' + x.room : ' holds a claim in ' + x.room);
+      if (x.note) sub.push(x.note);
+      if (x.claim) {
+        const until = new Date(x.claim.expires_at * 1000);
+        sub.push('claim held until ' + pad2(until.getHours()) + ':' + pad2(until.getMinutes()) +
+          (x.claim.note && x.claim.note !== x.note ? ' (' + x.claim.note + ')' : ''));
+      }
+    }
+    body.append(t, el('div', 'hc-sub', sub.join(' · ')));
+    const side = el('div', 'hc-side');
+    side.append(homeGo('Open ' + x.room, function () { goToRoom(x.room); }));
+    row.append(homeAvatar(x), body, side);
+    li.append(row);
+    return li;
+  }
+
+  // ---- Rooms
+  function roomSummary(r) {
+    let last = null;
+    for (let i = r.msgs.length - 1; i >= 0; i--) {
+      if (r.msgs[i].kind === 'chat') { last = r.msgs[i]; break; }
+    }
+    return last;
+  }
+
+  function roomRow(r, last) {
+    const li = el('li', 'home-row');
+    const b = btn('home-rowbtn', null);
+    const tile = el('span', 'hc-tile');
+    tile.append(icon(r.private ? 'lock' : 'hash'));
+    tile.setAttribute('aria-hidden', 'true');
+    const body = el('span', 'hc-body');
+    body.append(el('span', 'hc-title room-t', r.name.replace(/^#/, '')),
+      el('span', 'hc-sub', last ? last.from + ': ' + firstLine(last.text, 140) : 'No messages yet'));
+    b.append(tile, body);
+    if (last) b.append(homeAge(last.ts));
+    if (r.unread > 0) {
+      const badge = el('span', 'badge danger', r.unread > 99 ? '99+' : r.unread);
+      badge.setAttribute('aria-label', plural(r.unread, 'message', 'messages') + ' for you');
+      b.append(badge);
+    } else if (r.quiet) {
+      const dot = el('span', 'dot quiet');
+      dot.setAttribute('aria-label', 'new activity');
+      b.append(dot);
+    }
+    b.setAttribute('aria-label', r.name + (r.unread ? ', ' + plural(r.unread, 'message', 'messages') + ' for you' : ''));
+    b.addEventListener('click', function () { selectRoom(r.name); });
+    li.append(b);
+    return li;
+  }
+
+  // Draw Home. `again`: a card opened or closed, so draw even if the data is the same. `focusKey`:
+  // the control (by data-focus) that has the keyboard, which is found again in the new drawing.
+  function renderHome(error, again, focusKey) {
+    const root = $('home');
+    const d = state.homeData;
+    const rooms = Array.from(state.rooms.values()).map(function (r) {
+      const last = roomSummary(r);
+      return { r: r, last: last, ts: last ? last.ts : 0 };
+    }).sort(function (a, b) { return b.ts - a.ts || (a.r.name < b.r.name ? -1 : 1); });
+    const sig = JSON.stringify([d && { w: d.waiting, d: d.done, l: d.live },
+      rooms.map(function (x) { return [x.r.name, x.r.unread, x.r.quiet, x.last && x.last.id]; }), !!error]);
+    if (!again && sig === homeSig && homeRefs) return;
+    homeSig = sig;
+    const focused = focusKey || (document.activeElement && document.activeElement.dataset
+      && root.contains && root.contains(document.activeElement) ? document.activeElement.dataset.focus : null);
+    const refs = { root: root, ages: [], status: null, firstAction: null };
+    homeRefs = refs;
+    const frag = document.createDocumentFragment();
+    const status = el('p', 'sr-only');
+    status.setAttribute('role', 'status');
+    refs.status = status;
+    frag.append(status);
+    if (!d) {
+      frag.append(homeEmpty(error ? 'Home could not be loaded: ' + String(error.message || error) : 'Loading…'));
+    } else {
+      const w = homeSection(refs, 'waiting', 'Waiting on you', d.waiting.length || null, true);
+      if (!d.waiting.length) w.append(homeEmpty('Nothing is waiting on you.'));
+      else {
+        const ul = el('ul', 'home-list cards');
+        for (const c of d.waiting) ul.append(c.kind === 'board' ? boardCard(c) : questionCard(c));
+        w.append(ul);
+        if (d.waiting_total > d.waiting.length) w.append(homeEmpty('And ' + (d.waiting_total - d.waiting.length) + ' more in your rooms.'));
+      }
+      frag.append(w);
+
+      const dn = homeSection(refs, 'done', 'Done since you last looked', d.done.length ? d.done.length : null, false);
+      if (d.done.length) {
+        const seen = btn('btn home-act home-seen', 'Mark as seen');
+        seen.addEventListener('click', async function () {
+          try {
+            await api('POST', '/api/home/seen', { at: d.now });
+            d.done = [];
+            homeSay('Marked as seen.');
+            renderHome(null, true, 'seen-done');
+          } catch (e) { homeSay('Could not mark as seen: ' + String(e.message || e)); }
+        });
+        seen.dataset.focus = 'seen-done';
+        dn.firstChild.append(seen);
+      }
+      if (!d.done.length) dn.append(homeEmpty('Nothing new since you last looked.'));
+      else {
+        const ul = el('ul', 'home-list rows');
+        for (const x of d.done) ul.append(doneRow(x));
+        dn.append(ul);
+      }
+      frag.append(dn);
+
+      const lv = homeSection(refs, 'live', 'Live now', d.live.length ? d.live.length : null, false);
+      if (!d.live.length) lv.append(homeEmpty('No calls and no agents at work right now.'));
+      else {
+        const ul = el('ul', 'home-list rows');
+        for (const x of d.live) ul.append(liveRow(x));
+        lv.append(ul);
+      }
+      frag.append(lv);
+    }
+    const rm = homeSection(refs, 'rooms', 'Rooms', rooms.length, false);
+    const ul = el('ul', 'home-list rows');
+    for (const x of rooms) ul.append(roomRow(x.r, x.last));
+    rm.append(ul);
+    frag.append(rm);
+    root.replaceChildren(frag);
+    // the first control that answers a card, for where the keyboard goes when one is gone
+    const first = root.querySelector ? root.querySelector('.home-card .home-act') : null;
+    refs.firstAction = first;
+    if (refs.focusNow) { refs.focusNow.focus(); return; }
+    if (focused && root.querySelectorAll) {
+      for (const n of root.querySelectorAll('[data-focus]')) {
+        if (n.dataset.focus === focused) { n.focus(); break; }
+      }
+    }
+  }
+
   async function openRoomRules() {
     const r = activeRoom();
     if (!r) return;
@@ -6984,9 +7565,11 @@
     renderClosedButton();
     const names = helloAll ? Array.from(state.rooms.keys()) : fresh;
     if (names.length) hello(names);
-    if (!state.active && state.rooms.size) {
+    if (!state.active && !state.home && state.rooms.size) {
+      // a link to a room (#build) opens that room; opening switchboard itself opens Home (#626)
       const want = '#' + decodeURIComponent(location.hash.replace(/^#/, ''));
-      selectRoom(state.rooms.has(want) ? want : Array.from(state.rooms.keys()).sort()[0]);
+      if (state.rooms.has(want)) selectRoom(want);
+      else showHome();
     } else {
       if (pruned) history.replaceState(null, '', location.pathname);  // nothing left to point at
       // redraw only a view that is out of date: local lines (a command's reply) stay
@@ -7009,6 +7592,11 @@
     $('claim-board-toggle').addEventListener('click', function () {
       state.claimsOpen = !state.claimsOpen;
       renderClaimBoard();
+    });
+    $('home-nav').addEventListener('click', function () {
+      setNav(false);
+      showHome();
+      $('home').focus();
     });
     keepLogPinned();
     try {

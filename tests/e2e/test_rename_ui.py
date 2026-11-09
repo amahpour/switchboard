@@ -200,6 +200,7 @@ def test_rename_yourself_in_settings_and_someone_from_people(ui: UI, hosted: InP
     expect(page.locator("#buddy-me .m-name")).to_have_text("Alice Liddell-Hart")
     expect(page.locator("#buddy-me .m-full")).to_have_text("@ali")
     page.keyboard.press("Escape")
+    page.locator('#tabs .room[data-room="#build"]').click()  # the page opens on Home (#626)
     expect(page.locator("#log")).to_contain_text("alice is now ali")
 
     # People: the admin renames bob on his card

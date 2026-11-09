@@ -200,7 +200,12 @@ def sign_in(page: Any, b: Any) -> None:
 def open_build(page: Any, n_chat: int) -> None:
     from playwright.sync_api import expect
 
-    page.evaluate("location.hash = 'build'")
+    # a page opened on the bare address shows Home (#626): choose the room, as a person does (on a phone the
+    # rooms are a drawer to open first)
+    tab = page.locator('#tabs .room[data-room="#build"]')
+    if not tab.is_visible():
+        page.click("#rooms-toggle")
+    tab.click()
     expect(page.locator("#room-title")).to_have_text("build", timeout=WAIT_MS)
     from ui_world import wait_js
 
@@ -3355,10 +3360,57 @@ def shoot_attachments_guide(browser: Any, out: Path, world: Any) -> None:
         page.context.close()
 
 
+def shoot_home(browser: Any, out: Path, world: Any) -> None:
+    """#626, the home page: two rooms of their own, a question to alice, a review board that needs her call,
+    some finished work and an agent at work. The desktop in the light theme is the guide's picture
+    (``guide-home-light``); the dark theme and the phone (390 wide) are the pull request's previews."""
+    from playwright.sync_api import expect
+
+    world.create_room("#uploads")
+    world.add_agents("#uploads", ("claude-1", "codex-1"))
+    world.seed_review("#uploads")
+    world.create_room("#ship")
+    world.add_agents("#ship", ("codex-1",))
+    world.agent_say("#ship", "codex-1", "@alice Keep the old upload endpoint, or remove it?")
+    world.agent_say("#uploads", "claude-1", "raised the upload limit (2 files changed)")
+    world.agent_status("#uploads", "claude-1", "Reviewing the upload fix")
+    world.set_member_status("#uploads", "claude-1", "busy")
+
+    def home(options: dict[str, Any], scheme: str) -> Any:
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme=scheme, **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        sign_in(page, world.broker)  # the bare address: Home, not a room
+        expect(page.locator("#room-title")).to_have_text("Home")
+        expect(page.locator("#home .home-card")).to_have_count(2)
+        expect(page.locator("#home .home-row.live")).not_to_have_count(0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        return page
+
+    page = home({"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5}, "light")
+    try:
+        shot(page, out, "guide-home-light.png")
+    finally:
+        page.context.close()
+    page = home({"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5}, "dark")
+    try:
+        shot(page, out, "home-dark.png")
+    finally:
+        page.context.close()
+    for scheme in ("light", "dark"):
+        page = home(PHONE, scheme)
+        try:
+            shot(page, out, f"home-phone-{scheme}.png")
+        finally:
+            page.context.close()
+
+
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names`` and ``admins`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
 ONLY: dict[str, Any] = {
+    "home": shoot_home,
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
     "quiet": shoot_quiet,
