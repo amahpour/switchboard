@@ -412,7 +412,7 @@ class AgentTokenRow:
 
 @dataclass(frozen=True)
 class ListenerKeyRow:
-    """A ``listener_keys`` row (DESIGN.md §49.11): the sha256 of a key that Claude Code's helper scripts
+    """A ``listener_keys`` row (DESIGN.md §49.11): the sha256 of a key that the plugin's helper scripts
     made on the machine and claimed over a signed-in connection, the agent token that claimed it, and
     the one session it is for (None until the first one is named)."""
 
@@ -422,6 +422,7 @@ class ListenerKeyRow:
     session_id: str | None
     created_at: float
     last_used_at: float
+    harness: str
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "ListenerKeyRow":

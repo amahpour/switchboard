@@ -266,6 +266,17 @@ def test_codex_runs_with_approvals_on_request_and_its_hooks_trusted_at_their_has
     )
 
 
+def test_codex_live_config_exercises_the_installed_local_header_helper() -> None:
+    """The real CLI must claim a process key, not just pass a synthetic header in broker tests (#637)."""
+    import shlex
+    import tomllib
+
+    configured = tomllib.loads(codex.config_toml("https://example.com", Path("/tmp/ws"), []))
+    assert configured["mcp_servers"]["switchboard"]["http_headers_helper"] == (
+        "sh " + shlex.quote(str(codex.plugin_dir() / "bin" / "headers"))
+    )
+
+
 def test_codex_composite_hook_hash_trusts_both_definition_and_content() -> None:
     """0.166.0 returns definition/content in currentHash. Writing that whole value as trusted_hash
     leaves every hook modified: the TUI stops at review before the first join (#635). Each half must

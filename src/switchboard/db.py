@@ -22,7 +22,7 @@ holds, the one-time grants that upload or download them, and a broker setting fo
 files are kept (§53); 41 (#593) lets a call be a file's uploader; 42 (#623) lets a call be hosted on a
 person's machine, with a key per call, and stores each line it pushes with that call (§54); 43 (#623)
 records when a call went live and lets an admin upload the icon of each platform a call can be on, in
-``agent_icons`` (§29.11).
+``agent_icons`` (§29.11); 44 (#637) binds script keys to their harness (§49.11).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -43,7 +43,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 43
+SCHEMA_VERSION = 44
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -255,7 +255,8 @@ CREATE TABLE listener_keys(
   token_id INTEGER NOT NULL REFERENCES agent_tokens(id),
   key_hash TEXT NOT NULL UNIQUE CHECK(length(key_hash) = 64),
   session_id TEXT CHECK(session_id IS NULL OR length(session_id) <= 128),
-  created_at REAL NOT NULL, last_used_at REAL NOT NULL);
+  created_at REAL NOT NULL, last_used_at REAL NOT NULL,
+  harness TEXT NOT NULL DEFAULT 'claude' CHECK(harness IN ('claude','codex','unknown')));
 CREATE INDEX listener_keys_token ON listener_keys(token_id, last_used_at);
 
 CREATE TABLE meetings(
@@ -923,6 +924,15 @@ V42_TO_V43 = (
 )
 
 
+# v43 -> v44 (#637, DESIGN.md §49.11): old keys remain Claude's. A Codex key is pinned to
+# both its harness and its first authenticated thread, never a same-id session of another harness.
+V43_TO_V44 = (
+    "ALTER TABLE listener_keys ADD COLUMN harness TEXT NOT NULL DEFAULT 'claude'"
+    " CHECK(harness IN ('claude','codex','unknown'))",
+    "UPDATE meta SET value='44' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -984,6 +994,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         40: MigrationStep(41, V40_TO_V41, (), (("files", "'human','agent','meeting')"),)),
         41: MigrationStep(42, V41_TO_V42, (), (("meetings", "'zoom','meet','teams','unknown')"),)),
         42: MigrationStep(43, V42_TO_V43, (), (("agent_icons", "'opencode','zoom','meet','teams')"),)),
+        43: MigrationStep(44, V43_TO_V44, ()),
     }
     out = []
     v = frm

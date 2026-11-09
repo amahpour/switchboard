@@ -7,11 +7,12 @@ session and for nothing else, and it dies with its sign-in. Driven with what Cla
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
-from conftest import InProcBroker
+from conftest import FakeClock, InProcBroker
 from test_agents_http import make_token
 from test_agents_http_claude import DISCOVER, HOOK, SESSION_1, SESSION_2, Claude
 from test_agents_http_wake import (
@@ -144,6 +145,48 @@ def test_a_token_keeps_at_most_sixteen_keys_the_oldest_go_first(build: InProcBro
         assert SignedIn(build, token, SESSION_1, k).discover().status_code == 200
     assert stored(build, keys[0]) is None
     assert all(stored(build, k) is not None for k in keys[1:])
+
+
+def test_an_evicted_claude_key_is_reclassified_by_its_next_tool_call(
+    tmp_home: Path, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An alive connection can outlast the 16-key retention cap. A body without client info leaves the
+    recreated key closed; the authenticated tool context restores Claude scope and the listener (#637).
+    Disable the bounded body inspector after eviction to exercise HttpTools' independent classification.
+    """
+    b = InProcBroker(tmp_home, clock=clock).start()
+    claude = None
+    try:
+        b.call("room.create", {"name": "#build"})
+        claude, token = signed_in_member(b)
+        for n in range(listener_keys.MAX_PER_TOKEN):
+            other = SignedIn(b, token, SESSION_2, "sbl_" + f"{n:064x}")
+            try:
+                assert other.discover().status_code == 200
+            finally:
+                other.c.close()
+        assert stored(b) is None
+        clock.advance(listener_keys.TOUCH_S + 1)
+        r = claude.post({"jsonrpc": "2.0", "method": "notifications/initialized"}, DISCOVER["headers"])
+        assert r.status_code == 202, r.text
+        assert stored(b)[0].harness == "unknown"
+        assert listen(b, KEY, SESSION_1, wait=0).status_code == 401
+        monkeypatch.setattr(agent_http, "_listener_harness", lambda _raw: "unknown")
+        assert claude.call("read", room="#build")["ok"]
+        assert stored(b)[0].harness == "claude"
+        from concurrent.futures import ThreadPoolExecutor
+
+        p = participant(b, "claude-1")
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(listen, b, KEY, SESSION_1)
+            until(lambda: parked(b, p.id))
+            b.call("human.say", {"room": "#build", "text": "@claude-1 key restored"})
+            r = waiting.result(30)
+        assert r.status_code == 200 and "key restored" in r.text, r.text
+    finally:
+        if claude is not None:
+            claude.c.close()
+        b.stop()
 
 
 # ---------------------------------------------------------------------------------------- scope

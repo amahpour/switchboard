@@ -1677,7 +1677,9 @@ class Store:
 
     # ------------------------------------------- listener keys (#488, §49.11)
     # Only the sha256 of a key is kept: the key itself is made on the agent's machine and never sent.
-    def listener_key_claim(self, token_id: int, key_hash: str, keep: int, idle_s: float) -> bool:
+    def listener_key_claim(
+        self, token_id: int, key_hash: str, keep: int, idle_s: float, harness: str = "claude"
+    ) -> bool:
         """Record that ``token_id`` (a signed-in connection) claims the key whose sha256 this is. True when
         it is this token's now: new, or claimed by it before (its use is noted). False when another token
         holds that hash, which is never taken over. A new one first removes the keys idle for ``idle_s``
@@ -1691,7 +1693,11 @@ class Store:
             if held is not None:
                 if held["token_id"] != token_id:
                     return False
-                self.con.execute("UPDATE listener_keys SET last_used_at=? WHERE key_hash=?", (now, key_hash))
+                self.con.execute(
+                    "UPDATE listener_keys SET last_used_at=?,"
+                    " harness=CASE WHEN harness='unknown' THEN ? ELSE harness END WHERE key_hash=?",
+                    (now, harness, key_hash),
+                )
                 return True
             self.con.execute("DELETE FROM listener_keys WHERE last_used_at < ?", (now - idle_s,))
             self.con.execute(
@@ -1700,8 +1706,9 @@ class Store:
                 (token_id, max(keep - 1, 0)),
             )
             self.con.execute(
-                "INSERT INTO listener_keys(token_id, key_hash, created_at, last_used_at) VALUES(?,?,?,?)",
-                (token_id, key_hash, now, now),
+                "INSERT INTO listener_keys(token_id, key_hash, created_at, last_used_at, harness)"
+                " VALUES(?,?,?,?,?)",
+                (token_id, key_hash, now, now, harness),
             )
         return True
 
@@ -1737,10 +1744,20 @@ class Store:
             return (
                 self.con.execute(
                     "UPDATE listener_keys SET session_id=?, last_used_at=? WHERE token_id=? AND key_hash=?"
-                    " AND (session_id IS NULL OR session_id != ?)",
+                    " AND harness='claude' AND (session_id IS NULL OR session_id != ?)",
                     (session_id, self.clock.now(), token_id, key_hash, session_id),
                 ).rowcount
                 == 1
+            )
+
+    def listener_key_name_codex_session(self, token_id: int, key_hash: str, session_id: str) -> None:
+        """Pin a locally made key to its first authenticated Codex thread. A second thread of the
+        connection, or a claimed Claude key that already has a session, cannot move it (§49.11)."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE listener_keys SET session_id=?, last_used_at=?"
+                " WHERE token_id=? AND key_hash=? AND harness='codex' AND session_id IS NULL",
+                (session_id, self.clock.now(), token_id, key_hash),
             )
 
     # ------------------------------------------------- OAuth clients (#386, §49.9)

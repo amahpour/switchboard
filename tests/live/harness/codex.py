@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -66,6 +67,7 @@ def config_toml(server_url: str, ws: Path, hooks: list[dict[str, Any]], extra: s
         "[mcp_servers.switchboard]",
         f"url = {toml_str(server_url + '/mcp')}",
         'bearer_token_env_var = "SWITCHBOARD_AGENT_TOKEN"',
+        f"http_headers_helper = {toml_str('sh ' + shlex.quote(str(plugin_dir() / 'bin' / 'headers')))}",
         "tool_timeout_sec = 86400",  # longer than the Stop hook's wait (§49.4, #449)
         "",
         f"[projects.{toml_str(str(ws))}]",

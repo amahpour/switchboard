@@ -1,0 +1,63 @@
+#!/bin/sh
+# Codex's http_headers_helper (docs/DESIGN.md section 49.11, #637). Run locally as the MCP
+# connection starts. Make a private key for this process, print only its hash in the existing
+# X-Switchboard-Listener header, and read no harness credential store. The authenticated request
+# claims it; the first thread using that connection pins it. Only that thread may register a call.
+# With no argument, use SWITCHBOARD_PLUGIN_DATA or ~/.cache/switchboard, as meeting-host does.
+# Native Windows uses headers.cmd and windows/headers.ps1; Git Bash returns no header.
+none() {
+  printf '{}\n'
+  exit 0
+}
+case $(uname -s) in MINGW* | MSYS* | CYGWIN*) none ;; esac
+umask 077
+dir=${1:-${SWITCHBOARD_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}}
+case $dir in /*) ;; *) none ;; esac
+# Codex's pid: this script's parent, or that parent's when
+# the parent is the shell Codex runs a command in (seen: codex -> sh -c -> this script)
+ppid_of() {
+  if [ -r "/proc/$1/status" ]; then
+    sed -n 's/^PPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null
+  else
+    ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '
+  fi
+}
+comm_of() {
+  if [ -r "/proc/$1/comm" ]; then cat "/proc/$1/comm" 2>/dev/null; else ps -o comm= -p "$1" 2>/dev/null; fi
+}
+codex=$PPID
+case $(comm_of "$codex") in *sh) codex=$(ppid_of "$codex") ;; esac
+case $codex in '' | *[!0-9]*) none ;; esac
+[ "$codex" -gt 1 ] || none
+key=sbl_$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+[ "${#key}" -eq 68 ] || none
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 | sed 's/^.*= //'
+  else
+    return 1
+  fi
+}
+hash=$(printf '%s' "$key" | sha256 2>/dev/null | cut -c1-64)
+case $hash in '' | *[!0-9a-f]*) none ;; esac
+[ "${#hash}" -eq 64 ] || none
+mkdir -p "$dir" 2>/dev/null || none
+tmp=$(mktemp "$dir/.listener-key.XXXXXX" 2>/dev/null) || none
+trap 'rm -f "$tmp"' EXIT
+chmod 600 "$tmp" 2>/dev/null
+printf '%s\n' "$key" >"$tmp" 2>/dev/null || none
+# a rename, so a reader never sees half a key, and a link planted at the name is replaced, never followed
+mv -f "$tmp" "$dir/codex-listener-key-$codex" 2>/dev/null || none
+# the keys of Codexs that have gone, so the folder holds only live ones
+for f in "$dir"/codex-listener-key-*; do
+  [ -f "$f" ] || continue
+  pid=${f##*/codex-listener-key-}
+  case $pid in '' | *[!0-9]*) continue ;; esac
+  [ "$pid" = "$codex" ] || kill -0 "$pid" 2>/dev/null || rm -f "$f"
+done
+printf '{"X-Switchboard-Listener": "%s"}\n' "$hash"
+exit 0
