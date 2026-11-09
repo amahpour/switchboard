@@ -12,8 +12,37 @@ const output = path.resolve(process.argv[2]);
 if (output === path.parse(output).root || output === here || output === deps || here.startsWith(output + path.sep) || deps.startsWith(output + path.sep)) throw new Error('output must not contain the sources or dependencies');
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
-const built = await build({ metafile: true, absWorkingDir: here, nodePaths: [path.join(deps, 'node_modules')], entryPoints: [path.join(here, 'frame.jsx')], outdir: output, entryNames: 'board', chunkNames: 'chunks/[name]-[hash]', bundle: true, minify: true, format: 'esm', splitting: true, conditions: ['production'], define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false}' }, loader: { '.woff2': 'file', '.woff': 'file' }, legalComments: 'linked' });
-for (const name of ['Excalifont', 'Nunito', 'Virgil', 'Assistant', 'Cascadia', 'Liberation', 'Lilita', 'ComicShanns', 'Xiaolai']) {
+let fontPatchSeen = false;
+const scope = {
+  name: 'room-board-scope',
+  setup(build) {
+    // Excalidraw's built-in text-to-diagram UI is disabled. #658 supplies its own bounded action.
+    build.onResolve({ filter: /^@excalidraw\/mermaid-to-excalidraw$/ }, args =>
+      args.importer.includes('/@excalidraw/excalidraw/') ? { path: 'disabled', namespace: 'board-only' } : undefined);
+    // switchboard's UI is English; no locale picker is exposed in this document.
+    build.onResolve({ filter: /(?:^|\/)[a-z]{2}(?:-[A-Za-z0-9]+)?-[A-Z0-9]+\.js$/ }, args => {
+      if (args.importer.includes('/@excalidraw/excalidraw/') && !/(?:^|\/)en-/.test(args.path)) return { path: 'english-only', namespace: 'board-locale' };
+    });
+    build.onLoad({ filter: /.*/, namespace: 'board-locale' }, () => ({ contents: 'export default {};' }));
+    build.onLoad({ filter: /.*/, namespace: 'board-only' }, () => ({ contents: 'export const parseMermaidToExcalidraw = () => { throw new Error("Use the room board tool"); };' }));
+    build.onLoad({ filter: /chunk-K2UTITRG\.js$/ }, async args => {
+      const source = await readFile(args.path, 'utf8');
+      fontPatchSeen = true;
+      const noCjkFiles = source.replace('n(Mn,...b1)', 'n(Mn)')
+        .replace('n("Comic Shanns",...Qd)', 'n("Comic Shanns")')
+        .replace('n("Nunito",...xc)', 'n("Nunito")')
+        .replace('n("Lilita One",...pc)', 'n("Lilita One")')
+        .replace('n("Liberation Sans",...lc)', 'n("Liberation Sans")');
+      const localCjk = noCjkFiles.replace(/(\[Un\.Xiaolai\]:\{metrics:\{[^}]+\},)fallback:!0\}/, '$1fallback:!0,local:!0}');
+      if (localCjk === noCjkFiles || noCjkFiles === source) throw new Error('font scope patch no longer matches pinned Excalidraw');
+      // CJK uses the machine's installed fallback fonts, like Helvetica and emoji. No font fetches.
+      return { contents: localCjk, loader: 'js' };
+    });
+  },
+};
+const built = await build({ plugins: [scope], metafile: true, absWorkingDir: here, nodePaths: [path.join(deps, 'node_modules')], entryPoints: [path.join(here, 'frame.jsx')], outdir: output, entryNames: 'board', chunkNames: 'chunks/[name]-[hash]', bundle: true, minify: true, format: 'esm', splitting: true, conditions: ['production'], define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"DEV":false}' }, loader: { '.woff2': 'file', '.woff': 'file' }, legalComments: 'linked' });
+if (!fontPatchSeen) throw new Error('the pinned font registration chunk is missing');
+for (const name of ['Excalifont', 'Virgil', 'Assistant', 'Cascadia']) {
   await cp(path.join(deps, 'node_modules/@excalidraw/excalidraw/dist/prod/fonts', name), path.join(output, 'fonts', name), { recursive: true });
 }
 async function patch(dir) {

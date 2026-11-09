@@ -65,7 +65,13 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
     page.mouse.up()
     expect(page.locator("#whiteboard-status")).to_contain_text("1 shape")
     made = world.agent_call(
-        "#" + room, "drawer", "board", action="note", text="<img onerror=alert(1)> is text", x=240, y=80
+        "#" + room,
+        "drawer",
+        "board",
+        action="note",
+        text="<img onerror=alert(1)> is text 日本語",
+        x=240,
+        y=80,
     )
     assert made["ok"], made
     if other is not None:
@@ -74,7 +80,7 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
     texts = frame.locator("body").evaluate(
         "() => window.sbBoard.api.getSceneElements().filter(e => e.type === 'text').map(e => e.text)"
     )
-    assert texts == ["<img onerror=alert(1)> is text"]
+    assert texts == ["<img onerror=alert(1)> is text 日本語"]
     assert frame.locator("img, a[href], iframe, object, embed").count() == 0
     frame.locator("body").evaluate("""() => {
         const a=window.sbBoard.api, t=a.getSceneElements().find(e=>e.type==='text');

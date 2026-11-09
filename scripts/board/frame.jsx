@@ -59,7 +59,7 @@ document.addEventListener('keydown', () => { dirty = true; });
 document.addEventListener('input', () => { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 250); });
 document.addEventListener('pointerup', () => { pointer = false; timer = setTimeout(flush, 0); });
 createRoot(document.getElementById('board-root')).render(
-  <Excalidraw excalidrawAPI={value => { api = value; window.sbBoard = { api, flush }; post('ready'); }}
+  <Excalidraw langCode="en" aiEnabled={false} excalidrawAPI={value => { api = value; window.sbBoard = { api, flush }; post('ready'); }}
     initialData={{ appState: { currentItemFontFamily: 1 }, elements: [] }}
     onChange={() => { if (!applying && dirty) { clearTimeout(timer); timer = setTimeout(flush, 250); } }}
     onLinkOpen={(_e, ev) => ev.preventDefault()}
