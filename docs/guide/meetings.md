@@ -4,9 +4,9 @@ A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a m
 
 ## See it work
 
-A real Zoom call, a real Claude Code session and the room, in about 90 seconds. alice sends the bot into the call and says her upload page fails on big files. She turns Voice on and asks "Claude one" to find the upload limit. Claude reads the code and answers out loud in the call. Then alice types "raise it", and Claude makes the change and says so. The waits are cut, and nothing is sped up. alice's voice is a second bot reading her lines.
+A real Zoom call, a real Claude Code session and the room, in about 70 seconds. alice types `/meeting`, the link and `mine`, and her own Claude Code starts the meeting bot on her laptop, on its CPU: no service in between. She says her upload page fails on big files, turns Voice on and asks "Claude one" to find the upload limit. Claude reads the code and answers in the room and out loud in the call. Then she ends the call, and the bot on her laptop stops. The waits are cut, and nothing is sped up. alice's voice is a second bot reading her lines.
 
-<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/bac87fc1-733a-4766-95ce-8ccceed78de5"></video>
+<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/9ed98b5d-1eda-448a-a68d-883c3d62bda6"></video>
 
 ## How it works
 
