@@ -37,6 +37,7 @@ nav = [
     { "Meetings" = "guide/meetings.md" },
     { "Meetings: reference" = "guide/meetings-reference.md" },
     { "Code review on a board" = "guide/review-board.md" },
+    { "Code review: reference" = "guide/review-board-reference.md" },
     { "A room's whiteboard" = "guide/board.md" },
     { "Attachments" = "guide/attachments.md" },
   ] },

@@ -44,7 +44,7 @@ The tests' output goes in the section either way. A recording shows the change w
        take.pause(2.0)
    ```
 
-   `take` has `open`, `begin`, `step`, `click`, `type`, `press`, `pause` and `rest` (move the pointer away, when a hover tip covers what the step shows); `take.page` is Playwright's page for anything else. `world` is `tests/ui_world.py`'s `UIWorld`: a test broker in a throwaway home with alice, three rooms and the stand-in agents. `rename_room` in [`docs/media/ui_record.py`](../../../docs/media/ui_record.py) is the worked example.
+   `take` has `open`, `begin`, `step`, `click`, `type`, `press`, `pause` and `rest` (move the pointer away, when a hover tip covers what the step shows); `take.page` is Playwright's page for anything else. The recorder samples viewport screenshots during `take.pause`, between actions and while typing, including native full screen. After a direct `take.page` action, use `take.pause` for the viewer's reading time so that view is sampled too. `world` is `tests/ui_world.py`'s `UIWorld`: a test broker in a throwaway home with alice, three rooms and the stand-in agents. `rename_room` in [`docs/media/ui_record.py`](../../../docs/media/ui_record.py) is the worked example.
 
    - **Wait for the event with `expect`,** as the e2e tests do. `take.pause` is reading time for the viewer, never a wait for the page.
    - **One window size.** The frames are joined at the size the recording started with, so a scenario never resizes the window. A phone is `--phone`.
