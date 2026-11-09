@@ -167,6 +167,25 @@ class Machine:
         )
 
 
+def hosted_container_logs(
+    project: str, out_dir: Path, pieces: list[str], steps: list[StepResult]
+) -> list[str]:
+    """The host's joinly and relay logs, scrubbed, when a step failed or logs were requested.
+
+    ``meeting-host stop`` removes those containers, so this runs first. Empty when the run passed
+    and ``SWITCHBOARD_SELFTEST_LOGS`` is not set, or when a container is already gone."""
+    if not selftest.keep_container_logs(steps, os.environ.get(base.LOGS_ENV, "") == "1"):
+        return []
+    saved: list[str] = []
+    for service in ("joinly", "relay"):
+        text = relay.logs(project, service, tail=None)
+        if not text:
+            continue
+        with contextlib.suppress(Exception):
+            saved.append(selftest.write_container_log(out_dir, f"{service}-hosted.log", text, pieces).name)
+    return saved
+
+
 def project_of(stdout: str) -> str:
     found = re.search(r"project (switchboard-call-[0-9a-f]{8})", stdout)
     assert found, f"the script did not name its project:\n{stdout}"
@@ -462,6 +481,7 @@ async def test_every_meetings_feature_against_a_real_call_with_a_hosted_bot(
         containers["observer"] = base.Joinly("observer")
     steps: list[StepResult] = []
     problems: list[str] = []
+    saved: list[str] = []
     before = set(relay.projects())
     speaker_fixes(link, containers, os.environ.get(base.STOCK_ENV, "") == "1")
     image = relay.relay_image() if MODE == "local" else ""
@@ -473,24 +493,22 @@ async def test_every_meetings_feature_against_a_real_call_with_a_hosted_bot(
                 for box in containers.values():
                     box.wait_healthy()
                 await run_hosted_in_a_broker(
-                    tmp_home, containers, link, steps, problems, caplog, image, out_dir
+                    tmp_home, containers, link, steps, problems, caplog, image, out_dir, saved
                 )
             except Exception as e:
                 problems.append(selftest.scrub(f"{type(e).__name__}: {e}", pieces)[:300])
     finally:
-        removed = [box.remove() for box in containers.values()]
-        relay.remove(
-            [p for p in relay.projects() if p not in before]
-        )  # (a local run's; the other machine is its own)
+        try:
+            # The speaker (and the observer) are still up. A failed step keeps their logs, scrubbed,
+            # before they are removed. The host's own containers were saved inside the run, before stop.
+            selftest.fill_unattempted(steps, selftest.step_specs(HOSTED_STEPS, PLATFORM_LABEL[link.platform]))
+            saved.extend(base.kept_logs(containers, out_dir, pieces, steps))
+        finally:
+            removed = [box.remove() for box in containers.values()]
+            relay.remove(
+                [p for p in relay.projects() if p not in before]
+            )  # (a local run's; the other machine is its own)
     problems += [w for w in removed if w]
-    for n, (name, expected) in HOSTED_STEPS.items():
-        if all(s.n != n for s in steps):
-            steps.append(
-                StepResult.not_attempted(
-                    n, name, expected.format(platform=PLATFORM_LABEL[link.platform]), "the run stopped first"
-                )
-            )
-    steps.sort(key=lambda s: s.n)
     meta = {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "platform": link.platform,
@@ -503,6 +521,8 @@ async def test_every_meetings_feature_against_a_real_call_with_a_hosted_bot(
         "containers_removed": not any(removed),
         "problems": problems,
     }
+    if saved:
+        meta["container_logs"] = ", ".join(saved)
     try:
         _, md = selftest.write_report(out_dir, steps, pieces, meta)
         print("\n" + md.read_text(encoding="utf-8"))
@@ -528,6 +548,7 @@ async def run_hosted_in_a_broker(
     caplog: pytest.LogCaptureFixture,
     image: str,
     out_dir: Path,
+    saved: list[str],
 ) -> None:
     broker = hosted_broker(home)
     web = broker.web_client()
@@ -571,10 +592,18 @@ async def run_hosted_in_a_broker(
                 await world.run()
             finally:
                 await world.leave_everything(problems)
-                if machine is not None:
-                    stopped = await asyncio.to_thread(machine.stop)  # whatever the steps did
-                    if stopped.returncode != 0:
-                        problems.append(f"meeting-host stop failed: {stopped.stderr[-200:]}")
+                try:
+                    if world.project:
+                        # stop removes these containers. A failed step has to read their logs first.
+                        selftest.fill_unattempted(
+                            steps, selftest.step_specs(HOSTED_STEPS, PLATFORM_LABEL[link.platform])
+                        )
+                        saved.extend(hosted_container_logs(world.project, out_dir, link.parts(), steps))
+                finally:
+                    if machine is not None:
+                        stopped = await asyncio.to_thread(machine.stop)  # whatever the steps did
+                        if stopped.returncode != 0:
+                            problems.append(f"meeting-host stop failed: {stopped.stderr[-200:]}")
                 with contextlib.suppress(Exception):
                     kept_messages = json.dumps(world.messages())
                 shutil.rmtree(root, ignore_errors=True)

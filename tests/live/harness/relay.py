@@ -212,11 +212,15 @@ def running(project: str) -> bool:
     return any(c["state"] == "running" for c in projects().get(project, []))
 
 
-def logs(project: str, service: str = "relay", tail: int = 40) -> str:
+def logs(project: str, service: str = "relay", tail: int | None = 40) -> str:
+    """The service's log. ``tail`` is how many lines; ``None`` is the whole log (kept on a failure)."""
     cs = [c for c in projects().get(project, []) if c["service"] == service]
     if not cs:
         return ""
-    got = docker("logs", "--tail", str(tail), cs[0]["id"], timeout=60)
+    args = ["logs", cs[0]["id"]]
+    if tail is not None:
+        args[1:1] = ["--tail", str(tail)]
+    got = docker(*args, timeout=60)
     return (got.stdout or "") + (got.stderr or "")
 
 
