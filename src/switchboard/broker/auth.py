@@ -240,6 +240,14 @@ def app_csp(origin: WebOrigin) -> str:
     return csp(origin, inline_styles=True)
 
 
+# The maintainer approved these exceptions for this document only (#671, DESIGN §56.8).
+BOARD_CSP = (
+    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "connect-src 'self'; img-src 'self' data: blob:; worker-src 'self' blob:; font-src 'self'; "
+    "object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'"
+)
+
+
 class SecurityHeaders:
     """Adds CSP, nosniff, no-referrer (and a few friends) to every HTTP response."""
 

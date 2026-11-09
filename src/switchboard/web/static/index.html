@@ -29,6 +29,8 @@
 <script src="/static/md.js" defer></script>
 <script src="/static/diagram.js" defer></script>
 <script src="/static/webauthn.js" defer></script>
+  <script src="/static/board-rules.js"></script>
+  <script src="/static/whiteboard.js"></script>
 <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -120,6 +122,8 @@
       <span class="head-divider" aria-hidden="true"></span>
 
       <div class="head-tools">
+        <button type="button" class="icon-btn head-btn" id="whiteboard-toggle" aria-controls="whiteboard-panel"
+                aria-pressed="false" title="Draw together" aria-label="Whiteboard">✎</button>
         <button type="button" class="icon-btn head-btn hidden" id="board-toggle" aria-controls="board"
                 aria-pressed="false" aria-label="Review board" title="Show this room's review board">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6 2.5v11M10 2.5v11"/></svg>
@@ -210,6 +214,11 @@
     </div>
 
     <div class="log-wrap">
+      <section id="whiteboard-panel" class="hidden" aria-label="Room whiteboard">
+      <div class="whiteboard-bar"><span id="whiteboard-status" role="status"></span>
+        <button type="button" id="whiteboard-close">Back to chat</button></div>
+      <div id="whiteboard-host"></div>
+    </section>
       <div class="log" id="log" role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages"></div>
       <!-- The review board (#80): drawn by app.js when the room has one and it's shown. -->
       <section class="board hidden" id="board" aria-label="Review board"></section>

@@ -67,7 +67,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, board, build_info, db
 from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people
-from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
+from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.passkeys import CEREMONY_TTL_S, CLAIM_GRACE_S, clean_name, sign_count_ok
@@ -348,6 +348,28 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 headers=headers,
             )
         return FileResponse(STATIC_DIR / page, media_type="text/html", headers=headers)
+
+    @app.get("/board", include_in_schema=False)
+    async def board_document() -> Response:
+        # Public shell only: no session, room, credentials or data goes into this document.
+        return FileResponse(
+            STATIC_DIR / "board.html",
+            media_type="text/html",
+            headers={**NO_STORE, "content-security-policy": BOARD_CSP, "x-frame-options": "SAMEORIGIN"},
+        )
+
+    @app.get("/board-assets/{asset:path}", include_in_schema=False)
+    async def board_asset(asset: str) -> Response:
+        # Only the pinned build's files, never room files or a prefix-wide CORS middleware.
+        root = STATIC_DIR / "vendor" / "board"
+        target = (root / asset).resolve()
+        if (
+            root not in target.parents
+            or not target.is_file()
+            or target.suffix not in {".js", ".css", ".woff2", ".woff"}
+        ):
+            return _err(404, "not_found", "not found")
+        return FileResponse(target, headers={"cache-control": "no-cache", "access-control-allow-origin": "*"})
 
     app.mount("/static", _StaticFiles(directory=STATIC_DIR, html=False), name="static")
 
@@ -2390,7 +2412,7 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
     it does not close the socket."""
     raw_room = frame.get("room")
     elements = frame.get("elements")
-    if not isinstance(raw_room, str) or not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
+    if not isinstance(raw_room, str):
         return False
     try:
         name = normalize_room(raw_room)
@@ -2399,6 +2421,14 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
     room = state.store.get_room(name)
     person = sub.person if sub.person is not None else -1
     if room is None or not state.service.visible(room, person):
+        return False
+    if "request" in frame:
+        if set(frame) != {"t", "room", "request", "result"}:
+            return False
+        # A late or malformed picture is dropped, like a rejected element, without disconnecting a page.
+        state.room_board.image_result(room, frame["request"], frame["result"])
+        return True
+    if not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
         return False
     who = state.service.person_name(person) or "someone"
     state.room_board.from_page(room, who, elements)
