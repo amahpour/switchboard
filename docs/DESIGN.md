@@ -2450,7 +2450,7 @@ Fewer ways in: a person with an email has one identifier, not two, and names, wh
 
 The palette is six of the basic terminal colours (red, green, yellow, blue, magenta and cyan; their bright variants left to the terminal's theme) plus bold and dim, with no backgrounds, so it reads on dark and light terminals alike. Call sites name a `Paint` role (`ok`, `warn`, `bad`, `link`, `added`, `removed`, `heading`, `prompt`, `nick`) rather than a raw colour; an agent's nick colour comes from `crc32` of its name, so it's the same colour in every process and on every run, and red stays free for warnings.
 
-Tests: `tests/unit/test_colors.py` (`enabled()`'s rules, `Paint`'s styling and reset, `nick_colour`'s stability), `tests/unit/test_cli_color.py` (each command plain when piped, with `NO_COLOR`, with `--color never` and with `--json`, and coloured with `--color always` or on a terminal; colour only ever adds switchboard's own codes, so stripping them gives back the plain output exactly; escape codes inside room text stay stripped).
+Tests: `tests/unit/test_colors.py` (`enabled()`'s rules, `Paint`'s styling and reset, `nick_colour`'s stability), `tests/unit/test_cli_color.py` (each command plain when piped, with `NO_COLOR`, with `--color never` and with `--json`, and coloured with `--color always` or on a terminal; colour only ever adds switchboard's own codes, so stripping them gives back the plain output exactly; escape codes inside room text stay stripped). Those tests set or clear `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR_FORCE` and `TERM` themselves (#650), so a shell that disables colour does not change the result. `enabled()` is unchanged.
 
 ## 41. Renaming (#114)
 

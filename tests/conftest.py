@@ -11,6 +11,8 @@
   ``Config()`` defaults the human to (``TEST_HUMAN``), so every machine sees the same.
 - ``child_env()`` builds every child process env from an allowlist (with
   ``LOGNAME=TEST_HUMAN``, for a child broker's default human name).
+- ``own_color_env()`` clears ``NO_COLOR``, ``FORCE_COLOR`` and ``CLICOLOR_FORCE`` and
+  pins ``TERM`` for the colour tests, so a shell that disables colour does not (#650).
 - ``tmp_home``: a short /tmp home with the ``.switchboard-test`` marker.
 - ``broker``: an in-process broker (uvicorn in a thread, AllowAllHumans, test mode).
 - ``web``: an httpx client on http://switchboard.localhost:<port>, signed in.
@@ -89,7 +91,9 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     fake_home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.delenv("SWITCHBOARD_HOME", raising=False)
-    # the CLI's colour switches (issue #28): output is plain unless a test asks for colour
+    # the CLI's colour switches (issue #28): output is plain unless a test asks for colour.
+    # TERM stays as the shell left it. The colour tests pin it themselves (own_color_env, #650):
+    # pinning it here would colour every test that pretends stdout is a terminal.
     for k in ("NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"):
         monkeypatch.delenv(k, raising=False)
     # `start`'s container settings (issue #34): a broker listens on loopback unless a test says so
@@ -195,6 +199,19 @@ def fail_on_unraisable_exception() -> Iterator[None]:
     promoted to 1); either is well within what ``gc.collect(1)`` reaches."""
     yield
     gc.collect(1)
+
+
+def own_color_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The colour tests decide colour. The shell that launched pytest does not (#650).
+
+    ``colors.enabled`` still honours ``NO_COLOR``, ``FORCE_COLOR``, ``CLICOLOR_FORCE`` and
+    ``TERM=dumb``. Some agent CLIs export ``NO_COLOR=1``, ``FORCE_COLOR=0`` and ``TERM=dumb``,
+    and a test that read that shell saw a terminal as plain. Clearing the three switches and
+    pinning ``TERM`` is the same idea as ``child_env``: the test owns its environment.
+    """
+    for name in ("NO_COLOR", "FORCE_COLOR", "CLICOLOR_FORCE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TERM", "xterm")
 
 
 def child_env(home: str | os.PathLike | None = None, **extra: str) -> dict[str, str]:
