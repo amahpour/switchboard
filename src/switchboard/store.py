@@ -714,6 +714,50 @@ class Store:
         ).fetchone()
         return int(r[0])
 
+    # ------------------------------------------------------------ the home page (#626, §55)
+    def last_message_id_of_human(self, room_id: int, name: str) -> int:
+        """The id of the last chat message ``name`` (a person, by their name in rooms) said in the
+        room, or 0: what a question to them is answered by."""
+        r = self.con.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id=? AND sender_kind='human'"
+            " AND kind='chat' AND lower(sender_name)=lower(?)",
+            (room_id, name),
+        ).fetchone()
+        return int(r[0])
+
+    def chat_after(self, room_id: int, after: int, since: float, limit: int) -> list[Message]:
+        """Chat messages of the room with ``id > after`` and ``ts >= since``, the newest ``limit``
+        of them, oldest first."""
+        rows = self.con.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND kind='chat' AND id>? AND ts>=?"
+            " ORDER BY id DESC LIMIT ?) ORDER BY id",
+            (room_id, int(after), since, max(1, min(int(limit), 500))),
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
+    def meetings_ended_since(self, since: float) -> list[Meeting]:
+        """Calls that ended at or after ``since``, in any room (the caller filters by who may see)."""
+        rows = self.con.execute(
+            "SELECT * FROM meetings WHERE state='ended' AND ended_at>=? ORDER BY ended_at, id", (since,)
+        ).fetchall()
+        return [Meeting.from_row(r) for r in rows]
+
+    def meeting_lines(self, meeting_id: int) -> tuple[int, list[str]]:
+        """How many lines a call posted, and the members those lines addressed (who it woke)."""
+        rows = self.con.execute(
+            "SELECT mentions FROM messages WHERE meeting_id=? AND kind='chat'", (meeting_id,)
+        ).fetchall()
+        woke: list[str] = []
+        for (raw,) in rows:
+            try:
+                names = json.loads(raw or "[]")
+            except ValueError:
+                names = []
+            for n in names:
+                if isinstance(n, str) and n not in woke:
+                    woke.append(n)
+        return len(rows), woke
+
     # ------------------------------------------------------------ pinned decisions (#292, §48)
     def pins(self, room_id: int) -> list[Pin]:
         """A room's pins, in message order (the order they were said in)."""

@@ -6,6 +6,7 @@ tests build the server over a stub backend, so what is checked is the tools them
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastmcp import Client
@@ -92,32 +93,54 @@ async def test_tool_list_fits_the_review_budget() -> None:
         for t in tools
     )
     # 3,700 for claims (#293); 3,900 for review's report (#291), the maintainer's yes: "Raise it".
-    # #423's Markdown, Mermaid and concur fit inside it by shortening the review tool's own wording
-    # and putting it on one line (a newline costs two characters on the wire); the budget did not move.
-    assert size <= 3900, size
+    # #423's Markdown, Mermaid and concur fit inside 3,900 by shortening the review tool's own wording.
+    # #629 moved that how-to into the review-board skill. The list measured 3,885 before and 3,653
+    # after, and the review tool 1,185 before and 953 after. The cap is the new size, down from 3,900.
+    assert size <= 3653, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
     review = next(t for t in tools if t.name == "review")
     assert "where" in review.input_schema["properties"]
+    assert "detail" in review.input_schema["properties"]
     assert "file" not in review.input_schema["properties"]
     assert "lines" not in review.input_schema["properties"]
+    review_size = len(
+        json.dumps(
+            {"name": review.name, "description": review.description, "inputSchema": review.input_schema},
+            separators=(",", ":"),
+        )
+    )
+    assert review_size <= 953, review_size  # was 1,185 before the how-to left the description (#629)
 
 
-async def test_the_review_tool_asks_for_markdown_allows_mermaid_and_lists_concur() -> None:
-    """#423: details arrived as flat paragraphs because nothing told agents to write Markdown, and
-    an agent could only agree with a recommendation by guessing the move. The description says
-    both, and names every action the broker takes, in one place."""
+async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
+    """#629: the tool list names every action and not the field guide. Markdown, Mermaid, ``where``
+    and each action's fields live in one skill, the same file in the three plugins that load one.
+    A description that grows the how-to back fails the size test above; a skill that drops it, or
+    a copy that drifts, fails here."""
+    from switchboard.broker.reviews import ACTIONS
+
     _st, server = make()
     async with Client(server, mode="legacy") as c:
         review = next(t for t in await c.list_tools() if t.name == "review")
     desc = review.description or ""
-    assert "detail: Markdown, Mermaid ok" in desc
-    assert "concur(item, recommend)" in desc and "ask(title, options, recommend)" in desc
-    from switchboard.broker.reviews import ACTIONS
-
+    assert "Markdown" not in desc and "Mermaid" not in desc
     for action in ACTIONS:  # a move the broker takes but the tool never names is one agents can't find
         assert action in desc, action
+    root = Path(__file__).resolve().parents[2]
+    paths = [
+        root / "plugins" / name / "skills" / "review-board" / "SKILL.md"
+        for name in ("claude", "codex", "cursor")
+    ]
+    bodies = [p.read_bytes() for p in paths]
+    assert bodies[0] == bodies[1] == bodies[2]
+    text = bodies[0].decode()
+    assert "name: review-board" in text
+    assert "Markdown" in text and "Mermaid" in text
+    assert "shop/cart.py:40-58" in text and "switchboard_review" in text
+    for action in ACTIONS:
+        assert action in text, action
 
 
 def test_instructions_are_tiny() -> None:

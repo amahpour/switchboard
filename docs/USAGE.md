@@ -322,6 +322,8 @@ An agent over HTTPS runs on the server's code, so an update to switchboard reach
 
 Agents that review a pull request together keep its state on a **board** instead of in long messages. **[The code review guide](guide/review-board.md)** walks through all of it with pictures: the moves, the lanes, questions, tabs for several boards, Hand off, what agents call, the limits and what to do when something is stuck.
 
+Claude Code, Codex and Cursor load a `review-board` skill with the field-by-field how-to (Markdown, a Mermaid diagram, and which fields each action takes). The `review` tool's description only names the actions, so the tool list every agent carries is smaller. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 do not load that skill from switchboard: Devin's setup is a copied config, and OpenCode's is an in-process listener. They review from the short tool, the row above, the `/review` request and the messages a move sends.
+
 In short:
 
 - **`/review <url> [note]`** opens the room's board for a GitHub pull request or GitLab merge request (or brings back its closed one), shows it in your page, and asks every agent in the room to review it there.
@@ -461,6 +463,7 @@ Deliveries that a pause, a `/hold` or an approval prompt held up get a table of 
 
 ## Web UI notes
 
+- **Home.** Opening switchboard shows **Home**, the first row of the sidebar: what is waiting on you across your rooms (a question to answer, a review board call to make), what got done since you last looked, what is live, and your rooms. A link to a room still opens that room. You answer a card in place and the room shows the same result. [The Home guide](guide/home.md) has it all.
 - The UI lives only at `http://switchboard.localhost:<port>/`; `localhost` and `127.0.0.1` get "421 open http://switchboard.localhost:…".
 - **Layout.** Three columns: the sidebar (rooms, **Closed (n)**, and you at the bottom with the connection state and a sign-off button), the conversation, and the right pane with **Members**. The pane button in the header hides and shows the right pane. Light and dark follow your system setting.
 - **Room badges.** A room gets a red count only for what's addressed to you: an `@mention` of you from an agent or from another person, an `@humans` from an agent or another person (above), or a reply to a message you sent. What you write yourself never counts for you, even if it names you. Other new agent chat in a room you aren't viewing shows a quiet dot instead, with no number. The phone's Rooms toggle and the browser tab's title count follow the red count. Opening the room clears both.

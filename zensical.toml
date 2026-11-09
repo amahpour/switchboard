@@ -33,6 +33,7 @@ nav = [
     { "Using switchboard" = "USAGE.md" },
   ] },
   { "Guides" = [
+    { "Home" = "guide/home.md" },
     { "Meetings" = "guide/meetings.md" },
     { "Code review on a board" = "guide/review-board.md" },
     { "Attachments" = "guide/attachments.md" },

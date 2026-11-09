@@ -46,6 +46,14 @@
       </button>
     </div>
 
+    <div class="side-section side-home">
+      <button type="button" class="room room-home" id="home-nav" aria-label="Home">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.7V13h8V6.7M6.7 13V9.5h2.6V13"/></svg>
+        <span class="room-name">Home</span>
+        <span class="badge hidden" id="home-badge"></span>
+      </button>
+    </div>
+
     <div class="side-section" aria-labelledby="rooms-label">
       <div class="side-label" id="rooms-label">Rooms</div>
       <div class="room-list" id="tabs" aria-labelledby="rooms-label"></div>
@@ -205,6 +213,9 @@
       <div class="log" id="log" role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages"></div>
       <!-- The review board (#80): drawn by app.js when the room has one and it's shown. -->
       <section class="board hidden" id="board" aria-label="Review board"></section>
+
+      <!-- Home (#626): what waits on you, what got done, what is live, your rooms. Drawn by app.js. -->
+      <section class="home hidden" id="home" tabindex="-1" aria-label="Home"></section>
 
       <!-- Empty room: nobody joined yet and nothing said. -->
       <div class="room-empty hidden" id="room-empty">

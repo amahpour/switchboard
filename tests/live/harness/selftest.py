@@ -6,7 +6,8 @@ together. What needs no call is here, so ``tests/unit/test_meeting_selftest.py``
 - how words are compared (speech-to-text of text-to-speech is close to the sentence, never equal),
 - how the meeting link is read from its file and kept out of every output,
 - what a batch, a transcript and a participant list look like when parsed,
-- and the report: JSON and a Markdown table of the steps.
+- and the report: JSON and a Markdown table of the steps,
+- and when a failed step keeps the containers' logs (#642).
 
 The link carries the meeting's passcode. It is held as a ``SecretLink`` whose ``repr`` is a placeholder,
 so a traceback with locals shows nothing, and every string that reaches a report goes through ``scrub``.
@@ -354,6 +355,44 @@ class StepResult:
 
 def failed_steps(steps: Iterable[StepResult]) -> list[str]:
     return [f"{s.n} ({s.name})" for s in steps if not s.ok]
+
+
+def step_specs(table: Mapping[int, tuple[str, str]], platform: str) -> dict[int, tuple[str, str]]:
+    """The step table with ``{platform}`` filled in, for ``fill_unattempted``."""
+    return {n: (name, expected.format(platform=platform)) for n, (name, expected) in table.items()}
+
+
+def fill_unattempted(steps: list[StepResult], specs: Mapping[int, tuple[str, str]]) -> None:
+    """Record a failed step for each one the run never reached.
+
+    A step that could not start counts as failed (``not_attempted``). The log decision reads the
+    list after this, so a run that stopped at step 2 still counts as a failure (#642)."""
+    have = {step.n for step in steps}
+    for n, (name, expected) in specs.items():
+        if n not in have:
+            steps.append(StepResult.not_attempted(n, name, expected, "the run stopped first"))
+    steps.sort(key=lambda step: step.n)
+
+
+def keep_container_logs(steps: Iterable[StepResult], requested: bool) -> bool:
+    """Keep both containers' logs when a step failed, or when the run asked for them (#642).
+
+    ``requested`` is ``SWITCHBOARD_SELFTEST_LOGS=1``, which keeps the logs on a pass as well. A
+    passing run that did not ask leaves them out: a log names the call's participants."""
+    return requested or any(not step.ok for step in steps)
+
+
+def write_container_log(
+    out_dir: str | os.PathLike[str], name: str, text: str, secrets: Iterable[str]
+) -> Path:
+    """Write ``text`` as ``name`` in ``out_dir``, scrubbed of the link, mode 0600.
+
+    The same scrub as every other string the self-test keeps. The report names ``name``."""
+    folder = Path(out_dir)
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = folder / name
+    _write_private(path, scrub(text, list(secrets)))
+    return path
 
 
 def _cell(text: str) -> str:

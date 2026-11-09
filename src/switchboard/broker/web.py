@@ -65,7 +65,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, build_info, db
-from switchboard.broker import agent_icons, agent_tokens, oauth, oidc, people
+from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people
 from switchboard.broker.auth import COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
@@ -1775,6 +1775,33 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "closed": len(state.service.closed_room_dicts(viewer(request))),
             }
         )
+
+    # The home page (§55, #626): what waits on this person across their rooms, what got done since
+    # they last looked, and what is live. A read of what is stored, for the one person asking;
+    # "seen" moves their own looked-at time forward and nothing else.
+    @app.get("/api/home")
+    async def home_page(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        return _ok(home.build(state, w.name, w.person_id, w.is_admin))
+
+    @app.post("/api/home/seen")
+    async def home_seen(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+            at = body.get("at")
+            if set(body) - {"at"} or (
+                at is not None
+                and (isinstance(at, bool) or not isinstance(at, (int, float)) or not 0 <= at < 1e12)
+            ):
+                raise ServiceError("bad_request", "give at, a time, or nothing")
+            return _ok({"seen": home.mark_seen(state, state.service.person_key(w.person_id), at)})
+        except ServiceError as e:
+            return _svc_err(e)
 
     @app.post("/api/rooms")
     async def create_room(request: Request) -> Response:

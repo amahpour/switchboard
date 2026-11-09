@@ -734,7 +734,7 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the ten live modules (eight harness runs, the meeting self-test and its
+    """With no ``SWITCHBOARD_LIVE`` the eleven live modules (nine harness runs, the meeting self-test and its
     hosted variant, which start containers and join a real call) are collected and skipped, each with the
     line that says how to run it, and nothing is run. (The hosted variant imports the self-test, whose skip
     it shares, so that line shows twice.) Fails if a live module starts a broker, a container or a CLI on
@@ -746,13 +746,14 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "10 skipped" in out and "passed" not in out and "failed" not in out, out
+    assert "11 skipped" in out and "passed" not in out and "failed" not in out, out
     for h in ("claude", "codex", "devin", "cursor", "opencode", "meeting"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
         "test_live_claude.py",
         "test_live_claude_host.py",
         "test_live_claude_long_wait.py",
+        "test_live_claude_mine.py",
         "test_live_claude_signin.py",
         "test_live_codex.py",
         "test_live_cursor.py",
