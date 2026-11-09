@@ -37,10 +37,13 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
     page.on(
         "request",
         lambda request: (
-            cookies.append(request.all_headers().get("cookie", "")) if request.url.endswith("/board") else None
+            cookies.append(request.all_headers().get("cookie", ""))
+            if request.url.endswith("/board")
+            else None
         ),
     )
     frame = open_board(page)
+    other = open_board(ui.open(room)) if mode == "light" else None
     assert cookies == [""], "the credentialless document navigation must not carry the app cookie"
     node = page.locator("#whiteboard-host iframe")
     expect(node).to_have_attribute("sandbox", "allow-scripts")
@@ -65,6 +68,8 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
         "#" + room, "drawer", "board", action="note", text="<img onerror=alert(1)> is text", x=240, y=80
     )
     assert made["ok"], made
+    if other is not None:
+        expect(other.locator("#board-count")).to_have_text("3 shapes")
     expect(frame.locator("#board-count")).to_have_text("3 shapes")
     texts = frame.locator("body").evaluate(
         "() => window.sbBoard.api.getSceneElements().filter(e => e.type === 'text').map(e => e.text)"

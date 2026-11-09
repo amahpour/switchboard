@@ -200,7 +200,10 @@ def test_a_private_room_refuses_a_board_from_anyone_else() -> None:
         stop(hosted)
 
 
-async def test_board_image_is_returned_only_for_its_pending_room_request(broker: InProcBroker) -> None:
+@pytest.mark.parametrize("stale", [False, True])
+async def test_board_image_is_returned_only_for_its_pending_room_request(
+    broker: InProcBroker, stale: bool
+) -> None:
     """A bounded PNG answers one read; unsolicited responses, wrong rooms and stale pictures fail."""
     import asyncio
     import base64
@@ -220,12 +223,21 @@ async def test_board_image_is_returned_only_for_its_pending_room_request(broker:
             request = await asyncio.to_thread(recv_until, ws, lambda f: f.get("t") == "board" and "task" in f)
             task = request["task"]
             payload = base64.b64encode(png()).decode()
+            if stale:
+                broker.on_loop(
+                    lambda: broker.state.room_board.from_page(
+                        broker.state.store.get_room("#build"), "alice", [page_shape()]
+                    )
+                )
             ws.send(json.dumps({"t": "board", "room": "#build", "request": task["id"], "result": payload}))
             result = await pending
             assert not result.is_error
             image = result.content[0]
-            assert image.type == "image" and image.data == payload
-            assert image.mime_type == "image/png"
+            if stale:
+                assert image.type == "text" and json.loads(image.text)["code"] == "board_changed"
+            else:
+                assert image.type == "image" and image.data == payload
+                assert image.mime_type == "image/png"
             assert broker.on_loop(lambda: len(broker.state.room_board._pending)) == 0
     finally:
         ws.close()
