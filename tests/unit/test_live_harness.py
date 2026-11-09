@@ -266,7 +266,6 @@ def test_codex_runs_with_approvals_on_request_and_its_hooks_trusted_at_their_has
     )
 
 
-
 def test_codex_live_config_exercises_the_installed_local_header_helper() -> None:
     """The real CLI must claim a process key, not just pass a synthetic header in broker tests (#637)."""
     import shlex
