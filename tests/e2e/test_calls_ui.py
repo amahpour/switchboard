@@ -61,9 +61,12 @@ def logo_shown(avatar: Locator, platform: str, where: str = "") -> None:
     that is missing or that the CSP blocks fails the decode), on the white tile, with no drawn glyph on it and
     no text showing. It fills a square tile of the size its place has, when ``where`` names a place."""
     path, width = LOGO[platform]
+    expect(avatar).to_be_visible()
     if where in TILE:
-        box = avatar.evaluate("el => { const r = el.getBoundingClientRect(); return [r.width, r.height]; }")
-        assert box == [TILE[where]] * 2, (where, platform, box)
+        # A room frame replaces the avatar. evaluate() can measure the detached old node (#644);
+        # these expectations resolve the current node on each retry, at the same exact tile size.
+        expect(avatar).to_have_css("width", f"{TILE[where]}px")
+        expect(avatar).to_have_css("height", f"{TILE[where]}px")
     got = avatar.evaluate(PIXEL)
     assert got is not None and got["url"] == path and got["width"] == width, (where, platform, got)
     look = avatar.evaluate("el => { const s = getComputedStyle(el); return [s.backgroundColor, s.color]; }")
