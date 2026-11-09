@@ -247,3 +247,18 @@ def test_a_broken_foreign_key_rolls_back(store: Store, two) -> None:
     with pytest.raises(StoreError, match="would leave rows that point at it"):
         delete(store, a)
     assert snapshot(con) == before
+
+
+def test_delete_removes_the_home_page_marks_of_the_room_and_keeps_another_rooms(store: Store, two) -> None:
+    """What a person has read of a room, and a board they set aside (#663), name the room, and a room's id is
+    reused after a delete: a mark left behind would hide a new room's first messages. Fails if either table
+    keeps a row of the deleted room (the foreign key check refuses it), or loses the other room's."""
+    a, b, _, _ = two
+    store.home_mark_seen(0, a.id, 1)
+    store.home_snooze(0, a.id, 7, 5.0)
+    store.home_mark_seen(0, b.id, 1)
+    store.home_snooze(0, b.id, 8, 5.0)
+    closed = store.rename_room(a.id, closed_room_name(a.name, a.id), expect=a.name)
+    delete(store, closed)
+    assert store.home_seen_marks(0) == {b.id: 1}
+    assert store.home_snoozes(0) == {(b.id, 8): 5.0}

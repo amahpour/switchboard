@@ -2,6 +2,20 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.55.0 (2026-11-09)
+
+### Added
+
+- Codex 0.166.0 can host a meeting call after browser sign-in with the plugin's local HTTP header helper configured. Its script key stays in a private file, is bound to one Codex thread, and opens only that thread's call registration. Agent-token hosting still works; no script reads Codex's credential store. See the meetings guide for setup.
+
+### Changed
+
+- **Third-party container images are pinned by digest.** joinly (the CPU build and the CUDA build), Caddy, the sandbox's Debian, the Kubernetes `busybox` probe and the Tart Ubuntu image are `name:tag@sha256:…`. A moved tag cannot change what is pulled. The digest is the multi-platform index when the registry publishes one. switchboard's own image stays `ghcr.io/amahpour/switchboard:<version>`: a release writes that tag before the image exists. To move a third-party pin, take the new tag's index digest and replace `name:tag@sha256:…` in the same places. CPU and CUDA joinly have different digests. In Helm, move `meetings.image.tag`, `meetings.image.digest` and `meetings.image.cudaDigest` together. [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#upgrading) has the steps. The plugins that host a call pick this up on update: Claude Code's is 0.16.1 and Codex's is 0.7.1.
+
+### Fixed
+
+- **The Codex plugin README no longer says `meeting-host stop` waits out five minutes of silence.** The relay tells the broker it left, so the call ends at once. The silence timeout is only the fallback when the broker cannot be reached. The host skills and the meetings guide already said this.
+
 ## 0.54.0 (2026-11-09)
 
 ### Upgrading

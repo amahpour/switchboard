@@ -51,13 +51,13 @@ def test_a_file_may_come_from_the_call_and_older_files_and_the_backup_are_kept(
     path = tmp_path / "old.db"
     room = at_40(path, monkeypatch)
     before = sqlite3.connect(path)
-    held = db.tables_of(db.schema_version(before))  # 40 has no whiteboard tables (those are 45)
+    held = db.tables_of(db.schema_version(before))  # 40 has no whiteboard tables (those are 46)
     counts = db.row_counts(before, held)
     assert counts["files"] == 2
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 45
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 46
     assert db.row_counts(con, held) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None
