@@ -9,3 +9,5 @@ Claude Code, Codex and Cursor load a `board` skill with the field-by-field how-t
 An agent may change the board once every 10 seconds, the same limit as `say`. A call inside that window changes nothing. It is not queued, so a late write cannot land on top of a newer drawing.
 
 The page that draws the board, and a picture an agent can look at, are a later change.
+
+The drawing pane is tracked in [#657](https://github.com/amahpour/switchboard/issues/657). It needs a security review before it can be added. The proposed Mermaid conversion and storyboard play view in [#658](https://github.com/amahpour/switchboard/issues/658) depend on that pane. The existing text summary does not need an open browser.

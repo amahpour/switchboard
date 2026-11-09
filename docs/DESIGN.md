@@ -3218,3 +3218,23 @@ The Excalidraw pane, its sandbox, and a raster the agent can see (#657). `draw_m
 
 **Tests.** `tests/unit/test_room_board.py` (the merge, the caps, each action, the summary, the rows and a room delete, with a `FakeClock`), `tests/unit/test_db_migrate_v45.py`, `tests/unit/test_hub.py` (a `board` frame stays in its room), `tests/integration/test_board_tool.py` (the tool, the envelope, the rate limit, two sockets, a hostile element, a private room).
 
+
+### 56.8 The drawing pane needs a security review (#657)
+
+The planned pane is Excalidraw 0.18.1 in a broker-served, opaque-origin iframe with `sandbox="allow-scripts"`, without `allow-same-origin`. The parent would own the room socket and relay bounded board data through `postMessage`, checking `event.source`. This is a proposal, not a route that exists. #658 depends on this pane; it must extend the existing `board` tool rather than add a tool or raise its budget.
+
+**The guard stop.** The maintainer's overnight instruction for #657 says: "If it needs the CSP loosened (`unsafe-eval`, `unsafe-inline`, `wasm-unsafe-eval` or another host), that is a guard: open the PR as a draft, explain exactly why, and stop there." Approval to vendor the built files is separate from approval to change a guard. No CSP, framing header, static lint exception or tool budget is changed here.
+
+There is no existing sandboxed Mermaid page to reuse. #57 proposed one, but the implemented renderer uses a shadow root in the main page (§33.2). Its inline-style exception is confined to the signed-in app response (§33.3). Every other response still gets `style-src 'self'`, `frame-ancestors 'none'` and `X-Frame-Options: DENY` from `broker/auth.py`; the static lint also rejects creating an iframe.
+
+The [spike's result](https://github.com/amahpour/switchboard/issues/622#issuecomment-6730461749) and its `spikes/whiteboard/server.py` on branch `spike/whiteboard` explicitly use a different policy for the frame: `style-src 'self' 'unsafe-inline'`, `img-src 'self' data: blob:`, and `worker-src 'self' blob:`. Excalidraw's React interface uses inline layout styles. An external CSS bundle alone does not remove those inline styles. The spike also needed CORS for modules and fonts loaded by the opaque-origin document, and patched the hard-coded `esm.sh` font fallback to a broker URL.
+
+Before implementing this pane, a review must decide the exact scope of these new exceptions:
+
+- A frame-only inline-style policy, rather than extending the main page's Mermaid exception by assumption. Scripts must still forbid inline code and evaluation.
+- Permission to frame that one page: a narrow `frame-ancestors` value and removal of its `DENY` header. Every other response must retain its current headers.
+- Whether the frame actually needs each `data:` or `blob:` image and worker source. An unused capability must stay forbidden.
+- CORS for the precise vendored module and font paths, and local-only font lookup; no CDN or new external host.
+- One static-lint exception for constructing this sandboxed frame, plus hashes for every vendored asset. The rest of the UI must keep its existing restrictions.
+
+After that review, implementation still needs the pinned rebuild and notices, room relay, text-only shapes, arrow binding fix, phone layout, hostile-input e2e tests, previews and a recording. A successful build or a spike screenshot is not evidence that those parts are finished.
