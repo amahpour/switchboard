@@ -71,13 +71,14 @@ def test_the_old_call_and_line_are_kept_as_the_brokers_own_and_a_hosted_call_can
     path = tmp_path / "old.db"
     room, call = at_41(path, monkeypatch)
     before = sqlite3.connect(path)
-    counts = db.row_counts(before, db.TABLES)
+    held = db.tables_of(db.schema_version(before))  # 41 has no whiteboard tables (those are 45)
+    counts = db.row_counts(before, held)
     assert counts["meetings"] == 1 and counts["messages"] >= 1
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 44
-    assert db.row_counts(con, db.TABLES) == counts
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 45
+    assert db.row_counts(con, held) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None
     old = con.execute("SELECT * FROM meetings WHERE id=?", (call,)).fetchone()
@@ -174,7 +175,8 @@ def test_the_backup_is_the_schema_41_database_and_a_new_one_has_the_same_tables_
     path = tmp_path / "old.db"
     at_41(path, monkeypatch)
     before = sqlite3.connect(path)
-    counts = db.row_counts(before, db.TABLES)
+    held = db.tables_of(db.schema_version(before))
+    counts = db.row_counts(before, held)
     before.close()
     migrated = db.open_db(path)
 
@@ -185,7 +187,7 @@ def test_the_backup_is_the_schema_41_database_and_a_new_one_has_the_same_tables_
     )
     assert "source" not in [r[1] for r in backup.execute("PRAGMA table_info(meetings)")]
     assert "meeting_id" not in [r[1] for r in backup.execute("PRAGMA table_info(messages)")]
-    assert db.row_counts(backup, db.TABLES) == counts
+    assert db.row_counts(backup, held) == counts
     backup.close()
 
     fresh = db.open_db(tmp_path / "new.db")

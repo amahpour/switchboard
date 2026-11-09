@@ -10,6 +10,31 @@ from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.rpc import TailSubscriber
 
 
+def test_a_board_frame_reaches_only_that_rooms_pages() -> None:
+    """#656: the whiteboard is a hub kind of its own, so a later page can follow one room. A page
+    on another room gets nothing. A tail asks only for messages and notices, so it gets nothing
+    either: the shapes are not a line in ``switchboard tail``."""
+
+    class Tail(H.Subscriber):
+        kinds = frozenset({"msg", "notice"})
+
+    h = Hub()
+    here, there, tail = WsSubscriber(), WsSubscriber(), Tail()
+    here.rooms, there.rooms, tail.rooms = {"#a"}, {"#b"}, {"#a"}
+    h.add(here)
+    h.add(there)
+    h.add(tail)
+    assert h.room_board("#a", {"seq": 1, "elements": [{"id": "n1"}], "full": False}) == 1
+    assert here.q.get_nowait() == {
+        "t": "board",
+        "room": "#a",
+        "seq": 1,
+        "elements": [{"id": "n1"}],
+        "full": False,
+    }
+    assert there.q.empty() and tail.q.empty()
+
+
 def test_publish_only_to_subscribed_rooms() -> None:
     h = Hub()
     a, b = WsSubscriber(), WsSubscriber()

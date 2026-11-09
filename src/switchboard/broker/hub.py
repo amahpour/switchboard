@@ -67,9 +67,11 @@ class Subscriber:
 class WsSubscriber(Subscriber):
     """A browser WebSocket. Frames are the §5.5 server->client shapes, plus ``people``: everyone
     on a hosted broker and who has a page open (§44.8), ``pins``: a room's pinned decisions
-    (§48), and ``icons``: an agent's avatar was set or reset (§29.11; the page fetches its stylesheet)."""
+    (§48), ``icons``: an agent's avatar was set or reset (§29.11; the page fetches its stylesheet),
+    and ``board``: a room's whiteboard changed (§56). ``review`` is the pull-request board, a
+    different thing."""
 
-    kinds: frozenset[str] = Subscriber.kinds | {"review", "people", "pins", "icons", "file"}
+    kinds: frozenset[str] = Subscriber.kinds | {"review", "people", "pins", "icons", "file", "board"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -150,6 +152,10 @@ class Hub:
         """A room's open review boards after a move, none once the last is closed (§37.5, §37.14);
         the web UI subscribes to it."""
         return self.publish("review", room, {"boards": boards})
+
+    def room_board(self, room: str, data: dict[str, Any]) -> int:
+        """Elements just accepted on the room's whiteboard (§56). Pages that follow the room get them."""
+        return self.publish("board", room, data)
 
     def file_stored(self, room: str, data: dict[str, Any]) -> int:
         """A pending upload finished: the page turns that message's card into a download (§53)."""

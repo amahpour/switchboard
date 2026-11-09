@@ -1,7 +1,7 @@
 """switchboard's agent tools (DESIGN.md §6, §49.2): the one interface every agent has.
 
 ``build_server`` builds the MCP server whose tools (join, leave, who, say, read, wait, pass, away,
-review, claim, status) the broker serves at ``/mcp`` to an agent with an agent token
+review, board, claim, status) the broker serves at ``/mcp`` to an agent with an agent token
 (``broker/agent_http.py``). It is a thin relay: every decision is made in the broker, through a
 ``ToolBackend``. Every broker error becomes a normal tool result (``{"ok": false, ...}``, never
 ``isError``: Codex skips PostToolUse on ``isError``, FINDINGS §4b), and the server declares no
@@ -165,7 +165,20 @@ def pass_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 # Every tool build_server registers; a test pins the two equal.
-TOOL_NAMES = ("join", "leave", "who", "claim", "say", "read", "wait", "pass", "away", "review", "status")
+TOOL_NAMES = (
+    "join",
+    "leave",
+    "who",
+    "claim",
+    "say",
+    "read",
+    "wait",
+    "pass",
+    "away",
+    "review",
+    "board",
+    "status",
+)
 
 
 def build_server(st: ToolBackend) -> FastMCP:
@@ -328,6 +341,43 @@ def build_server(st: ToolBackend) -> FastMCP:
         res = await st.call("agent.review", params)
         return dumps(res)
 
+    @mcp.tool(
+        annotations=RW,
+        description=("One room's whiteboard. action: note, box, connect, frame, move, edit, delete, read."),
+    )
+    async def board(
+        room: str,
+        action: str,
+        ctx: Context,
+        text: str = "",
+        id: str = "",
+        to: str = "",
+        shape: str = "",
+        x: float = 1_000_000_000.0,
+        y: float = 1_000_000_000.0,
+    ) -> str:
+        await st.prime(ctx)
+        tid = st.thread_id(ctx)
+        got = await st.find_cred(room, tid)
+        if isinstance(got, str):
+            return got
+        _name, cred = got
+        params: dict[str, Any] = {**st.base(cred, tid), "action": action}
+        if text:
+            params["text"] = text
+        if id:
+            params["id"] = id
+        if to:
+            params["to"] = to
+        if shape:
+            params["shape"] = shape
+        if x != 1_000_000_000.0:
+            params["x"] = x
+        if y != 1_000_000_000.0:
+            params["y"] = y
+        res = await st.call("agent.board", params)
+        return dumps(res)
+
     @mcp.tool(annotations=RO)
     async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
         """Unread messages in full, oldest first, "not shown here" ones too. before=<id>: older chat."""
@@ -430,6 +480,7 @@ def build_server(st: ToolBackend) -> FastMCP:
             "pass": pass_,
             "away": away,
             "review": review,
+            "board": board,
             "status": status,
         }
         for name, fn in aliases.items():

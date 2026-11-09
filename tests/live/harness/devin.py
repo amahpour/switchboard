@@ -22,7 +22,7 @@ from .run import Run
 
 REPO = Path(__file__).resolve().parents[3]
 MODEL = "swe-1-6-slow"
-TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "claim", "review", "status")
+TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "claim", "review", "board", "status")
 READ_CONFIG_FROM = ("agents_standard", "cursor", "windsurf", "claude", "copilot", "opencode", "zed")
 ALLOW_EXTRA = ["Exec(sh hold.sh)"]
 

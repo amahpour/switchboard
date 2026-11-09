@@ -49,7 +49,7 @@ def test_people_gain_admin_off_and_the_backup_is_schema_37(
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 44
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 45
     assert db.row_counts(con, db.tables_of(37)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None

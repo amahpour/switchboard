@@ -35,7 +35,7 @@ from .tmuxdrv import REAL_HOME, clean_env
 REPO = Path(__file__).resolve().parents[3]
 MODEL = "auto"
 SERVER = "switchboard-https"
-TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "claim", "review", "status")
+TOOLS = ("join", "leave", "who", "say", "read", "wait", "pass", "away", "claim", "review", "board", "status")
 # ``Mcp(<server>:<tool>)`` is the entry Cursor's own "Allowlist MCP Tool" writes; ``Shell(<command>)`` matches
 # a command that starts with those words, so this is the scratch script and not every ``sh``
 ALLOW = [f"Mcp({SERVER}:switchboard_{t})" for t in TOOLS] + ["Shell(sh hold.sh)"]

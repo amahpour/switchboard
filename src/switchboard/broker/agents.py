@@ -6,8 +6,8 @@ and a call names a membership (``m:<id>``) that is checked against the caller's 
 from the token and the harness's session id. There are no credentials and no processes: a session is
 told apart by what its harness says, and what it may do by its token (§11).
 
-- ``join``, ``leave``, ``who``, ``say``, ``read``, ``wait``, ``pass``, ``review``, ``claim``, ``away`` and
-  ``status`` are the tools (``mcp/server.py``).
+- ``join``, ``leave``, ``who``, ``say``, ``read``, ``wait``, ``pass``, ``review``, ``board``, ``claim``,
+  ``away`` and ``status`` are the tools (``mcp/server.py``).
 - ``http_hook`` takes a harness's hook report (§49.4): the engine updates status, confirms offers and,
   where the hook reply table allows it (``broker/hook_replies.py``), returns priority context, or holds
   a Stop hook until a message comes.
@@ -670,6 +670,23 @@ class AgentService:
                 sender_host=p.host or None,
             )
         return res
+
+    def board(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        """One action on the room's whiteboard (DESIGN.md §56). A change is rate-limited like a post
+        and, when it is kept, shares that post's clock. A read is not. The text an agent reads back
+        is already run through the envelope."""
+        p, m, room = self._member(conn, params)
+        action = params.get("action")
+        if action != "read":
+            retry = self.engine.check_say(p, m, None)
+            if retry is not None:
+                return {
+                    "changed": False,
+                    "reason": "rate_limited",
+                    "retry_after_s": retry,
+                    "error": f"rate limited: try again in about {retry:.0f} s",
+                }
+        return self.state.room_board.agent(room, m.screen_name, params, p.id if action != "read" else None)
 
     def _hand_back(
         self,

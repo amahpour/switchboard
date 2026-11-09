@@ -14,7 +14,7 @@ from fastmcp import Client
 from switchboard import __version__, guardrails
 from switchboard.mcp import server as srv
 
-TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "status", "claim"}
+TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "board", "status", "claim"}
 
 
 class Backend:
@@ -63,7 +63,7 @@ async def test_tools_annotations_and_instructions() -> None:
         ann = {n: t.annotations.model_dump(by_alias=True, exclude_none=True) for n, t in tools.items()}
         for n in ("who", "read", "wait"):
             assert ann[n] == {"readOnlyHint": True, "openWorldHint": False}
-        for n in ("say", "pass", "review", "claim"):
+        for n in ("say", "pass", "review", "board", "claim"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False}
         for n in ("join", "leave", "away", "status"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False, "idempotentHint": True}
@@ -95,8 +95,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # 3,700 for claims (#293); 3,900 for review's report (#291), the maintainer's yes: "Raise it".
     # #423's Markdown, Mermaid and concur fit inside 3,900 by shortening the review tool's own wording.
     # #629 moved that how-to into the review-board skill. The list measured 3,885 before and 3,653
-    # after, and the review tool 1,185 before and 953 after. The cap is the new size, down from 3,900.
-    assert size <= 3653, size
+    # after, and the review tool 1,185 before and 953 after.
+    # #656 adds one board tool, 512 on its own. The list measured 3,653 before and 4,165 after.
+    # The maintainer's answer "1. Yes" to "Can I raise it and start #656 tonight" raises the cap
+    # for that one tool and nothing else. The cap is the measured size, with no room to grow.
+    assert size == 4165, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
@@ -141,6 +144,35 @@ async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
     assert "shop/cart.py:40-58" in text and "switchboard_review" in text
     for action in ACTIONS:
         assert action in text, action
+
+
+async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
+    """#656: one ``board`` tool, the same shape as ``review``. The description names every action
+    and stays one line; the fields, the caps and what text is live in one skill, the same file in
+    the three plugins that load one. A second tool, or a description that grows the how-to back,
+    fails the size test above."""
+    from switchboard.board import ACTIONS
+
+    _st, server = make()
+    async with Client(server, mode="legacy") as c:
+        board = next(t for t in await c.list_tools() if t.name == "board")
+    desc = board.description or ""
+    assert "\n" not in desc
+    for action in ACTIONS:
+        assert action in desc, action
+    assert set(board.input_schema["properties"]) == {"room", "action", "text", "id", "to", "shape", "x", "y"}
+    root = Path(__file__).resolve().parents[2]
+    paths = [
+        root / "plugins" / name / "skills" / "board" / "SKILL.md" for name in ("claude", "codex", "cursor")
+    ]
+    bodies = [p.read_bytes() for p in paths]
+    assert bodies[0] == bodies[1] == bodies[2]
+    text = bodies[0].decode()
+    assert "name: board" in text and "switchboard_board" in text
+    for action in ACTIONS:
+        assert action in text, action
+    for field in ("text", "id", "to", "shape", "x", "y"):
+        assert field in text, field
 
 
 def test_instructions_are_tiny() -> None:
