@@ -2,7 +2,7 @@
 
 ## The UI screenshots (`ui/`)
 
-The screenshots of the web UI in `ui/` (the README shows `ui/desktop-light.png`, with `ui/desktop-dark.png` in dark mode) are made by `ui_shots.py`, which you run by hand (pytest never runs or imports it; CI's `frontend` job runs it into a temp dir and uploads the pictures as an artifact):
+The screenshots of the web UI in `ui/` (the docs home page shows `ui/desktop-light.png`, with `ui/desktop-dark.png` in dark mode) are made by `ui_shots.py`, which you run by hand (pytest never runs or imports it; CI's `frontend` job runs it into a temp dir and uploads the pictures as an artifact):
 
 ```bash
 uv run python docs/media/ui_shots.py              # writes docs/media/ui/*.png
