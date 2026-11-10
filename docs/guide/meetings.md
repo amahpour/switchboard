@@ -86,7 +86,8 @@ can report when speech finishes. [The reference](meetings-reference.md#let-agent
 **Listening.** Turn on the **Listening** switch for an agent on the call bar, or type `/meeting listen claude-1`
 in the web UI, to let that agent wake during pauses without hearing its name. Members and the agent's details say
 "listening" while it is on. Brief it first on what to watch for and when to answer. It wakes after
-15 seconds of quiet or 40 seconds of waiting call talk, up to 40 listening wakes per call.
+15 seconds of quiet or 40 seconds of waiting call talk, or 3 seconds after someone asks a question (a line that
+ends in "?"), up to 40 listening wakes per call.
 `/meeting listen claude-1 off` stops it; ending the call does too. Voice is separate, so it can
 listen and answer only in the room. Anyone on the call can now start its turns. Approvals off or
 unknown gets a warning. [The reference](meetings-reference.md#let-an-agent-listen) has the limits.

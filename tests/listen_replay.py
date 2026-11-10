@@ -44,8 +44,11 @@ class Utterance:
     posted: float  # when the line reaches the room
 
 
-def script(lag_s: float = LAG_S) -> list[Utterance]:
-    rows = json.loads(FIXTURE.read_text())
+CONVERSATION = FIXTURE.with_name("one_to_one.json")
+
+
+def script(lag_s: float = LAG_S, fixture: Path = FIXTURE) -> list[Utterance]:
+    rows = json.loads(fixture.read_text())
     out: list[Utterance] = []
     t = START_S
     for i, r in enumerate(rows):
@@ -74,25 +77,26 @@ class Replay:
     min_budget: int = 0
     key_posted: float = 0.0
     date_posted: float = 0.0
+    fixture: Path = FIXTURE
 
     def wake_with(self, index: int) -> Wake | None:
         return next((w for w in self.wakes if index in w.lines), None)
 
     def delay_for(self, tag: str) -> float | None:
         """Seconds from the tagged line reaching the room to the wake that carries it."""
-        u = next(u for u in script() if u.tag == tag)
+        u = next(u for u in script(fixture=self.fixture) if u.tag == tag)
         w = self.wake_with(u.index)
         return None if w is None else w.at - u.posted
 
     def lines_before_wake(self, tag: str) -> int | None:
         """Lines posted after the tagged one and before its wake: how far the talk had gone on."""
-        u = next(u for u in script() if u.tag == tag)
+        u = next(u for u in script(fixture=self.fixture) if u.tag == tag)
         w = self.wake_with(u.index)
         return None if w is None else max(i for i in w.lines) - u.index
 
     def line_delays(self) -> list[float]:
         """For every line a wake carried: seconds from reaching the room to that wake."""
-        lines = script()
+        lines = script(fixture=self.fixture)
         return sorted(w.at - lines[i].posted for w in self.wakes for i in w.lines)
 
     def delay_pct(self, q: float) -> float:
@@ -117,17 +121,22 @@ def replay(
     lag_s: float = LAG_S,
     budget_per_hour: int = 60,
     listen_max_wakes: int = 40,
+    ask_s: float | None = None,
+    fixture: Path = FIXTURE,
     tmp: Path,
 ) -> Replay:
-    lines = script(lag_s)
+    """``ask_s`` is ``[delivery] listen_ask_s``; None leaves the broker's default."""
+    lines = script(lag_s, fixture)
     clock = FakeClock()
     t0 = clock.now()
     root = tmp
+    extra = {} if ask_s is None else {"listen_ask_s": ask_s}
     cfg = Config(human_name="alice").with_delivery(
         listen_quiet_s=quiet_s,
         listen_hold_s=max_hold_s,
         budget_per_hour=budget_per_hour,
         listen_max_wakes=listen_max_wakes,
+        **extra,
     )
     w = World(root, clock, cfg)
     p, m, sink = waiting(w, "alpha")
@@ -135,7 +144,7 @@ def replay(
     w.store.set_meeting_live(call.id)
     if listening:
         w.store.set_listen(m.id, True, call.id, listen_max_wakes)
-    out = Replay(quiet_s, max_hold_s, listening, turn_s, min_budget=budget_per_hour)
+    out = Replay(quiet_s, max_hold_s, listening, turn_s, min_budget=budget_per_hour, fixture=fixture)
     ids: dict[int, int] = {}  # message id -> utterance index
     posts = sorted(lines, key=lambda u: u.posted)
     nxt = 0
@@ -190,8 +199,8 @@ def replay(
         if nxt >= len(posts) and now > end_of_call + 120 and back_at is None:
             break
     out.duration_s = end_of_call
-    out.key_posted = next(u.posted for u in lines if u.tag == "key")
-    out.date_posted = next(u.posted for u in lines if u.tag == "date")
+    out.key_posted = next((u.posted for u in lines if u.tag == "key"), 0.0)
+    out.date_posted = next((u.posted for u in lines if u.tag == "date"), 0.0)
     room = w.store.room_by_id(w.room.id)
     assert room is not None
     out.min_budget = min(out.min_budget, room.budget_remaining)

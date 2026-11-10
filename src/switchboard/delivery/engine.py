@@ -208,6 +208,7 @@ class Engine:
             room=room,
             listen_quiet_s=self.d.listen_quiet_s,
             listen_hold_s=self.d.listen_hold_s,
+            listen_ask_s=self.d.listen_ask_s,
         )
 
     # the humans (DESIGN.md §32): the owner, and on a hosted broker everyone the owner added
@@ -433,6 +434,7 @@ class Engine:
             listening_call=m.listen_call_id if m.listen else None,
             listen_quiet_s=self.d.listen_quiet_s,
             listen_hold_s=self.d.listen_hold_s,
+            listen_ask_s=self.d.listen_ask_s,
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
@@ -1586,6 +1588,7 @@ class Engine:
                 listening_call=m.listen_call_id if m.listen else None,
                 listen_quiet_s=self.d.listen_quiet_s,
                 listen_hold_s=self.d.listen_hold_s,
+                listen_ask_s=self.d.listen_ask_s,
             )
             if rel is None or rel.kind != "wake":
                 continue
@@ -1747,6 +1750,7 @@ class Engine:
                 listening_call=m.listen_call_id if m.listen else None,
                 listen_quiet_s=self.d.listen_quiet_s,
                 listen_hold_s=self.d.listen_hold_s,
+                listen_ask_s=self.d.listen_ask_s,
             )
             if rel is None:
                 continue

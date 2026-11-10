@@ -124,7 +124,7 @@ Tell the people on the call. The bot joins as `switchboard (transcribing)`.
 An agent wakes when someone on the call says its name the way you would address it: "Claude", "hey Codex", "Claude one" when the room has claude-1. It wakes the agent that holds a claim in the same way when a line names it (someone reading out `SYSINT-645` wakes whoever claimed that ticket). The earlier lines of the call come along with that wake. Talk that names nobody stays in the room and shows up on the agent's next `read()`, and it does not start a turn by itself unless you enable listening. "Claude" with both claude-1 and claude-2 in the room wakes neither; the room asks you to say the number.
 
 **Let an agent listen without being named.** In the web UI, the **Listening** switch for that agent on the call bar, or `/meeting listen claude-1`, lets that
-agent wake after 15 seconds of quiet or 40 seconds of waiting call talk. Brief it on what to
+agent wake after 15 seconds of quiet, 3 seconds after a question (a line ending in "?"), or 40 seconds of waiting call talk. Brief it on what to
 watch for first. `/meeting listen claude-1 off` stops it (your own CLI may stop it too), and
 ending the call clears listening. Each agent has 40 listening wakes per call by default, beside
 the room's hourly budget; reaching the cap stops it with a notice. Toggling cannot reset that

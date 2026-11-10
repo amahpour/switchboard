@@ -1,0 +1,128 @@
+[
+ {
+  "gap_s": 0,
+  "speaker": "alice",
+  "text": "I want to talk through the export feature with you. Users keep asking for a CSV download.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "Where does the export code live right now?",
+  "tag": "q1"
+ },
+ {
+  "gap_s": 24,
+  "speaker": "alice",
+  "text": "Okay, that is what I thought. The query runs in the request handler, so big exports time out.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "So the plan is to move it to a background job.",
+  "tag": ""
+ },
+ {
+  "gap_s": 22,
+  "speaker": "alice",
+  "text": "Does the job queue we already have support retries?",
+  "tag": "q2"
+ },
+ {
+  "gap_s": 26,
+  "speaker": "alice",
+  "text": "Good. I only want a retry for network errors, not for bad input.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "How would you tell those two apart in the worker?",
+  "tag": "q3"
+ },
+ {
+  "gap_s": 25,
+  "speaker": "alice",
+  "text": "That makes sense. Let us keep the error classes in one small module.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Can you list the tests we would need for that module?",
+  "tag": "q4"
+ },
+ {
+  "gap_s": 27,
+  "speaker": "alice",
+  "text": "Fine, three tests is enough for a first version.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Now the file itself. I would stream the rows instead of building the whole file in memory.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "Is there any reason not to stream it?",
+  "tag": "q5"
+ },
+ {
+  "gap_s": 23,
+  "speaker": "alice",
+  "text": "Right. And the download link should expire after a day.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "What would you use to store the file until then?",
+  "tag": "q6"
+ },
+ {
+  "gap_s": 24,
+  "speaker": "alice",
+  "text": "Local disk is fine for now, we can move to object storage later.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "One more thing. Someone asked me, and I quote, \"is the export limited to admins?\"",
+  "tag": "q7"
+ },
+ {
+  "gap_s": 25,
+  "speaker": "alice",
+  "text": "For now yes, admins only. We can open it up after the first release.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Let me think out loud for a moment about the column order.",
+  "tag": ""
+ },
+ {
+  "gap_s": 8,
+  "speaker": "alice",
+  "text": "I think it should match the table on the screen. Do you agree?",
+  "tag": "q8"
+ },
+ {
+  "gap_s": 24,
+  "speaker": "alice",
+  "text": "Good. Last question, how long do you think the whole thing will take (roughly)?",
+  "tag": "q9"
+ },
+ {
+  "gap_s": 26,
+  "speaker": "alice",
+  "text": "That works for me. Thanks, this was useful.",
+  "tag": ""
+ }
+]
