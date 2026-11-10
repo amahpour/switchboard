@@ -79,10 +79,13 @@ services:
     profiles: [cpu]
     image: ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0   # a release, not :latest; the tag docs/DEPLOY.md runs (3.7 GB)
     volumes:
-      # Two fixes that joinly 0.5.4 does not have yet, mounted over its own copies and pinned by sha256 in
+      # Fixes that joinly 0.5.4 does not have yet, mounted over its own copies and pinned by sha256 in
       # meeting/fixes.pins: Zoom's speaker names (joinly-ai/joinly#187) and the first word of a line (#620).
       - ${SB_FIXES_DIR:?the host script sets this}/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
       - ${SB_FIXES_DIR}/transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
+      # The voice patch (#713, deploy/joinly/NOTICE): `speak_text` takes a voice for one line. Also pinned in fixes.pins.
+      - ${SB_FIXES_DIR}/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro
+      - ${SB_FIXES_DIR}/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro
 
   joinly-gpu:
     <<: *joinly
@@ -98,6 +101,8 @@ services:
     volumes:
       - ${SB_FIXES_DIR}/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro
       - ${SB_FIXES_DIR}/transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
+      - ${SB_FIXES_DIR}/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro
+      - ${SB_FIXES_DIR}/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro
       # a model you name is downloaded once (about 1.6 GB for large-v3-turbo) and kept here for the next call;
       # the CUDA image holds a different default model than the CPU one, so this volume is its own
       - joinly-models-cuda:/home/app/.cache/huggingface

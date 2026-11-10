@@ -861,21 +861,89 @@ def test_a_fix_that_cannot_be_fetched_stops_before_anything_is_made(machine: Mac
 
 def test_the_pins_are_the_ones_the_self_test_and_deploy_md_name() -> None:
     """The shipped pins (``meeting/fixes.pins``) are the files the broker's own bot runs with in the live
-    self-test and the ones docs/DEPLOY.md tells an operator to download: one set. Fails if they drift
-    apart."""
+    self-test and the ones docs/DEPLOY.md tells an operator to use: one set. Fails if they drift apart. The
+    voice patch is a pair of files this repository holds, so it is checked in
+    ``tests/unit/test_joinly_voice_patch.py``."""
     text = (ROOT / "tests" / "live" / "test_meeting_selftest.py").read_text()
     pins = {}
     for line in (PLUGIN / "meeting" / "fixes.pins").read_text().splitlines():
         if line and not line.startswith("#"):
             name, sha, url = line.split()
             pins[name] = (sha, url)
-    assert set(pins) == {"zoom.py", "transcription.py"}
+    assert set(pins) == {"zoom.py", "transcription.py", "server.py", "kokoro.py"}
     assert f'ZOOM_FIX_SHA256 = "{pins["zoom.py"][0]}"' in text
     assert f'PREROLL_FIX_SHA256 = "{pins["transcription.py"][0]}"' in text
     deploy = (ROOT / "docs" / "DEPLOY.md").read_text()
     for name, (sha, url) in pins.items():
-        assert url in deploy, name  # the commit-pinned address DEPLOY.md downloads from
+        if not url.startswith("plugin:"):
+            assert url in deploy, name  # the commit-pinned address DEPLOY.md downloads from
         assert sha in deploy, name  # and the hash it checks
+
+
+def shipped_pins(m: Machine) -> dict[str, bytes]:
+    """The plugin's own voice-patch files, pinned the way the shipped pins pin them (``plugin:<path>``)."""
+    lines = (PLUGIN / "meeting" / "fixes.pins").read_text().splitlines()  # the shipped ones, not the test's
+    out = {}
+    for line in lines:
+        if line.startswith(("server.py", "kokoro.py")):
+            name, _, url = line.split()
+            out[name] = (m.plugin / "meeting" / url.removeprefix("plugin:")).read_bytes()
+    return out
+
+
+def test_a_fix_the_plugin_ships_is_copied_without_a_download_and_checked_like_any_other(
+    machine: Machine,
+) -> None:
+    """The voice patch is in the plugin (``plugin:joinly/server.py`` in ``fixes.pins``): the script copies it
+    into the fixes folder with no request, as a public file, and refuses a copy that is not the pinned file
+    and keeps nothing. Fails if it is downloaded, mounted unchecked, or kept after a mismatch."""
+    m = machine
+    shipped = shipped_pins(m)
+    assert set(shipped) == {"server.py", "kokoro.py"}
+    pins = (PLUGIN / "meeting" / "fixes.pins").read_text().splitlines()
+    ours = [line for line in pins if line.startswith(("server.py", "kokoro.py"))]
+    zoom = m.plugin / "meeting" / "fixes.pins"
+    zoom.write_text(
+        "\n".join(
+            [
+                *[
+                    f"{n} {hashlib.sha256(d).hexdigest()} {m.stub.url}/fix/{n}"
+                    for n, d in (("zoom.py", FIX_ZOOM), ("transcription.py", FIX_TRANSCRIPTION))
+                ],
+                *ours,
+            ]
+        )
+        + "\n"
+    )
+    m.stub.fetches.clear()
+    ok = m.start()
+    assert ok.returncode == 0, ok.stderr
+    for name, data in shipped.items():
+        assert (m.fix_dir / name).read_bytes() == data
+        assert stat.S_IMODE((m.fix_dir / name).stat().st_mode) == 0o644
+    assert m.stub.fetches == []  # nothing was downloaded
+    # a plugin file that is not the pinned one is refused, and no copy is kept
+    for name in shipped:
+        (m.fix_dir / name).unlink()
+    (m.plugin / "meeting" / "joinly" / "server.py").write_bytes(b"# not the pinned file\n")
+    refused = m.start()
+    assert refused.returncode == 1 and "not the file meeting/fixes.pins pins" in refused.stderr
+    assert not (m.fix_dir / "server.py").exists()
+    assert not list(m.fix_dir.glob(".fetch.*"))
+
+
+def test_a_pin_may_not_name_a_path_outside_the_plugins_meeting_folder(machine: Machine) -> None:
+    """``plugin:../../x`` would copy any file the user can read into the folder joinly mounts. Fails if the
+    script follows it."""
+    m = machine
+    data = b"# x\n"
+    (m.plugin / "meeting" / "fixes.pins").write_text(
+        f"evil.py {hashlib.sha256(data).hexdigest()} plugin:../../data/x\n"
+    )
+    (m.root / "data" / "x").write_bytes(data)
+    r = m.start()
+    assert r.returncode == 1 and "path that leaves the plugin" in r.stderr
+    assert not (m.fix_dir / "evil.py").exists()
 
 
 # ------------------------------------------------------------------------ pulling, sweeping, stopping
@@ -991,7 +1059,7 @@ def test_the_relays_compose_file_keeps_joinly_private_and_ties_its_life_to_the_r
     assert cpu_name.startswith("ghcr.io/joinly-ai/joinly:v") and ":latest" not in cpu
     assert cpu_digest.startswith("sha256:") and gpu_digest.startswith("sha256:")
     mounts = [v for s in ("joinly", "joinly-gpu") for v in services[s]["volumes"]]
-    assert sum(v.endswith(":ro") for v in mounts) == 4  # the two fixes, in both
+    assert sum(v.endswith(":ro") for v in mounts) == 8  # the four fixes (the voice patch is two), in both
     models = [v for v in services["joinly-gpu"]["volumes"] if "huggingface" in v]
     assert len(models) == 1 and not [v for v in services["joinly"]["volumes"] if "huggingface" in v]
 

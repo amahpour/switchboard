@@ -217,7 +217,7 @@ credential() { # prints the credential, or nothing: the agent token, else the li
 }
 
 # ------------------------------------------------------------------------------------------------ the fixes
-# Each fix is a file named in fixes.pins with its sha256 and where to fetch it. Kept in the data folder, checked
+# Each fix is a file named in fixes.pins with its sha256 and where to get it (a URL, or a file the plugin ships). Kept in the data folder, checked
 # against the pin every time, fetched when missing, and refused (and removed) when it is not the pinned file.
 ensure_fixes() {
   fixes=$data/joinly-fixes
@@ -229,12 +229,22 @@ ensure_fixes() {
     is_hex "$sum" 64 || die "meeting/fixes.pins: $name has no sha256"
     have=$(sha256 <"$fixes/$name" 2>/dev/null)
     if [ "$have" != "$sum" ]; then
-      command -v curl >/dev/null 2>&1 || die "curl is needed to fetch $name"
       tmp=$(mktemp "$fixes/.fetch.XXXXXX") || die "cannot write in $fixes"
-      if ! curl -fsSL --max-time 120 -o "$tmp" "$url" 2>/dev/null; then
-        rm -f "$tmp"
-        die "could not fetch $name from the address in meeting/fixes.pins; run again when it can be reached"
-      fi
+      case $url in
+        plugin:*) # a file this plugin ships: no download, and the same check as for one that was fetched
+          rel=${url#plugin:}
+          case /$rel/ in */../* | */./* | //*) rm -f "$tmp"; die "meeting/fixes.pins: $name has a path that leaves the plugin" ;; esac
+          src=$plugin/meeting/$rel
+          cp "$src" "$tmp" 2>/dev/null || { rm -f "$tmp"; die "the plugin has no $src: reinstall the plugin"; }
+          ;;
+        *)
+          command -v curl >/dev/null 2>&1 || { rm -f "$tmp"; die "curl is needed to fetch $name"; }
+          if ! curl -fsSL --max-time 120 -o "$tmp" "$url" 2>/dev/null; then
+            rm -f "$tmp"
+            die "could not fetch $name from the address in meeting/fixes.pins; run again when it can be reached"
+          fi
+          ;;
+      esac
       got=$(sha256 <"$tmp")
       if [ "$got" != "$sum" ]; then
         rm -f "$tmp"

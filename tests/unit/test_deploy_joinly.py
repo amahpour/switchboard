@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "deploy" / "kubernetes"
 PATCH = DEPLOY / "meetings" / "joinly.yaml"
 ZOOM_PATCH = DEPLOY / "meetings" / "joinly-zoom-fix.yaml"
+VOICE_PATCH = DEPLOY / "meetings" / "joinly-voice-patch.yaml"
 PREROLL_PATCH = DEPLOY / "meetings" / "joinly-preroll-fix.yaml"
 
 
@@ -158,6 +159,28 @@ def test_the_preroll_fix_is_a_patch_of_its_own_over_the_files_docs_name() -> Non
     assert f"{mount['mountPath']}:ro" in deploy_md, "DEPLOY.md's docker run mounts the same file"
     assert "joinly-preroll-fix" not in PATCH.read_text().replace("joinly-preroll-fix.yaml", "")
     assert "joinly-preroll-fix" not in ZOOM_PATCH.read_text()
+
+
+def test_the_voice_patch_is_a_patch_of_its_own_over_the_two_files_docs_name() -> None:
+    """The voice patch (#713) is two files of joinly in one ConfigMap, each mounted with subPath over the
+    image's copy, so it is a patch of its own for the same reason as the other fixes. Fails if a mount path
+    drifts from DEPLOY.md's `docker run` or the plugin's compose file, if a mount is writable, if the volume
+    reaches the sidecar patch or another fix, or if the keys are not the repository's file names."""
+    pod = _pod(VOICE_PATCH)
+    mounts = _container(pod, "joinly")["volumeMounts"]
+    assert {m["subPath"] for m in mounts} == {"server.py", "kokoro.py"}
+    assert all(m["readOnly"] is True for m in mounts)
+    (volume,) = pod["volumes"]
+    assert {m["name"] for m in mounts} == {volume["name"]}
+    assert volume["configMap"]["name"] == "joinly-voice-patch"
+    deploy_md = (ROOT / "docs" / "DEPLOY.md").read_text()
+    compose = (ROOT / "plugins" / "claude" / "meeting" / "compose.yaml").read_text()
+    for m in mounts:
+        assert f"{m['mountPath']}:ro" in deploy_md, "DEPLOY.md's docker run mounts the same file"
+        assert f"{m['mountPath']}:ro" in compose, "and so does the hosted call's compose file"
+        assert (ROOT / "deploy" / "joinly" / m["subPath"]).is_file()
+    for other in (PATCH, ZOOM_PATCH, PREROLL_PATCH):
+        assert "joinly-voice-patch" not in other.read_text()
 
 
 def test_the_preroll_fix_is_pinned_to_one_commit_everywhere_it_is_named() -> None:

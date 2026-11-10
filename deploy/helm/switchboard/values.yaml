@@ -104,3 +104,9 @@ meetings:
   # Empty mounts nothing. joinly needs no setting for it: the fix is its default.
   prerollFix:
     configMap: ""
+  # joinly 0.5.4 takes one voice for a whole call (#713). Name a ConfigMap that holds this repository's two
+  # patched files (deploy/joinly/) as the keys `server.py` and `kokoro.py`, and they are mounted read-only
+  # over the image's copies, so `speak_text` can take a voice for one line. Make it first: the pod can't start
+  # without it. DEPLOY.md, "A voice for each line". Empty mounts nothing.
+  voicePatch:
+    configMap: ""

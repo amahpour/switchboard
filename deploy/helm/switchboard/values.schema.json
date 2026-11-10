@@ -86,6 +86,13 @@
           "properties": {
             "configMap": {"type": "string"}
           }
+        },
+        "voicePatch": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "configMap": {"type": "string"}
+          }
         }
       }
     }

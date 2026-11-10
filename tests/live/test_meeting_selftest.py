@@ -8,7 +8,7 @@ Two joinly containers are started (published on a free loopback port each, since
 switchboard's, which the throwaway broker's ``[meeting] joinly_url`` names, and a test speaker named
 "switchboard self-test speaker" that this test drives as an MCP client the way the broker drives its own. The
 broker runs in this process in a temp home, with a room and a scripted agent, ``claude-1``. Both bots join
-the call named in the file, and six steps run in order, each with what it expected, what it saw and how long
+the call named in the file, and seven steps run in order, each with what it expected, what it saw and how long
 it took (``harness/selftest.py`` writes them as JSON and a Markdown table):
 
 1. ``/meeting <link>`` from a person: the bar goes live.
@@ -17,7 +17,11 @@ it took (``harness/selftest.py`` writes them as JSON and a Markdown table):
 4. ``/meeting voice on``, and claude-1 says ``@call I can hear you loud and clear``: the speaker's transcript
    has most of those words.
 5. ``/meeting snapshot``: a stored file whose bytes are a JPEG, and its card in the room.
-6. ``/meeting leave`` and the speaker leaves: the bar ends and no bot is left in the call.
+6. Two voices (#713): the speaker, whose joinly has the voice patch, says one line in each of two Kokoro
+   voices, and the broker's bot hears both (each reaches the room as a call line). A third line, in a voice
+   Kokoro does not have, is answered with the patch's "voice was not found" and still spoken. Not run with
+   stock joinly. Whether the two voices *sound* different is for a person to hear on the call.
+7. ``/meeting leave`` and the speaker leaves: the bar ends and no bot is left in the call.
 
 The link has the call's passcode in it. It is read from the file named by ``SWITCHBOARD_MEETING_URL_FILE``
 (mode 0600, refused otherwise), never from an argument; it is held as a ``SecretLink``; every error that
@@ -25,7 +29,7 @@ might quote it is scrubbed first; and at the end the broker's database, its mess
 for any piece of it. Whatever happens, both bots leave and both containers are removed. A failed step keeps
 both containers' logs in the output folder, scrubbed of the link, and the report names the files; delete
 them after reading. A step that can't start because an earlier one failed is recorded as failed ("not
-attempted"), so a run is green only if all six passed.
+attempted"), so a run is green only if all seven passed.
 """
 
 from __future__ import annotations
@@ -97,6 +101,19 @@ PREROLL_FIX_URL = (
 )
 PREROLL_FIX_SHA256 = "6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97"
 CONTROLLER_PY = "/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py"
+# The voice patch (#713, deploy/joinly/NOTICE): `speak_text` takes a voice for one line. Two files of this
+# repository, mounted into every container on any platform, pinned by sha256 like the others. Step 6 uses it.
+VOICE_PATCH = {
+    "server.py": (
+        "b168efc06793f6ee1873f1f9d28bd8e01692a4577408a1637968ad2b2d6a38c0",
+        "/app/.venv/lib/python3.12/site-packages/joinly/server.py",
+    ),
+    "kokoro.py": (
+        "d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3",
+        "/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py",
+    ),
+}
+VOICE_PATCH_DIR = Path(__file__).resolve().parents[2] / "deploy" / "joinly"
 STOCK_ENV = "SWITCHBOARD_SELFTEST_STOCK_JOINLY"
 # SWITCHBOARD_SELFTEST_LOGS=1 keeps each container's log, scrubbed of the link, in the output folder (0600),
 # on a pass as well. A failed step keeps them either way (#642): the run that failed is the one to read.
@@ -175,8 +192,23 @@ STEPS = {
         "a snapshot is a room file and a card",
         "a stored file whose bytes are a JPEG, and its card in the room",
     ),
-    6: ("the bots leave", "the bar ends and the speaker no longer sees the bot; the speaker leaves"),
+    6: (
+        "two voices are heard",
+        "the speaker says a line in each of two voices and the bot hears both; an unknown voice falls back",
+    ),
+    7: ("the bots leave", "the bar ends and the speaker no longer sees the bot; the speaker leaves"),
 }
+# Step 6's words: two lines to be heard, in two voices Kokoro v1.0 has (an American man and a British woman),
+# neither of which is switchboard's default (bm_george) or joinly's (af_bella); and a voice no one has.
+VOICE_LINES = (
+    "The green lighthouse keeps the quiet harbour company",
+    "A small orange kite is circling above the old bridge",
+)
+VOICES = ("am_adam", "bf_emma")
+UNKNOWN_VOICE = "zz_nobody"
+UNKNOWN_LINE = "Nothing here has that voice"
+NOT_FOUND = "voice was not found"  # what the patched speak_text answers when Kokoro lacks the voice
+HEARD_BOTH_S = 90.0
 
 
 # ---------------------------------------------------------------------- docker
@@ -306,8 +338,10 @@ class Speaker:
         )
         self.joined = True
 
-    async def say(self, text: str) -> str:
-        return reply_text(await self.call("speak_text", {"text": text}, timeout=SPEAK_S))
+    async def say(self, text: str, voice: str | None = None) -> str:
+        """Speak ``text``; with ``voice``, in that Kokoro voice (the voice patch, #713)."""
+        args = {"text": text, **({"voice": voice} if voice else {})}
+        return reply_text(await self.call("speak_text", args, timeout=SPEAK_S))
 
     async def segments(self) -> list[selftest.Segment]:
         return selftest.segments_of(await self.call("get_transcript", {"mode": "full"}))
@@ -345,7 +379,9 @@ async def until(check: Callable[[], Any], seconds: float, every: float = POLL_S)
 
 
 class World:
-    """The broker, its room, its scripted agent, the speaker and the six steps."""
+    """The broker, its room, its scripted agent, the speaker and the seven steps."""
+
+    voice_patch = os.environ.get(STOCK_ENV, "") != "1"  # step 6 needs the patched joinly; stock has none
 
     def __init__(
         self,
@@ -423,7 +459,8 @@ class World:
             result = StepResult(n, name, out.ok, expected, seen, time.monotonic() - began, out.ratio)
         self.steps.append(result)
         print(
-            f"[{n}/6] {'PASS' if result.ok else 'FAIL'} {name} ({result.seconds:.1f} s) {result.seen[:160]}"
+            f"[{n}/{len(STEPS)}] {'PASS' if result.ok else 'FAIL'} {name} ({result.seconds:.1f} s)"
+            f" {result.seen[:160]}"
         )
 
     def needs_bot(self) -> str | None:
@@ -642,7 +679,33 @@ class World:
         )
         return Outcome(not problems, seen)
 
-    # -- 6: both bots leave
+    # -- 6: two voices (the voice patch, #713)
+    async def voices(self) -> Outcome:
+        """The speaker says two lines in two voices and an unknown voice's line. Both lines must reach the
+        room
+        as call lines (the bot heard them), neither answer may say the voice was not found (Kokoro has both),
+        and the third must (the patch falls back and still speaks)."""
+        cursor = self.last_id()
+        answers = []
+        for line, voice in zip(VOICE_LINES, VOICES, strict=True):
+            answers.append(await self.speaker.say(line, voice=voice))
+        unknown = await self.speaker.say(UNKNOWN_LINE, voice=UNKNOWN_VOICE)
+        if any(NOT_FOUND in a for a in answers):
+            return Outcome(False, f"Kokoro has no such voice among {VOICES}: {' / '.join(answers)}"[:300])
+        if NOT_FOUND not in unknown:
+            return Outcome(False, f"an unknown voice was not reported as such: {unknown[:200]}")
+        heard = ""
+
+        def arrived() -> bool:
+            nonlocal heard
+            heard = " / ".join(m["text"] for m in self.messages(cursor) if m.get("sender_kind") == "meeting")
+            return all(selftest.matches(line, heard) for line in VOICE_LINES)
+
+        ok = await until(arrived, HEARD_BOTH_S)
+        shown = f"voices {', '.join(VOICES)} accepted; unknown voice fell back; heard: {heard or 'nothing'}"
+        return Outcome(bool(ok), shown[:400])
+
+    # -- 7: both bots leave
     async def leave(self) -> Outcome:
         if not self.bot_seen:  # "the bot is gone" means nothing if the bot was never seen
             self.bot_seen = await self.bot_listed() is True
@@ -687,7 +750,9 @@ class World:
         await self.step(3, self.wake, [self.needs_bot, self.needs_speaker])
         await self.step(4, self.hear, [self.needs_bot, self.needs_speaker])
         await self.step(5, self.snapshot, [self.needs_bot])
-        await self.step(6, self.leave, [self.needs_bot, self.needs_speaker])
+        if self.voice_patch:
+            await self.step(6, self.voices, [self.needs_bot, self.needs_speaker])
+        await self.step(7, self.leave, [self.needs_bot, self.needs_speaker])
         if self.observer is not None:
             with contextlib.suppress(Exception):
                 await self.observer.leave()
@@ -762,7 +827,7 @@ async def test_every_meetings_feature_against_a_real_call(
     tmp_home: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Both bots join one real call and every meetings feature is used in it. Fails (and names the steps) if
-    any of the six steps fails, if a step could not start, if a bot or a container is left behind, or if any
+    any of the seven steps fails, if a step could not start, if a bot or a container is left behind, or if any
     piece of the call's link is found in the broker's database, messages or log. Each step's expected and
     seen strings and timings are in the report."""
     link = read_link()
@@ -785,6 +850,13 @@ async def test_every_meetings_feature_against_a_real_call(
         fixes.append(
             (PREROLL_FIX_URL, PREROLL_FIX_SHA256, "transcription.py", CONTROLLER_PY, "the first-word fix")
         )
+    voice_files: list[tuple[Path, str]] = []
+    if not stock:  # the voice patch (#713) is this repository's own files, pinned by sha256 all the same
+        for name, (voice_sha256, target) in VOICE_PATCH.items():
+            copy = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / name
+            copy.write_bytes(selftest.check_pinned((VOICE_PATCH_DIR / name).read_bytes(), voice_sha256))
+            copy.chmod(0o644)
+            voice_files.append((copy, target))
     for fix_url, fix_sha256, name, target, what in fixes:
         fix = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / name
         try:
@@ -794,6 +866,8 @@ async def test_every_meetings_feature_against_a_real_call(
         fix.chmod(0o644)  # the image's user (uid 1001) reads it through the mount
         for box in containers.values():
             box.mounts.append((fix, target))
+    for box in containers.values():
+        box.mounts.extend(voice_files)
     try:
         with sigterm_is_an_interrupt():
             try:
@@ -808,7 +882,10 @@ async def test_every_meetings_feature_against_a_real_call(
         try:
             # Missing steps count as failed, and a failed step is what keeps the logs. Fill them
             # before the containers go: docker logs needs the container, and --rm drops it on remove.
-            selftest.fill_unattempted(steps, selftest.step_specs(STEPS, PLATFORM_LABEL[link.platform]))
+            specs = selftest.step_specs(STEPS, PLATFORM_LABEL[link.platform])
+            if stock:
+                del specs[6]  # the voices step needs the patch
+            selftest.fill_unattempted(steps, specs)
             saved = kept_logs(containers, out_dir, pieces, steps)
         finally:
             # sync, so it also runs after an interrupt: no bot stays in the call once its container is gone
@@ -820,6 +897,7 @@ async def test_every_meetings_feature_against_a_real_call(
         "joinly_image": IMAGE,
         "zoom_fix": "mounted (joinly-ai/joinly#187)" if zoom_fix else "none",
         "preroll_fix": f"mounted (#620, {PREROLL_FIX_COMMIT[:7]})" if preroll_fix else "none",
+        "voice_patch": "mounted (#713, deploy/joinly)" if not stock else "none",
         "callouts": CALLOUTS,
         "bot_name": BOT_NAME,
         "speaker_name": SPEAKER_NAME,
@@ -852,7 +930,7 @@ async def run_in_a_broker(
     problems: list[str],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The throwaway broker, its room, its scripted agent and the speaker; the six steps; and, last, the
+    """The throwaway broker, its room, its scripted agent and the speaker; the seven steps; and, last, the
     check that nothing the broker kept holds the link."""
     cfg = Config(human_name="alice").replace(meeting=MeetingCfg(joinly_url=containers["switchboard"].url))
     cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0, rate_limit_s=0.0)

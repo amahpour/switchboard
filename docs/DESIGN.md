@@ -3238,6 +3238,62 @@ Tests: `test_rules_voice_loop.py` (the pure rule, with the unknown kind; the sev
 wakes and the eighth holds; no call, no hold; a person in the room and a line from the call each
 end it; one notice per run; a busy agent; `hop_limit` untouched).
 
+### 52.5 A voice for one line: the joinly patch (#713)
+
+Today the bot speaks in one voice. joinly 0.5.4 takes the voice once, when a bot session starts
+(`tts_args` in the `joinly-settings` header, `[meeting] tts_voice` here), builds its speech service
+once, and its `speak_text` tool has no voice argument. Five speech providers ship; only Kokoro, the one
+we use, runs without an account. The spike (#706) weighed one bot per agent (two browsers, two
+transcribers, about 2.7 GiB and a CPU each, and a bot for the host to admit for each), a patch, an
+upstream pull request, and saying the name before a line. A small patch is the one that was built.
+
+**The patch** is two files of joinly v0.5.4, kept whole in `deploy/joinly/` with joinly's MIT licence
+header and a NOTICE (`server.py`, `kokoro.py`), mounted read-only over the image's copies exactly as
+`zoom.py` and `transcription.py` are (§54), until a joinly release has a voice on `speak_text`:
+
+- `server.py`: `speak_text(text, voice=None)`. `voice` is a string of `a-z`, `0-9` and `_`, 1 to 32
+  characters (a pattern in the tool's schema); anything else is refused by the tool before it runs.
+  The tool sets a context variable for the length of the call and clears it after.
+- `kokoro.py`: `_tts` reads that variable and uses it, else the session's voice. The speech tasks that
+  `speak_text` starts copy the context when they are created, which is why the variable reaches them.
+  A name Kokoro does not know (`get_voices()`) is not an error for the line: the session's voice is
+  used, and the tool's answer is `Finished speaking. The voice was not found, so the session's voice
+  was used.` in place of `Finished speaking.` Phase 4 reads that answer to tell the room once.
+
+**Nothing changes without a voice.** No caller sends one yet: the bridge and the relay still say
+`speak_text` with a text alone, so a call speaks as it did. The tool's answer is the same too. A joinly
+without the patch ignores nothing, either, since the broker sends nothing it does not know.
+
+**Where the files live and how they are pinned.** The repository holds them in `deploy/joinly/` (one
+source), and each plugin ships a copy in `meeting/joinly/` (`plugins/claude/` and `plugins/codex/`).
+`tests/unit/test_joinly_voice_patch.py` keeps the three byte for byte identical and checks that the
+hashes in both plugins' `fixes.pins`, in the self-test and in DEPLOY.md are theirs. A hosted call needs no
+download: a pin whose third field is `plugin:<path>` is copied by `meeting-host` (the shell script and its
+PowerShell twin) from the plugin's `meeting/` folder into the fixes folder, after the same sha256 check as
+a downloaded file, and a path that leaves `meeting/` is refused. Compose then mounts it as it mounts the
+others, by `${SB_FIXES_DIR}/server.py`. The server's own joinly mounts them by relative path in
+`deploy/compose/compose.yaml` (a `joinly/` folder beside it), from a ConfigMap (`joinly-voice-patch`, one
+patch `deploy/kubernetes/meetings/joinly-voice-patch.yaml`, and the Helm chart's `meetings.voicePatch`), or
+in DEPLOY.md's `docker run`, whose `curl` names the files at a release tag. `release.py` moves that tag
+with the other pins (`RAW_PIN_RE`; the patch's manifest is in `PIN_FILES`). The tag exists from the release
+that has the files.
+
+**Security.** A mounted file runs inside the bot, as `zoom.py` does, so it is pinned and refused when its
+hash differs. The bot has no broker secret and is reachable only on loopback (§11). The patch adds no
+authority: it picks a Kokoro voice from a table and cannot name a path, and the voice is still not a
+setting an agent can reach (phase 4: only a person's `/meeting voice` sets one, and the broker and the
+relay check the shape again). Nothing is pushed to the joinly repository: sending the argument upstream is
+for later.
+
+**The live test.** The meeting self-test (§12.4) gains a step 6, run in both tests (server path and
+hosted): the speaker's joinly has the patch, says one line in each of two voices and then a line in an
+unknown one; the bot's room must get both lines as call lines, neither answer may report the voice as
+not found, and the unknown one must. Whether the two voices sound different is for a person to hear.
+Tests: `test_joinly_voice_patch.py`; the host script's `plugin:` pins in `test_meeting_host.py` (copied
+without a download, refused when altered, no path outside `meeting/`); the compose files in
+`test_meeting_host.py`; the Kubernetes patch and the chart in `test_deploy_joinly.py` and
+`test_deploy_helm.py`; the release tag in `test_release_script.py`.
+
 ## 53. Attachments (#544)
 
 A room can hold a file. The message still names it with the artifact line (§29.4). The bytes live beside the database. No new tool or parameter: the agents' tool list and `JOIN_BUDGET` stay where they are. Agents learn the line from the eighth fixed room rule (#588), which every join carries: without it nothing an agent read mentioned the line, so an agent shared a file only when a room's own rules or a pin said how. The tool list had no room for it under its approved 3,900 characters.
@@ -3335,7 +3391,7 @@ The timeouts are read from the broker's clock in a tick (`HostedCalls.tick`, eve
 **The relay and the host (phase 3).** The broker's side is above. The machine's side is three things, all in switchboard's repository and none needing anything installed but Docker.
 
 - **The relay** (`meeting/relay.py`, `switchboard meeting relay`, in switchboard's own image) is `bridge.py` turned around: the broker doesn't reach out to it, it reaches in. It reads the call's key and the meeting link from files only their owner can read, or from stdin (`--key-file` and `--link-file`, with `-` for stdin), never from an argument or the environment; a file others can read is refused unless `--no-mode-check` says the files are a container's mounts. Both are held as a `Secret` that prints as `<secret>`, so a stray f-string or traceback shows nothing. It prints the key's fingerprint, then asks the broker for the room's names (`POST /mcp/meeting/speech` with `wait` 0), connects to joinly with them as hotwords, joins the call, and marks it live with an empty first push. Then two loops run until the call ends. One reads joinly's transcript when joinly says it changed (or every 3 s) and pushes each new segment, in batches of at most 100; the bot's own speech (`role` other than `participant`) is not pushed. The other long-polls `/mcp/meeting/speech` for the `@call` lines (while voice is on) and has joinly say them, one at a time, dropping the waiting ones when voice goes off. A `429` is waited out for `Retry-After` (at most a minute at a time), an error or a `5xx` is retried after 1, 2, 4 ... 30 seconds, and a broker that stays away as long as it would itself wait before it ends a call (`QUIET_S`, 300 s) ends the relay. `ended` in a poll, a `410` or a `401` makes it leave the call and exit. A call ended while the relay is still joining is heard (the voice loop runs from the start) and the join is dropped. SIGTERM (`docker stop`) pushes what was heard last, leaves, and exits. **Its exit code says why:** 0 the call ended, 2 a key or link that can't be used, 3 the key was refused, 4 joinly could not join, 5 joinly was lost, 6 the broker could not be reached, 7 stopped. It shares joinly's client code with the broker's bot (`meeting/joinly.py`: the settings header, the transcript parsing, the redaction of a link from the MCP libraries' logs), and the numbers it holds the broker to are copies of `hosted.py`'s that a test keeps equal. Its HTTP is the standard library's, in a thread a request, closed from outside so that a stop doesn't wait out a 25 s poll; a plain `http` address is refused unless it is this machine's own or `--allow-http` says the network is trusted, because the key is a bearer.
-- **The Compose file** (`plugins/claude/meeting/compose.yaml`; DEPLOY.md, "Meetings on your own machine") starts the relay and joinly for one call, one Compose project each (`switchboard-call-<fingerprint>`). joinly has no sign-in, so it has **no address**: it shares the relay's network (`network_mode: service:relay`) and listens on that network's `127.0.0.1`, with no port published. It **ends with the relay** by sharing its process namespace (`pid: service:relay`): when the relay's first process ends, the kernel ends the rest of the namespace, joinly's included, so End call from the room leaves nothing running and nothing has to watch. Both run with a read-only root, no capability and `no-new-privileges`. The two joinly fixes (§52) are mounted from the plugin's data folder and **pinned by sha256** in `meeting/fixes.pins`: a file whose hash differs is refused and removed. **GPU if there is one, CPU if not** is a Compose profile: `gpu` is joinly's `-cuda` image with one NVIDIA device and a named volume for the model, and `large-v3-turbo`; `cpu` is the plain image and joinly's own `base`, with no download.
+- **The Compose file** (`plugins/claude/meeting/compose.yaml`; DEPLOY.md, "Meetings on your own machine") starts the relay and joinly for one call, one Compose project each (`switchboard-call-<fingerprint>`). joinly has no sign-in, so it has **no address**: it shares the relay's network (`network_mode: service:relay`) and listens on that network's `127.0.0.1`, with no port published. It **ends with the relay** by sharing its process namespace (`pid: service:relay`): when the relay's first process ends, the kernel ends the rest of the namespace, joinly's included, so End call from the room leaves nothing running and nothing has to watch. Both run with a read-only root, no capability and `no-new-privileges`. The joinly fixes (§52, §52.5) are mounted from the plugin's data folder and **pinned by sha256** in `meeting/fixes.pins`: a file whose hash differs is refused and removed. Two come from addresses of the fork; the voice patch is shipped in the plugin (`plugin:joinly/server.py`) and copied from it, with no download. **GPU if there is one, CPU if not** is a Compose profile: `gpu` is joinly's `-cuda` image with one NVIDIA device and a named volume for the model, and `large-v3-turbo`; `cpu` is the plain image and joinly's own `base`, with no download.
 - **The host script** (`plugins/claude/bin/meeting-host`, with `windows/meeting-host.ps1` for PowerShell and `meeting-host.cmd`, and the skill `skills/host-meeting-bot`) is what the agent runs when its person asks. `start` checks everything that can be wrong before a key exists (Docker and Compose answer; the credential; the fixes; the images, pulling a missing one), reads the link from stdin into a 0600 file in a 0700 folder, makes the key (`sbc_` and 64 hex) there, registers its hash at `/mcp/meeting/host`, checks that the fingerprint the server gives back is the one it made (and does not start if not), starts the project, prints the fingerprint, the device and the model, and returns. `stop` takes the project down and forgets its files; `status` lists the calls and the relay's last lines; `plan` prints the choice and starts nothing. Neither the link nor the key is ever an argument, a variable or output: the link goes from stdin to a file by the shell's own `printf`, the credential reaches `curl` on its stdin, and the containers get the files as a mount. A link given as an argument is refused, so is a link that is not an `https` address on Zoom, Meet or Teams, and the server's address must be `https` (or this machine's own, or allowed with `SWITCHBOARD_RELAY_ALLOW_HTTP=1`). **The GPU is detected with three local questions that pull nothing:** `nvidia-smi -L` lists a GPU, `docker info` lists an `nvidia` runtime (the Container Toolkit), and the machine is not a Mac. A flag forces either, and the output says what it overrode. The skill says to run it only when the person asks, with the link in a quoted heredoc, never to repeat the link, to tell the person the fingerprint and the device, and how to stop. The sweep at each `start` removes the containers and folders of calls that have ended.
 
 **Codex hosting (phase 4).** `plugins/codex/skills/host-meeting-bot` runs the same shell and PowerShell host and Compose project. The marketplace installs only the plugin's subdirectory, so resources cannot point into a sibling plugin. The five host files are packaged identically in both roots (`tests/unit/test_meeting_plugin_packages.py` keeps them equal); a release pins both Compose files. The shared scripts detect the Codex manifest and use `SWITCHBOARD_AGENT_TOKEN` first, otherwise their own process key (§49.11), never a Claude credential. Codex's shell must also have `SWITCHBOARD_URL`, and defaults to `~/.cache/switchboard` for data (`--data` overrides it). With a token, an agent on its device must be in the room and the script uses the existing any-member-on-the-device rule. With a process key, it sends its own thread id and only that thread can host. Phase 4 shipped token-only; #637 adds a local helper key claimed through browser sign-in (§49.11), without adding a route, request field or tool. The key is pinned to a Codex thread and cannot use the listener or session-report routes. The departure route below widens `AGENT_PATHS` with the maintainer's yes of 2026-11-06.

@@ -34,6 +34,9 @@ switchboard {{ include "switchboard.imageTag" . }} is starting at {{ include "sw
 {{- if .Values.meetings.prerollFix.configMap }}
    The first-word fix for call lines comes from the ConfigMap {{ .Values.meetings.prerollFix.configMap }}, which must exist in this namespace.
 {{- end }}
+{{- if .Values.meetings.voicePatch.configMap }}
+   The voice patch (a voice for each line) comes from the ConfigMap {{ .Values.meetings.voicePatch.configMap }}, which must exist in this namespace.
+{{- end }}
 {{- end }}
 
 Upgrading: change the image (image.tag, or a newer chart) and run helm upgrade; the broker migrates its

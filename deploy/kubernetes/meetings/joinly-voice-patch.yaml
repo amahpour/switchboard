@@ -1,0 +1,41 @@
+# The voice patch for the joinly sidecar (docs/DEPLOY.md, "Meetings on Kubernetes"; #713).
+# Apply it after joinly.yaml. Without it a call has one voice for everything the bot says.
+#
+# joinly 0.5.4 takes the voice once, when a bot session starts, and `speak_text` has no voice argument.
+# The patch is two files of joinly (server.py and the Kokoro voice, kokoro.py): `speak_text` takes an
+# optional `voice` for that line, and Kokoro uses it, falling back to the session's voice. Nothing
+# changes for a caller that sends none. deploy/joinly/NOTICE says what changed and keeps joinly's MIT
+# licence. Until a joinly release has it, the files go over the image's copies, read-only, from one
+# ConfigMap made from this repository's files (the ones DEPLOY.md's `docker run` mounts), which are pinned
+# by sha256 in DEPLOY.md. Create the ConfigMap first, because the pod can't start without it
+# (`kubectl describe pod` says the ConfigMap is not found):
+#
+#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/server.py
+#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/kokoro.py
+#   kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
+#   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
+#
+# Drop this patch once joinly has a release with a voice on `speak_text`, and move the image in
+# joinly.yaml to it.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: switchboard
+spec:
+  template:
+    spec:
+      containers:
+        - name: joinly
+          volumeMounts:
+            - name: joinly-voice-patch
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/server.py
+              subPath: server.py        # one file over the image's copy, not the folder
+              readOnly: true
+            - name: joinly-voice-patch
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py
+              subPath: kokoro.py
+              readOnly: true
+      volumes:
+        - name: joinly-voice-patch
+          configMap:
+            name: joinly-voice-patch

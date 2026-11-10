@@ -320,6 +320,24 @@ meetings:
 
 Remove `prerollFix` once a joinly release has the fix too. It is independent of `zoomFix`: use either or both.
 
+**A voice for each line.** The voice patch (two files, [described above](#a-meeting-bot)) is one ConfigMap with two keys. Make it first:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/kokoro.py
+kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
+```
+
+```yaml
+# switchboard-values.yaml, then helm upgrade
+meetings:
+  enabled: true
+  voicePatch:
+    configMap: joinly-voice-patch
+```
+
+Remove `voicePatch` once a joinly release has a voice on `speak_text`. It is independent of the two fixes above.
+
 **A GPU and a better model.** `meetings.gpu.enabled` runs joinly on one NVIDIA GPU, and `meetings.sttModel` names the model ([why `large-v3-turbo`](#the-speech-model-and-a-gpu)):
 
 ```yaml
@@ -372,6 +390,8 @@ spec:
             configMap: joinly-zoom-fix  # made beforehand; drop these two lines to skip the Zoom fix
           prerollFix:
             configMap: joinly-preroll-fix  # made beforehand too; drop these two lines to skip the first-word fix
+          voicePatch:
+            configMap: joinly-voice-patch  # made beforehand too; drop these two lines to skip the voice patch
   destination:
     server: https://kubernetes.default.svc
     namespace: switchboard
@@ -660,6 +680,19 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
 
 switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` argument has the fix as its default (0 turns it off), and a setting that stock joinly doesn't know would break every call for anyone who hasn't mounted the file. So a joinly without the file works as before, and with it the fix is on. As with the Zoom fix, drop the mount once a joinly release has it, and move to that release. The file's sha256 is `6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97`.
 
+**A voice for each line (#713).** joinly 0.5.4 takes one voice when a bot session starts, and its `speak_text` tool has no voice argument, so every agent that speaks on a call has the same voice. The patch is two files of joinly (`server.py` and the Kokoro voice, `kokoro.py`): `speak_text` takes an optional `voice` for that line, and Kokoro uses it, falling back to the session's voice when it is not given or Kokoro has no voice of that name. Without a `voice` joinly behaves as 0.5.4, so the patch changes nothing on its own: it is the base for a voice per agent. The files are in this repository ([deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly), with joinly's MIT licence and a NOTICE saying what changed); until a joinly release has the argument, mount them over the image's copies, read-only, in the same `docker run` as the other files (use any or all):
+
+```bash
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/server.py
+curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/kokoro.py
+docker run -d --name joinly -p 127.0.0.1:8010:8000 \
+  -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
+  -v "$PWD/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro" \
+  ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
+```
+
+The URL names a release tag, which does not move; the link works from the release that has the files on. Their sha256 sums are `b168efc06793f6ee1873f1f9d28bd8e01692a4577408a1637968ad2b2d6a38c0` (`server.py`) and `d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3` (`kokoro.py`); check them after you download (`sha256sum server.py kokoro.py`), because a mount makes them run inside the bot. A hosted call's plugin ships the same two files and checks them against the same sums, so there is nothing to download there. Drop the mounts once a joinly release has a voice on `speak_text`, and move to that release.
+
 ### The speech model, and a GPU
 
 joinly turns the call's speech into text with Whisper. Out of the box it runs `base`, a small model, on the CPU. That is quick, and it sometimes mishears a name. You can choose a bigger model, and run joinly on a GPU so that the bigger model keeps up with the call.
@@ -823,6 +856,17 @@ configMapGenerator:
 
 Drop this patch once a joinly release has the fix too, and move the image to that release.
 
+**A voice for each line.** The voice patch (#713, [described above](#a-meeting-bot)) is a fourth patch, [joinly-voice-patch.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-voice-patch.yaml): one ConfigMap with the two files of this repository as its keys, each mounted over joinly's copy with `subPath`, so a pod can't start without the ConfigMap. Make it first:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/kokoro.py
+kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
+kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
+```
+
+With kustomize, add `{path: joinly-voice-patch.yaml}` to `patches` and a generator, `- name: joinly-voice-patch` with `files: [server.py, kokoro.py]`, beside the others. Drop the patch once a joinly release has a voice on `speak_text`.
+
 **A GPU and a better model.** The patch is the CPU bot with `base`, and asks for no GPU, so that it applies on a cluster that has none. For [a GPU and `large-v3-turbo`](#the-speech-model-and-a-gpu), apply a second patch after it. The same lines are in a comment at the top of `joinly.yaml`:
 
 ```yaml
@@ -868,6 +912,8 @@ kubectl -n switchboard exec switchboard-0 -c joinly -- \
   grep -c single-main-container__video-frame /app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py    # 1 with the Zoom fix
 kubectl -n switchboard exec switchboard-0 -c joinly -- \
   grep -c utterance_preroll_seconds /app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py    # more than 0 with the first-word fix
+kubectl -n switchboard exec switchboard-0 -c joinly -- \
+  grep -c LINE_VOICE /app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py    # more than 0 with the voice patch
 ```
 
 The second command runs in the broker's container and reaches joinly on the pod's localhost. Then, in a room, `/meeting <a test meeting's link>`: the room says it is joining. `/meeting` with no link only says whether a call is live, so it doesn't tell you the broker found joinly. To see that nothing else can reach joinly, run a throwaway pod and fetch the broker pod's IP on port 8000, which must be refused:
@@ -893,7 +939,7 @@ What the file starts, and why it is built this way:
 - **joinly** is the same bot as [above](#a-meeting-bot), with the same two fixes mounted over its copies (below). It has no sign-in, so it has **no address of its own**: it shares the relay's network (`network_mode: service:relay`) and listens on that network's `127.0.0.1` (`JOINLY_SERVER_HOST`), as the broker's pod does for its own ([Meetings on Kubernetes](#meetings-on-kubernetes)). No port is published, and nothing else on the machine or the network can talk to it. It runs with the same restrictions as the Kubernetes patch gives it: a read-only root with `/tmp` writable, no capability, and `no-new-privileges`.
 - **joinly ends with the relay.** It also shares the relay's process namespace (`pid: service:relay`), so when the relay exits (End call, a revoked sign-in, `meeting-host stop`) the kernel ends every process in that namespace and joinly's container stops with it. Nothing is left running and nothing has to watch for it. The exited containers stay until the script removes them, at the next `start` or at `stop`.
 - **GPU or CPU is a Compose profile.** `gpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4-cuda@sha256:cc79e10311f95252d7684c4969c4467ea581c78de9b331096ac27a4a5a98532e` (about 6 GB to pull) with one NVIDIA device reserved (`deploy.resources.reservations.devices`) and a named volume, `switchboard-joinly-models-cuda`, that keeps the speech model (about 1.6 GB for `large-v3-turbo`) between calls, so only the first GPU call waits for the download. `cpu` runs `ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0` with joinly's own `base`, which is in the image, so nothing is downloaded and no volume is mounted (a volume at that path would hide the model the image holds). The script picks the profile: `nvidia-smi` sees a GPU, Docker has an `nvidia` runtime (the NVIDIA Container Toolkit), and the machine is not a Mac. It pulls nothing to find out, says which it chose and why, and `--gpu` or `--cpu` forces either. The GPU image needs the driver for CUDA 12.6 or newer.
-- **The two fixes are pinned by sha256.** `plugins/claude/meeting/fixes.pins` names each fix, its address (a commit, so it doesn't move) and its sha256, the same files as [above](#a-meeting-bot). The script keeps them in the plugin's data folder, checks both against the pins every time, fetches a missing one from its address, and refuses (and deletes) one whose hash differs, so a changed file never reaches joinly. The addresses are `raw.githubusercontent.com`, which the machine must reach the first time. Drop a line, and its mount, once a joinly release has the fix.
+- **The fixes are pinned by sha256.** `plugins/claude/meeting/fixes.pins` names each fix, where it comes from and its sha256, the same files as [above](#a-meeting-bot). The Zoom fix and the first-word fix come from an address (a commit of our fork, so it doesn't move) on `raw.githubusercontent.com`, which the machine must reach the first time. The voice patch (`server.py` and `kokoro.py`, #713) is shipped in the plugin itself, under `meeting/joinly/` (`plugin:` in the pins), so it needs no download; a test keeps those copies identical to [deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly). The script keeps all of them in the plugin's data folder, checks each against its pin every time, fetches or copies a missing one, and refuses (and deletes) one whose hash differs, so a changed file never reaches joinly. Drop a line, and its mount, once a joinly release has the fix.
 - **Images.** A missing image is pulled before the script tells the server anything, so a call registered in the room is ready to start. To try a build of your own, `SWITCHBOARD_RELAY_IMAGE=my-switchboard:dev` (`docker build -f deploy/image/Dockerfile .`) names the relay's image, and nothing else changes.
 - **A server the containers can't resolve.** `--add-host NAME:IP` (or `host-gateway`) writes a second Compose file with `extra_hosts` for the relay, for a server whose name only this machine knows.
 

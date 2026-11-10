@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -128,6 +129,41 @@ def test_update_pins() -> None:
         "python:3.13-slim-trixie@sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
     ):
         assert rel.update_pins(other, "0.5.0") == other  # not a release pin of this image
+
+
+def test_update_pins_moves_the_voice_patchs_download_tag_and_only_that() -> None:
+    """The voice patch's files are fetched from a release's tag of this repository (#713), so the tag in the
+    docs moves with the release (a release is the commit that holds the files). Fails if the address is left
+    on an old tag, or if another repository's raw address, or a path outside ``deploy/joinly/``, is moved."""
+    base = "https://raw.githubusercontent.com/amahpour/switchboard/v0.4.0/deploy/joinly/server.py"
+    assert rel.update_pins(base, "0.5.0") == base.replace("v0.4.0", "v0.5.0")
+    for other in (
+        "https://raw.githubusercontent.com/amahpour/joinly/v0.4.0/deploy/joinly/server.py",
+        "https://raw.githubusercontent.com/amahpour/switchboard/v0.4.0/docs/DEPLOY.md",
+        "https://raw.githubusercontent.com/amahpour/switchboard/main/deploy/joinly/server.py",
+    ):
+        assert rel.update_pins(other, "0.5.0") == other
+
+
+def test_every_file_that_names_the_voice_patchs_address_is_one_a_release_rewrites() -> None:
+    """A file that names ``…/switchboard/vX.Y.Z/deploy/joinly/…`` and is not in ``PIN_FILES`` would keep an
+    old tag for ever, and all of them must name one tag. Fails when a new doc or manifest names it and the
+    release script does not know of it."""
+    address = re.compile(r"raw\.githubusercontent\.com/amahpour/switchboard/(v\d+\.\d+\.\d+)/deploy/joinly/")
+    named: dict[str, set[str]] = {}
+    for path in rel.git("ls-files", "-co", "--exclude-standard", root=rel.ROOT).splitlines():
+        if not path.endswith((".md", ".yaml", ".yml", ".sh", ".toml")) or path.startswith(
+            ("tests/", "changes/")
+        ):
+            continue
+        if path == "CHANGELOG.md":
+            continue  # history, written by a release
+        tags = set(address.findall((rel.ROOT / path).read_text()))
+        if tags:
+            named[path] = tags
+    assert named, "DEPLOY.md names it"
+    assert set(named) <= set(rel.PIN_FILES), sorted(set(named) - set(rel.PIN_FILES))
+    assert len({tag for tags in named.values() for tag in tags}) == 1, named
 
 
 def test_pin_chart_moves_the_app_version_and_nothing_else() -> None:
