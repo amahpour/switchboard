@@ -58,7 +58,9 @@ one waiting, a 1.5-second speech gap, a 60-second wait limit, each agent's own l
 apart (2 seconds for an answer to a question put to it) and at most 4 agent lines in a row until a
 person speaks. The bridge holds the slot until `speak_text` returns. A hosted call holds it after its speech poll, until
 the same call's relay reports completion of that exact id at the existing speech route.
-Refusals and expiry are fixed system notices, also queued for the member who tried to speak.
+Refusals and expiry are fixed system notices, also queued for the member who tried to speak. In a
+room with a live call the engine adds a rule of its own (`rules.voice_loop_run`, §52.4): after 8
+agent messages in a row with no person, agents wake only for a person.
 
 `backup.py` streams a verified live SQLite snapshot and stored attachments into a private data
 archive. `cli.py` exposes backup and offline restore; `daemon.py` checks `restore/` under its
