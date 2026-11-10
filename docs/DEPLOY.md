@@ -511,7 +511,7 @@ switchboard start --home ~/.switchboard
 
 Restore refuses while the broker holds the home's exclusive lock. It never changes deployment
 configuration. A hostname change warns that old passkeys cannot work: sign in with your password
-and enrol a new passkey under **Settings → Security**. For a team, each person does the same.
+and enrol a new passkey under **Settings → Sign-in & security**. For a team, each person does the same.
 If all credentials are lost, the existing `SWITCHBOARD_RESET_OWNER` recovery ([Signing in](#signing-in))
 removes all people and credentials; claim the owner again and invite the team again. Archives
 made before the broker recorded its passkey hostname warn that the old hostname is unknown.

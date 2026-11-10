@@ -33,7 +33,7 @@ For a container or Kubernetes broker, put one archive in `$SWITCHBOARD_HOME/rest
 restart. The broker checks and applies it before opening any listener. The deployment guide
 has the [Kubernetes recipe and interrupted-restore recovery](../DEPLOY.md#backups).
 
-If the hostname changed, sign in with a password and enrol a new passkey in **Settings → Security**.
+If the hostname changed, sign in with a password and enrol a new passkey in **Settings → Sign-in & security**.
 Every person needs a new passkey for the new hostname. If nobody can sign in, use the
 [owner recovery procedure](../DEPLOY.md#signing-in); that removes all people and credentials,
 so the team must be invited again.

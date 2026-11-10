@@ -227,7 +227,7 @@ def hostname_warning(old: object, hostname: str | None) -> str:
     return (
         "Passkeys from the previous hostname will not work here. "
         + ("The backup did not record its passkey hostname. " if old is None else "The hostname changed. ")
-        + "Sign in with a password and enrol a new passkey in Settings > Security. "
+        + "Sign in with a password and enrol a new passkey in Settings > Sign-in & security. "
         "If no password works, use SWITCHBOARD_RESET_OWNER once to claim the owner again; "
         "this removes all people and credentials, so invite your team again."
     )
