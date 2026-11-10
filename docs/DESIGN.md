@@ -3017,9 +3017,9 @@ call and zero wakes; the migration keeps the old rows and a schema-46 backup.
 **Timing and bounds.** Only pending, not-yet-notified call chatter from `listen_call_id` can drive
 a listening wake. Older calls' lines can ride along, but cannot start a turn on a new call.
 The pure `chatter_due` policy uses `[delivery] listen_quiet_s` (15 by default), measured from the
-room's latest message, or `listen_hold_s` (40), measured from the oldest waiting call line.
-These times must be greater than zero and at most 3,600 seconds. Room notices and an agent's own
-posts also move the room's quiet clock. Ordinary `quiet_s`, `max_hold_s` and unaddressed chatter
+room's latest chat message, or `listen_hold_s` (40), measured from the oldest waiting call line.
+These times must be greater than zero and at most 3,600 seconds. An agent's own chat posts also
+move the room's quiet clock; notices do not. Ordinary `quiet_s`, `max_hold_s` and unaddressed chatter
 holds keep their values. Listening explicitly opts into call chatter even for a quiet membership;
 quiet still holds its ordinary unaddressed agent chatter. `wait()` uses the same call timing.
 `chatter_wakes_at` uses those same deadlines for Members' next wake time.

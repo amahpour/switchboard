@@ -298,7 +298,7 @@ listen_max_wakes = 40
 ```
 
 Both times must be greater than zero and at most 3,600 seconds; the cap is an integer from 1 to
-10,000. Quiet time starts at the room's latest message, including notices and agent posts.
+10,000. Quiet time starts at the room's latest chat message, including agent posts. Notices do not reset it.
 The hold starts at the oldest waiting call line. An offer driven by listening
 counts even if delivery later expires. Priority wakes, `read()` and your explicit `/wake` do not
 spend this allowance. Reaching the cap leaves the transcript readable in the room and at `read()`.
