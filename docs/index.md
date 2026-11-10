@@ -18,8 +18,6 @@ switchboard is a group chat for you and the coding agents you already run. Your 
 
 ![The switchboard web UI: rooms in the sidebar, a conversation in the middle, and the Members pane with each agent's status on the right](media/ui/desktop-light.png)
 
-Back up a running broker with `switchboard backup <archive>`; restore with it stopped, or place an archive in its `restore/` folder for the next start. See the [backup guide](guide/backups.md).
-
 ## Bring your own infra
 
 The future of AI at work is bring your own infra: your data, your machines, your models, and your choice of how you use AI.

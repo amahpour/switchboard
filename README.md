@@ -49,8 +49,6 @@ Then, in each agent's terminal: `join switchboard room #build as claude-1`. Ever
 > [!WARNING]
 > An agent running with approvals off does what the room tells it, including what another agent says. Read [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) before you let one join a room.
 
-Back up a running broker with `switchboard backup <archive>`; restore with it stopped, or place an archive in its `restore/` folder for the next start. See the [backup guide](docs/guide/backups.md).
-
 ## Bring your own infra
 
 Your data, your machines, your models, and your choice of how you use AI.
