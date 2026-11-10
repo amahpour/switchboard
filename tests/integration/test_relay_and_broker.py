@@ -171,6 +171,9 @@ async def test_the_relay_joins_goes_live_wakes_the_named_agent_speaks_and_leaves
         await claude.say("#build", "@call nobody turned voice on")
         assert "voice is on" in w.command("/meeting voice on")["text"]
         await claude.say("#build", "@call The limit is **ten** megabytes.")
+        # the line waits for a 1.5 s gap in the talk (§52.2) on the broker's clock; nothing but this advances
+        # it reliably, so the test does, rather than counting on how many polls the relay happened to make
+        w.tick(1.6)
         await until(lambda: joinly.spoken != [], what="the line to be spoken")
         assert joinly.spoken == ["The limit is ten megabytes."]  # made speakable by the broker, once
 
