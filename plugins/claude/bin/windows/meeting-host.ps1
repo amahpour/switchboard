@@ -242,7 +242,7 @@ function Ensure-Fixes([string]$data) {
                 $src = Join-Path (Join-Path $plugin 'meeting') $rel
                 try { Copy-Item -LiteralPath $src -Destination $tmp -Force -ErrorAction Stop } catch {
                     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-                    Die "the plugin has no $src: reinstall the plugin"
+                    Die "the plugin has no ${src}: reinstall the plugin"
                 }
             } else {
                 try {
