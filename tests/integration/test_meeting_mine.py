@@ -83,6 +83,10 @@ async def test_mine_wakes_only_owned_agents_and_the_script_takes_the_link_once(
         got = await asyncio.wait_for(waiting, 10)
         assert got["ok"] and "host-meeting-bot" in got["text"] and "#build" in got["text"]
         assert "--from-room" in got["text"] and LINK not in got["text"]
+        # a chat message under alice's name, so one short line (#685), not the instruction it used to be
+        line = next(m for m in w.messages() if "--from-room" in m["text"])["text"]
+        assert len(line) <= 100 and "\n" not in line, line
+        assert "Do not" not in line and "stdin" not in line
         assert "@claude-2" not in got["text"]
         assert not other_waiting.done()
         assert w.b.on_loop(lambda: LINK not in repr(w.b.state.hosted_calls._requests))
