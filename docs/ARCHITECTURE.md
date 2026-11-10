@@ -66,6 +66,9 @@ agent messages in a row with no person, agents wake only for a person.
 archive. `cli.py` exposes backup and offline restore; `daemon.py` checks `restore/` under its
 home lock before opening the database or listening. The replaced DB, WAL and files stay in a
 recovery folder ([§57](DESIGN.md#57-live-backup-archives-and-restore-at-start-688)).
+`broker/backups.py` schedules the same archive from an admin's web request, in a worker thread,
+and keeps bounded job state and expiring, fresh-check-protected download links. Audit writes
+and admin notices stay on the broker loop ([§57.1](DESIGN.md#571-background-web-backups-and-expiring-downloads)).
 
 ## The path of a message
 

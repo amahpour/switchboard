@@ -1756,17 +1756,21 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     ui.world.command("e2e-wake", "/close")
 
 
-def test_settings_shows_five_tabs_on_a_desktop_broker(ui: UI) -> None:
+def test_settings_shows_six_tabs_on_a_desktop_broker(ui: UI) -> None:
     """A desktop broker has no password or passkeys to show, so Settings has no Sign-in &
-    security tab, but it has Agents (#382) and, for its owner, Files (#544); Sign out still sits
-    in the rail (#232)."""
+    security tab, but it has Agents (#382) and, for its owner, Files (#544) and Backups (#688).
+    Backups explains the CLI fallback until desktop reauthentication exists; Sign out stays in the rail."""
     page = ui.open()
     open_settings(page)
-    expect(page.locator("#settings-rail [role='tab']")).to_have_count(5)
+    expect(page.locator("#settings-rail [role='tab']")).to_have_count(6)
     expect(page.locator("#settings-tab-files")).to_be_visible()
     expect(page.locator("#settings-tab-agents")).to_be_visible()
+    expect(page.locator("#settings-tab-backups")).to_be_visible()
     expect(page.locator("#settings-tab-security")).to_have_count(0)
     expect(page.locator("#settings-sign-out")).to_be_visible()
+    page.click("#settings-tab-backups")
+    expect(page.locator("#backup-start")).to_be_disabled()
+    expect(page.locator("#backup-status")).to_contain_text("switchboard backup <archive>")
     page.keyboard.press("Escape")
 
 
@@ -1798,14 +1802,14 @@ def test_settings_tabs_respond_to_arrow_keys_tab_and_escape(ui: UI) -> None:
     expect(page.locator("#settings-panel-appearance")).to_be_visible()
     expect(page.locator("#settings-tab-profile")).to_have_attribute("aria-selected", "false")
     expect(page.locator("#settings-panel-profile")).to_be_hidden()
-    page.keyboard.press("End")  # the owner's last tab is Files (#544)
-    expect(page.locator("#settings-tab-files")).to_be_focused()
-    expect(page.locator("#settings-panel-files")).to_be_visible()
+    page.keyboard.press("End")  # the owner's last tab is Backups (#688)
+    expect(page.locator("#settings-tab-backups")).to_be_focused()
+    expect(page.locator("#settings-panel-backups")).to_be_visible()
     page.keyboard.press("Home")
     expect(page.locator("#settings-tab-profile")).to_be_focused()
     expect(page.locator("#settings-panel-profile")).to_be_visible()
     page.keyboard.press("ArrowUp")  # wraps to the last tab
-    expect(page.locator("#settings-tab-files")).to_be_focused()
+    expect(page.locator("#settings-tab-backups")).to_be_focused()
     page.keyboard.press("Home")
     page.keyboard.press("Tab")
     expect(page.locator("#settings-first")).to_be_focused()  # Tab left the rail, into the panel

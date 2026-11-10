@@ -461,6 +461,20 @@ It contains every room, private rooms included, people, password and token hashe
 passkeys. Keep it private and encrypt it before sending it to storage you do not control.
 `config.toml` stays with the deployment and is never included.
 
+An admin can also use **Settings → Backups → Back up now**. The existing fresh identity check
+is required both to start it and to download it. The broker runs the copy in a worker thread,
+so the page, rooms and agents keep working. The initiating admin gets a ready notice with a
+native download link. Other admins hear about each backup and download start, and both leave
+events. Download links last ten minutes after completion, require an admin session and a fresh
+check, and become invalid on restart. The archive streams from disk.
+
+The server allows one backup at a time and one start every five minutes, and keeps only the
+last three archives in `$SWITCHBOARD_HOME/backups/` (directory 0700, files 0600). Old files and
+interrupted partial archives are pruned by the disk worker before another copy. Leave room
+for the live data, retained archives and temporary database copy. A desktop that uses only
+CLI sign-in links uses the command below because it has no password/passkey reauthentication.
+See the [backup guide](guide/backups.md).
+
 ```bash
 switchboard backup ~/switchboard-backup.tar --home ~/.switchboard
 ```
@@ -519,7 +533,8 @@ made before the broker recorded its passkey hostname warn that the old hostname 
 For example, with the broker scaled to zero, this Job copies an archive already available on
 another PVC. Replace the image tag, namespace, claim names and archive name with your own;
 `broker-data` is the broker's existing claim. Wait for the Job to complete before scaling up.
-The source PVC must be readable by uid 10001.
+The source PVC must be readable by uid 10001. The Job uses the broker pod's
+`OnRootMismatch` policy so mounting the existing volume does not broaden its private directory modes.
 
 ```yaml
 apiVersion: batch/v1
@@ -536,6 +551,7 @@ spec:
         runAsUser: 10001
         runAsGroup: 10001
         fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: stage-archive
           image: ghcr.io/amahpour/switchboard:<version>

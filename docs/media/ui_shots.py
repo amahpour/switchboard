@@ -3694,10 +3694,60 @@ def shoot_home(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
-# The sets ``--only`` can shoot alone. ``real_names``, ``admin_names`` and ``admins`` need a
+def prepare_backup_preview(world: Any) -> str:
+    """Claim a throwaway hosted broker for the backup pictures/recording (§57.1)."""
+    import httpx
+
+    headers = {"Origin": world.origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=world.origin, headers=headers) as client:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        signed = client.post("/api/signin/password", json={"name": "admin", "password": one_time})
+        assert signed.status_code == 200, signed.text
+        chosen = client.post("/api/setup/password", json={"password": "correct horse battery"})
+        assert chosen.status_code == 200, chosen.text
+        cookie = client.cookies.get("switchboard_session")
+    assert cookie
+    return cookie
+
+
+def shoot_backups(browser: Any, out: Path, world: Any) -> None:
+    """A real completed archive in Settings: light, dark and phone (#688)."""
+    from playwright.sync_api import expect
+
+    cookie = prepare_backup_preview(world)
+    for theme, options in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": cookie, "url": world.origin}])
+        try:
+            page = ctx.new_page()
+            page.goto(world.origin + "/")
+            connected(page)
+            if not page.locator("#me-settings").is_visible():
+                page.click("#rooms-toggle")
+            page.click("#me-settings")
+            phone = theme == "phone-light"
+            page.click("#settings-row-backups" if phone else "#settings-tab-backups")
+            if theme == "light":
+                expect(page.locator("#backup-start")).to_be_enabled()
+                page.click("#backup-start")
+            expect(
+                page.locator("#backup-download").get_by_role("button", name="Download archive")
+            ).to_be_visible()
+            shot(page, out, f"backups-{theme}.png")
+        finally:
+            ctx.close()
+
+
+# The sets ``--only`` can shoot alone. ``real_names``, ``admin_names``, ``admins`` and ``backups`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
 ONLY: dict[str, Any] = {
+    "backups": shoot_backups,
     "home": shoot_home,
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
@@ -3719,12 +3769,12 @@ ONLY: dict[str, Any] = {
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names``,
-    ``admin_names`` and ``admins`` start a hosted broker; the others start the seeded desktop world."""
+    ``admin_names``, ``admins`` and ``backups`` start a hosted broker; the others start the seeded desktop world."""
     from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    hosted = name in ("real_names", "admin_names", "admins")
+    hosted = name in ("real_names", "admin_names", "admins", "backups")
     world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()
@@ -3757,6 +3807,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
     owners = HostedWorld(keep=args.keep)  # alice, bob and an agent each, for whose an agent is (#496)
     names = HostedWorld(keep=args.keep)  # alice and bob, shown by their real names (#563)
     admin_names = HostedWorld(keep=args.keep)  # the admin sets a person's names from their card (#566)
+    backups = HostedWorld(keep=args.keep)  # background admin backup, #688
     admins = HostedWorld(keep=args.keep)  # an Owner badge, an Admin badge and Make admin (#569)
     try:
         world.start()
@@ -3768,6 +3819,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         names.start()
         admin_names.start()
         admins.start()
+        backups.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
         browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
         try:
@@ -3815,6 +3867,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_real_names(browser, out, names)
             shoot_admin_names(browser, out, admin_names)
             shoot_admins(browser, out, admins)
+            shoot_backups(browser, out, backups)
             shoot_agent_owner(browser, out, owners)
         finally:
             browser.close()
@@ -3822,6 +3875,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         names.stop()
         admin_names.stop()
         admins.stop()
+        backups.stop()
         owners.stop()
         consent.stop()
         people.stop()
@@ -3831,7 +3885,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         if args.keep:
             print(
                 f"kept: {world.home} {world.home2} {hosted.home} {weak.home} {people.home}"
-                f" {owners.home} {names.home} {admin_names.home} {admins.home}",
+                f" {owners.home} {names.home} {admin_names.home} {admins.home} {backups.home}",
                 file=sys.stderr,
             )
 
