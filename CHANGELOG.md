@@ -2,6 +2,44 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.58.0 (2026-11-10)
+
+### Upgrading
+
+- Update the plugin with the server, as for any change to a hosted bot. The Compose and Kubernetes examples mount the new files only when you add the lines; nothing changes until you do.
+- The database moves to schema 49 (a column for the pinned voice); a backup is written first. The server and the plugin update in either order: an older server sends no voice, so a new relay speaks in the call's one voice, and an older relay ignores the voice a new server sends.
+
+### Added
+
+- **Back up a broker without stopping it.** `switchboard backup <archive>` saves a verified
+  live database and its stored attachments. Restore with `switchboard restore` while stopped,
+  or place one archive in the home's `restore/` for the next start. Restore keeps the old data,
+  refuses newer schemas, and warns when passkeys need enrolment for a new hostname.
+- **A patch that lets joinly speak one line in a chosen voice.** joinly 0.5.4 has one voice for a whole call and its `speak_text` takes none. Two patched files of joinly (`deploy/joinly/server.py` and `kokoro.py`, with joinly's MIT licence and a NOTICE) add an optional `voice` to `speak_text`, read by Kokoro and falling back to the session's voice. Nothing uses it yet, so calls sound as before: it is the base for a voice per agent. A bot hosted on your machine gets the files from its plugin (no download, still checked by sha256), the Compose, Kubernetes and Helm examples mount them like the Zoom fix (`meetings.voicePatch.configMap` in the chart), and the live meeting self-test now has a step that says a line in each of two voices.
+- **Back up a hosted broker from Settings without stopping it.** Admins confirm their identity,
+  start a background backup and get a notice with a download link. Downloads require a fresh
+  check too and expire after ten minutes. Each backup and download start is recorded and
+  other admins are notified. One backup runs at a time, starts are five minutes apart, and
+  the server keeps the last three archives.
+- **Each agent speaks in a voice of its own on a call.** With Voice on, an agent's `@call` line is now spoken in a Kokoro voice picked from its name out of a short list (`am_adam`, `bf_emma`, `af_sarah`, `bm_lewis`), so a conversation between agents is easy to follow by ear. Members shows the voice while a call is open. Type `/meeting voice claude-1 bf_emma` in the web UI to choose another, or `/meeting voice claude-1 default` to put the picked one back; only you can, and an agent's `/meeting voice …` is only text. A voice Kokoro does not have is said once in the room and the line is spoken in the call's own voice. It needs the joinly voice patch from 0.58 (the compose, Kubernetes and Helm examples mount it when you add the lines; a bot hosted on your machine has it in its plugin).
+
+### Changed
+
+- **Agents can answer each other on a call without losing lines.** One `@call` line is spoken while another waits behind it, an agent's own lines start 30 seconds apart (not the whole call's), and a line that answers a question put to its speaker, because the agent was @mentioned or replied to, may start 2 seconds after the last. After 4 agent lines in a row, none is spoken until a person speaks on the call or writes in the room. Before, a second agent's reply was refused while the first waited its 30 seconds: 3 of 10 lines in a scripted three-way call were never spoken. The notice for a refused line now reads `Another @call line is already waiting`. The 2-second answer is a deliberate loosening of the earlier one-start-per-30-seconds bound, approved by the maintainer; the cap of 4, the single waiting line and the Voice switch still bound it. A hosted bot needs no new plugin.
+- **Agents stop waking each other on a call after 8 messages in a row.** In a room with a live call, after 8 agent messages in a row with no one speaking on the call and no one writing in the room, agents wake only for a person's message, and the room says so once. Two agents answering each other, for example thanking each other for ever, used to wake each other until the room's hourly wake budget was gone, a paid model turn each. A person speaking on the call, or writing in the room, lets them wake for each other again. The room's loop guard (`/hops`) works as before, and a room with no call is not affected.
+
+### Fixed
+
+- **`/meeting <link> mine` now posts one short line.** The room used to show a long instruction to your agent, under your name, that read like plumbing. It now reads `@claude-1 /meeting mine: host the call in #uploads with host-meeting-bot (--from-room).` The rules the long message repeated (empty stdin, never read or repeat the link, the first host takes it) are in the plugin's `host-meeting-bot` skill. Update the server first, then the plugin; an older plugin still follows the short line, because its skill already says all of it. The link still never reaches a model.
+- **The room header's chips are no longer cut off when both side panels are open.** On a desktop window with the room list and Members open, the header had room for about one and a half chips, so Running, Budget and Hops scrolled out of sight (and Hands-free pushed them further). When the header is narrower than 1,100 px, the chips now take a line of their own under the room's name and the room's buttons, all in view. A wide window is unchanged, and so is the phone.
+- **The whiteboard no longer flashes white when it opens in the dark theme.** The board starts in a light theme and is told yours a moment later, so a white frame showed first. Now the frame stays hidden, over the app's own background, until the board has drawn in your theme.
+- **Play frames now fits each frame to the screen.** A frame of a few hundred pixels used to play at 100% in the middle of a mostly empty full screen. Each step is now zoomed to fill the view, like a slide, and fitted again if the window changes size or a phone is turned. Playing still changes nothing on the board.
+
+### Known limitations
+
+- Desktop brokers that sign in only with CLI links use `switchboard backup`; web backup needs
+  password/passkey reauthentication. Restore upload and scheduled token endpoints are not added.
+
 ## 0.57.0 (2026-11-10)
 
 ### Upgrading
