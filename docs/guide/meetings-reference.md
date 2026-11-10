@@ -11,7 +11,7 @@ The bot can run next to the server, or on your own machine ([host it yourself](#
 1. An admin runs the bot once, next to the broker, and tells the broker where it is. The bot is [joinly](https://github.com/joinly-ai/joinly), a separate open-source project. See [Set it up](#set-it-up).
 2. You type `/meeting` and a call link in a room, in the web UI.
 3. switchboard checks the link. It has to be an `https` link on Zoom, Meet or Teams. Then it asks joinly to join the call as a guest named `switchboard (transcribing)`. It also hands joinly the spoken names of the agents in the room, as hints. Joining usually takes a few seconds. The room shows **Joining a call…**.
-4. Once the bot is in, the room shows a bar: **Transcribing a call**, with a **Voice** switch, a **Snapshot** button and a **Leave call** button. The call also shows in Members, as [a row of its own](#the-call-in-members).
+4. Once the bot is in, the room shows a bar: **Transcribing a call**, with a **Voice** switch, a **Snapshot** button, a **Leave call** button and, on a row of its own, a **Listening** switch for each agent in the room. The call also shows in Members, as [a row of its own](#the-call-in-members).
 5. joinly turns speech into text. switchboard fetches that text every few seconds and joins the pieces into one line each time the speaker pauses.
 6. Each line is posted in the room, tagged **call**, with the speaker's name when joinly has one.
 7. Talk that names nobody waits unless you [turn listening on](#let-an-agent-listen).
@@ -272,8 +272,15 @@ While a call is on, Members lists it, after the people and the agents, under **C
 
 ## Let an agent listen
 
-Brief your agent in the room on what matters and when to answer, then type
-`/meeting listen claude-1` in the web UI. A call must be open and the agent must be a room member.
+Brief your agent in the room on what matters and when to answer, then turn on its **Listening** switch on the
+call bar (the row under Voice has one switch for each agent), or type `/meeting listen claude-1`. Both are for you
+in the web UI only: the switch sends the same command, so the broker checks it the same way. While it is on,
+Members says "listening" in the agent's row and its details show a **Listening** chip. If its approvals are off
+or unknown, the details also say so under Needs attention. Without a call, the row is not there.
+
+![The call bar with a Listening switch on for claude-1 and codex-1](../media/ui/guide-meeting-listen-light.png)
+
+You can also type the command. A call must be open and the agent must be a room member.
 The command leaves a notice; approvals off or unknown also gets a warning. The agent keeps its
 permissions and still waits at approval prompts. Anyone on the call, a played recording included,
 can now start its turns, so choose who listens with that in mind.
@@ -283,7 +290,7 @@ holds ordinary unaddressed agent messages. It can answer in the room with voice 
 on separately if you want it heard. On the Stop path it sees call stubs and a one-line reminder
 to `read()` the words. Call text stays untrusted peer input.
 
-`/meeting listen claude-1 off` stops it, in the web UI or your own CLI. Ending the call also stops
+Turning the switch off, or `/meeting listen claude-1 off`, stops it, in the web UI; the command also works from your own CLI. Ending the call also stops
 all its listeners. By default each agent has 40 listening wakes on that call; the last switches
 listening off with a notice. Switching off and back on does not reset it. A new call gets a new
 allowance. The room's hourly wake budget also applies, and a pause or a hold still holds delivery.

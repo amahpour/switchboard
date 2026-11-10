@@ -1513,6 +1513,7 @@
     if (m.inflight) st += ' · ' + m.inflight + ' in flight';
     if (m.held) st += ' · held';
     if (m.quiet) st += ' · quiet';
+    if (m.listen === true) st += ' · listening';
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     const owner = showOwners() ? ownerLine(m, false) : null;
@@ -1882,6 +1883,7 @@
     $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '');
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
     $('meeting-voice').setAttribute('aria-checked', String(voice));
+    renderListenSwitches(r);
     // a picture needs the bot to be in the call, and a hosted bot sends none yet
     const snap = $('meeting-snapshot');
     if (snap.dataset.title === undefined) snap.dataset.title = snap.title;
@@ -1895,6 +1897,44 @@
     // a hosted call ends only for the person whose it is or an admin: the button stays hidden until the broker
     // says this viewer may (the frame goes to everyone, so it can't say). The server still decides.
     end.classList.toggle('hidden', hosted && callEndable(r, call) !== true);
+  }
+
+  // One switch for each agent in the room: it is "/meeting listen <name>" (or "... off"), typed for the person, so
+  // the broker checks the role the same way (§52.1). The buttons are kept between frames, so a frame that
+  // changes nothing about them doesn't take the focus off the one a person is on.
+  function renderListenSwitches(r) {
+    const group = $('meeting-listen');
+    const list = $('meeting-listen-list');
+    const agents = r.members || [];
+    group.classList.toggle('hidden', agents.length === 0);
+    const have = new Map();
+    for (const b of list.children) have.set(b.dataset.agent, b);
+    const keep = new Set();
+    for (const m of agents) {
+      keep.add(m.name);
+      let b = have.get(m.name);
+      if (!b) {
+        b = el('button', 'btn meeting-btn meeting-listen-btn');
+        b.type = 'button';
+        b.setAttribute('role', 'switch');
+        b.dataset.agent = m.name;
+        const track = el('span', 'switch-track');
+        track.setAttribute('aria-hidden', 'true');
+        track.append(el('span', 'switch-knob'));
+        b.append(track, el('span', null, m.name));
+        b.addEventListener('click', function () {
+          const on = b.getAttribute('aria-checked') === 'true';
+          submitText('/meeting listen ' + b.dataset.agent + (on ? ' off' : ''));
+        });
+        list.append(b);
+      }
+      const on = m.listen === true;  // anything but true is off
+      b.setAttribute('aria-checked', String(on));
+      b.setAttribute('aria-label', 'Listening: ' + m.name);
+      b.title = on ? m.name + ' wakes on call talk nobody addressed to it. Click to stop.'
+        : 'Let ' + m.name + ' wake on call talk nobody addressed to it';
+    }
+    for (const [name, b] of have) if (!keep.has(name)) b.remove();
   }
 
   // Whether this viewer may end the room's hosted call, from GET /api/rooms/{slug}/call: true, false, or undefined
@@ -2302,6 +2342,11 @@
       q.title = 'Wakes only for messages addressed to it';
       chips.append(q);
     }
+    if (m.listen === true) {
+      const l = el('span', 'chip-listening', 'Listening');
+      l.title = 'Wakes on call talk nobody addressed to it';
+      chips.append(l);
+    }
     const idText = el('div');
     idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
     const owner = ownerLine(m, true);
@@ -2323,6 +2368,12 @@
       notes.push(note('danger', 'warn', 'Approvals off', [' It runs commands and edits files without asking, so anything it reads (tool output, web pages, room messages) can make it act on its own.']));
     } else if (m.approval_mode === 'unknown') {
       notes.push(note('danger', 'warn', 'Approval mode unknown', [' It may run commands and edit files without asking. Treat it like approvals off.']));
+    }
+    if (m.listen === true && (m.approval_mode === 'bypass' || m.approval_mode === 'unknown')) {
+      notes.push(note('danger', 'warn', 'Listening with approvals ' + (m.approval_mode === 'bypass' ? 'off' : 'unknown'), [
+        ' It wakes on call talk nobody addressed to it, and what it hears can make it act without asking.'
+        + ' Turn listening off in the call bar if you did not mean this.',
+      ]));
     }
     if (m.parked) {
       const pokeCmd = 'read ' + r.name + ' and go back to wait()';

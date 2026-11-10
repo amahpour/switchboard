@@ -364,3 +364,113 @@ def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_ne
     finally:
         relay.close()
     expect(line.locator(".via-host")).to_have_text("via alice-laptop")  # what it pushed keeps its label
+
+
+def _post(broker: InProcBroker, path: str, body: dict[str, str]) -> httpx.Response:
+    client = broker.web_client()
+    try:
+        return client.post(path, json=body, headers=broker.write_headers())
+    finally:
+        client.close()
+
+
+def _plant_agents(broker: InProcBroker, room: str, modes: dict[str, str]) -> None:
+    """Agents in a room, as the other call tests plant them: a participant and a membership each, with the
+    approval mode the participant reports, then the Members frame published."""
+    from switchboard.models import session_key
+
+    def plant() -> None:
+        st = broker.state
+        row = st.store.get_room(room)
+        for name, mode in modes.items():
+            p = st.store.upsert_participant(
+                "claude", session_key("claude", "alice-laptop", f"{room}-{name}"), host="alice-laptop"
+            )
+            st.store.update_participant(p.id, approval_mode=mode)
+            st.store.create_membership(row.id, p.id, name)
+        st.hub.members_changed(room)
+
+    broker.on_loop(plant)
+
+
+def test_the_call_bar_turns_an_agents_listening_on_and_off(ui: UI, calls: InProcBroker) -> None:
+    """Each agent has a Listening switch in the call bar. It is named for its agent, reachable by Tab, and
+    sends the person's own /meeting listen command: on shows "listening" in Members and a Listening chip in
+    the Inspector (with the approvals warning for an agent whose approvals are off), and off takes them away.
+    Nothing is cut off on a phone. Fails if the switch is missing, ignores the keyboard, leaves the marker
+    after off, shows the bar's row with no call, or the warning is missing for approvals off."""
+    broker = calls
+    for name in ("#hearing", "#nocall"):
+        assert _post(broker, "/api/rooms", {"name": name}).status_code == 200
+    _plant_agents(broker, "#hearing", {"claude-1": "prompting", "codex-1": "bypass"})
+    _plant_agents(broker, "#nocall", {"claude-1": "prompting"})
+
+    page = _open(ui, broker, room="nocall")
+    expect(page.locator("#banner-meeting")).to_be_hidden()
+    expect(page.locator("#meeting-listen")).to_be_hidden()
+
+    def start_call() -> None:
+        room = broker.state.store.get_room("#hearing")
+        assert room is not None
+        row = broker.state.store.insert_meeting(room.id, started_by="alice", platform="meet")
+        broker.state.store.set_meeting_live(row.id)
+        broker.state.service.publish_settings(room.id)
+
+    broker.on_loop(start_call)
+    page = _open(ui, broker, room="hearing")
+    claude = page.get_by_role("switch", name="Listening: claude-1")
+    codex = page.get_by_role("switch", name="Listening: codex-1")
+    expect(claude).to_have_attribute("aria-checked", "false")
+    expect(codex).to_have_attribute("aria-checked", "false")
+    expect(page.locator(".m-status", has_text="listening")).to_have_count(0)
+
+    claude.click()
+    expect(claude).to_have_attribute("aria-checked", "true")
+    expect(page.locator("#log")).to_contain_text("alice started claude-1 listening to the call")
+    row = page.locator("#buddy-list .member", has=page.locator(".m-name", has_text="claude-1"))
+    expect(row.locator(".m-status")).to_contain_text("listening")
+    expect(
+        page.locator("#buddy-list .member", has=page.locator(".m-name", has_text="codex-1")).locator(
+            ".m-status"
+        )
+    ).not_to_contain_text("listening")
+
+    # the keyboard: Tab reaches the switch, a ring shows, Space flips it; its words are in the page's own
+    claude.focus()
+    page.keyboard.press("Tab")
+    expect(codex).to_be_focused()
+    outline = codex.evaluate("el => getComputedStyle(el).outlineStyle")
+    assert outline == "solid", outline
+    page.keyboard.press("Space")
+    expect(codex).to_have_attribute("aria-checked", "true")
+    expect(page.locator("#log")).to_contain_text("approvals off")
+    expect(codex).to_be_focused()  # the frame that follows keeps the focus where the person is
+
+    # the Inspector: the chip, and the warning for approvals off
+    page.locator("#buddy-list .member", has=page.locator(".m-name", has_text="codex-1")).locator(
+        ".m-name"
+    ).click()
+    expect(page.locator("#insp-name")).to_contain_text("codex-1")
+    expect(page.locator(".insp-chips .chip-listening")).to_have_text("Listening")
+    expect(page.locator(".insp-attn")).to_contain_text("Listening with approvals off")
+
+    # off takes the marker away, in Members and in the Inspector
+    codex.click()
+    expect(codex).to_have_attribute("aria-checked", "false")
+    expect(page.locator(".insp-chips .chip-listening")).to_have_count(0)
+    expect(page.locator(".insp-attn")).not_to_contain_text("Listening with approvals")
+    claude.click()
+    expect(claude).to_have_attribute("aria-checked", "false")
+    expect(page.locator(".m-status", has_text="listening")).to_have_count(0)
+
+    # a phone: every switch is inside the screen, with a name that says which agent
+    phone = _open(ui, broker, room="hearing", **PHONE)
+    for who in ("claude-1", "codex-1"):
+        expect(phone.get_by_role("switch", name=f"Listening: {who}")).to_be_visible()
+    inside = phone.evaluate(
+        """() => [...document.querySelectorAll('.meeting-listen-btn')].every(b => {
+          const r = b.getBoundingClientRect();
+          return r.left >= 0 && r.right <= document.documentElement.clientWidth;
+        }) && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"""
+    )
+    assert inside
