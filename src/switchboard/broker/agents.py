@@ -270,6 +270,8 @@ class AgentService:
         self.run(self.engine.on_message(msg.id))
 
     def on_command(self, room: Room, name: str, membership_id: int | None) -> None:
+        if membership_id is not None and name in ("listen", "unlisten"):  # SPIKE (#694)
+            (self.engine.listening.add if name == "listen" else self.engine.listening.discard)(membership_id)
         self.run(self.engine.on_command(room.id, name, membership_id))
 
     def on_membership_ended(self, membership_id: int, reason: str) -> None:

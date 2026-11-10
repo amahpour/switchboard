@@ -111,6 +111,9 @@ class Engine:
         # whether a room's live call is speaking agents' @call lines (§52); set once the broker is up.
         # None, as in the engine tests, means voice is off everywhere.
         self.voice_on: Callable[[int], bool] | None = None
+        # SPIKE (#694): membership ids a person set to listen: their call lines that name nobody can
+        # become due like a reply (rules.chatter_due). Memory only; a real build would store it.
+        self.listening: set[int] = set()
         self.parked: dict[int, str] = {}  # membership_id -> reason
         # A Stop wait its own side ended (Esc, a timeout in the harness) leaves no wake path until the
         # session's next hook (#449). The adapter's reason is kept even with nothing pending, so
@@ -420,6 +423,7 @@ class Engine:
             wake_now=self._wake_now(m.id, pending),
             peers_stubbed=peers_stubbed,
             addressed_only=m.quiet,
+            listening=m.id in self.listening,
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
@@ -443,6 +447,7 @@ class Engine:
                 peer_batch_boundary=m.peer_batch_boundary,
                 boundary_seq=p.boundary_seq,
                 addressed_only=m.quiet,
+                listening=m.id in self.listening,
             ):
                 out += self._budget_exhausted(room)
             return out + unparked()
@@ -1202,7 +1207,7 @@ class Engine:
         if name == "hold" and membership_id is not None:
             self._unpark(membership_id)
             return [Snapshot(room_id)]
-        if name in ("quiet", "unquiet") and membership_id is not None:
+        if name in ("quiet", "unquiet", "listen", "unlisten") and membership_id is not None:
             # on: a due chatter release stops; off: chatter already past the hold goes now
             return self.evaluate(membership_id) + [Snapshot(room_id)]
         if name == "wake" and membership_id is not None:
@@ -1551,6 +1556,7 @@ class Engine:
                 # Devin's Stop block stubs peer text, same as a held Stop hook (#548).
                 peers_stubbed="stop_block" not in caps.inline_paths,
                 addressed_only=m.quiet,
+                listening=m.id in self.listening,
             )
             if rel is None or rel.kind != "wake":
                 continue

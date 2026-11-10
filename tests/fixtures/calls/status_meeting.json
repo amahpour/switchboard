@@ -1,0 +1,740 @@
+[
+ {
+  "gap_s": 0,
+  "speaker": "alice",
+  "text": "Okay, I think everyone is here. Thanks for joining the weekly status. Let's go quickly so we finish on time.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Morning. Can you all hear me fine? My headset was acting up earlier.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "Yes, you sound fine. Loud and clear.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Great. Quick recap of the sprint first. We closed eleven tickets last week and carried over four.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "The carried over ones are mostly the search indexing work, the onboarding redesign, and two small bugs in the settings page.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "Can I jump in on the settings bugs? One of them is mine, the dark mode toggle. It is fixed, I just have not merged it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Sure, please merge it today if you can. Bob, do you want to start with search indexing?",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Yes. So the indexer rewrite is about eighty percent done. The incremental updates work and the full rebuild works.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "What is left is the part that handles deleted documents. Right now a deleted document stays in the index until the nightly rebuild.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "Is that visible to users? Like, would they see a document that no longer exists?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Yes, in the search results, for up to a day. The link would go to a not found page. It is ugly but not dangerous.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Okay. Do we need to fix that before the next release, or can it wait?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "I would like to fix it. It is maybe two days of work, mostly testing, because the delete path touches a lot of places.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "Fine, let's plan for it. Anything blocking you on search?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Not really. I need a review on the pull request for the query parser, though. It has been open since Tuesday.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "I can look at it this afternoon. Send me the link in the chat.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Will do. Thanks.",
+  "tag": ""
+ },
+ {
+  "gap_s": 14,
+  "speaker": "alice",
+  "text": "Sorry, I was writing that down. Carol, onboarding redesign next. Where are we?",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "So I finished the new welcome screens, there are four of them now instead of seven. I tested them with five people last week.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "Four out of five finished the whole flow without help, which is better than before. The fifth person got stuck on the permissions step.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "What was confusing about the permissions step?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "The wording. It asks for access to notifications and to the camera in the same screen, and people did not know why we need the camera.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "We only need the camera for scanning, right? We could ask for it later, when they first scan something.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "Exactly my thinking. I will split it up and ask for the camera only when it is needed. I need to update the copy for that.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "Good. Do you need anything from engineering for that?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "A small thing. A way to check whether the permission was already granted, so we do not show our explanation twice.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "That exists already. I will send you the function name. It is one line.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "Perfect.",
+  "tag": ""
+ },
+ {
+  "gap_s": 6,
+  "speaker": "alice",
+  "text": "Before the roadmap, let's talk about last Thursday. We had that failed deploy and I want to make sure we learned something from it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "bob",
+  "text": "I can take that one. The short version is that the migration script ran twice. Our pipeline retried the step after a timeout, and the script was not safe to run a second time.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "What did users see while that was happening?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "A maintenance page for about twenty five minutes. Nobody lost data, we checked, but the profile pictures were missing until we restored them from the backup.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Twenty five minutes is long. What took most of the time?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Honestly, finding out what had happened. The logs for the migration step were in three different places and none of them told the whole story.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "So that is one action item. Put the logs in one place.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Agreed. I would also like to make the migration script safe to run twice. Then a retry cannot hurt us, whatever the timeout does.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "Could we also have a smaller deploy window? I noticed we deploy everything on Thursday afternoon, which is when most customers are online.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "That is a fair point. What would you suggest?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "Early morning, before the east coast wakes up. Or at least not the afternoon.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "The earlier the better for me, but then someone has to be around. I do not want to be the only one watching the deploy at six in the morning.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "We can do a rotation. Let me think about how to set that up fairly, and I will propose something next week.",
+  "tag": ""
+ },
+ {
+  "gap_s": 8,
+  "speaker": "bob",
+  "text": "While we are at it, the build is also slower than it was. It used to take eight minutes, now it takes closer to fourteen.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Do we know why?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Mostly the tests. We added a lot of end to end tests last month and they all run in sequence. I want to run them in parallel on four machines.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "That sounds expensive.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "A bit more per build, but the engineers waiting for it cost a lot more. I did the math, it pays for itself in about two weeks.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Okay, you have my support. Write a short proposal with the numbers and I will approve it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Will do, thanks.",
+  "tag": ""
+ },
+ {
+  "gap_s": 16,
+  "speaker": "alice",
+  "text": "Sorry, my other screen froze for a moment. Where were we? Right, the incident. Anything else on that?",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "One question. Do we tell the customers what happened? A few of them asked in the support channel.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Support already sent a short note on Friday. I think that is enough. If anyone asks for more, we send the full write up.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "Okay, I just wanted to be sure someone had done it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 9,
+  "speaker": "alice",
+  "text": "Okay, let me share my screen for the roadmap. Give me a second to find the right window.",
+  "tag": ""
+ },
+ {
+  "gap_s": 24,
+  "speaker": "alice",
+  "text": "Can you see it now? The roadmap with the three columns.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Yes, I can see it. The text is a bit small, though.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Let me zoom in. Better?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Better, thanks.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "So the middle column is what we committed to for this quarter. The file attachments feature is the big one in there.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "How far along is attachments? I have the designs ready but I have not heard much about the backend.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "The backend is mostly there. You can upload a file, it gets stored, and you can download it again. What I still need is the size check and the virus scan.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "For the upload dialog I need to write the error message for when a file is too big. So what is the maximum file size for uploads? Does anyone know the number?",
+  "tag": "key"
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "Hm. I thought we had decided that in the planning meeting. Bob, do you remember?",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "I remember a long discussion, but I do not remember the outcome. I think it depends on the plan. Let me look it up later.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "Okay, I will put a placeholder in the design and fix it when someone tells me.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Sounds good. Let's keep moving, we have a lot to cover.",
+  "tag": ""
+ },
+ {
+  "gap_s": 5,
+  "speaker": "bob",
+  "text": "While we are on attachments, one side note. Uploading from the phone is slower than from the desktop, and I do not know why yet.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Is that a problem for the release?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Probably not, but I want to understand it. It might just be the mobile network in the office.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "I can test it on the home wifi tonight if that helps.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "That would help, yes. Thank you.",
+  "tag": ""
+ },
+ {
+  "gap_s": 7,
+  "speaker": "alice",
+  "text": "Next, the customer feedback. Support sent me a summary of the top five requests from this month.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Number one is still better search, which Bob is working on. Number two is dark mode, which Carol just fixed. Number three is the export to spreadsheet.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "The export is smaller than it sounds. A day, maybe a day and a half, if we only do the basic format.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Great, let's add it to the list for next sprint. Number four is single sign on, and number five is the mobile app being slow.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "The mobile slowness is probably related to what Bob just said about the phone.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Could be, yes. I will keep that in mind when I look at it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 9,
+  "speaker": "alice",
+  "text": "Next, the customer demo on the twentieth. It is with the big retail company that we have been talking to since the summer.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "I would like to show search, the new onboarding, and the attachments if they are ready. About thirty minutes in total.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "Who is doing the talking? I can walk through the onboarding, that is easy for me.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "I will do the intro and the search part. Bob, can you handle questions about the technical side?",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Sure. If they ask about security or hosting, I can answer that. If they ask about pricing, please do not look at me.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Pricing is mine. Nobody else needs to say anything about it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "I would like one dry run before the demo. Maybe the day before, with a customer like data set so the screens do not look empty.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "I can prepare the data. It would take me an hour or so to generate something realistic.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Please do that. And let's agree now that we do not show anything that is not ready. If attachments are not done, we skip them and talk about them as upcoming.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "That seems wise. I would rather skip a feature than have a broken demo.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Agreed. A crash during the demo is worse than a missing feature.",
+  "tag": ""
+ },
+ {
+  "gap_s": 10,
+  "speaker": "alice",
+  "text": "Okay, now hiring. We have two open positions, one for backend and one for design, and I got the first batch of applications.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "There are about forty for backend and fifteen for design. I looked at them quickly and there are maybe six good ones in each group.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "bob",
+  "text": "Do you want me to help with the technical interviews? I can do one or two a week.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Yes please. Let's start with the phone screens in two weeks. I will send you the list of candidates once I have narrowed it down.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "For the design role, I would like to give the candidates a small exercise instead of a long portfolio review. Something like a two hour task.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Is a two hour exercise fair for them? Some people do not have the time.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "That is true. We could pay them for it, a small amount, or keep it to one hour and use it as a conversation starter.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Let's go with one hour and no payment, but we make it optional. Anyone who prefers can send a portfolio instead.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "Okay, I like that. I will write up the exercise this week.",
+  "tag": ""
+ },
+ {
+  "gap_s": 7,
+  "speaker": "bob",
+  "text": "A question about the backend role. Do we need someone with experience in search? Or is that too narrow?",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "I would say experience in search is nice to have, but not required. Good general engineers can learn it.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Good, because I do not want to filter out people who would be great. Learning the search part takes a few months at most.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "One more thing about hiring. Can we make sure the interview panel is not all the same kind of person? Last time it was three engineers and the candidate felt a bit outnumbered.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Good point. I will make sure there is someone from design and someone from support on every panel.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "Thank you, that would be good.",
+  "tag": ""
+ },
+ {
+  "gap_s": 11,
+  "speaker": "alice",
+  "text": "Okay, one more item before we finish. Some of the customers are asking when they get attachments. Do we have a date we can share?",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "carol",
+  "text": "Support asked me this morning too. They want to tell customers it will be ready by Friday.",
+  "tag": "date"
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Friday is not realistic. The scan and the size check are not done, and then there is testing.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Right. So we can say it is coming soon, but no date yet. I will talk to support after this call.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "carol",
+  "text": "Okay. I will tell them not to promise a specific day.",
+  "tag": ""
+ },
+ {
+  "gap_s": 6,
+  "speaker": "alice",
+  "text": "Last topic. The team offsite. We have the budget for it in the spring and I need to know whether people prefer a city trip or somewhere quiet.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Somewhere quiet, please. I get tired of cities.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "carol",
+  "text": "I vote for the mountains. Somewhere with a lake would be perfect.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Two for the mountains then. I will check some places and send a short list next week.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Can we avoid anything that needs a long flight? Two hours by train is my limit.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Noted. Train distance only.",
+  "tag": ""
+ },
+ {
+  "gap_s": 8,
+  "speaker": "carol",
+  "text": "Before we finish, one thing about next week. I am out on Thursday for a doctor appointment, so if anyone needs design input, please ask on Wednesday.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Thanks for telling us. Bob, are you around all week?",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "bob",
+  "text": "Yes, all week. Except Friday afternoon, I leave early.",
+  "tag": ""
+ },
+ {
+  "gap_s": 3,
+  "speaker": "alice",
+  "text": "Good. Let me summarize the action items. Bob, the delete path for search and the review of the parser pull request goes to Carol.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "alice",
+  "text": "Carol, merge the dark mode fix, split the permission screen and test the phone upload tonight. And I talk to support about the date and send the offsite list.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "And I send the function name for the permission check.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Yes, that too. Anything else from anyone?",
+  "tag": ""
+ },
+ {
+  "gap_s": 5,
+  "speaker": "carol",
+  "text": "Nothing from me.",
+  "tag": ""
+ },
+ {
+  "gap_s": 2,
+  "speaker": "bob",
+  "text": "Nothing here either.",
+  "tag": ""
+ },
+ {
+  "gap_s": 1,
+  "speaker": "alice",
+  "text": "Great, thanks everyone. Talk next week.",
+  "tag": ""
+ }
+]

@@ -203,6 +203,7 @@ def chatter_due(
     hold_s: float = 0.0,
     *,
     addressed_only: bool = False,
+    listening: bool = False,
 ) -> bool:
     """Chatter goes out once the room has been quiet for ``quiet_s``, or the oldest
     item has waited ``max_hold_s``.
@@ -217,14 +218,20 @@ def chatter_due(
     still does, and the caller sends the other chatter along with it.
 
     A call line that names nobody is not chatter that can become due (§52): it rides along
-    with the next real wake and never starts one, for every agent, quiet or not."""
+    with the next real wake and never starts one, for every agent, quiet or not.
+
+    SPIKE (#694): ``listening`` (a member a person set to listen) makes those call lines due by
+    the same quiet period / max hold as a reply. It does not change anything else: the hold,
+    ``addressed_only`` and every other kind of chatter are as before."""
+    asides = [c for c in chatter if _meeting_aside(c)] if listening else []
     chatter = [c for c in chatter if not _meeting_aside(c)]
-    if not chatter:
+    if not chatter and not asides:
         return False
     if hold_s > 0 or addressed_only:
         addressed = [c for c in chatter if c.reply_to_me]
     else:
         addressed = list(chatter)
+    addressed = sorted(addressed + asides, key=lambda c: c.ts)
     if addressed:
         quiet = room.last_msg_at is None or now - room.last_msg_at >= quiet_s
         if quiet or now - addressed[0].ts >= max_hold_s:
@@ -263,6 +270,7 @@ def releasable(
     wake_now: bool = False,
     peers_stubbed: bool = False,
     addressed_only: bool = False,
+    listening: bool = False,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -298,7 +306,16 @@ def releasable(
     if chatter and wake_now:
         return done(chatter, "wake", True)
     if chatter and ok and room.budget_remaining > 0:
-        if chatter_due(room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=addressed_only):
+        if chatter_due(
+            room,
+            chatter,
+            now,
+            quiet_s,
+            max_hold_s,
+            hold_s,
+            addressed_only=addressed_only,
+            listening=listening,
+        ):
             return done(chatter, "wake", True)
     return None
 
@@ -311,6 +328,7 @@ def budget_blocked(
     peer_batch_boundary: int,
     boundary_seq: int,
     addressed_only: bool = False,
+    listening: bool = False,
 ) -> bool:
     """True when an idle member has wake-eligible non-human items that only the
     empty budget holds back (drives the once-per-window budget_exhausted notice).
@@ -325,7 +343,9 @@ def budget_blocked(
     if any(d.prio == 1 for d in eligible):
         return True
     chatter = [
-        d for d in eligible if d.prio == 0 and not _meeting_aside(d) and (d.reply_to_me or not addressed_only)
+        d
+        for d in eligible
+        if d.prio == 0 and (listening or not _meeting_aside(d)) and (d.reply_to_me or not addressed_only)
     ]
     return bool(chatter) and peer_ok(peer_batch_boundary, boundary_seq)
 
