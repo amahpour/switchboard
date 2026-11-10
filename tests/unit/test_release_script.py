@@ -192,7 +192,10 @@ def test_a_release_pr_may_change_the_marketplaces() -> None:
     marketplaces are release files now, or a release would run everything."""
     assert rel.is_release_file(".claude-plugin/marketplace.json")
     assert rel.is_release_file(".agents/plugins/marketplace.json")
-    assert not rel.is_release_file("plugins/claude/.claude-plugin/plugin.json")  # a plugin itself is not
+    assert not rel.is_release_file("plugins/claude/hooks/hooks.json")  # a plugin's other files are not
+    # the manifests are (#705): a release raises their version with the pin, and must still skip the suite
+    assert rel.is_release_file("plugins/claude/.claude-plugin/plugin.json")
+    assert rel.is_release_file("plugins/codex/.codex-plugin/plugin.json")
 
 
 # ------------------------------------------------------------------ a real repo
@@ -258,6 +261,18 @@ def make_repo(tmp_path: Path) -> Path:
     (repo / "plugins" / "claude" / "meeting" / "compose.yaml").write_text(
         "    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.4.0}   # a release\n"
     )
+    (repo / "plugins" / "codex" / "meeting").mkdir(parents=True)
+    (repo / "plugins" / "codex" / "meeting" / "compose.yaml").write_text(
+        "    image: ${SB_RELAY_IMAGE:-ghcr.io/amahpour/switchboard:0.4.0}\n"
+    )
+    for folder, manifest, version in (
+        ("claude", ".claude-plugin", "1.2.9"),
+        ("codex", ".codex-plugin", "0.8.4"),
+    ):
+        (repo / "plugins" / folder / manifest).mkdir(parents=True)
+        (repo / "plugins" / folder / manifest / "plugin.json").write_text(
+            f'{{\n  "name": "switchboard",\n  "version": "{version}",\n  "description": "x 1.0.0"\n}}\n'
+        )
     (repo / "deploy" / "helm" / "switchboard").mkdir(parents=True)
     (repo / "deploy" / "helm" / "switchboard" / "Chart.yaml").write_text(CHART)
     for rel_path, folder in (
@@ -501,6 +516,41 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
     )
     assert "## 0.4.1 (2026-09-30)\n\n" + notes in (repo / "CHANGELOG.md").read_text()
     assert sorted(p.name for p in (repo / "changes").iterdir()) == ["README.md"]  # gathered, the README stays
+
+
+def test_a_release_that_moves_a_plugins_relay_pin_bumps_that_plugins_version(tmp_path: Path) -> None:
+    """Claude Code and Codex keep an installed plugin by its manifest `version`, so a release that moves the
+    relay image in `meeting/compose.yaml` under an unchanged version never reaches an installed plugin
+    (#705: after v0.57.0, `claude plugin update` said "already at the latest" and the old relay stayed). A
+    release PR skips the suite, so only the script can keep the two together. Fails if either manifest's
+    version stays, if the bump touches anything but the patch of the first `version`, or if a plugin whose
+    files no pin moved in is bumped too."""
+    repo = make_repo(tmp_path)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "fix(cli): a fix (#30)")
+    assert rel.release(repo, tmp_path / "notes.md", "2026-09-30") == "0.4.1"
+    claude = (repo / "plugins/claude/.claude-plugin/plugin.json").read_text()
+    codex = (repo / "plugins/codex/.codex-plugin/plugin.json").read_text()
+    assert json.loads(claude)["version"] == "1.2.10" and json.loads(codex)["version"] == "0.8.5"
+    assert claude.replace("1.2.10", "1.2.9") == (
+        '{\n  "name": "switchboard",\n  "version": "1.2.9",\n  "description": "x 1.0.0"\n}\n'
+    )
+    # a plugin with no pin in it is left alone
+    other = make_repo(tmp_path / "other")
+    (other / "plugins/codex/meeting/compose.yaml").write_text("image: example.com/relay:1\n")
+    git(other, "commit", "-qam", "chore: no pin in codex")
+    git(other, "commit", "-q", "--allow-empty", "-m", "fix(cli): a fix (#31)")
+    assert rel.release(other, tmp_path / "notes2.md", "2026-09-30") == "0.4.1"
+    assert (
+        json.loads((other / "plugins/claude/.claude-plugin/plugin.json").read_text())["version"] == "1.2.10"
+    )
+    assert json.loads((other / "plugins/codex/.codex-plugin/plugin.json").read_text())["version"] == "0.8.4"
+
+
+def test_a_manifest_with_no_version_stops_the_release() -> None:
+    """A manifest the bump cannot read stops the release, as a marketplace with no pin does."""
+    with pytest.raises(SystemExit, match="plugin.json has no"):
+        rel.bump_plugin('{"name": "switchboard"}', "plugin.json")
+    assert rel.bump_plugin('{"version": "0.16.9"}') == '{"version": "0.16.10"}'
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
