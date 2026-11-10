@@ -3011,6 +3011,10 @@ permission and changes no approval mode. Voice remains a separate switch, off at
 **Storage (schema 47).** `memberships.listen` is a checked boolean, off by default.
 `listen_call_id` references the current call and `listen_wakes` is its nonnegative count.
 Disabling and re-enabling on that call preserves the count; a new call starts a new allowance.
+Leaving and joining again does not reset it either: `Store.set_listen` starts a membership new to
+the call from the most an earlier membership of the same participant or name in the room spent on
+it. An agent can leave and join by itself, and with hands-free listening (§52.3) a join listens at
+once, so a rejoin must not hand it a fresh allowance.
 Every call-end path clears its listeners in `Store.end_meeting`, including a failed join, a hosted
 relay's departure, shutdown and recovery after restart. A migrated membership starts off with no
 call and zero wakes; the migration keeps the old rows and a schema-46 backup.

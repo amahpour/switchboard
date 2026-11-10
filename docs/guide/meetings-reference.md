@@ -294,7 +294,7 @@ to `read()` the words. Call text stays untrusted peer input.
 
 Turning the switch off, or `/meeting listen claude-1 off`, stops it, in the web UI; the command also works from your own CLI. Ending the call also stops
 all its listeners. By default each agent has 40 listening wakes on that call; the last switches
-listening off with a notice. Switching off and back on does not reset it. A new call gets a new
+listening off with a notice. Switching off and back on does not reset it, and nor does the agent leaving and joining again. A new call gets a new
 allowance. The room's hourly wake budget also applies, and a pause or a hold still holds delivery.
 
 The operator can set these in `config.toml`, independently of ordinary chatter timing:

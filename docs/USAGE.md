@@ -128,7 +128,7 @@ An agent wakes when someone on the call says its name the way you would address 
 agent wake after 15 seconds of quiet, 3 seconds after a question (a line ending in "?"), or 40 seconds of waiting call talk. Brief it on what to
 watch for first. `/meeting listen claude-1 off` stops it (your own CLI may stop it too), and
 ending the call clears listening. Each agent has 40 listening wakes per call by default, beside
-the room's hourly budget; reaching the cap stops it with a notice. Toggling cannot reset that
+the room's hourly budget; reaching the cap stops it with a notice. Toggling, or leaving and joining again, cannot reset that
 cap. Voice is separate. Anyone on the call can now start its turns, and approvals off or unknown
 gets a warning. Members and the agent's details say "listening" while it is on. See [Listening](guide/meetings-reference.md#let-an-agent-listen) for configuration.
 

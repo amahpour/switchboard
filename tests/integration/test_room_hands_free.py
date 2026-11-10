@@ -169,3 +169,39 @@ async def test_a_hosted_call_starts_with_voice_on_and_listening_agents(world: Wo
         con.close()
     finally:
         await claude.close()
+
+
+async def test_leaving_and_joining_again_does_not_reset_an_agents_wake_cap_for_the_call(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """The per-call cap bounds how often call talk, which anyone on the call can make, wakes an agent. With
+    the room's setting on, a rejoin listens again at once: it must carry the wakes its earlier membership
+    spent on this call, and not listen at all once they reach the cap. Fails if a leave and a join, which an
+    agent can do by itself, hands it a fresh 40."""
+    cap = broker.state.cfg.delivery.listen_max_wakes  # type: ignore[attr-defined]
+    store = broker.state.store  # type: ignore[attr-defined]
+
+    def spend(name: str, n: int) -> None:
+        m = next(m for m in store.room_memberships(store.get_room("#build").id) if m.screen_name == name)
+        for _ in range(n):
+            store.count_listen_wake(m.id, cap)
+
+    def wakes(name: str) -> int:
+        m = next(m for m in store.room_memberships(store.get_room("#build").id) if m.screen_name == name)
+        return m.listen_wakes
+
+    command(broker, "/room listen on")
+    async with FakeAgent(broker.home, "k1") as a:
+        assert (await a.join("#build", "alpha"))["ok"]
+        await start_call(broker, joinly)
+        broker.on_loop(lambda: spend("alpha", 5))
+        assert (await a.leave("#build"))["ok"]
+        assert (await a.join("#build", "alpha"))["ok"]
+        assert listening(broker) == {"alpha": True}
+        assert broker.on_loop(lambda: wakes("alpha")) == 5
+        broker.on_loop(lambda: spend("alpha", cap - 5))  # the last one turns listening off
+        assert listening(broker) == {"alpha": False}
+        assert (await a.leave("#build"))["ok"]
+        assert (await a.join("#build", "alpha"))["ok"]
+        assert listening(broker) == {"alpha": False}
+        command(broker, "/meeting leave")
