@@ -97,6 +97,9 @@ $SWITCHBOARD_HOME/                0700
   switchboard.db, -wal, -shm      0600
   switchboard.db.v<N>.bak         0600  written once by a schema migration from version N (§4); never overwritten
   switchboard.db.delete-<room>-<id>.bak  0600  one per `switchboard rooms delete`, checked, never overwritten (§28.6)
+  restore/                        0700  one queued data archive; consumed as .used at start (§57)
+  before-restore-<id>/             0700  database, WAL and files kept before a restore (§57)
+  restore-in-progress             0600  blocks startup after an interrupted replacement (§57)
   run/                            0700
     broker.sock                   0600  UDS (JSON-lines RPC)
     broker.pid                          "<pid> <start_time>" of the foreground broker
@@ -126,7 +129,8 @@ $SWITCHBOARD_HOME/                0700
   3. calls `human.login_link` and prints the URL. If the peer check denies that call, it prints "run `switchboard login` in your own terminal".
 - **`--foreground`**:
   1. takes `flock(run/broker.lock)`, exiting 1 if it is held;
-  2. pins this boot's first `/proc/stat` `btime` in `run/boot_time` on Linux, then writes `broker.pid` as pid plus process start time;
+  2. verifies and applies one archive from `restore/`, if present, then opens and migrates the database (§57);
+  3. pins this boot's first `/proc/stat` `btime` in `run/boot_time` on Linux, then writes `broker.pid` as pid plus process start time;
   4. starts the UDS server, the engine and the runner in the FastAPI lifespan.
 
   SIGTERM or SIGINT shuts down gracefully: close sinks, checkpoint the WAL, and remove the socket and pidfile.
@@ -3454,3 +3458,42 @@ The page validates the converted elements before forwarding. The server validate
 **Play frames** requests fullscreen on the parent panel, with a viewport-filling fallback when the browser does not support it. The view is read-only. Frames are ordered by their row (100-unit bands), then x, matching the summary's reading order. Each frame's name is its caption, drawn by the parent with textContent. Previous/Next, arrow keys and Escape/Exit play navigate without a server write. The sandbox displays only that frame and its children and fits its camera to them; updates still arrive live. Exiting restores the complete editable scene and focus to Play frames. Pending person edits are flushed before entering; image reads still export the complete board. The phone uses the same view and controls. Exporting a storyboard is outside this issue.
 
 Tests: `test_board_mermaid.py` checks source/type/byte/id/placement caps, including rotated shapes and long strokes; `test_board_conversion.py` drives the real MCP/WebSocket request and races it with leaving and posting; `test_board_story.py` converts hostile text without browser errors, edits a converted label and plays six frames on desktop and phone without changing stored data.
+
+## 57. Live backup archives and restore at start (#688)
+
+`backup.py` owns the data archive shared by the command and future web orchestration. No
+backup takes the broker's home lock or stops it. A separate read-only SQLite connection pins
+a deferred WAL read transaction before `db.backup_verified`: its row counts and backup API
+therefore read the same committed snapshot while the broker can keep writing. The copied DB
+is self-contained (DELETE journal), with integrity and all known schema tables checked. Only
+finalized attachments referenced by that snapshot are streamed, with their stored sizes and
+SHA-256 checked; a concurrent deletion fails this attempt. Later uploads and partial files
+are excluded. Temporary DB copies are private and cleaned on failure or completion.
+
+The archive is an uncompressed tar, exclusively created with mode 0600: `switchboard.db`,
+`files/<id>` and `manifest.json`. The bounded manifest (16 MiB; at most 100,000 archive members)
+records format 1, schema, row counts, per-file SHA-256 and the last passkey RP hostname. Startup
+records that hostname as `meta.passkey_rp_id`; no table or column changes. Older copies without
+it warn that the binding is unknown. The archive carries no configuration, logs or script keys
+from the filesystem. It does contain database credentials and private histories.
+
+`switchboard restore` takes the daemon's exclusive home lock, refusing a running broker.
+`run_foreground` calls `restore_pending` while holding that lock, before `open_db` and before
+any listener. Exactly one candidate in `restore/` is allowed; `.used` archives are ignored.
+Verification streams into a private staging directory. Paths are allowlisted; duplicates,
+links, devices, extension headers, sparse entries, unknown members and compressed archives are
+refused. Neither archive ownership nor modes are applied. Hashes, integrity, schema, counts and attachment
+references must agree before replacing anything. A newer schema is refused; an older one is
+installed unchanged and migrated by `open_db` on start.
+
+A durable `restore-in-progress` marker names a private recovery folder. The old DB, WAL, SHM
+and files are moved there, never deleted, then staged data is renamed into place and synced.
+Only then is the input archive renamed `.used` and the marker removed. An interrupted replace
+refuses the next start until an operator recovers the complete original set, as DEPLOY.md
+explains. Files created by extraction belong to the process uid with mode 0600, directories
+0700, so the image's existing privilege drop to uid 10001 needs no root restore step.
+
+A different RP hostname produces a warning without printing the old hostname: use a password
+and enrol new passkeys. `SWITCHBOARD_RESET_OWNER` remains the destructive last-resort recovery
+and its warning says it removes people and credentials. No archive upload or scheduled backup
+HTTP endpoint is added here.

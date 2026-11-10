@@ -232,6 +232,7 @@ def create_app(
             )
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
+        state.store.meta_set("passkey_rp_id", web_origin.hostname)
         state.listener_keys = listener_keys.ListenerKeys(state.store, clock)
         state.recovery = state.store.recover_on_start()
         if any(state.recovery.values()):
