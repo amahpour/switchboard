@@ -4,4 +4,4 @@
 
 ### Upgrading
 
-- The database moves to schema 49 (a column for the pinned voice); a backup is written first. Update the server first and then the plugin: a new relay sends a flag an older server refuses (a line's voice was not found), and an older relay simply speaks in the call's one voice.
+- The database moves to schema 49 (a column for the pinned voice); a backup is written first. The server and the plugin update in either order: an older server sends no voice, so a new relay speaks in the call's one voice, and an older relay ignores the voice a new server sends.
