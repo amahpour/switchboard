@@ -142,6 +142,8 @@ class Room:
     rules_text: str = ""
     rules_version: int = 1
     private: bool = False  # seen only by its people (§44, #74)
+    call_voice: bool = False  # every call here starts with Voice on (§52.3)
+    call_listen: bool = False  # every agent here listens on calls (§52.3)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Room":
@@ -162,6 +164,8 @@ class Room:
             rules_text=r["rules_text"] if "rules_text" in r.keys() else "",  # read-only old-schema reports
             rules_version=r["rules_version"] if "rules_version" in r.keys() else 1,
             private=bool(r["private"]) if "private" in r.keys() else False,
+            call_voice=bool(r["call_voice"]) if "call_voice" in r.keys() else False,
+            call_listen=bool(r["call_listen"]) if "call_listen" in r.keys() else False,
         )
 
     @property

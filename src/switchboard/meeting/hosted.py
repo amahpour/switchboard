@@ -409,6 +409,7 @@ class HostedCalls:
                 "conflict", f"{room.name} already has a call, or that key was used before"
             ) from None
         self._state(row)
+        svc.start_hands_free(room.id, row.id, self)  # the room's settings, if a person made any (§52.3)
         self.forget_requests(room.id)  # any successful start cancels stale handoffs for this room
         fp = keys.fingerprint(h)
         store.add_event(
@@ -417,7 +418,11 @@ class HostedCalls:
             data={"meeting": row.id, "platform": platform, "host": token.device, "by": who, "key": fp},
         )
         svc.publish_settings(room.id)
-        svc.notice_in(room.id, f"{who} is hosting {_a_call(platform)} from {token.device}")
+        note = svc.hands_free_note(room)
+        svc.notice_in(
+            room.id,
+            f"{who} is hosting {_a_call(platform)} from {token.device}" + (f". {note}" if note else ""),
+        )
         return {
             "room": room.name,
             "state": row.state,

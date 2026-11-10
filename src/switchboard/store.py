@@ -387,6 +387,16 @@ class Store:
                 )
         return self._room_or_raise(room_id)
 
+    def set_room_call(self, room_id: int, setting: str, on: bool) -> bool:
+        """Set a room's hands-free call setting, ``voice`` or ``listen`` (§52.3). True when that
+        changed it. Kept by the room whether or not a call is live."""
+        col = {"voice": "call_voice", "listen": "call_listen"}[setting]  # a KeyError, never SQL from outside
+        with db.tx(self.con):
+            cur = self.con.execute(
+                f"UPDATE rooms SET {col}=? WHERE id=? AND {col}!=?", (int(on), room_id, int(on))
+            )
+            return cur.rowcount == 1
+
     def set_budget(self, room_id: int, remaining: int) -> Room:
         if remaining < 0:
             raise ValueError("budget must be >= 0")

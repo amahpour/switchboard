@@ -11,6 +11,8 @@ so it reduces activity: ``human_cli``. ``/quiet`` reduces what wakes an agent, s
 ``human_cli``; ``/unquiet`` raises it, so ``human`` (§50). ``/meeting`` joins a call,
 which raises what the room's agents can be asked to do, so ``human`` (§52); so do its
 ``voice on|off`` (agents speaking in the call) and ``snapshot`` (a picture of its shared screen).
+``/room voice|listen on|off`` (§52.3) sets what every call in the room starts with, so it raises
+what agents can do and needs ``human`` too; ``/room`` alone only reads them.
 """
 
 from __future__ import annotations
@@ -70,9 +72,12 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /meeting leave      leave the call and stop transcribing (web only)
   /meeting listen <name> [off]  wake this agent on call chatter (on: web only)
   /meeting voice on   let agents speak in the call: a say() that starts with @call
-                      is read aloud to everyone on it. Off when a call starts (web only)
+                      is read aloud to everyone on it. Off when a call starts unless /room voice on (web only)
   /meeting voice off  stop that (web only)
   /meeting snapshot   post a picture of the call's shared screen (web only)
+  /room               show this room's call settings (hands-free calls)
+  /room voice on|off  every call here starts with Voice on (web only)
+  /room listen on|off every agent here listens on calls (web only)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -82,7 +87,13 @@ _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release", "wake", "quiet", "unquiet"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
 _ONE_MESSAGE = frozenset({"pin", "unpin"})  # /name <message id>
-KNOWN = _NO_ARGS | _ONE_NAME | set(_ONE_NUMBER) | _ONE_MESSAGE | {"catchup", "review", "rename", "meeting"}
+KNOWN = (
+    _NO_ARGS
+    | _ONE_NAME
+    | set(_ONE_NUMBER)
+    | _ONE_MESSAGE
+    | {"catchup", "review", "rename", "meeting", "room"}
+)
 
 _STATIC_ROLES = {
     "pause": "human_cli",
@@ -104,6 +115,7 @@ _STATIC_ROLES = {
     # a person's web session (#292). Taking one away reduces it, as /kick and /hold do.
     "pin": "human",
     "unpin": "human_cli",
+    "room": "human",  # hands-free calls: what every call here starts with (§52.3); /room alone is read-only
     "meeting": "human",  # joining a call lets anyone on it address an agent (§52)
 }
 
@@ -172,6 +184,8 @@ def parse_command(text: str) -> Command:
         raise CommandError("bad_request", f"unknown command /{name}; try /help")
     if name == "meeting":
         return _parse_meeting(args, raw)
+    if name == "room":
+        return _parse_room(args, raw)
     if name == "catchup":
         # parsed from the raw text: a quoted topic keeps its spaces
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
@@ -238,6 +252,19 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     if len(args) != 1:
         raise CommandError("bad_request", MEETING_USAGE)
     return Command(name="meeting", args=(args[0],), raw=raw)
+
+
+ROOM_USAGE = "usage: /room [voice|listen on|off]"
+
+
+def _parse_room(args: tuple[str, ...], raw: str) -> Command:
+    """``/room`` (show), ``/room voice on|off`` and ``/room listen on|off``: a room's hands-free
+    call settings (§52.3). Anything else is refused, never guessed at."""
+    if not args:
+        return Command(name="room", args=(), raw=raw)
+    if len(args) == 2 and args[0].lower() in ("voice", "listen") and args[1].lower() in ("on", "off"):
+        return Command(name="room", args=(args[0].lower(), args[1].lower()), raw=raw)
+    raise CommandError("bad_request", ROOM_USAGE)
 
 
 def _screen_name(cmd: str, arg: str) -> str:
@@ -393,6 +420,8 @@ def hops_raise(new: int, old: int) -> bool:
 
 
 def required_role(cmd: Command, room: Room) -> str:
+    if cmd.name == "room" and not cmd.args:
+        return "human_cli"  # reading the settings changes nothing
     if cmd.name == "meeting" and cmd.args[:1] == ("listen",) and len(cmd.args) == 3:
         return "human_cli"
     if cmd.name == "budget":
@@ -731,11 +760,13 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
     if svc.meetings is None:
         svc.store.end_meeting(row.id, "the meeting bridge is not running")
         return Result(True, "No meeting server is running. See DEPLOY.md.")
+    svc.start_hands_free(room.id, row.id, svc.meetings)  # the room's settings, if a person made any (§52.3)
     svc.meetings.start(room.id, link.url)
+    note = svc.hands_free_note(room)
     return Result(
         True,
         f"{room.name}: joining a {label} call",
-        notice=f"is joining a {label} call",
+        notice=f"is joining a {label} call" + (f". {note}" if note else ""),
         room_changed=True,
         event="meeting_join",
         event_data={"platform": link.platform},
@@ -791,6 +822,53 @@ def _meeting_listen(cmd: Command, room: Room, svc: "RoomService") -> Result:
         event="meeting_listen",
         event_data={"membership_id": member.membership_id, "on": on},
     )
+
+
+def _room_calls(cmd: Command, room: Room, svc: "RoomService") -> Result:
+    """A room's hands-free call settings (§52.3). Only a person gets here: ``apply`` checked the role,
+    and an agent's ``say("/room ...")`` is stored as text and never parsed. Turning one on also applies
+    to a call that is open now, so a person on a phone does not have to wait for the next call; turning
+    one off leaves the open call as it is (``/meeting voice off`` and the call bar change that)."""
+    if not cmd.args:
+        voice, listen = ("on" if x else "off" for x in (room.call_voice, room.call_listen))
+        return Result(
+            True, f"{room.name}: hands-free voice is {voice}; hands-free listening is {listen} (calls here)"
+        )
+    setting, word = cmd.args
+    on = word == "on"
+    if not svc.store.set_room_call(room.id, setting, on):
+        return Result(True, f"{room.name}: {_ROOM_CALL_LABEL[setting]} is already {word}")
+    row = svc.store.open_meeting(room.id)
+    if on and row is not None:
+        if setting == "voice":
+            voices = svc.hosted_calls if row.hosted else svc.meetings
+            if voices is not None:
+                voices.set_voice(room.id, True)
+        else:
+            svc.listen_everyone(room.id, row.id)
+    notice = f"turned {word} {_ROOM_CALL_LABEL[setting]}: {_ROOM_CALL_MEANING[setting][on]}"
+    return Result(
+        True,
+        f"{room.name}: {_ROOM_CALL_LABEL[setting]} is {word}",
+        notice=notice,
+        room_changed=True,
+        members_changed=setting == "listen",
+        event="room_calls",
+        event_data={"setting": setting, "on": on},
+    )
+
+
+_ROOM_CALL_LABEL = {"voice": "hands-free voice", "listen": "hands-free listening"}
+_ROOM_CALL_MEANING = {
+    "voice": {
+        True: "every call here starts with Voice on, so an agent's @call message is read aloud",
+        False: "calls here start with Voice off again",
+    },
+    "listen": {
+        True: "every agent here listens on calls, without being named",
+        False: "agents here listen on a call only when a person turns it on for them",
+    },
+}
 
 
 def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
@@ -853,6 +931,8 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     name = cmd.name
     if name == "meeting":
         return _meeting(cmd, room, actor, svc)
+    if name == "room":
+        return _room_calls(cmd, room, svc)
     if name == "close":
         return Result(True, svc.close_room(room, actor), done=True)
     if name == "rename":

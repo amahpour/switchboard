@@ -20,7 +20,7 @@ The bot can run next to the server, or on your own machine ([host it yourself](#
 
 Speaking and seeing use the same bot and the same connection. They only start when you do:
 
-- **Voice** is a switch on the bar, off at the start of every call. While it is on, an agent that starts a message with `@call` is heard in the call. The text is read by joinly's text-to-speech voice.
+- **Voice** is a switch on the bar, off at the start of every call unless the room is [hands-free](#hands-free-calls). While it is on, an agent that starts a message with `@call` is heard in the call. The text is read by joinly's text-to-speech voice.
 - **Snapshot** asks the bot for one picture of what it sees, and the room keeps it as a file. A call line that addresses an agent and says "screen" asks for one too.
 
 ```mermaid
@@ -313,11 +313,37 @@ The hold starts at the oldest waiting call line. An offer driven by listening
 counts even if delivery later expires. Priority wakes, `read()` and your explicit `/wake` do not
 spend this allowance. Reaching the cap leaves the transcript readable in the room and at `read()`.
 
+## Hands-free calls
+
+A room can keep two settings, whether or not a call is live. They are for a call you join from a phone, where
+you can't flip a switch on the call bar:
+
+- **Calls start with Voice on.** Every call in the room, the server's bot and a [call you host](#host-the-bot-on-your-own-machine) alike, starts with Voice on (see [Let agents speak](#let-agents-speak)).
+- **Agents listen on calls.** Every agent in the room listens for the whole call, without `/meeting listen`, including one that joins after the call started (see [Let an agent listen](#let-an-agent-listen)). The wake cap per call still applies.
+
+Set them in the room's **Call settings** (the phone icon in the header: two checkboxes and **Save**), or type
+`/room voice on`, `/room voice off`, `/room listen on` or `/room listen off` in the web UI. `/room` alone shows
+what they are. Turning one on also applies to a call that is open now; turning one off leaves the open call as it is.
+For one call you can still turn Voice off on the bar, or one agent off with its switch or
+`/meeting listen claude-1 off`. Both stay off for that call, and the next call starts as the room says.
+
+Only a person can change them. An agent's `/room voice on` is stored as text like any other command, and no call line
+or hook can reach them: a tricked agent must not be able to start speaking in a call. Each change leaves a notice that
+names you. While either is on, the room's header shows a **Hands-free** marker, so everyone in the room can see
+it. A call that starts this way says so in its first notice: "Voice is on: this room's setting." and
+"Agents listen: this room's setting."
+
+![The room's Call settings with both boxes ticked](../media/ui/guide-meeting-handsfree-light.png)
+
+Everything said about [listening](#let-an-agent-listen) and [speaking](#let-agents-speak) applies to every agent in the room: anyone on the
+call can start their turns, and what they say in the call is heard by everyone on it. Turn this on only for a room whose
+agents you would let speak for you.
+
 ## Let agents speak
 
 For a bot hosted on your own machine, update the hosting plugin alongside the broker. The relay in its pinned image reports when each line ends, so the next line waits for it. An older relay still works, paced by the 30-second interval alone. A line whose end is never reported frees the slot 90 seconds after it started.
 
-Voice is off when a call starts. You turn it on, for that call only.
+Voice is off when a call starts, unless the room is [hands-free](#hands-free-calls). You turn it on, for that call only.
 
 1. **Click the Voice switch** on the bar, or type `/meeting voice on`. Both are for you in the web UI only. The switch turns blue, the bar adds **agents can speak**, and the room gets a notice such as `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)`.
 2. **Tell your agents, or let them find out.** An agent that is woken by a call line, while voice is on, is told in one line how to speak: start a `say()` with `@call`. You can also ask it: "answer on the call with @call".

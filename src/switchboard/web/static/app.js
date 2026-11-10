@@ -285,6 +285,31 @@
           hopsInput.addEventListener('input', validWake);
           form.append(budgetLabel, budgetInput, hopsLabel, hopsInput, wakeWarn, wakeError);
         }
+        let voiceBox = null, listenBox = null;
+        if (options.kind === 'calls') {
+          const init = options.initial || {};
+          // two plain checkboxes: Save types "/room voice on|off" and "/room listen on|off" for the person, so
+          // the broker checks the role as it does for the commands (§52.3)
+          const rowFor = function (id, labelText, hint, on) {
+            const row = el('label', 'check-row');
+            const box = el('input');
+            box.type = 'checkbox';
+            box.id = id;
+            box.checked = on === true;
+            box.setAttribute('aria-describedby', id + '-hint');
+            row.append(box, el('span', null, labelText));
+            const note = el('p', 'calls-hint', hint);
+            note.id = id + '-hint';
+            form.append(row, note);
+            return box;
+          };
+          voiceBox = rowFor('app-dialog-call-voice', 'Calls start with Voice on',
+            'Agents can speak in every call here, from the first moment. You can still turn Voice off on the call bar.',
+            init.voice);
+          listenBox = rowFor('app-dialog-call-listen', 'Agents listen on calls',
+            'Every agent here wakes on call talk without being named, up to the cap for the call. You can turn one off on the call bar.',
+            init.listen);
+        }
         let personPick = null;
         if (options.kind === 'person') {
           const label = el('label', null, 'Person');
@@ -363,6 +388,7 @@
             } else if (options.kind === 'rules') answer = rulesInput.value;
             else if (options.kind === 'person') answer = personPick.value;
             else if (options.kind === 'handoff') answer = handoffPick.value;
+            else if (options.kind === 'calls') answer = { voice: voiceBox.checked, listen: listenBox.checked };
             else if (options.kind === 'wake') {
               answer = { budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value) };
             } else answer = true;
@@ -376,7 +402,7 @@
         if (validWake) validWake();
         dlg.showModal();
         (settings ? (settingsFocus || $('settings-close'))
-          : (name || rulesInput || budgetInput || personPick || handoffPick || (options.danger ? cancel : action))).focus();
+          : (name || rulesInput || budgetInput || voiceBox || personPick || handoffPick || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -1768,6 +1794,7 @@
     $('pause-toggle').classList.toggle('hidden', !r);
     $('room-rules').classList.toggle('hidden', !r);
     $('room-wake').classList.toggle('hidden', !r);
+    $('room-calls').classList.toggle('hidden', !r);
 
     const st = $('st-state');
     const paused = $('banner-paused');
@@ -1825,6 +1852,14 @@
       hops.title = 'Loop guard: agent messages in a row with none from you / the limit. /hops n changes it.';
     }
     hops.classList.toggle('bad', guardOff);
+    // a marker while the room's calls are hands-free, so everyone in it can see that (§52.3)
+    const hf = $('st-handsfree');
+    const hands = (s.hands_free && typeof s.hands_free === 'object') ? s.hands_free : {};
+    const hfVoice = hands.voice === true, hfListen = hands.listen === true;  // anything but true is off
+    hf.classList.toggle('hidden', !r || !(hfVoice || hfListen));
+    hf.textContent = 'Hands-free';
+    hf.title = 'Calls here start with ' + (hfVoice ? 'Voice on' : 'Voice off') + '; agents ' +
+      (hfListen ? 'listen without being named' : 'listen only when a person turns it on');
     $('banner-test').classList.toggle('hidden', !(state.me && state.me.test_mode));
     renderMeeting(r);
     renderCalls();
@@ -7371,6 +7406,23 @@
     }
   }
 
+  // The room's hands-free call settings (§52.3). Only what changed is sent, as the commands a person would type.
+  async function openRoomCalls() {
+    const r = activeRoom();
+    if (!r) return;
+    const now = (r.settings && r.settings.hands_free) || {};
+    const answer = await openDialog({
+      kind: 'calls', title: 'Calls in ' + r.name,
+      body: 'What every call in this room starts with, even when no call is live. Only a person can change this: an agent cannot.',
+      initial: { voice: now.voice === true, listen: now.listen === true },
+      action: 'Save',
+    });
+    if (!answer) return;
+    for (const k of ['voice', 'listen']) {
+      if (answer[k] !== (now[k] === true)) await submitText('/room ' + k + (answer[k] ? ' on' : ' off'));
+    }
+  }
+
   // the Welcome form's room name, without a leading '#'
   function welcomeName() {
     return String($('new-room-name').value || '').trim().replace(/^#+/, '');
@@ -7598,6 +7650,7 @@
     });
     $('room-rules').addEventListener('click', openRoomRules);
     $('room-wake').addEventListener('click', openRoomWake);
+    $('room-calls').addEventListener('click', openRoomCalls);
     if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
     $('board-toggle').addEventListener('click', function () {
       closeWhiteboard();

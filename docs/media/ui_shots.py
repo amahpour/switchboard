@@ -3371,6 +3371,66 @@ def shoot_listen(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_room_calls(browser: Any, out: Path, world: Any) -> None:
+    """#697 phase 5, a room's hands-free calls: the room before (``roomcalls-before-{light,dark,phone}``), the Call
+    settings dialog with both boxes ticked (``roomcalls-dialog-*``), and the header marker after Save
+    (``roomcalls-after-*``), plus the guide's picture of the dialog (``guide-meeting-handsfree-light``)."""
+    from playwright.sync_api import expect
+
+    room, b = "#phoneroom", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    for name in ("claude-1", "codex-1"):
+        world.set_member_harness(room, name, name.split("-")[0])
+    variants = {
+        "light": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="light"),
+        "dark": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    pages = {}
+    try:
+        for name, options in variants.items():
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+            ctx.set_default_timeout(WAIT_MS)
+            page = ctx.new_page()
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            pages[name] = page
+
+        def take(prefix: str, clip_dialog: bool = False) -> None:
+            for name, page in pages.items():
+                page.evaluate(
+                    """() => document.querySelectorAll('#log .line').forEach(e => {
+                      if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+                )
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                page.mouse.move(0, 0)
+                shot(page, out, f"roomcalls-{prefix}-{name}.png")
+
+        take("before")
+        for page in pages.values():
+            page.get_by_role("button", name="Call settings").click()
+            page.get_by_label("Calls start with Voice on").check()
+            page.get_by_label("Agents listen on calls").check()
+        take("dialog")
+        light = pages["light"]
+        dialog = light.locator("#app-dialog")
+        shot(light, out, "guide-meeting-handsfree-light.png", clip=dialog.bounding_box())
+        light.get_by_role("button", name="Save").click()  # one Save: the other pages see it as the room does
+        for page in pages.values():
+            if page is not light:
+                page.keyboard.press("Escape")
+            expect(page.locator("#st-handsfree")).to_be_visible()
+        take("after")
+    finally:
+        for page in pages.values():
+            page.context.close()
+
+
 def shoot_attachments_guide(browser: Any, out: Path, world: Any) -> None:
     """#586, the attachments guide: a room of its own with claude-1. A file attached from the composer
     (``guide-attachments-attach-light``), an agent's file that has not been uploaded yet and the same card once
@@ -3497,6 +3557,7 @@ ONLY: dict[str, Any] = {
     "admins": shoot_admins,
     "meeting": shoot_meeting_guide,
     "listen": shoot_listen,
+    "room_calls": shoot_room_calls,
     "attachments": shoot_attachments_guide,
 }
 

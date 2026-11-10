@@ -1093,6 +1093,7 @@ See §23 for the rules of removal.
 | `/catchup <agent> [on <member> \| on "<topic>"] [note]` | Posts one human chat message asking `agent` to get up to speed on a member's work, a topic, or the room, from their session history with its own tool, by a fixed protocol; the subjects get no delivery of it; a `catchup` event (§26) | human_cli (it only posts as the human, like `switchboard say`) | service (`human_say`) |
 | `/review <url> [note]` | Opens the room's review board for `url`, as the person, and posts one human chat message that @mentions every agent in the room and asks them to review it on the board (§37.8). Until 0.4 it was `/catchup`'s alias (§26) | human_cli (it posts as the human, like `/catchup`) | service (`human_say`), `Boards` |
 | `/meeting listen <name> [off]` | Listen to call chatter (§52.1); off also works from the person's CLI | human (off: human_cli) | engine.evaluate |
+| `/room`, `/room voice on\|off`, `/room listen on\|off` | A room's hands-free call settings (§52.3): every call starts with Voice on; every agent listens on calls. Bare `/room` shows them | human (bare: human_cli) | service |
 | `/who` | Members: name, harness, status, tier (+note; `verifying...` alone while a Codex thread proof runs, §9.3), away, ⚠/?, held, quiet, queued, in flight, parked, `session: <id> @ <host>` (§26) | human_cli | service |
 | `/status` | Room: paused and reason, budget, hop count; per-agent queued, in-flight and expiry counts; the last 10 rule events; Codex link state; hook hash state; test mode | human_cli | service |
 | `/help` | Lists the commands | human_cli | – |
@@ -2957,7 +2958,7 @@ All forms except `/meeting listen <name> off` need the web session, the role `hu
 
 **The bridge.** Finished lines enter `ingest.receive`, the same checked posting path as hosted calls (§54). It binds the checked line to the call, then `Incoming.post` stores and delivers it after any snapshot. Both sources store `meeting_id`; the server bot keeps no machine label and its visible behavior is unchanged. `meeting/bridge.py` is the only async part: one `MeetingBridge` on the broker, started and stopped with the lifespan the way `delivery/runner.py` is. One MCP session per call (`fastmcp.Client`, `StreamableHttpTransport`, protocol mode `legacy`, so `resources/subscribe` still exists). The `joinly-settings` header carries the participant name `switchboard (transcribing)` and the room's agents' spoken names as hotwords, captured when the call starts. It subscribes to `transcript://live/segments` and also reads that resource every 3 seconds. Each new participant segment (any other role, including the bot's own speech, is skipped) goes to `lines.py`. `leave_meeting`, then the client is closed, on `/meeting leave`, on room close, on a join failure or a dropped connection, and on broker shutdown. A row still `joining` or `live` when the process starts again is marked ended: that session is gone, so the bot cannot be asked to leave.
 
-**Voice (#593).** Off when a call starts. A person turns it on or off with `/meeting voice on|off` or the **Voice** switch on the bar, which sends the same command. Each change leaves a notice in the room, and saying the state it is already in changes nothing and leaves none. Whether it is on is a set of room ids in the bridge: memory only. A call does not survive a restart (the row is marked ended, above), so neither does its voice, and the next call starts with it off. The room frame's `settings.meeting` is `{state, platform, voice}`, `voice` a boolean, and an older frame without it reads as off.
+**Voice (#593).** Off when a call starts, unless a person set the room to start calls with Voice on (§52.3). A person turns it on or off with `/meeting voice on|off` or the **Voice** switch on the bar, which sends the same command. Each change leaves a notice in the room, and saying the state it is already in changes nothing and leaves none. Whether it is on is a set of room ids in the bridge: memory only. A call does not survive a restart (the row is marked ended, above), so neither does its voice, and the next call starts with it off. The room frame's `settings.meeting` is `{state, platform, voice}`, `voice` a boolean, and an older frame without it reads as off.
 
 While voice is on and the bot is in the call, an agent that is a member of the room speaks by starting a `say()` with `@call`. `AgentService._post_say`, which every agent post goes through (the immediate path and a queued one), hands the posted text to `MeetingBridge.speak` after the message is stored and delivered, so the room has the message as written. `speak` does nothing unless voice is on, the bot is in the call, and the text starts with `@call` as a whole word (`@call-1` and `@calls` do not). Otherwise the `@call` is plain text: there is no error and no refusal. `call` is a reserved screen name (`RESERVED_NAMES`, §6.1), so it can never be a member's name and a `@call` is never also an @mention. What is spoken is `meeting/speech.py`'s `speakable`, a pure function: control characters and Markdown marks dropped, a link's text kept, a bare URL, an HTML tag and an artifact line left out, a fenced code block replaced by "code omitted", lines joined with a full stop where they had none, and the whole cut to 600 characters at a word boundary. Nothing left to say speaks nothing. The line goes to joinly's `speak_text` tool in a task of its own, so a `say()` never waits on speech (`speak_text` returns when the line has been said). Turn-taking (§52.2) allows one outstanding line, waits for a speech gap, expires a waiting line after 60 seconds and starts at most one every 30 seconds. A second line is refused with a notice also queued for its author. Turning voice off empties the wait, and the line being spoken finishes. joinly answers an interrupted line with a message that starts `Interrupted`; the room gets a notice that someone spoke over it. A failed `speak_text` is one notice. The task ends with the call.
 
@@ -3131,6 +3132,43 @@ including the refusal in the author's next read, malformed completion ids and th
 `test_relay_turns.py` proves that completion follows actual speech and malformed ids never
 speak. Existing voice, hosted-call and relay integration tests keep the full posting path.
 
+### 52.3 Hands-free calls: a room's setting (#697)
+
+A person on a call from a phone has no switchboard screen to flip Voice or turn listening on for each
+agent. So a room keeps two settings, whether or not a call is live: **calls here start with Voice on**
+(`rooms.call_voice`) and **agents here listen on calls** (`rooms.call_listen`), schema 48, both off by
+default and checked booleans.
+
+**Who sets them.** Only a person: `/room voice on|off` and `/room listen on|off` (and the room header's
+Call settings dialog, which types them), role `human`, the same as `/meeting voice` and
+`/meeting listen <name>`. `/room` alone shows them (`human_cli`). An agent's `say()` of any of these stays
+literal text, like every command (§10). They are not on the agent's tool surface and no hook or call line
+reaches them. The reason is the same as for Voice itself: a tricked agent must never be able to start
+speaking in a call, or to make itself and its peers wake on whatever a call says. A setting changes what
+every later call does, so it is a person's decision, taken once, in a room they can see.
+
+**What they do.** `RoomService.start_hands_free` runs when a call starts, for the server's bot
+(`/meeting <link>`) and for a call hosted on a person's machine (§54, at registration): with
+`call_voice` it sets the call's voice on, and with `call_listen` it turns listening on, through
+`Store.set_listen`, for every agent in the room. An agent that joins while a call is open and
+`call_listen` is on listens at once (`join_hands_free`). Nothing new is needed in the delivery rules:
+this only sets what `/meeting voice on` and `/meeting listen <name>` would, so the cap
+(`listen_max_wakes` per call), the quiet and hold timers, the question fast path and the turn rules
+apply as before. A person can still turn Voice off on the call bar, or one agent off with its switch or
+`/meeting listen <name> off`, for that call; it stays off for the call. Turning a setting on while a call
+is live applies it to that call too; turning it off changes the open call no further.
+
+**What everyone sees.** Each change leaves a notice naming the person. While either is on, the room
+header shows a **Hands-free** marker (in `settings.hands_free`, which goes to everyone in the
+room), and a call that starts this way says so in its first notice ("Voice is on: this room's setting.",
+"Agents listen: this room's setting."). Granting no permission: approvals, warnings and the approvals-off
+rules of §52.1 are unchanged.
+
+Tests: `test_room_hands_free.py` (an agent's `say` changes nothing; a person's change, its notice and
+frame; the bot's call and a hosted call start with voice on; every agent listens, a late joiner too,
+a person's off stays; a live call follows a setting turned on), `test_commands_room.py` (parsing and
+roles), `test_db_migrate_v48.py` (a real old database), and the page in `test_room_calls_ui.py`.
+
 
 ## 53. Attachments (#544)
 
@@ -3199,7 +3237,7 @@ Both packaged host scripts implement `start --from-room`: they read no stdin, ad
 | a speech poll's wait | the poll asks, 0 to 30 s (25 if it says nothing), far inside the Ingress's 16 minutes (DEPLOY.md); a non-number is 400 |
 | hosted calls | one per person, and with the broker's own bot's, at most `max_calls` |
 
-**Speaking** (`HostedCalls.speech`, `speak`, `set_voice`). The same rules as §52's voice, over a poll. Voice is off when a call starts, a person turns it on or off with `/meeting voice on|off` or the bar's switch, and the state is memory only. While it is on and the host is in the call (it has pushed), an agent's `say()` that starts with `@call` is made speakable (`meeting/speech.py`) and offered to the relay under the one-slot turn policy (§52.2), by `AgentService._post_say`, which hands the posted text to the hosted call as well as to the bridge. The poll's answer is `{"lines": [...], "speech_id": int|null, "hints": [...], "voice": bool, "ended": bool, "tts_voice": str}`: the lines to say (only while voice is on, each given once, to the newest poll only), the room's names as the transcriber's hotwords (`names.hotwords`, each cut to 40 characters, at most 100: the relay sends them to joinly as it sends its own), the voice switch, whether the call is over, and the server's `[meeting] tts_voice`. Before opening joinly, the relay reads that setting from its first poll and checks the same 1–32 lowercase-letter, digit and underscore shape as config. A missing or malformed field keeps the relay's `--voice` fallback, so it still works with older servers. It is answered at once when there is a ready line, the voice switch changes, the call ends or a newer poll arrives (an older one is answered with nothing); otherwise after the wait. The waits are events of the broker's loop, not sleeps. The hints are read at each round, so a member who joins is heard for within one. A hosted bot sends no snapshot yet: `/meeting snapshot` says so, and the bar's button is off.
+**Speaking** (`HostedCalls.speech`, `speak`, `set_voice`). The same rules as §52's voice, over a poll. Voice is off when a call starts (unless a person set the room otherwise, §52.3), a person turns it on or off with `/meeting voice on|off` or the bar's switch, and the state is memory only. While it is on and the host is in the call (it has pushed), an agent's `say()` that starts with `@call` is made speakable (`meeting/speech.py`) and offered to the relay under the one-slot turn policy (§52.2), by `AgentService._post_say`, which hands the posted text to the hosted call as well as to the bridge. The poll's answer is `{"lines": [...], "speech_id": int|null, "hints": [...], "voice": bool, "ended": bool, "tts_voice": str}`: the lines to say (only while voice is on, each given once, to the newest poll only), the room's names as the transcriber's hotwords (`names.hotwords`, each cut to 40 characters, at most 100: the relay sends them to joinly as it sends its own), the voice switch, whether the call is over, and the server's `[meeting] tts_voice`. Before opening joinly, the relay reads that setting from its first poll and checks the same 1–32 lowercase-letter, digit and underscore shape as config. A missing or malformed field keeps the relay's `--voice` fallback, so it still works with older servers. It is answered at once when there is a ready line, the voice switch changes, the call ends or a newer poll arrives (an older one is answered with nothing); otherwise after the wait. The waits are events of the broker's loop, not sleeps. The hints are read at each round, so a member who joins is heard for within one. A hosted bot sends no snapshot yet: `/meeting snapshot` says so, and the bar's button is off.
 
 **Ending** (`HostedCalls.stop`, `end`). A person's **End call** is `/meeting leave`, the command the bar's button already sends. For a hosted call it is allowed to the **person whose call it is** and to an **admin** (the owner is one, §51); anyone else is refused (`forbidden`, "Only alice, who hosts it, or an admin can end this call."). Ending posts what is left of the transcript (the line being assembled and the lines waiting, without the pacing, as the bridge does at its end), marks the row ended, which refuses the key at once (`ended`), answers a waiting poll with `ended: true` so the relay can leave, takes the call out of the room's settings, and records a `meeting_leave` event. The lines already pushed stay in the room with their call and their machine. A hosted call also ends, with a notice that says why and the same phrase in the row's `error`, when:
 

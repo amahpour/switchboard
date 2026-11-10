@@ -39,6 +39,12 @@ class Service:
         self.notices: list[tuple[int, str]] = []
         self.published: list[int] = []
 
+    def start_hands_free(self, room_id: int, call_id: int, voices: Any) -> None:
+        """No room here has a hands-free setting."""
+
+    def hands_free_note(self, room: Any) -> str:
+        return ""
+
     @staticmethod
     def person_key(person_id: int | None) -> int:
         return 0 if person_id is None else person_id
