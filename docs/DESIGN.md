@@ -3024,6 +3024,20 @@ holds keep their values. Listening explicitly opts into call chatter even for a 
 quiet still holds its ordinary unaddressed agent chatter. `wait()` uses the same call timing.
 `chatter_wakes_at` uses those same deadlines for Members' next wake time.
 
+**A question is answered faster.** A conversation with one listening agent cannot wait 15 seconds for each
+reply. A pending call line from the listened-to call whose text ends in `?` (after trailing whitespace and
+closing quotes or brackets, `rules.asks`) is due after `[delivery] listen_ask_s` (3 by default, the same
+bounds as the others) of room quiet instead of `listen_quiet_s`. The clock is the same: the room's latest
+chat message, so more talk after the question restarts it, and the 40 s hold is unchanged. It is the same
+listening wake: it spends one of `listen_max_wakes` and one of the room's hourly budget, and every gate below
+still applies. Only a person's call line counts, and a call line is only a person's speech: the bridge skips
+the bot's own spoken line (`role`, §52), so it never comes back as one. A room message from an agent, a notice
+or a line of another call is not a question here. A "?" is a cheap, local signal an untrusted speaker can
+also send, which is why it only shortens the wait and never skips a cap. Measured on the replays: in the
+1:1 fixture (`tests/fixtures/calls/one_to_one.json`) each question's wake came 15.0 to 15.9 s after its
+line was posted and now comes 3.0 to 3.9 s; in the status meeting, whose people ask one another things,
+the same path uses the 40 wakes up (32 before), so 20 of its 123 lines no longer reach a wake.
+
 The room's hourly budget, peer batch boundary, pause, hold, busy and approval gates all still apply.
 `[delivery] listen_max_wakes` defaults to 40 (integer 1 to 10,000) for each membership on each call.
 An offer driven by the listening deadline spends one, even when the batch limit leaves its
@@ -3050,6 +3064,7 @@ focus from one; each is a `role="switch"` named "Listening: <agent>".
 
 Tests: `test_listen_mode.py` covers the clocks, holds, gates, private and shared caps, stored state,
 old call lines, ending a call, command roles and warnings, and the #694 status-meeting replay.
+`test_listen_ask.py` covers the question path (what counts as one, its 3 s clock, the cap and the budget, and the 1:1 replay).
 `test_db_migrate_v47.py` migrates the real release fixture, checks the backup, defaults and CHECKs.
 `test_meeting_listen.py` exercises the command, agent literal text and bridge departure over HTTPS.
 

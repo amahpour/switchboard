@@ -194,6 +194,18 @@ def peer_ok(peer_batch_boundary: int, boundary_seq: int) -> bool:
     return peer_batch_boundary < boundary_seq
 
 
+_CLOSERS = "\"'\u201d\u2019)]}\u00bb"
+
+
+def asks(text: str) -> bool:
+    """True when a call line ends in a question mark, once trailing whitespace and closing quotes or
+    brackets are trimmed (§52.1). Only the end counts: "Is it done? I think so." does not ask.
+
+    The caller has already limited this to call lines, which are people's speech: the bot's own
+    spoken line never comes back as one (``role`` is checked at ingest, §52)."""
+    return text.rstrip().rstrip(_CLOSERS).rstrip().endswith("?")
+
+
 def chatter_due(
     room: Room,
     chatter: Sequence[Item],
@@ -206,6 +218,7 @@ def chatter_due(
     listening_call: int | None = None,
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
+    listen_ask_s: float = 3.0,
 ) -> bool:
     """Chatter goes out once the room has been quiet for ``quiet_s``, or the oldest
     item has waited ``max_hold_s``.
@@ -230,6 +243,11 @@ def chatter_due(
         quiet = room.last_msg_at is None or now - room.last_msg_at >= listen_quiet_s
         if quiet or now - min(c.ts for c in call) >= listen_hold_s:
             return True
+        # a person's question is answered after a short quiet instead (§52.1): the same clock, a
+        # shorter wait, and the same budget and cap
+        if any(asks(c.text) for c in call):
+            if room.last_msg_at is None or now - room.last_msg_at >= listen_ask_s:
+                return True
     chatter = [c for c in chatter if not _meeting_aside(c)]
     if not chatter:
         return False
@@ -255,6 +273,7 @@ def chatter_wakes_at(
     room: Room | None = None,
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
+    listen_ask_s: float = 3.0,
 ) -> float | None:
     """Next ordinary chatter hold or listening deadline, using the same clocks as chatter_due."""
     eligible = [d for d in pending if d.notified_at is None]
@@ -268,7 +287,8 @@ def chatter_wakes_at(
     ]
     if call and room is not None:
         last = room.last_msg_at if room.last_msg_at is not None else min(d.ts for d in call)
-        deadlines.append(min(last + listen_quiet_s, min(d.ts for d in call) + listen_hold_s))
+        quiet_for = listen_ask_s if any(asks(d.text) for d in call) else listen_quiet_s
+        deadlines.append(min(last + quiet_for, min(d.ts for d in call) + listen_hold_s))
     chatter = [d for d in eligible if not _meeting_aside(d)]
     if not addressed_only and hold_s > 0 and chatter:
         deadlines.append(min(d.ts for d in chatter) + hold_s)
@@ -294,6 +314,7 @@ def releasable(
     listening_call: int | None = None,
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
+    listen_ask_s: float = 3.0,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -347,6 +368,7 @@ def releasable(
             listening_call=listening_call,
             listen_quiet_s=listen_quiet_s,
             listen_hold_s=listen_hold_s,
+            listen_ask_s=listen_ask_s,
         ):
             return done(chatter, "wake", True, listen_wake=True)
     return None
