@@ -34,7 +34,7 @@ def test_a_room_gains_an_empty_board_and_the_old_rows_stay(
         messages = before.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         assert "room_boards" not in {r[0] for r in before.execute("SELECT name FROM sqlite_master")}
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 48
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 49
     assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == messages
     assert con.execute("SELECT COUNT(*) FROM room_boards").fetchone()[0] == 0
     assert con.execute("SELECT COUNT(*) FROM room_board_changes").fetchone()[0] == 0

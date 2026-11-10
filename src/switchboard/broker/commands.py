@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from switchboard import reviews
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
+from switchboard.meeting import voices
 from switchboard.meeting.links import PLATFORM_LABEL, LinkError, MeetingLink, parse_link
 from switchboard.meeting.screen import Asker
 from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
@@ -74,6 +75,9 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /meeting voice on   let agents speak in the call: a say() that starts with @call
                       is read aloud to everyone on it. Off when a call starts unless /room voice on (web only)
   /meeting voice off  stop that (web only)
+  /meeting voice <name> <voice>  the Kokoro voice this agent speaks with on calls (web only);
+                      <voice> is a-z, 0-9 and _, up to 32 characters, or "default" for the one picked
+                      from its name
   /meeting snapshot   post a picture of the call's shared screen (web only)
   /room               show this room's call settings (hands-free calls)
   /room voice on|off  every call here starts with Voice on (web only)
@@ -224,7 +228,13 @@ def parse_command(text: str) -> Command:
     return Command(name=name, args=args, raw=raw)
 
 
-MEETING_USAGE = "usage: /meeting [<link> [mine]|leave|snapshot|voice on|voice off|listen <name> [off]]"
+MEETING_USAGE = (
+    "usage: /meeting [<link> [mine]|leave|snapshot|voice on|voice off|voice <name> <voice>"
+    "|listen <name> [off]]"
+)
+
+
+VOICE_USAGE = "usage: /meeting voice on|off, or /meeting voice <name> <voice>"
 
 
 def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
@@ -246,7 +256,20 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     if word == "voice":
         if len(args) == 2 and args[1].lower() in ("on", "off"):
             return Command(name="meeting", args=("voice", args[1].lower()), raw=raw)
-        raise CommandError("bad_request", "usage: /meeting voice on|off")
+        if (
+            len(args) == 3
+        ):  # /meeting voice <name> <voice>: a person's pin (#713), checked again where it is set
+            if args[1].lower() in ("on", "off"):
+                raise CommandError("bad_request", VOICE_USAGE)
+            target = _screen_name("meeting voice", args[1])
+            voice = args[2].lower()
+            if voice != "default" and not voices.valid(voice):
+                raise CommandError(
+                    "bad_request",
+                    '/meeting voice: a voice is a-z, 0-9 and _, 1 to 32 characters (or "default")',
+                )
+            return Command(name="meeting", args=("voice", target, voice), raw=raw)
+        raise CommandError("bad_request", VOICE_USAGE)
     if len(args) == 2 and args[1].lower() == "mine":
         return Command(name="meeting", args=(args[0], "mine"), raw=raw)
     if len(args) != 1:
@@ -721,6 +744,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
     if cmd.args[:1] == ("listen",):
         return _meeting_listen(cmd, room, svc)
     if cmd.args[:1] == ("voice",):
+        if len(cmd.args) == 3:
+            return _meeting_voice_pin(cmd, room, svc)
         return _meeting_voice(cmd.args[1] == "on", room, svc)
     try:
         link = parse_link(cmd.args[0])
@@ -894,6 +919,31 @@ def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
         room_changed=True,
         event="meeting_voice",
         event_data={"on": on},
+    )
+
+
+def _meeting_voice_pin(cmd: Command, room: Room, svc: "RoomService") -> Result:
+    """Pin the Kokoro voice a member speaks with on calls, or put its default back (#713, §52.6). A person's
+    setting: the role check makes it web-only, and an agent's say() never reaches a command. Kept with the
+    member, so it holds for later calls too; it does not need a call to be open."""
+    member = svc.store.find_member(room.id, cmd.args[1])
+    if member is None:
+        raise CommandError("not_found", f"no such member in {room.name}: {cmd.args[1]}")
+    voice = None if cmd.args[2] == "default" else cmd.args[2]
+    if not voices.valid(voice) and voice is not None:  # the parser checked; this is the second door
+        raise CommandError("bad_request", "a voice is a-z, 0-9 and _, 1 to 32 characters")
+    if member.call_voice == voice:
+        return Result(True, f"{member.name} already speaks with {voices.effective(voice, member.name)}")
+    svc.store.set_call_voice(member.membership_id, voice)
+    now = voices.effective(voice, member.name)
+    notice = f"set {member.name}'s voice on calls to {now}" + (" (its default)" if voice is None else "")
+    return Result(
+        True,
+        notice,
+        notice=notice,
+        members_changed=True,
+        event="meeting_voice_pin",
+        event_data={"membership_id": member.membership_id, "voice": voice},
     )
 
 

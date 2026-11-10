@@ -32,6 +32,7 @@ from switchboard.delivery.rules import (
     parse_mentions,
 )
 from switchboard.envelope import clean
+from switchboard.meeting import voices
 from switchboard.meeting.keys import PLATFORMS, fingerprint
 from switchboard.models import (
     CONTINUE_PATHS,
@@ -189,6 +190,9 @@ def member_dict(m: Member) -> dict[str, Any]:
         "approval_mode": m.approval_mode,
         "held": m.held,
         "listen": m.listen,  # opt-in to call chatter (§52.1)
+        # the Kokoro voice its @call lines are spoken in (§52.6): the one a person pinned, else its default
+        "voice": voices.effective(m.call_voice, m.name),
+        "voice_pinned": m.call_voice is not None,
         "quiet": m.quiet,  # wake only for what is addressed (#548, §50)
         "queued": m.queued,
         # when the hold on unaddressed chatter (#137) lets the queued messages wake it, or None

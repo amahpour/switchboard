@@ -53,7 +53,7 @@ flowchart TB
 
 Also: `cli.py`; `install/`, which only removes what an old install wrote ([§23](DESIGN.md#23-implementation-notes-and-deviations-uninstall)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `files.py`, the bytes a room holds, next to the database ([§53](DESIGN.md#53-attachments-544)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
 
-Spoken call replies share the pure `meeting/turns.py` policy (§52.2): one line being spoken and
+Each agent's voice on a call comes from `meeting/voices.py` (§52.6): a default picked from its name, or the one a person pinned with `/meeting voice <name> <voice>`. Spoken call replies share the pure `meeting/turns.py` policy (§52.2): one line being spoken and
 one waiting, a 1.5-second speech gap, a 60-second wait limit, each agent's own lines 30 seconds
 apart (2 seconds for an answer to a question put to it) and at most 4 agent lines in a row until a
 person speaks. The bridge holds the slot until `speak_text` returns. A hosted call holds it after its speech poll, until

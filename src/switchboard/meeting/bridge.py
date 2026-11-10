@@ -21,7 +21,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from switchboard.meeting import ingest, joinly
+from switchboard.meeting import ingest, joinly, voices
 from switchboard.meeting.ingest import LINE_GAP_S
 from switchboard.meeting.joinly import (
     INTERRUPTED,
@@ -37,6 +37,7 @@ from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
 from switchboard.meeting.speech import call_text, speakable
 from switchboard.meeting.turns import STALE_NOTICE, STALE_S, Turns
+from switchboard.meeting.voices import voice_of
 
 log = logging.getLogger("switchboard.meeting")
 
@@ -54,6 +55,8 @@ class _Live:
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     worker: asyncio.Task[None] | None = None
     last_snapshot: float | None = None
+    voices: bool = False  # this joinly's speak_text takes a voice (the patch, §52.5)
+    missing: set[str] = field(default_factory=set)  # voices Kokoro lacked, already told to the room
 
 
 class MeetingBridge:
@@ -146,8 +149,11 @@ class MeetingBridge:
                 except Exception:
                     errors.append("couldn't join the call")
                     return
+                # asked before the call is marked live: the bar must never say live while a command that needs
+                # ``_live`` (a snapshot, a voice) still finds no call to act on
+                takes_voice = await joinly.takes_voice(client)
                 self._mark_live(room_id)
-                live = self._live[room_id] = _Live(client)
+                live = self._live[room_id] = _Live(client, voices=takes_voice)
                 try:
                     await self._listen(live, handler, room_id, stop, errors)
                 finally:
@@ -270,7 +276,10 @@ class MeetingBridge:
         line = speakable(body)
         if not line:
             return
-        if not live.turns.offer(line, self.state.clock.now(), membership_id, answering=answering):
+        voice = voice_of(self.state.store, membership_id) if live.voices else None
+        if not live.turns.offer(
+            line, self.state.clock.now(), membership_id, answering=answering, voice=voice
+        ):
             self.state.service.call_voice_notice(room_id, live.turns.refusal_notice, membership_id)
             return
         live.changed.set()
@@ -302,10 +311,17 @@ class MeetingBridge:
                     pass
                 continue
             try:
-                result = await live.client.call_tool(
-                    "speak_text", {"text": line.text}, timeout=SPEAK_TIMEOUT_S
-                )
-                if joinly.reply(result).startswith(INTERRUPTED):
+                args: dict[str, str] = {"text": line.text}
+                if line.voice is not None:
+                    args["voice"] = line.voice  # the patched joinly reads it (deploy/joinly, §52.5)
+                result = await live.client.call_tool("speak_text", args, timeout=SPEAK_TIMEOUT_S)
+                said = joinly.reply(result)
+                if line.voice is not None and voices.NOT_FOUND in said and line.voice not in live.missing:
+                    live.missing.add(line.voice)  # once a call for each voice: the room is told, not nagged
+                    self.state.service.notice_in(
+                        room_id, voices.missing_notice(self.state.store, line.membership_id, line.voice)
+                    )
+                if said.startswith(INTERRUPTED):
                     self.state.service.notice_in(
                         room_id, "Someone spoke over the line in the call, so it stopped early."
                     )

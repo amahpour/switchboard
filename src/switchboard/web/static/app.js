@@ -1540,6 +1540,8 @@
     if (m.held) st += ' · held';
     if (m.quiet) st += ' · quiet';
     if (m.listen === true) st += ' · listening';
+    // the Kokoro voice its @call lines are spoken in, while the room has a call (#713): shown only as text
+    if (typeof m.voice === 'string' && callOf(activeRoom())) st += ' · voice ' + m.voice + (m.voice_pinned === true ? ' (set)' : '');
     const chips = el('span', 'm-chips');
     chips.append(tierChip(m));
     const owner = showOwners() ? ownerLine(m, false) : null;
@@ -2382,6 +2384,12 @@
       l.title = 'Wakes on call talk nobody addressed to it';
       chips.append(l);
     }
+    if (typeof m.voice === 'string' && callOf(activeRoom())) {
+      const v = el('span', 'chip-voice', 'Voice ' + m.voice);
+      v.title = m.voice_pinned === true ? 'Pinned with /meeting voice ' + m.name + ' <voice>; /meeting voice ' + m.name + ' default puts back the one its name picks'
+        : 'Picked from its name. /meeting voice ' + m.name + ' <voice> sets another';
+      chips.append(v);
+    }
     const idText = el('div');
     idText.append(nameH, el('p', 'insp-status', statusWord(m) + since + ' · ' + harnessOf(m.harness)[1]));
     const owner = ownerLine(m, true);
@@ -2849,7 +2857,7 @@
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
       usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
     { group: 'Room', cmd: 'meeting', args: '[<link> [mine]|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
-      pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   snapshot',
+      pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   voice <name> <voice>   snapshot',
       detail: 'Add mine to ask your own agent to host it, without a model seeing the link. The link is not kept. Voice lets agents speak with @call; a snapshot posts the shared screen.' },
     { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
       detail: 'Asks first. Reopen it from Closed rooms.' },

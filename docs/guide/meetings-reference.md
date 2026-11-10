@@ -370,6 +370,8 @@ What is read aloud, and what is not:
 
 One line is spoken at a time, and one more may wait behind it. A third is refused with a room notice that its author also receives in the next batch. A line waits for 1.5 seconds without new call speech. It also waits 30 seconds since the same agent's preceding start, unless it answers a question put to its speaker: the agent's last batch held a message that @mentioned it or replied to its message, and then the line may start 2 seconds after the call's last start. The broker works that out from the batch, never from what the line says, and a batch answers once. After 4 agent lines in a row, further lines are refused with a notice until a person speaks on the call or writes in the room. At 60 seconds still waiting, a line is dropped with a notice instead of being spoken late. Turning Voice off clears the waiting line too; turning it back on preserves each agent's interval. If someone on the call talks over the bot, it stops. With the server's bot, the room says `Someone spoke over the line in the call, so it stopped early.` A hosted relay reports the interruption in its log.
 
+**A voice for each agent.** With voice on, each agent speaks in its own voice, so a conversation between agents is easy to follow by ear. Every agent has a default picked from its name out of a short list (`am_adam`, `bf_emma`, `af_sarah`, `bm_lewis`); the same name always gets the same one. Members shows it while a call is open (`voice am_adam`, with `(set)` when you chose it). To choose another, type `/meeting voice claude-1 bf_emma` in the web UI: a voice is lowercase letters, digits and `_`, up to 32 characters, and `default` puts the picked one back. It needs the voice patch described in [DEPLOY.md](../DEPLOY.md#a-meeting-bot), which a bot hosted on your machine already has. A name Kokoro does not have is told once in the room and the line is spoken in the call's own voice. Only you can set a voice: an agent's `/meeting voice …` is only text, and a voice name inside an `@call` line is only words that are spoken.
+
 Only an agent that is a member of the room can speak this way. A person's message that starts with `@call` is only text, and so is an agent's when voice is off or there is no call.
 
 ## Show an agent the shared screen
@@ -525,6 +527,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 - `/meeting <link>` joins a call.
 - `/meeting leave` leaves it. **Leave call** on the bar, and **End this call** in [the call's details](#the-call-in-members), do the same.
 - `/meeting voice on` and `/meeting voice off` turn speaking on and off for this call. The **Voice** switch on the bar does the same.
+- `/meeting voice <name> <voice>` sets the Kokoro voice that agent speaks with (`/meeting voice <name> default` puts back the one picked from its name). Web only.
 - `/meeting listen <name>` lets that agent wake on call chatter; `/meeting listen <name> off` stops it.
 - `/meeting snapshot` posts a picture of the shared screen. **Snapshot** on the bar does the same.
 
@@ -557,6 +560,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 - `The call ended because the room closed.`, `… because the broker stopped.` and `… because the broker restarted.`
 - `This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).` (`2 calls`, and so on, for a higher limit). It is the answer to `/meeting <link>`, not a room notice.
 - The ambiguous-name notice and the dropped-lines notice, above.
+- `alice set claude-1's voice on calls to bf_emma` and `claude-1's voice zz_nobody was not found, so the call's own voice is used for its lines.`
 - `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)` and `alice turned voice off: agents no longer speak in the call (via web)`.
 - `Someone spoke over the line in the call, so it stopped early.`, `Another @call line is already waiting; this line was not spoken.`, `Agents have spoken 4 lines in a row; this @call line was not spoken. It is spoken again once a person speaks on the call or in the room.` and `A queued @call line waited 60 seconds and was dropped instead of being spoken late.` and `Couldn't speak in the call.`
 - `Couldn't get a snapshot of the call.`, `joinly sent something that is not a PNG, JPEG or WebP picture.`, `The snapshot is larger than the room's file limit (25 MB).` and `A snapshot was taken less than 10 seconds ago. Try again in a moment.`

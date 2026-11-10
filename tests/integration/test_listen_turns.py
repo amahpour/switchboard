@@ -244,3 +244,55 @@ async def test_four_agent_lines_in_a_row_then_a_person_writes_in_the_room(world:
     finally:
         await a.close()
         await other.close()
+
+
+# ------------------------------------------------------------------------------ a voice per line (#713)
+async def test_a_hosted_line_carries_its_speakers_voice_and_a_missing_voice_is_told_once(
+    world: World,
+) -> None:
+    """The speech poll's answer names the voice of the line (``line_voice``): the member's default, or the
+    one a person pinned. A receipt that says Kokoro lacked it makes one room notice for that voice, naming the
+    member,
+    however many lines follow. Fails if the field is absent, ignores a pin, or the notice repeats."""
+    from switchboard.meeting import voices
+
+    w = world
+    a, other = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        await a.say("#build", "@call First.")
+        first = poll(w)
+        assert first["lines"] == ["First."] and first["line_voice"] == voices.default_for("claude-1")
+        w.command("/meeting voice claude-1 zz_nobody")
+        # a receipt that does not say it changes nothing
+        poll(w, done=first["speech_id"])
+        assert not any("was not found" in n for n in w.notices())
+        w.clock.advance(31)
+        await a.say("#build", "@call Second.")
+        second = poll(w)
+        assert second["lines"] == ["Second."] and second["line_voice"] == "zz_nobody"
+        poll(w, done=second["speech_id"], voice_missing=True)
+        notice = voices.MISSING_NOTICE.format(name="claude-1", voice="zz_nobody")
+        assert w.notices().count(notice) == 1
+        w.clock.advance(31)
+        await a.say("#build", "@call Third.")
+        third = poll(w)
+        poll(w, done=third["speech_id"], voice_missing=True)
+        assert w.notices().count(notice) == 1  # once a call for that voice
+        # a receipt for another id, or with no line, names nothing
+        poll(w, done=999, voice_missing=True)
+        assert w.notices().count(notice) == 1
+    finally:
+        await a.close()
+        await other.close()
+
+
+@pytest.mark.parametrize("flag", ["yes", 1, 0, None, {}, []])
+async def test_hosted_refuses_a_voice_missing_that_is_not_a_boolean(world: World, flag: object) -> None:
+    """Only true or false says what a relay found; anything else is refused, never read as either."""
+    a, other = await hosted_call(world)
+    try:
+        assert world.relay.post(SPEECH, {"wait": 0, "done": 1, "voice_missing": flag}).status_code == 400
+    finally:
+        await a.close()
+        await other.close()

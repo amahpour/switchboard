@@ -85,6 +85,8 @@ in a row, none is spoken until a person speaks on the call or writes in the room
 after 60 seconds is dropped. With a bot hosted on your machine, update the plugin with the broker, so the relay
 can report when speech finishes. [The reference](meetings-reference.md#let-agents-speak) has the rules.
 
+**A voice for each agent.** With Voice on, each agent speaks in a voice of its own, picked from its name, and Members shows it. `/meeting voice claude-1 bf_emma` gives it another. [The reference](meetings-reference.md#let-agents-speak) has the details.
+
 **Listening.** Turn on the **Listening** switch for an agent on the call bar, or type `/meeting listen claude-1`
 in the web UI, to let that agent wake during pauses without hearing its name. Members and the agent's details say
 "listening" while it is on. Brief it first on what to watch for and when to answer. It wakes after

@@ -25,7 +25,8 @@ records when a call went live and lets an admin upload the icon of each platform
 ``agent_icons`` (§29.11); 44 (#637) binds script keys to their harness (§49.11); 45 (#663) adds what
 each person has seen of each room and which board cards they set aside, for the home page (§55.8);
 46 adds room whiteboards (§56); 47 adds membership listening and its per-call wake count (§52.1);
-48 adds a room's hands-free call settings (§52.3).
+48 adds a room's hands-free call settings (§52.3); 49 (#713) adds the voice a person pinned for a member
+on calls (§52.6).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -46,7 +47,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 48
+SCHEMA_VERSION = 49
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -101,7 +102,9 @@ CREATE TABLE memberships(
   quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)),
   listen INTEGER NOT NULL DEFAULT 0 CHECK(listen IN (0, 1)),
   listen_call_id INTEGER REFERENCES meetings(id),
-  listen_wakes INTEGER NOT NULL DEFAULT 0 CHECK(listen_wakes >= 0));
+  listen_wakes INTEGER NOT NULL DEFAULT 0 CHECK(listen_wakes >= 0),
+  call_voice TEXT CHECK(call_voice IS NULL OR (length(call_voice) BETWEEN 1 AND 32
+    AND call_voice NOT GLOB '*[^a-z0-9_]*')));
 CREATE UNIQUE INDEX memberships_active_name ON memberships(room_id, screen_name) WHERE left_at IS NULL;
 CREATE UNIQUE INDEX memberships_active_part ON memberships(room_id, participant_id) WHERE left_at IS NULL;
 
@@ -1027,6 +1030,16 @@ V47_TO_V48 = (
 )
 
 
+# v48 -> v49 (#713, DESIGN.md §52.6): the Kokoro voice a person pinned for a member on calls, by
+# `/meeting voice <name> <voice>`. NULL: the default from the member's screen name. The shape is checked here
+# as well as where it is set.
+V48_TO_V49 = (
+    "ALTER TABLE memberships ADD COLUMN call_voice TEXT CHECK(call_voice IS NULL OR"
+    " (length(call_voice) BETWEEN 1 AND 32 AND call_voice NOT GLOB '*[^a-z0-9_]*'))",
+    "UPDATE meta SET value='49' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1093,6 +1106,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         45: MigrationStep(46, V45_TO_V46, ("room_boards", "room_board_changes")),
         46: MigrationStep(47, V46_TO_V47, ()),
         47: MigrationStep(48, V47_TO_V48, ()),
+        48: MigrationStep(49, V48_TO_V49, ()),
     }
     out = []
     v = frm

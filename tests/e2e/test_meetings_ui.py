@@ -474,3 +474,52 @@ def test_the_call_bar_turns_an_agents_listening_on_and_off(ui: UI, calls: InProc
         }) && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"""
     )
     assert inside
+
+
+def test_members_shows_each_agents_voice_while_a_call_is_open_and_a_pin_changes_it(
+    ui: UI, calls: InProcBroker
+) -> None:
+    """With a call open, Members says which voice each agent speaks in (#713): the default its name picks,
+    then the one a person pinned with ``/meeting voice <name> <voice>``, marked as set, and the Inspector
+    has a Voice chip. With no call it shows none. Nothing is cut off on a phone. Fails if the voice is
+    missing, ignores a pin, shows with no call, or the page raises (the fixtures fail on a console error)."""
+    from switchboard.meeting import voices
+
+    broker = calls
+    for name in ("#voices", "#quiet"):
+        assert _post(broker, "/api/rooms", {"name": name}).status_code == 200
+    _plant_agents(broker, "#voices", {"claude-1": "prompting", "codex-1": "prompting"})
+    _plant_agents(broker, "#quiet", {"claude-1": "prompting"})
+
+    page = _open(ui, broker, room="quiet")
+    expect(page.locator(".m-status", has_text="voice")).to_have_count(0)  # no call: no voice shown
+
+    def start_call() -> None:
+        room = broker.state.store.get_room("#voices")
+        assert room is not None
+        row = broker.state.store.insert_meeting(room.id, started_by="alice", platform="meet")
+        broker.state.store.set_meeting_live(row.id)
+        broker.state.service.publish_settings(room.id)
+
+    broker.on_loop(start_call)
+    page = _open(ui, broker, room="voices")
+    claude = page.locator("#buddy-list .member", has=page.locator(".m-name", has_text="claude-1"))
+    codex = page.locator("#buddy-list .member", has=page.locator(".m-name", has_text="codex-1"))
+    expect(claude.locator(".m-status")).to_contain_text("voice " + voices.default_for("claude-1"))
+    expect(codex.locator(".m-status")).to_contain_text("voice " + voices.default_for("codex-1"))
+    expect(claude.locator(".m-status")).not_to_contain_text("(set)")
+
+    page.locator("#input").fill("/meeting voice claude-1 bf_emma")
+    page.keyboard.press("Enter")
+    expect(page.locator("#log")).to_contain_text("alice set claude-1's voice on calls to bf_emma")
+    expect(claude.locator(".m-status")).to_contain_text("voice bf_emma (set)")
+    expect(codex.locator(".m-status")).not_to_contain_text("(set)")
+
+    claude.locator(".m-name").click()
+    expect(page.locator(".insp-chips .chip-voice")).to_have_text("Voice bf_emma")
+
+    phone = _open(ui, broker, room="voices", **PHONE)
+    expect(phone.locator(".m-status", has_text="voice bf_emma (set)")).to_be_visible()
+    assert phone.evaluate(
+        "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
+    )

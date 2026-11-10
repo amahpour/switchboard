@@ -54,7 +54,7 @@ def test_claims_gain_an_empty_note_and_the_backup_is_schema_36(
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 48
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 49
     assert db.row_counts(con, db.tables_of(36)) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None

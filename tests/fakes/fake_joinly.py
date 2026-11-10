@@ -77,7 +77,10 @@ class FakeJoinly:
         self.join_attempts = 0
         self._join_gate = asyncio.Event()
         self.drop = False
+        self.patched = True  # speak_text takes a voice (deploy/joinly); False: stock joinly 0.5.4
         self.spoken: list[str] = []
+        self.voices: list[str | None] = []  # the voice each line was asked for (the patched speak_text)
+        self.unknown_voices: set[str] = set()  # voices this stand-in's Kokoro does not have
         self.hold_speech = False
         self.interrupt_next = False
         self.fail_speech = False
@@ -118,18 +121,38 @@ class FakeJoinly:
             fake.leaves += 1
             return "left"
 
-        @mcp.tool
-        async def speak_text(text: str) -> str:
-            fake._note_loop()
-            fake.spoken.append(text)
-            if fake.fail_speech:
-                raise RuntimeError("could not speak")
-            if fake.hold_speech:
-                await fake._gate.wait()
-            if fake.interrupt_next:
-                fake.interrupt_next = False
-                return INTERRUPTED
-            return "Finished speaking."
+        if fake.patched:
+
+            @mcp.tool
+            async def speak_text(text: str, voice: str | None = None) -> str:
+                fake._note_loop()
+                fake.spoken.append(text)
+                fake.voices.append(voice)
+                if voice is not None and voice in fake.unknown_voices:
+                    return "Finished speaking. The voice was not found, so the session's voice was used."
+                if fake.fail_speech:
+                    raise RuntimeError("could not speak")
+                if fake.hold_speech:
+                    await fake._gate.wait()
+                if fake.interrupt_next:
+                    fake.interrupt_next = False
+                    return INTERRUPTED
+                return "Finished speaking."
+        else:
+
+            @mcp.tool
+            async def speak_text(text: str) -> str:
+                fake._note_loop()
+                fake.spoken.append(text)
+                fake.voices.append(None)
+                if fake.fail_speech:
+                    raise RuntimeError("could not speak")
+                if fake.hold_speech:
+                    await fake._gate.wait()
+                if fake.interrupt_next:
+                    fake.interrupt_next = False
+                    return INTERRUPTED
+                return "Finished speaking."
 
         @mcp.tool
         async def get_video_snapshot() -> mcp_types.ImageContent:

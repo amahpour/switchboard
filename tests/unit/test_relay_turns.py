@@ -99,3 +99,43 @@ async def test_every_speech_poll_says_this_relay_reports_when_a_line_ends() -> N
     assert len(polls) >= 3 and all(b.get("turns") is True for b in polls)
     rig.relay.finish(Exit.ENDED)
     await rig.code()
+
+
+# ------------------------------------------------------------------------------ a voice per line (#713)
+async def test_a_lines_voice_goes_to_speak_text_and_is_checked_here_again() -> None:
+    """The broker names a Kokoro voice for each line (``line_voice``). The relay passes a well-shaped one on
+    and drops anything else, so joinly never gets an argument it would refuse and the line is still said in
+    the call's voice. Older brokers send none. Fails if a bad shape reaches joinly or a good one is lost."""
+    rig = await joined(Rig())
+    rig.broker.answer(lines=["One."], voice=True, speech_id=1, line_voice="am_adam")
+    await rig.until(lambda: rig.joinly.spoken == ["One."], "the first line")
+    rig.broker.answer(lines=["Two."], voice=True, speech_id=2, line_voice="../etc/passwd")
+    await rig.until(lambda: rig.joinly.spoken == ["One.", "Two."], "the second line")
+    rig.broker.answer(lines=["Three."], voice=True, speech_id=3, line_voice="A" * 40)
+    await rig.until(lambda: len(rig.joinly.spoken) == 3, "the third line")
+    rig.broker.answer(lines=["Four."], voice=True, speech_id=4)
+    await rig.until(lambda: len(rig.joinly.spoken) == 4, "the fourth line")
+    rig.broker.answer(lines=["Five."], voice=True, speech_id=5, line_voice=7)
+    await rig.until(lambda: len(rig.joinly.spoken) == 5, "the fifth line")
+    assert rig.joinly.voices == ["am_adam", None, None, None, None]
+    rig.relay.finish(Exit.ENDED)
+    await rig.code()
+
+
+async def test_a_voice_kokoro_lacks_is_reported_with_the_receipt_and_nothing_else_is() -> None:
+    """When joinly says the voice was not found, the receipt for that line says so (``voice_missing``), so the
+    broker can tell the room once; a line that was found, or had no voice, reports nothing."""
+    rig = await joined(Rig())
+    rig.joinly.speak_answers = [
+        "Finished speaking.",
+        "Finished speaking. The voice was not found, so the session's voice was used.",
+    ]
+    rig.broker.answer(lines=["Found."], voice=True, speech_id=1, line_voice="am_adam")
+    await rig.until(lambda: any(b.get("done") == 1 for _, b in rig.broker.calls), "the first receipt")
+    rig.broker.answer(lines=["Lost."], voice=True, speech_id=2, line_voice="zz_nobody")
+    await rig.until(lambda: any(b.get("done") == 2 for _, b in rig.broker.calls), "the second receipt")
+    receipts = {b["done"]: b for _, b in rig.broker.calls if "done" in b}
+    assert "voice_missing" not in receipts[1]
+    assert receipts[2]["voice_missing"] is True
+    rig.relay.finish(Exit.ENDED)
+    await rig.code()

@@ -311,7 +311,7 @@ class Joinly(Protocol):
 
     async def changed(self, stop: asyncio.Event, timeout: float) -> None: ...
 
-    async def speak(self, text: str) -> str: ...
+    async def speak(self, text: str, voice: str | None = None) -> str: ...
 
     async def leave(self) -> None: ...
 
@@ -321,6 +321,7 @@ class JoinlyClient:
 
     def __init__(self, url: str, header: str) -> None:
         self.url, self.header = url, header
+        self._voices = False
         self._client: Any = None
         self._handler: joinly.Updates | None = None
 
@@ -328,6 +329,7 @@ class JoinlyClient:
         client, handler = joinly.open_client(self.url, self.header)
         await asyncio.wait_for(client.__aenter__(), JOINLY_OPEN_S)
         self._client, self._handler = client, handler
+        self._voices = await joinly.takes_voice(client)  # a joinly without the patch is sent no voice (§52.5)
         await joinly.subscribe(client)  # without it the transcript is read on a timer, which is slower
 
     async def close(self) -> None:
@@ -353,8 +355,9 @@ class JoinlyClient:
     async def changed(self, stop: asyncio.Event, timeout: float) -> None:
         await joinly.wait_for(self._updates(), stop, timeout)
 
-    async def speak(self, text: str) -> str:
-        result = await self._client.call_tool("speak_text", {"text": text}, timeout=joinly.SPEAK_TIMEOUT_S)
+    async def speak(self, text: str, voice: str | None = None) -> str:
+        args = {"text": text} if voice is None or not self._voices else {"text": text, "voice": voice}
+        result = await self._client.call_tool("speak_text", args, timeout=joinly.SPEAK_TIMEOUT_S)
         return joinly.reply(result)
 
     async def leave(self) -> None:
@@ -404,6 +407,7 @@ class Relay:
         self.exit: Exit | None = None
         self.stop = asyncio.Event()
         self._speech: deque[tuple[str, int | None]] = deque()
+        self._line_voice: dict[int, str] = {}  # speech id -> the voice its line is spoken in (§52.6)
         self._speech_ready = asyncio.Event()
         self._speech_done: deque[int] = deque()
         self._down_since: float | None = None
@@ -725,10 +729,18 @@ class Relay:
         tagged = "speech_id" in body
         if tagged and (type(line_id) is not int or not 1 <= line_id <= MAX_ID):
             lines = []  # absent ids mean an older broker; malformed ids never mean permission to speak
+        # The broker's voice for the line, checked here again: joinly would ignore a whole settings header it
+        # does not understand, and a tool argument that fails its own pattern fails the speech. An older
+        # broker sends none, and the line is spoken in the call's voice.
+        voice = body.get("line_voice")
+        if not isinstance(voice, str) or not re.fullmatch(r"[a-z0-9_]{1,32}", voice):
+            voice = None
         for line in lines if isinstance(lines, list) else []:
             if isinstance(line, str) and line.strip() and body.get("voice"):
                 self._speech.append((line, line_id if tagged else None))
                 if tagged:
+                    if voice is not None and line_id is not None:
+                        self._line_voice[line_id] = voice
                     break  # a turn id identifies one line, never a batch
         if self._speech:
             self._speech_ready.set()
@@ -737,6 +749,7 @@ class Relay:
         """Locally dropped claimed lines cannot remain reserved at the broker (§52.2)."""
         self._speech_done.extend(line_id for _, line_id in self._speech if line_id is not None)
         self._speech.clear()
+        self._line_voice.clear()
 
     async def _speaker(self, jy: Joinly) -> None:
         """Say the waiting lines one after another. ``speak_text`` returns when the speech has ended."""
@@ -746,8 +759,11 @@ class Relay:
                 await self._wait_event(self._speech_ready)
                 continue
             line, line_id = self._speech.popleft()
+            voice = self._line_voice.pop(line_id, None) if line_id is not None else None
+            missing = False
             try:
-                said = await jy.speak(line)
+                said = await jy.speak(line, voice) if voice is not None else await jy.speak(line)
+                missing = voice is not None and "voice was not found" in said
             except Exception:
                 self.say("could not speak in the call")
                 self._drop_speech()
@@ -758,9 +774,10 @@ class Relay:
                 if line_id is not None and not self.stop.is_set():
                     # A separate zero-wait poll releases this exact slot promptly, even while the
                     # ordinary long poll waits. Any answer is fed through the same voice checks.
-                    reply = await self._call(
-                        SPEECH_PATH, {"wait": 0, "turns": True, "done": line_id}, REQUEST_TIMEOUT_S
-                    )
+                    receipt: dict[str, Any] = {"wait": 0, "turns": True, "done": line_id}
+                    if missing:
+                        receipt["voice_missing"] = True  # the broker tells the room, once (§52.6)
+                    reply = await self._call(SPEECH_PATH, receipt, REQUEST_TIMEOUT_S)
                     if reply is not None:
                         self._heard(reply.body)
                     elif not self.stop.is_set():

@@ -143,6 +143,23 @@ async def subscribe(client: Any) -> bool:
     return True
 
 
+async def takes_voice(client: Any) -> bool:
+    """Whether this joinly's ``speak_text`` takes a ``voice`` (the patch in deploy/joinly, §52.5). Read from
+    the tool's own schema, once, so a joinly without the patch is never sent an argument it would refuse and
+    its calls speak as before. Anything unexpected is no."""
+    try:
+        for tool in await client.list_tools():
+            if getattr(tool, "name", None) == "speak_text":
+                schema = getattr(tool, "input_schema", None)  # MCP SDK v2's name; v1 calls it inputSchema
+                if schema is None:
+                    schema = getattr(tool, "inputSchema", None)
+                props = (schema or {}).get("properties") or {}
+                return "voice" in props
+    except Exception:
+        return False
+    return False
+
+
 def segments(contents: Any) -> list[Segment]:
     """The segments in what ``read_resource`` gave back: the whole transcript so far, in whatever shape the
     client library returned it. An item without a numeric start and end is skipped, a speaker that is not

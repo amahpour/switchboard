@@ -1099,6 +1099,7 @@ See §23 for the rules of removal.
 | `/catchup <agent> [on <member> \| on "<topic>"] [note]` | Posts one human chat message asking `agent` to get up to speed on a member's work, a topic, or the room, from their session history with its own tool, by a fixed protocol; the subjects get no delivery of it; a `catchup` event (§26) | human_cli (it only posts as the human, like `switchboard say`) | service (`human_say`) |
 | `/review <url> [note]` | Opens the room's review board for `url`, as the person, and posts one human chat message that @mentions every agent in the room and asks them to review it on the board (§37.8). Until 0.4 it was `/catchup`'s alias (§26) | human_cli (it posts as the human, like `/catchup`) | service (`human_say`), `Boards` |
 | `/meeting listen <name> [off]` | Listen to call chatter (§52.1); off also works from the person's CLI | human (off: human_cli) | engine.evaluate |
+| `/meeting voice <name> <voice>` | Pin the Kokoro voice that member speaks with on calls, or `default` for the one its name picks (§52.6) | human | store |
 | `/room`, `/room voice on\|off`, `/room listen on\|off` | A room's hands-free call settings (§52.3): every call starts with Voice on; every agent listens on calls. Bare `/room` shows them | human (bare: human_cli) | service |
 | `/who` | Members: name, harness, status, tier (+note; `verifying...` alone while a Codex thread proof runs, §9.3), away, ⚠/?, held, quiet, queued, in flight, parked, `session: <id> @ <host>` (§26) | human_cli | service |
 | `/status` | Room: paused and reason, budget, hop count; per-agent queued, in-flight and expiry counts; the last 10 rule events; Codex link state; hook hash state; test mode | human_cli | service |
@@ -2956,6 +2957,7 @@ The setting is `utterance_preroll_seconds` of `transcription_controller_args`, a
 - `/meeting leave` ends it.
 - `/meeting voice on` and `/meeting voice off` let agents speak in the call, or stop them (**Voice**).
 - `/meeting listen <name>` opts that agent into call chatter, and `/meeting listen <name> off` stops it (§52.1).
+- `/meeting voice <name> <voice>` pins the Kokoro voice that member's `@call` lines are spoken in (§52.6).
 - `/meeting snapshot` posts a picture of the call's shared screen (**Snapshots**).
 - `/meeting` alone says whether a call is live.
 
@@ -3293,6 +3295,49 @@ Tests: `test_joinly_voice_patch.py`; the host script's `plugin:` pins in `test_m
 without a download, refused when altered, no path outside `meeting/`); the compose files in
 `test_meeting_host.py`; the Kubernetes patch and the chart in `test_deploy_joinly.py` and
 `test_deploy_helm.py`; the release tag in `test_release_script.py`.
+
+### 52.6 A voice for each agent (#713)
+
+Phase 3 (§52.5) lets one `speak_text` name a voice. This gives each agent its own.
+
+**Which voice.** `meeting/voices.py`, pure. Each agent has a default from a short list of Kokoro names
+(`DEFAULT_VOICES`: `am_adam`, `bf_emma`, `af_sarah`, `bm_lewis`), picked by a hash of its lower-cased
+screen name, so it is the same on every machine and run and needs no setting. `am_adam` and `bf_emma` were
+heard on a real Zoom call by the meeting self-test; the other two are Kokoro's own names, and one that Kokoro
+lacks falls back (below) rather than failing. A person pins another with `/meeting voice <name> <voice>`,
+and `/meeting voice <name> default` puts the default back. The pin is `memberships.call_voice` (schema 49,
+NULL: the default), kept with the member so it holds for later calls and needs no open call. Members shows
+the effective voice (`voice`, and `voice_pinned`).
+
+**Who may set it.** Only a person, on the web: the command's role is `human`, like `/meeting voice on` (the
+command line and every agent are refused), and an agent's `say("/meeting voice …")` is only text in the
+room, as every command is. A voice name inside an `@call` line is only words that are spoken: the bridge
+reads no voice from a line. The shape is checked three times: where the command is parsed (`a-z`, `0-9`
+and `_`, 1 to 32 characters, or `default`), in `Store.set_call_voice`, and by a CHECK on the column, so a bad
+name can't be stored by a path that skips the code. It is checked again where it is used (`voices.valid`),
+and in the relay.
+
+**How it travels.** `AgentService._post_say` already hands the bridge and the hosted call the speaking
+member's id. `speak` looks the voice up (`voices.voice_of`) and the line carries it (`Line.voice`): the
+bridge puts it in `speak_text`'s arguments, and a hosted call's speech poll answers with a new field,
+`line_voice` (a string or null). The relay checks the field's shape again and passes it on; an older relay
+ignores the field and speaks in the call's voice, and an older broker sends none. Joinly without the patch
+(§52.5) would refuse an argument it does not know, so the voice is sent only where the patch is mounted:
+every deployment that mounts it by the documented steps, and the plugin's compose file always does.
+
+**A voice Kokoro lacks.** The patched `speak_text` speaks in the session's voice and answers that the voice
+was not found. The bridge reads that answer; a hosted relay reports it with the receipt for the line
+(`voice_missing: true` in the `done` request, a boolean or the request is refused). The room gets one
+notice for each missing voice, once a call, naming the member (`claude-1's voice zz_nobody was not found, so
+the call's own voice is used for its lines.`). The line is still spoken.
+
+**What this adds.** No authority: it picks a name in a table Kokoro owns, a person sets it, and nothing an
+agent says reaches it. The notice contains only the member's validated name and the validated voice.
+Tests: `test_meeting_voices.py` (the defaults, stable across processes and spread over the list),
+`test_db_migrate_v49.py` (a real old database, the CHECK), `test_store_call_voice.py`,
+`test_meeting_agent_voices.py` (the real broker: defaults, a pin, an agent's words changing nothing, bad
+shapes refused, the missing-voice notice once), `test_listen_turns.py` and `test_relay_turns.py` (the poll
+field, the relay's check and the receipt flag).
 
 ## 53. Attachments (#544)
 
