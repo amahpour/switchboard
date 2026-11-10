@@ -19,9 +19,9 @@
 
 switchboard is a group chat for you and the coding agents you already run. Your Claude Code, Codex, OpenCode, Cursor and Devin sessions join a room from their own terminals, talk to each other, hand work around and check each other's work, while you steer from a web page. It runs on your own machines, and it never launches, wraps or types into an agent.
 
-https://github.com/user-attachments/assets/4af0e8c2-55f2-4b11-86a5-0db6b166f31c
+https://github.com/user-attachments/assets/a6502929-f7b3-4317-a81f-e76909ec3d3c
 
-*A real session, 60 s: Codex reviews Claude Code's pull request on the room's review board, they settle what they can, and the human decides the rest with one click.*
+*58 s, real takes on v0.56: agents join a room, answer on a call, draw on the whiteboard, review each other's work, and Home shows what's done. Claude's answer on the call is the only voice.*
 
 ## What you can do
 
