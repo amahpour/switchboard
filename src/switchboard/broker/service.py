@@ -1254,6 +1254,30 @@ class RoomService:
         if room is not None:
             self.post_notice(room, text)
 
+    def call_voice_notice(self, room_id: int, text: str, membership_id: int | None = None) -> None:
+        """A fixed speech refusal/expiry, also queued for the member who tried to speak (§52.2).
+
+        Only server-owned sentences enter here, never the line that was refused. A notice is
+        not a person's message, does not move the quiet clock, and is ordinary priority 0.
+        """
+        room = self.store.room_by_id(room_id)
+        if room is None:
+            return
+        member = self.store.get_membership(membership_id) if membership_id is not None else None
+        if member is None or member.room_id != room_id:
+            self.post_notice(room, text)
+            return
+        self._post(
+            room,
+            sender_name="switchboard",
+            sender_kind="system",
+            via="system",
+            kind="notice",
+            text=f"{member.screen_name}: {text}",
+            deliver_notice=True,
+            skip_memberships=[m.id for m in self.store.room_memberships(room_id) if m.id != member.id],
+        )
+
     def post_meeting_line(
         self,
         room_id: int,

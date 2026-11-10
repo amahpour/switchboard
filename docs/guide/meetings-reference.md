@@ -305,6 +305,8 @@ spend this allowance. Reaching the cap leaves the transcript readable in the roo
 
 ## Let agents speak
 
+For a bot hosted on your own machine, update the hosting plugin alongside the broker. The relay in its pinned image reports when each line ends, so the next line waits for it. An older relay still works, paced by the 30-second interval alone. A line whose end is never reported frees the slot 90 seconds after it started.
+
 Voice is off when a call starts. You turn it on, for that call only.
 
 1. **Click the Voice switch** on the bar, or type `/meeting voice on`. Both are for you in the web UI only. The switch turns blue, the bar adds **agents can speak**, and the room gets a notice such as `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)`.
@@ -322,7 +324,7 @@ What is read aloud, and what is not:
 - A code block is replaced by "code omitted". An `artifact:` line is left out.
 - If nothing is left, nothing is said.
 
-One line is said at a time. Up to three more wait. If agents send more than that, the extra lines are dropped and the room says so once. If someone on the call talks over the bot, it stops, and the room says `Someone spoke over the line in the call, so it stopped early.`.
+One line can be queued or spoken at a time. A second is refused with a room notice that its author also receives in the next batch. A line waits for 1.5 seconds without new call speech and for 30 seconds since the preceding start. At 60 seconds still waiting, it is dropped with a notice instead of being spoken late. Turning Voice off clears the wait; turning it back on preserves the interval. If someone on the call talks over the bot, it stops. With the server's bot, the room says `Someone spoke over the line in the call, so it stopped early.` A hosted relay reports the interruption in its log.
 
 Only an agent that is a member of the room can speak this way. A person's message that starts with `@call` is only text, and so is an agent's when voice is off or there is no call.
 
@@ -388,7 +390,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on, and it takes pictures of what it sees.
 - **A picture is one frame.** It is 1024 by 576 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
 - **Voice is for the call it was turned on in.** It is kept in memory, so it is off after a restart and in every new call.
-- **At most 600 characters a line, one line at a time, three waiting.**
+- **At most 600 characters a line, one queued or being spoken, with starts at least 30 seconds apart.** A line waits for a 1.5-second gap and expires after 60 seconds still waiting.
 - **At most one snapshot every 10 seconds** in a call.
 - **No voice recognition.** A speaker's name is whatever joinly gives. On Zoom with joinly 0.5.4 it gives none.
 - **The bot's hint list is made when the call starts.** An agent that joins the room later can still be woken by name, but the speech-to-text was not told to listen for it, so it may mishear that name.
@@ -431,7 +433,8 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The room says "The call is coming in faster than the room can show":** more than 50 lines were waiting, and the oldest were dropped. It is shown once per call.
 - **Voice is on, but nothing is said:** the agent has to start its `say()` with `@call` (not in the middle of the message), and it has to be a member of the room. Check the bar says **agents can speak**. If the room says `Couldn't speak in the call.`, joinly refused the line: check its log, and check that `tts_voice` is a voice joinly has (DEPLOY.md lists them). An agent that has not been told how can be asked: "say it on the call with @call".
 - **The room says "Someone spoke over the line in the call":** the bot stopped because someone started talking. It does not say the rest. Ask the agent to say it again.
-- **The room says "More lines are waiting to be spoken than the call can say":** agents sent more than three lines while one was being said. The extra ones were dropped, and they are still in the room as text.
+- **The room says "Another @call line is waiting or being spoken":** another line owns the call's speech slot. This line stays in the room as text. Its author also receives the refusal in the next batch.
+- **A queued line waited 60 seconds:** it was dropped because the call never left a gap in time. Brief the agent to answer the current topic, rather than repeat a stale answer.
 - **Snapshot says "The bot is not in the call yet":** the call is still joining. Wait for the bar to read **Transcribing a call**.
 - **Snapshot says "A snapshot was taken less than 10 seconds ago":** wait a few seconds and click again.
 - **The room says "Couldn't get a snapshot of the call":** joinly could not take a picture, for example because the bot has been removed from the call. Check joinly's log. If it says the picture is "not a PNG, JPEG or WebP", or larger than the file limit, joinly sent something switchboard won't keep.
@@ -511,7 +514,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six step
 - `This broker follows at most 1 call at once, and that many are open. Leave one first (/meeting leave in its room).` (`2 calls`, and so on, for a higher limit). It is the answer to `/meeting <link>`, not a room notice.
 - The ambiguous-name notice and the dropped-lines notice, above.
 - `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)` and `alice turned voice off: agents no longer speak in the call (via web)`.
-- `Someone spoke over the line in the call, so it stopped early.`, `More lines are waiting to be spoken than the call can say. Some were dropped.` and `Couldn't speak in the call.`
+- `Someone spoke over the line in the call, so it stopped early.`, `Another @call line is waiting or being spoken; this line was not spoken.` and `A queued @call line waited 60 seconds and was dropped instead of being spoken late.` and `Couldn't speak in the call.`
 - `Couldn't get a snapshot of the call.`, `joinly sent something that is not a PNG, JPEG or WebP picture.`, `The snapshot is larger than the room's file limit (25 MB).` and `A snapshot was taken less than 10 seconds ago. Try again in a moment.`
 
 **Numbers:**
@@ -521,7 +524,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six step
 - A line ends after 2.0 seconds of pause in the audio, 2.5 seconds of quiet on the clock, a change of speaker, or 1,000 characters.
 - At most one line a second is posted, and at most 50 wait.
 - The hint list holds at most 100 names.
-- A spoken line is at most 600 characters, one at a time, with up to 3 waiting. Speech may take up to 3 minutes before it is given up.
+- A spoken line is at most 600 characters. One can be queued or being spoken, after a 1.5-second gap and at least 30 seconds after the previous start. Waiting expires at 60 seconds. Speech may take up to 3 minutes before it is given up.
 - A snapshot is taken at most every 10 seconds, waits up to 8 seconds for the picture, and is 1024 by 576 pixels.
 
 **More:** [A live call in USAGE.md](../USAGE.md#a-live-call), [A meeting bot in DEPLOY.md](../DEPLOY.md#a-meeting-bot), [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-a-room-573), and [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md).

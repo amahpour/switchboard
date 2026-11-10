@@ -14,7 +14,6 @@ from switchboard.envelope import clean
 from switchboard.files import parse_artifact_line
 
 SPEAK_MAX = 600  # characters of one spoken line
-QUEUE_MAX = 3  # lines waiting while one is spoken
 # the one line a batch with call lines carries while voice is on: the only place agents learn it
 VOICE_HINT = "Voice is on in this call: start a say() line with @call to have it spoken."
 

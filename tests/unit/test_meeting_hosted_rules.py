@@ -65,6 +65,9 @@ class Service:
     def notice_in(self, room_id: int, text: str) -> None:
         self.notices.append((room_id, text))
 
+    def call_voice_notice(self, room_id: int, text: str, membership_id: int | None = None) -> None:
+        self.notice_in(room_id, text)
+
     def publish_settings(self, room_id: int) -> None:
         self.published.append(room_id)
 
@@ -725,21 +728,20 @@ def test_an_at_call_line_is_queued_only_while_voice_is_on_and_the_host_is_in_the
     w.calls.speak(w.build.id, "no at-call here")
     w.calls.speak(w.build.id, "@call **hello** [everyone](https://example.com)")
     w.calls.speak(w.build.id, "@call ")
-    assert list(w.calls._calls[w.row().id].speech) == ["hello everyone"]
+    assert w.calls._calls[w.row().id].turns.pending.text == "hello everyone"
     assert w.calls.set_voice(w.build.id, False) is True
-    assert list(w.calls._calls[w.row().id].speech) == []
+    assert w.calls._calls[w.row().id].turns.pending is None
 
 
-def test_at_most_three_lines_wait_to_be_spoken_and_the_overflow_is_told_once(w: World) -> None:
-    """A slow relay must not let spoken lines pile up: a fourth is dropped, with one notice for the burst.
-    Fails if the queue grows, or every drop is announced."""
+def test_at_most_one_line_waits_to_be_spoken_and_each_refusal_is_noticed(w: World) -> None:
+    """A slow relay has one outstanding line; another is refused with its own notice (§52.2)."""
     w.open()
     w.calls.push(w.row(), [])
     w.calls.set_voice(w.build.id, True)
     for i in range(6):
         w.calls.speak(w.build.id, f"@call line {i}")
-    assert list(w.calls._calls[w.row().id].speech) == ["line 0", "line 1", "line 2"]
-    assert sum("waiting to be spoken" in t for t in w.notice_texts()) == 1
+    assert w.calls._calls[w.row().id].turns.pending.text == "line 0"
+    assert sum("waiting or being spoken" in t for t in w.notice_texts()) == 5
 
 
 async def test_the_speech_poll_answers_with_the_lines_the_hints_the_voice_state_and_the_end(w: World) -> None:
