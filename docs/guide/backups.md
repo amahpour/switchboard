@@ -3,6 +3,8 @@
 Save the broker's rooms, people and stored attachments in one archive. A backup runs while
 rooms and agents keep working. Restoring needs the broker stopped or restarted.
 
+<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/03f70571-1395-4782-a634-94f7b392c054"></video>
+
 ## Back up from the web UI
 
 1. Open **Settings → Backups** as an admin. On a hosted broker, only admins see this group.
