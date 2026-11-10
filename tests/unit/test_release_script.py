@@ -547,7 +547,7 @@ def test_a_release_that_moves_a_plugins_relay_pin_bumps_that_plugins_version(tmp
 
 
 def test_a_manifest_with_no_version_stops_the_release() -> None:
-    """The bump is not guessed: a manifest it cannot read stops the release, like a marketplace with no pin."""
+    """A manifest the bump cannot read stops the release, as a marketplace with no pin does."""
     with pytest.raises(SystemExit, match="plugin.json has no"):
         rel.bump_plugin('{"name": "switchboard"}', "plugin.json")
     assert rel.bump_plugin('{"version": "0.16.9"}') == '{"version": "0.16.10"}'
