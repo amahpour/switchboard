@@ -149,8 +149,11 @@ class MeetingBridge:
                 except Exception:
                     errors.append("couldn't join the call")
                     return
+                # asked before the call is marked live: the bar must never say live while a command that needs
+                # ``_live`` (a snapshot, a voice) still finds no call to act on
+                takes_voice = await joinly.takes_voice(client)
                 self._mark_live(room_id)
-                live = self._live[room_id] = _Live(client, voices=await joinly.takes_voice(client))
+                live = self._live[room_id] = _Live(client, voices=takes_voice)
                 try:
                     await self._listen(live, handler, room_id, stop, errors)
                 finally:
