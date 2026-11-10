@@ -2411,6 +2411,21 @@ class Store:
         ).fetchone()
         return int(r[0])
 
+    def question_batch(self, membership_id: int) -> int | None:
+        """The id of this member's last batch when it holds a message that @mentions the member or replies
+        to its own message, else None: a line it says now answers a question put to it (§52.2). Decided
+        from rows, never from a line's text. Chatter that replies to the member arrives already handled
+        (§8.2), so any delivery state counts."""
+        r = self.con.execute(
+            "SELECT b.id FROM batches b WHERE b.membership_id=? AND b.id=("
+            " SELECT MAX(id) FROM batches WHERE membership_id=?) AND EXISTS ("
+            " SELECT 1 FROM deliveries d JOIN messages m ON m.id=d.message_id"
+            " WHERE d.batch_id=b.id AND (d.mentioned=1 OR COALESCE((SELECT r.sender_membership_id"
+            "   FROM messages r WHERE r.id=m.reply_to)=d.membership_id, 0)))",
+            (membership_id, membership_id),
+        ).fetchone()
+        return int(r[0]) if r else None
+
     def mark_handled(self, membership_id: int) -> int:
         """say/pass: every in_context delivery of this member becomes handled.
 

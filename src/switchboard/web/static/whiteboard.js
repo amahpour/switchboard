@@ -19,6 +19,16 @@
     el('prev').disabled = i === 0; el('next').disabled = i === all.length-1;
     post('present', { id: f.id });
   }
+  // A step is fitted to the view when it is shown, so a view that changes size afterwards (a phone turned
+  // sideways, a window dragged, full screen settling after Play) asks for the same step again, which fits it
+  // again. It waits a moment for the frame's own size to settle, and sends nothing when nothing is playing.
+  let refitTimer = 0;
+  if (window.ResizeObserver && el('host')) {
+    new ResizeObserver(() => {
+      clearTimeout(refitTimer);
+      refitTimer = setTimeout(() => { if (playing && selected) post('present', { id: selected }); }, 120);
+    }).observe(el('host'));
+  }
   function stopPlay() {
     playing = false; selected = null;
     if (document.fullscreenElement === el('panel')) document.exitFullscreen().catch(() => {});
@@ -49,10 +59,22 @@
   }
   function dark() { return document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches); }
   function init() { post('init', { elements: cache.get(current) || [], dark: dark() }); }
+  // The board mounts in Excalidraw's light theme and learns the app's theme from the `init` above, so for a
+  // moment a dark app showed a white frame (#684). The frame stays hidden, over the host's own background
+  // (the app's), until it reports its first render, which is after the theme is set; two animation frames
+  // later it has painted that. A frame that never renders is shown after a while, not kept hidden for good.
+  let revealTimer = 0;
+  function reveal(now) {
+    const shown = frame;
+    const show = () => { if (frame && frame === shown) options.host.classList.remove('whiteboard-loading'); };
+    if (now) show(); else requestAnimationFrame(() => requestAnimationFrame(show));
+  }
   function close() {
     stopPlay();
+    clearTimeout(revealTimer);
     if (frame) frame.remove();
     frame = null; current = null; ready = false; pendingImages.clear(); pendingConversions.clear();
+    if (options) options.host.classList.remove('whiteboard-loading');
     if (options) options.host.classList.add('hidden');
   }
   window.addEventListener('message', function (ev) {
@@ -77,6 +99,7 @@
       if (options.send(current, elements)) cache.set(current, merged);
       else options.status.textContent = 'Disconnected. Reconnect before drawing.';
     } else if (m.action === 'rendered' && Object.keys(m).length === 4) {
+      reveal(false);
       const count = (cache.get(current) || []).filter(e => !e.isDeleted).length;
       options.status.textContent = 'Live · ' + count + (count === 1 ? ' shape' : ' shapes');
     } else if (m.action === 'image' && Object.keys(m).length === 6 && typeof m.request === 'string' && pendingImages.has(m.request) && /^[0-9a-f]{32}$/.test(m.request) && m.bytes instanceof ArrayBuffer && m.bytes.byteLength <= 600000) {
@@ -102,6 +125,8 @@
       frame.setAttribute('credentialless', '');
       frame.setAttribute('title', 'Whiteboard for ' + room);
       frame.src = '/board';
+      options.host.classList.add('whiteboard-loading');
+      revealTimer = setTimeout(() => reveal(true), 8000);
       options.status.textContent = 'Opening whiteboard…';
       options.host.replaceChildren(frame);
       options.host.classList.remove('hidden');

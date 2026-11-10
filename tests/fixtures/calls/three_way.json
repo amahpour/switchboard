@@ -1,0 +1,188 @@
+{
+ "lines": [
+  {
+   "at": 8,
+   "speaker": "alice",
+   "text": "Okay, let us go through the upload limit before the release.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 16,
+   "speaker": "alice",
+   "text": "Alpha, what is the upload limit set to today?",
+   "tag": "q1",
+   "to": "alpha"
+  },
+  {
+   "at": 70,
+   "speaker": "alice",
+   "text": "Right. I think the proxy might be the real problem here.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 84,
+   "speaker": "alice",
+   "text": "We have seen big files fail on the staging site twice this week.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 120,
+   "speaker": "alice",
+   "text": "Beta, is there any risk in the new export job?",
+   "tag": "q2",
+   "to": "beta"
+  },
+  {
+   "at": 185,
+   "speaker": "alice",
+   "text": "That matches what I saw in the logs yesterday.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 200,
+   "speaker": "alice",
+   "text": "The retries are the part I worry about most.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 215,
+   "speaker": "alice",
+   "text": "Let us keep the scope small for the first version.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 260,
+   "speaker": "alice",
+   "text": "Alpha, when can you finish the export job?",
+   "tag": "q3",
+   "to": "alpha"
+  },
+  {
+   "at": 325,
+   "speaker": "alice",
+   "text": "Good. That fits with the release on Thursday.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 340,
+   "speaker": "alice",
+   "text": "One more thing about the dashboard. The charts load slowly.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 352,
+   "speaker": "alice",
+   "text": "I think it is the query, not the front end.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 380,
+   "speaker": "alice",
+   "text": "Beta, can you look at the dashboard query after the export review?",
+   "tag": "q4",
+   "to": "beta"
+  },
+  {
+   "at": 440,
+   "speaker": "alice",
+   "text": "Fine. We can talk about the dashboard next week.",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 470,
+   "speaker": "alice",
+   "text": "Does anyone have anything else before we stop?",
+   "tag": "",
+   "to": ""
+  },
+  {
+   "at": 520,
+   "speaker": "alice",
+   "text": "Okay, thanks everyone. That was a useful call.",
+   "tag": "",
+   "to": ""
+  }
+ ],
+ "reactions": [
+  {
+   "agent": "alpha",
+   "on": "q1",
+   "say": "@call It is ten megabytes in the app. Beta, does the proxy agree?",
+   "tag": "r1",
+   "to": "beta"
+  },
+  {
+   "agent": "beta",
+   "on": "r1",
+   "say": "@call No. The proxy still stops at eight megabytes. Alpha, can you raise it?",
+   "tag": "r2",
+   "to": "alpha"
+  },
+  {
+   "agent": "alpha",
+   "on": "r2",
+   "say": "@call Yes. I will raise the proxy to ten and tell you when it is out. Beta, will you recheck then?",
+   "tag": "r3",
+   "to": "beta"
+  },
+  {
+   "agent": "beta",
+   "on": "r3",
+   "say": "@call I will recheck after the deploy. Alice, that closes the upload limit.",
+   "tag": "r4",
+   "to": "alice"
+  },
+  {
+   "agent": "beta",
+   "on": "q2",
+   "say": "@call One risk. A retry could write the file twice. Alpha, can the job check for a duplicate?",
+   "tag": "s1",
+   "to": "alpha"
+  },
+  {
+   "agent": "alpha",
+   "on": "s1",
+   "say": "@call Yes. I will add an idempotency key to each export.",
+   "tag": "s2",
+   "to": "beta"
+  },
+  {
+   "agent": "beta",
+   "on": "s2",
+   "say": "@call Good, that covers it.",
+   "tag": "s3",
+   "to": ""
+  },
+  {
+   "agent": "alpha",
+   "on": "q3",
+   "say": "@call Tomorrow at noon. Beta, can you review it by then?",
+   "tag": "t1",
+   "to": "beta"
+  },
+  {
+   "agent": "beta",
+   "on": "t1",
+   "say": "@call Yes, by two in the afternoon.",
+   "tag": "t2",
+   "to": ""
+  },
+  {
+   "agent": "beta",
+   "on": "q4",
+   "say": "@call I will look at the query tonight.",
+   "tag": "u1",
+   "to": ""
+  }
+ ]
+}

@@ -1165,6 +1165,9 @@ class RoomService:
         if before:
             self.hub.room_settings(room.name, self.settings(room))
         self.hub.members_changed(room.name)
+        for calls in (self.meetings, self.hosted_calls):
+            if calls is not None:
+                calls.person_posted(room.id)  # a person wrote: the run of agent lines on a call ends (§52.2)
         return msg
 
     def mention_names(self, room: Room) -> list[str]:

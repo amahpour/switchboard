@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import pytest
@@ -180,3 +181,57 @@ def test_bound_agent_text_wraps_to_its_container_without_changing_the_stored_sce
     assert " ".join(text["text"].split()) == phrase and text["originalText"] == phrase
     assert container["width"] == before[1][0]["width"] and container["height"] == before[1][0]["height"]
     assert b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#board-label").id)) == before
+
+
+def frame_pixel(ui: UI, host: Any) -> tuple[int, int, int]:  # noqa: F811
+    """The middle pixel of the board frame as painted, read back in a blank page (the e2e setup has no
+    imaging library)."""
+    decoder = ui.context().new_page()
+    r, g, b = decoder.evaluate(
+        """async b64 => {
+          const img = new Image(); img.src = 'data:image/png;base64,' + b64; await img.decode();
+          const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+          const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+          return [...x.getImageData(img.width >> 1, img.height >> 1, 1, 1).data].slice(0, 3);
+        }""",
+        base64.b64encode(host.screenshot(animations="disabled")).decode(),
+    )
+    decoder.close()
+    return r, g, b
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_the_board_frame_stays_hidden_until_it_has_drawn_in_the_apps_theme(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+    scheme: str,
+) -> None:
+    """#684: opening Whiteboard in the dark theme showed a white frame for a moment. The board mounts in
+    Excalidraw's light theme and is told the app's theme after it reports ready, so the first frames are
+    light. The frame now stays hidden, over the app's own background, until the board has rendered in the
+    app's theme. The test holds the board's scripts back so the frame is still opening, and checks that the
+    frame is hidden and the painted pixel is the app's background (dark in the dark theme, white in the
+    light one); then it lets the scripts go and checks that the frame is shown, with a board that is
+    dark in the dark theme. Fails if the frame is visible while it is opening."""
+    room = f"board-paint-{scheme}"
+    world.create_room(room)
+    page = ui.open(room, color_scheme=scheme)
+    held: list[Any] = []
+    # never answered until the end: mermaid.min.js blocks the shell's first paint and board.js draws the board
+    page.route("**/board-assets/*.js", lambda route: held.append(route))
+    with page.expect_request("**/board-assets/mermaid.min.js"):  # the shell is in, its scripts are held
+        page.get_by_role("button", name="Whiteboard", exact=True).click()
+    host = page.locator("#whiteboard-host iframe")
+    expect(page.locator("#whiteboard-status")).to_have_text("Opening whiteboard…")
+    expect(host).to_be_hidden()  # not painted: the host's background shows
+    r, g, b = frame_pixel(ui, page.locator("#whiteboard-host"))
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    assert (luminance < 60) if scheme == "dark" else (luminance > 230), ("opening", scheme, (r, g, b))
+    for route in held:
+        route.continue_()
+    page.unroute("**/board-assets/*.js")
+    expect(page.locator("#whiteboard-status")).to_contain_text("Live")
+    expect(host).to_be_visible()
+    r, g, b = frame_pixel(ui, host)
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    assert (luminance < 60) if scheme == "dark" else (luminance > 230), ("drawn", scheme, (r, g, b))

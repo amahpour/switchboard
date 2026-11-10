@@ -111,3 +111,62 @@ def test_play_steps_through_six_frames_in_reading_order_with_captions_and_never_
     expect(page.get_by_role("button", name="Play frames")).to_be_focused()
     after = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room(room).id))
     assert after == before
+
+
+FIT = """() => { const api = window.sbBoard.api, a = api.getAppState();
+  const f = api.getSceneElements().find(e => e.type === 'frame');
+  if (!f || !a.viewModeEnabled) return 0;
+  const wr = f.width * a.zoom.value / a.width, hr = f.height * a.zoom.value / a.height;
+  return Math.max(wr, hr); }"""
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_play_fits_a_small_frame_to_the_view_and_keeps_it_fitted(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+    phone: bool,
+):  # noqa: F811
+    """#686: Play frames showed a frame of a few hundred pixels at 100% in the middle of a full-screen, mostly
+    empty board, because Excalidraw's `fitToContent` never zooms in past 100%. A storyboard step should fill
+    the view like a slide does: the frame's box reaches most of the viewport in one direction (the fit asks
+    for 0.85), and it stays so when the window changes size (a phone turned sideways, a window dragged).
+    The frame is made 200x120, a size a person can draw. Fails if the frame stays near its own size, or does
+    not refit after the viewport changes."""
+    room = "#fit-" + ("phone" if phone else "desktop")
+    world.create_room(room)
+    b = world.broker
+    b.on_loop(
+        lambda: b.state.room_board.agent(
+            b.state.store.get_room(room),
+            "alice",
+            {"action": "frame", "text": "Small step", "x": 0, "y": 0},
+            None,
+        )
+    )
+    page = ui.open(room.lstrip("#"), **(PHONE if phone else {}))
+    open_board(page)
+    board = page.frame(url=re.compile(r"/board$"))
+    # make the frame small, as a person who drew one that size would: the agent tool's frame is 600x360
+    board.evaluate(
+        """() => { const api = window.sbBoard.api;
+          api.updateScene({ elements: api.getSceneElementsIncludingDeleted().map(
+            e => e.type === 'frame' ? { ...e, width: 200, height: 120, version: e.version + 1 } : e) });
+          window.sbBoard.flush(); }"""
+    )
+    wait_js(page, "() => /1 shape/.test(document.getElementById('whiteboard-status').textContent)")
+    page.get_by_role("button", name="Play frames").click()
+    wait_js(page, "() => document.fullscreenElement?.id === 'whiteboard-panel'")
+    wait_js(board, "() => window.sbBoard.api.getAppState().viewModeEnabled === true")
+    wait_js(board, f"() => ({FIT})() >= 0.7")
+    zoom = board.evaluate("window.sbBoard.api.getAppState().zoom.value")
+    assert zoom > 1.2, zoom  # the frame is 200 px wide: it is drawn larger than life, not at 100%
+    # a phone turned sideways, a window dragged: the page can't be resized while it is full screen, so the
+    # browser is told its screen has another size, which is what the page sees either way
+    width, height = (844, 390) if phone else (900, 560)
+    page.context.new_cdp_session(page).send(
+        "Emulation.setDeviceMetricsOverride",
+        {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": phone},
+    )
+    wait_js(board, f"() => ({FIT})() >= 0.7 && window.sbBoard.api.getAppState().zoom.value !== {zoom}")
+    page.get_by_role("button", name="Exit play").click()
+    expect(page.get_by_role("button", name="Play frames")).to_be_focused()
