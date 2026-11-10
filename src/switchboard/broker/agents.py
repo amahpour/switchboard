@@ -243,6 +243,8 @@ class AgentService:
         self.record_dir = Path(rec) if rec and state.test_mode else None
         # membership id -> rate-limited says waiting their turn: (text, reply_to, file ids), oldest first
         self._queued_says: dict[int, deque[tuple[str, int | None, list[str]]]] = {}
+        # member id -> the last batch whose question an @call line answered (§52.2)
+        self._answered: dict[int, int] = {}
 
     # ------------------------------------------------------------ plumbing
     @property
@@ -913,6 +915,10 @@ class AgentService:
         """Post an agent's say: what it had pending counts as answered, and the message goes out
         like any other (the delivery, the wake budget and the loop guard)."""
         now = self.state.clock.now()
+        asked = self.store.question_batch(m.id)
+        answering = asked is not None and self._answered.get(m.id) != asked  # a batch answers once (§52.2)
+        if asked is not None:
+            self._answered[m.id] = asked
         self.store.mark_handled(m.id)
         self.store.update_participant(p.id, last_say_at=now)
         mentions = rules.parse_mentions(text, self.svc.mention_names(room))
@@ -937,10 +943,10 @@ class AgentService:
         if self.state.meetings is not None:
             # an "@call" line is spoken in the room's live call while a person has voice on (§52);
             # otherwise this does nothing. It never waits: a task in the bridge does the speaking.
-            self.state.meetings.speak(room.id, msg.text, membership_id=m.id)
+            self.state.meetings.speak(room.id, msg.text, membership_id=m.id, answering=answering)
         if self.state.hosted_calls is not None:
             # the same for a call hosted on a person's machine (§54): the line waits for its relay's poll
-            self.state.hosted_calls.speak(room.id, msg.text, membership_id=m.id)
+            self.state.hosted_calls.speak(room.id, msg.text, membership_id=m.id, answering=answering)
         return msg
 
     def read(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:

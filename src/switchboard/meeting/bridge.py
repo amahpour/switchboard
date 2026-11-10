@@ -36,7 +36,7 @@ from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
 from switchboard.meeting.speech import call_text, speakable
-from switchboard.meeting.turns import BUSY_NOTICE, STALE_NOTICE, STALE_S, Turns
+from switchboard.meeting.turns import STALE_NOTICE, STALE_S, Turns
 
 log = logging.getLogger("switchboard.meeting")
 
@@ -250,8 +250,17 @@ class MeetingBridge:
                 live.changed.set()
         return True
 
-    def speak(self, room_id: int, text: str, *, membership_id: int | None = None) -> None:
-        """Offer one line to the call without delaying its room post (§52.2)."""
+    def person_posted(self, room_id: int) -> None:
+        """A person wrote in the room: the run of agent lines on the call ends (§52.2)."""
+        live = self._live.get(room_id)
+        if live is not None:
+            live.turns.person_posted()
+
+    def speak(
+        self, room_id: int, text: str, *, membership_id: int | None = None, answering: bool = False
+    ) -> None:
+        """Offer one line to the call without delaying its room post (§52.2). ``answering``: the broker
+        knows this agent's last batch put a question to it; the line is never parsed for that."""
         if room_id not in self._voice:
             return
         live = self._live.get(room_id)
@@ -261,8 +270,8 @@ class MeetingBridge:
         line = speakable(body)
         if not line:
             return
-        if not live.turns.offer(line, self.state.clock.now(), membership_id):
-            self.state.service.call_voice_notice(room_id, BUSY_NOTICE, membership_id)
+        if not live.turns.offer(line, self.state.clock.now(), membership_id, answering=answering):
+            self.state.service.call_voice_notice(room_id, live.turns.refusal_notice, membership_id)
             return
         live.changed.set()
         if live.worker is None or live.worker.done():

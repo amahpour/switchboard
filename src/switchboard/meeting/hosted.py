@@ -44,7 +44,7 @@ from switchboard.meeting.lines import CAP, Assembler, Line, Segment
 from switchboard.meeting.links import PLATFORM_LABEL, MeetingLink
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.speech import call_text, speakable
-from switchboard.meeting.turns import BUSY_NOTICE, MAX_ID, STALE_NOTICE, Turns
+from switchboard.meeting.turns import MAX_ID, STALE_NOTICE, Turns
 from switchboard.models import InvalidName, Meeting, Room, normalize_room, split_session_key
 from switchboard.store import Conflict
 
@@ -542,8 +542,17 @@ class HostedCalls:
         self._wake(st)
         return True
 
-    def speak(self, room_id: int, text: str, *, membership_id: int | None = None) -> None:
-        """Offer the call's one speech slot; its relay reports completion before it is free again."""
+    def person_posted(self, room_id: int) -> None:
+        """A person wrote in the room: the run of agent lines on the call ends (§52.2)."""
+        st = self._calls.get(self._rooms.get(room_id, -1))
+        if st is not None:
+            st.turns.person_posted()
+
+    def speak(
+        self, room_id: int, text: str, *, membership_id: int | None = None, answering: bool = False
+    ) -> None:
+        """Offer the call's speech slot; its relay reports completion before the next line starts.
+        ``answering``: the broker knows this agent's last batch put a question to it."""
         st = self._calls.get(self._rooms.get(room_id, -1))
         if st is None or not st.voice or not st.live:
             return
@@ -552,8 +561,8 @@ class HostedCalls:
         if not line:
             return
         self._expire_speech(st)
-        if not st.turns.offer(line, self.state.clock.now(), membership_id):
-            self.state.service.call_voice_notice(room_id, BUSY_NOTICE, membership_id)
+        if not st.turns.offer(line, self.state.clock.now(), membership_id, answering=answering):
+            self.state.service.call_voice_notice(room_id, st.turns.refusal_notice, membership_id)
             return
         self._wake(st)
 
@@ -606,7 +615,8 @@ class HostedCalls:
             st.last_seen = self.state.clock.now()
         line = st.turns.take(self.state.clock.now()) if st.seq == mine and st.voice else None
         if line is not None and not turns:
-            st.turns.finish(line.id)  # an older relay never says a line ended: the 30 s interval paces it
+            # an older relay never says a line ended; it speaks one at a time and polls again after
+            st.turns.finish(line.id)
         words = [w[:40] for w in hotwords(self.state.store.active_names(row.room_id))[:HINTS_MAX]]
         return {
             "lines": [line.text] if line is not None else [],

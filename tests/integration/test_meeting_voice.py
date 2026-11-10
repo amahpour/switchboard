@@ -215,7 +215,8 @@ async def test_voice_does_nothing_without_a_call(broker: InProcBroker, joinly: F
 async def test_speaking_never_holds_up_a_say_and_busy_lines_are_refused(
     timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
 ) -> None:
-    """The call has one slot, including speech in progress; refusals still leave the room posts intact."""
+    """One line may wait while another is spoken (#713); a third is refused. Refusals still leave the room
+    posts intact, and the waiting line is spoken once its agent's own interval has passed."""
     broker, clock = timed
     joinly.hold_speech = True
     async with FakeAgent(broker.home, "k1") as agent:
@@ -226,13 +227,16 @@ async def test_speaking_never_holds_up_a_say_and_busy_lines_are_refused(
         await wait_until(lambda: joinly.spoken == ["line one"])
         for text in ("two", "three", "four", "five", "six"):
             assert (await agent.say("#build", f"@call line {text}")).get("posted_id")
-        assert count(notice_texts(broker), "waiting or being spoken") == 5
+        assert count(notice_texts(broker), "already waiting") == 4
         joinly.release_speech()
         await wait_until(lambda: speech_finished(broker))
         advance_voice(broker, clock, 30)
+        await wait_until(lambda: joinly.spoken == ["line one", "line two"])
+        await wait_until(lambda: speech_finished(broker))
+        advance_voice(broker, clock, 30)
         await agent.say("#build", "@call after the burst")
-        await wait_until(lambda: len(joinly.spoken) == 2)
-    assert joinly.spoken == ["line one", "after the burst"]
+        await wait_until(lambda: len(joinly.spoken) == 3)
+    assert joinly.spoken == ["line one", "line two", "after the burst"]
     assert all(f"@call line {name}" in [m["text"] for m in history(broker)] for name in ("two", "six"))
 
 

@@ -2960,7 +2960,7 @@ All forms except `/meeting listen <name> off` need the web session, the role `hu
 
 **Voice (#593).** Off when a call starts, unless a person set the room to start calls with Voice on (§52.3). A person turns it on or off with `/meeting voice on|off` or the **Voice** switch on the bar, which sends the same command. Each change leaves a notice in the room, and saying the state it is already in changes nothing and leaves none. Whether it is on is a set of room ids in the bridge: memory only. A call does not survive a restart (the row is marked ended, above), so neither does its voice, and the next call starts with it off. The room frame's `settings.meeting` is `{state, platform, voice}`, `voice` a boolean, and an older frame without it reads as off.
 
-While voice is on and the bot is in the call, an agent that is a member of the room speaks by starting a `say()` with `@call`. `AgentService._post_say`, which every agent post goes through (the immediate path and a queued one), hands the posted text to `MeetingBridge.speak` after the message is stored and delivered, so the room has the message as written. `speak` does nothing unless voice is on, the bot is in the call, and the text starts with `@call` as a whole word (`@call-1` and `@calls` do not). Otherwise the `@call` is plain text: there is no error and no refusal. `call` is a reserved screen name (`RESERVED_NAMES`, §6.1), so it can never be a member's name and a `@call` is never also an @mention. What is spoken is `meeting/speech.py`'s `speakable`, a pure function: control characters and Markdown marks dropped, a link's text kept, a bare URL, an HTML tag and an artifact line left out, a fenced code block replaced by "code omitted", lines joined with a full stop where they had none, and the whole cut to 600 characters at a word boundary. Nothing left to say speaks nothing. The line goes to joinly's `speak_text` tool in a task of its own, so a `say()` never waits on speech (`speak_text` returns when the line has been said). Turn-taking (§52.2) allows one outstanding line, waits for a speech gap, expires a waiting line after 60 seconds and starts at most one every 30 seconds. A second line is refused with a notice also queued for its author. Turning voice off empties the wait, and the line being spoken finishes. joinly answers an interrupted line with a message that starts `Interrupted`; the room gets a notice that someone spoke over it. A failed `speak_text` is one notice. The task ends with the call.
+While voice is on and the bot is in the call, an agent that is a member of the room speaks by starting a `say()` with `@call`. `AgentService._post_say`, which every agent post goes through (the immediate path and a queued one), hands the posted text to `MeetingBridge.speak` after the message is stored and delivered, so the room has the message as written. `speak` does nothing unless voice is on, the bot is in the call, and the text starts with `@call` as a whole word (`@call-1` and `@calls` do not). Otherwise the `@call` is plain text: there is no error and no refusal. `call` is a reserved screen name (`RESERVED_NAMES`, §6.1), so it can never be a member's name and a `@call` is never also an @mention. What is spoken is `meeting/speech.py`'s `speakable`, a pure function: control characters and Markdown marks dropped, a link's text kept, a bare URL, an HTML tag and an artifact line left out, a fenced code block replaced by "code omitted", lines joined with a full stop where they had none, and the whole cut to 600 characters at a word boundary. Nothing left to say speaks nothing. The line goes to joinly's `speak_text` tool in a task of its own, so a `say()` never waits on speech (`speak_text` returns when the line has been said). Turn-taking (§52.2) lets one line wait while another is spoken, waits for a speech gap, expires a waiting line after 60 seconds, starts an agent's own lines at least 30 seconds apart (2 seconds for an answer to a question put to it) and allows 4 agent lines in a row. A line that finds one already waiting, or the run full, is refused with a notice also queued for its author. Turning voice off empties the wait, and the line being spoken finishes. joinly answers an interrupted line with a message that starts `Interrupted`; the room gets a notice that someone spoke over it. A failed `speak_text` is one notice. The task ends with the call.
 
 How an agent learns it is spoken is one line, `Voice is on in this call: start a say() line with @call to have it spoken.`, added by `Engine._render` to a batch that carries a call line while the room's voice is on (`Engine.voice_on`, set by the broker, is `None` in the engine's own tests: off everywhere). It is not in the tools, their parameters or the join text, so the tool list's character budget and `JOIN_BUDGET` are as they were.
 
@@ -3080,19 +3080,43 @@ All `@call` speech uses one pure policy, `meeting/turns.py`, for the server brid
 call. It covers every agent's line, including a listener's reply after the last listening wake
 has switched listening off. Voice remains a person's switch; nothing here enables it.
 
-**One slot and one start per 30 seconds.** The slot includes a queued line and a line being
-spoken. A second offer is refused rather than queued behind it. The original room post stays;
-a fixed notice says `Another @call line is waiting or being spoken; this line was not spoken.`
-The room sees the notice, and its author gets a priority-0 delivery of it in their next batch
-or `read()`. It is a system notice containing the validated member name and the fixed sentence,
-never a quotation of the refused line. It does not move the chat quiet clock. Starts are at
-least 30 seconds apart, measured from the preceding start. Voice off clears a waiting line;
-Voice back on preserves the interval and a line still being spoken keeps its slot.
+**A speaking slot and a waiting place (#713).** One line is spoken at a time and one more may wait
+behind it, so a second agent's reply to the first is not thrown away. A third is refused rather than
+queued. The original room post stays; a fixed notice says `Another @call line is already waiting;
+this line was not spoken.` The room sees the notice, and its author gets a priority-0 delivery of it
+in their next batch or `read()`. It is a system notice containing the validated member name and the
+fixed sentence, never a quotation of the refused line. It does not move the chat quiet clock. The
+waiting line starts only after the spoken one has ended, never over it. Voice off clears the waiting
+line, also while another is spoken; Voice back on preserves each agent's interval, and a line still
+being spoken keeps its slot.
+
+**Each agent's own 30 seconds, and a 2-second answer (#713).** Before #713 the call allowed one start
+per 30 seconds, and a three-way replay (`tests/voice_replay.py`, spike #706) lost 3 of 10 agent lines.
+Now the 30 seconds is measured from the *same agent's* last start, so a second agent is not held for
+the first's. A line that answers a question put to its speaker may start 2 seconds after the call's
+last start (`ANSWER_INTERVAL_S`). **This loosens #694's "one spoken line per 30 s on a call" for a
+named answer, by the maintainer's approval of 2026-11-10 on #713.** "Put to its speaker" is decided by
+the broker from rows, never from the line: `Store.question_batch` finds the agent's last batch and
+whether it holds a message that @mentioned the agent or replied to its own message (a claim-watch
+mention counts, as it does for delivery). `AgentService._post_say` marks the line `answering` when that
+batch has not yet had an answer, so a batch answers once and a second line from it waits its 30
+seconds. An agent cannot mark its own line. What bounds the shorter wait: the cap below, the single
+waiting line, the 60-second stale rule, the 90-second backstop, the room's wake budget and the person's
+Voice switch.
+
+**At most 4 agent lines in a row (#713, `CHAIN_MAX`).** `Turns.chain` counts accepted agent lines. A
+participant segment on the call (`hear`) or a person's message in the room (`person_posted`, called
+from `RoomService.human_say` for both the bridge and a hosted call) sets it back to 0. At 4 a new
+line is refused with `Agents have spoken 4 lines in a row; this @call line was not spoken. It is
+spoken again once a person speaks on the call or in the room.` The count is of lines accepted, so a
+line dropped as stale still counts, and a line refused as busy does not. In the polite-loop replay the
+cap leaves 4 spoken lines of 60. The cap stops the *speaking*; the engine's loop rule for a call is a
+separate part (#713 phase 2), and `hop_limit` is not changed.
 
 **Wait for a gap, and expire stale answers.** A new participant segment records when speech
 was last heard, using the broker's clock. Replayed segments and the bot's own speech do not
 move it; neither do room chat or notices. A queued line may start only after 1.5 seconds without
-new speech, and after its 30-second interval. If it is still waiting at 60 seconds from its
+new speech, and after its agent's interval (above). If it is still waiting at 60 seconds from its
 offer, it is dropped with `A queued @call line waited 60 seconds and was dropped instead of
 being spoken late.` The author gets this notice too. Expiry wins over starting at that exact
 time. The bridge's worker waits on an event or the next deadline, and rechecks the clock after
@@ -3118,7 +3142,7 @@ checks are unchanged. An id is not a credential and grants no harness permission
 Every speech poll from the new relay says `"turns": true`: it reports when each line ends. Only
 then does the broker keep the slot after the hand-off. A poll without it is from a relay older
 than #697, which never sends `done`, so the broker frees that slot as it hands the line over, and
-the 30-second interval paces the call, as it did before turns. Without this, an older relay's
+the relay's own one-at-a-time loop paces the call: it polls again only after it has said the line. Without this, an older relay's
 call fell silent after its first line until the call was restarted. A `turns` that is not a
 boolean refuses the request. The new relay also supports an older broker with no `speech_id`
 field.
@@ -3130,8 +3154,10 @@ call: the relay and the bridge each say their lines one after another. Without i
 receipt silenced the call for good. Turn state, including ids and the interval, lives only for the call
 and resets when a new call starts. No schema changes.
 
-Tests: `test_meeting_turns.py` uses explicit times for the gap, expiry, occupied slot, interval
-and Voice toggle; `test_listen_turns.py` exercises both real broker paths with a `FakeClock`,
+Tests: `test_meeting_turns.py` uses explicit times for the gap, expiry, occupied slot, the agent's
+interval, the 2-second answer, the cap of 4 and its resets, and the Voice toggle;
+`test_store_question_batch.py` the question rows; `test_voice_replay.py` the scripted three-way call
+(no line lost) and polite loop (4 spoken); `test_listen_turns.py` exercises both real broker paths with a `FakeClock`,
 including the refusal in the author's next read, malformed completion ids and the hosted gap;
 `test_relay_turns.py` proves that completion follows actual speech and malformed ids never
 speak. Existing voice, hosted-call and relay integration tests keep the full posting path.

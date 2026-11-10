@@ -740,14 +740,15 @@ def test_an_at_call_line_is_queued_only_while_voice_is_on_and_the_host_is_in_the
 
 
 def test_at_most_one_line_waits_to_be_spoken_and_each_refusal_is_noticed(w: World) -> None:
-    """A slow relay has one outstanding line; another is refused with its own notice (§52.2)."""
+    """A slow relay has one waiting line; another is refused with its own notice (§52.2). The agent has four
+    lines in a row at most, and a refused line is not one of them."""
     w.open()
     w.calls.push(w.row(), [])
     w.calls.set_voice(w.build.id, True)
     for i in range(6):
         w.calls.speak(w.build.id, f"@call line {i}")
     assert w.calls._calls[w.row().id].turns.pending.text == "line 0"
-    assert sum("waiting or being spoken" in t for t in w.notice_texts()) == 5
+    assert sum("already waiting" in t for t in w.notice_texts()) == 5
 
 
 async def test_the_speech_poll_answers_with_the_lines_the_hints_the_voice_state_and_the_end(w: World) -> None:
