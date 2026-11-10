@@ -23,7 +23,8 @@ files are kept (§53); 41 (#593) lets a call be a file's uploader; 42 (#623) let
 person's machine, with a key per call, and stores each line it pushes with that call (§54); 43 (#623)
 records when a call went live and lets an admin upload the icon of each platform a call can be on, in
 ``agent_icons`` (§29.11); 44 (#637) binds script keys to their harness (§49.11); 45 (#663) adds what
-each person has seen of each room and which board cards they set aside, for the home page (§55.8).
+each person has seen of each room and which board cards they set aside, for the home page (§55.8);
+46 adds room whiteboards (§56); 47 adds membership listening and its per-call wake count (§52.1).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -44,7 +45,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 46
+SCHEMA_VERSION = 47
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -94,7 +95,10 @@ CREATE TABLE memberships(
   peer_batch_boundary INTEGER NOT NULL DEFAULT -1,
   rules_seen INTEGER NOT NULL DEFAULT 0 CHECK(rules_seen >= 0),
   join_code_hash TEXT,
-  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)));
+  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)),
+  listen INTEGER NOT NULL DEFAULT 0 CHECK(listen IN (0, 1)),
+  listen_call_id INTEGER REFERENCES meetings(id),
+  listen_wakes INTEGER NOT NULL DEFAULT 0 CHECK(listen_wakes >= 0));
 CREATE UNIQUE INDEX memberships_active_name ON memberships(room_id, screen_name) WHERE left_at IS NULL;
 CREATE UNIQUE INDEX memberships_active_part ON memberships(room_id, participant_id) WHERE left_at IS NULL;
 
@@ -1003,6 +1007,15 @@ V45_TO_V46 = (
 )
 
 
+# v46 -> v47 (#697, DESIGN.md §52.1): listening and its per-call wake counter survive toggles.
+V46_TO_V47 = (
+    "ALTER TABLE memberships ADD COLUMN listen INTEGER NOT NULL DEFAULT 0 CHECK(listen IN (0, 1))",
+    "ALTER TABLE memberships ADD COLUMN listen_call_id INTEGER REFERENCES meetings(id)",
+    "ALTER TABLE memberships ADD COLUMN listen_wakes INTEGER NOT NULL DEFAULT 0 CHECK(listen_wakes >= 0)",
+    "UPDATE meta SET value='47' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1067,6 +1080,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         43: MigrationStep(44, V43_TO_V44, ()),
         44: MigrationStep(45, V44_TO_V45, ("home_seen", "home_snoozes")),
         45: MigrationStep(46, V45_TO_V46, ("room_boards", "room_board_changes")),
+        46: MigrationStep(47, V46_TO_V47, ()),
     }
     out = []
     v = frm

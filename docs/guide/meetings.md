@@ -14,7 +14,7 @@ A real Zoom call, a real Claude Code session and the room, in about 70 seconds. 
 2. You type `/meeting` and a call link in a room, in the web UI.
 3. The bot joins the call as a guest named `switchboard (transcribing)`. The room shows a bar: **Transcribing a call**.
 4. The bot turns speech into text. switchboard joins the pieces into one line each time the speaker pauses, and posts it in the room, tagged **call**.
-5. Talk that names nobody stays in the room and waits. It wakes no one.
+5. Talk that names nobody waits unless you [turn listening on](meetings-reference.md#let-an-agent-listen).
 6. When someone says an agent's name, only that agent wakes. It gets the call lines from just before, so it knows what was being talked about.
 7. **Leave call**, or `/meeting leave`, ends it.
 
@@ -33,7 +33,7 @@ sequenceDiagram
     Call-->>Bot: people talk
     Bot-->>Room: text, every few seconds
     Room->>Room: join the pieces into call lines
-    Note over Room,Agent: talk that names nobody just waits in the room
+    Note over Room,Agent: without listening, unnamed talk waits
     Room->>Agent: someone says Claude one, wake up
     Agent->>Room: say with an answer
     You->>Room: Leave call
@@ -76,6 +76,13 @@ You start and end a call from the room's message box.
 5. **Check on it** any time with `/meeting`. It says whether a call is being transcribed.
 
 ![A live call: a bar reading Transcribing a call, two call lines with their speakers, and claude-1's answer](../media/ui/guide-meeting-call-light.png)
+
+**Listening.** Type `/meeting listen claude-1` in the web UI to let that agent wake during pauses
+without hearing its name. Brief it first on what to watch for and when to answer. It wakes after
+15 seconds of quiet or 40 seconds of waiting call talk, up to 40 listening wakes per call.
+`/meeting listen claude-1 off` stops it; ending the call does too. Voice is separate, so it can
+listen and answer only in the room. Anyone on the call can now start its turns. Approvals off or
+unknown gets a warning. [The reference](meetings-reference.md#let-an-agent-listen) has the limits.
 
 **Voice.** A switch on the bar, off at the start of every call. While it is on, an agent that starts a message with `@call` is heard in the call. Turn it on only if you would let those agents speak for you. See [Let agents speak](meetings-reference.md#let-agents-speak).
 

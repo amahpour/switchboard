@@ -203,6 +203,9 @@ def chatter_due(
     hold_s: float = 0.0,
     *,
     addressed_only: bool = False,
+    listening_call: int | None = None,
+    listen_quiet_s: float = 15.0,
+    listen_hold_s: float = 40.0,
 ) -> bool:
     """Chatter goes out once the room has been quiet for ``quiet_s``, or the oldest
     item has waited ``max_hold_s``.
@@ -216,8 +219,17 @@ def chatter_due(
     chatter never becomes due, including when ``hold_s`` is 0 (an open ``wait()``). A reply
     still does, and the caller sends the other chatter along with it.
 
-    A call line that names nobody is not chatter that can become due (§52): it rides along
-    with the next real wake and never starts one, for every agent, quiet or not."""
+    Only lines from ``listening_call`` can independently become due at the listening
+    deadlines (§52.1), even for a quiet member. Other call chatter only rides a real wake."""
+    call = [
+        c
+        for c in chatter
+        if listening_call is not None and c.sender_kind == "meeting" and c.meeting_id == listening_call
+    ]
+    if call:
+        quiet = room.last_msg_at is None or now - room.last_msg_at >= listen_quiet_s
+        if quiet or now - min(c.ts for c in call) >= listen_hold_s:
+            return True
     chatter = [c for c in chatter if not _meeting_aside(c)]
     if not chatter:
         return False
@@ -234,17 +246,33 @@ def chatter_due(
     return hold_s > 0 and any(now - c.ts >= hold_s for c in chatter if not c.reply_to_me)
 
 
-def chatter_wakes_at(pending: Sequence[Item], hold_s: float, *, addressed_only: bool = False) -> float | None:
-    """When the hold (issue #137) lets an idle member's waiting chatter wake it, for the member
-    list: None when nothing is held, or something other than the hold decides (a priority item
-    wakes at once, a reply by the quiet period). A quiet member (#548) has no such time:
-    unaddressed chatter never wakes it."""
-    if addressed_only:
+def chatter_wakes_at(
+    pending: Sequence[Item],
+    hold_s: float,
+    *,
+    addressed_only: bool = False,
+    listening_call: int | None = None,
+    room: Room | None = None,
+    listen_quiet_s: float = 15.0,
+    listen_hold_s: float = 40.0,
+) -> float | None:
+    """Next ordinary chatter hold or listening deadline, using the same clocks as chatter_due."""
+    eligible = [d for d in pending if d.notified_at is None]
+    if any(d.prio >= 1 or d.reply_to_me for d in eligible):
         return None
-    eligible = [d for d in pending if d.notified_at is None and not _meeting_aside(d)]
-    if hold_s <= 0 or not eligible or any(d.prio >= 1 or d.reply_to_me for d in eligible):
-        return None
-    return min(d.ts for d in eligible) + hold_s
+    deadlines: list[float] = []
+    call = [
+        d
+        for d in eligible
+        if listening_call is not None and d.sender_kind == "meeting" and d.meeting_id == listening_call
+    ]
+    if call and room is not None:
+        last = room.last_msg_at if room.last_msg_at is not None else min(d.ts for d in call)
+        deadlines.append(min(last + listen_quiet_s, min(d.ts for d in call) + listen_hold_s))
+    chatter = [d for d in eligible if not _meeting_aside(d)]
+    if not addressed_only and hold_s > 0 and chatter:
+        deadlines.append(min(d.ts for d in chatter) + hold_s)
+    return min(deadlines) if deadlines else None
 
 
 def releasable(
@@ -263,6 +291,9 @@ def releasable(
     wake_now: bool = False,
     peers_stubbed: bool = False,
     addressed_only: bool = False,
+    listening_call: int | None = None,
+    listen_quiet_s: float = 15.0,
+    listen_hold_s: float = 40.0,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -285,9 +316,11 @@ def releasable(
     chatter = [d for d in eligible if d.prio == 0]
     ok = peer_ok(peer_batch_boundary, boundary_seq)
 
-    def done(items: list[Item], kind: str, counted: bool) -> Release:
+    def done(items: list[Item], kind: str, counted: bool, *, listen_wake: bool = False) -> Release:
         kept = cap(human_first(items), batch_max_msgs, max_chars, peers_stubbed=peers_stubbed)
-        return Release(items=tuple(kept), kind=kind, counted=counted, reason=wake_reason(kept))
+        return Release(
+            items=tuple(kept), kind=kind, counted=counted, reason=wake_reason(kept), listen_wake=listen_wake
+        )
 
     if eff == "busy":
         return done(prio, "priority", False) if prio else None
@@ -298,8 +331,24 @@ def releasable(
     if chatter and wake_now:
         return done(chatter, "wake", True)
     if chatter and ok and room.budget_remaining > 0:
-        if chatter_due(room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=addressed_only):
+        ordinary_due = chatter_due(
+            room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=addressed_only
+        )
+        if ordinary_due:
             return done(chatter, "wake", True)
+        if chatter_due(
+            room,
+            chatter,
+            now,
+            quiet_s,
+            max_hold_s,
+            hold_s,
+            addressed_only=addressed_only,
+            listening_call=listening_call,
+            listen_quiet_s=listen_quiet_s,
+            listen_hold_s=listen_hold_s,
+        ):
+            return done(chatter, "wake", True, listen_wake=True)
     return None
 
 
@@ -311,6 +360,7 @@ def budget_blocked(
     peer_batch_boundary: int,
     boundary_seq: int,
     addressed_only: bool = False,
+    listening_call: int | None = None,
 ) -> bool:
     """True when an idle member has wake-eligible non-human items that only the
     empty budget holds back (drives the once-per-window budget_exhausted notice).
@@ -325,7 +375,13 @@ def budget_blocked(
     if any(d.prio == 1 for d in eligible):
         return True
     chatter = [
-        d for d in eligible if d.prio == 0 and not _meeting_aside(d) and (d.reply_to_me or not addressed_only)
+        d
+        for d in eligible
+        if d.prio == 0
+        and (
+            (listening_call is not None and d.sender_kind == "meeting" and d.meeting_id == listening_call)
+            or (not _meeting_aside(d) and (d.reply_to_me or not addressed_only))
+        )
     ]
     return bool(chatter) and peer_ok(peer_batch_boundary, boundary_seq)
 

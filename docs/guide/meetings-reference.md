@@ -14,7 +14,7 @@ The bot can run next to the server, or on your own machine ([host it yourself](#
 4. Once the bot is in, the room shows a bar: **Transcribing a call**, with a **Voice** switch, a **Snapshot** button and a **Leave call** button. The call also shows in Members, as [a row of its own](#the-call-in-members).
 5. joinly turns speech into text. switchboard fetches that text every few seconds and joins the pieces into one line each time the speaker pauses.
 6. Each line is posted in the room, tagged **call**, with the speaker's name when joinly has one.
-7. Talk that names nobody stays in the room and waits. It does not wake any agent.
+7. Talk that names nobody waits unless you [turn listening on](#let-an-agent-listen).
 8. When someone says an agent's name, only that agent wakes. It gets the call lines from just before, so it knows what was being talked about.
 9. **Leave call**, **End this call** in [the call's details](#the-call-in-members), or `/meeting leave` ends it. So does closing the room. switchboard tells the bot to leave, and the bar and the row go away.
 
@@ -36,7 +36,7 @@ sequenceDiagram
     Call-->>Bot: people talk
     Bot-->>Room: text, every few seconds
     Room->>Room: join the pieces into call lines
-    Note over Room,Agent: talk that names nobody just waits in the room
+    Note over Room,Agent: without listening, unnamed talk waits
     Room->>Agent: someone says Claude one, wake up
     Agent->>Room: say with an answer
     You->>Room: Leave call
@@ -98,7 +98,7 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
 8. **Mount the first-word fix, so a line keeps its first word.** joinly 0.5.4 starts each piece of speech partway into its first word, and the room's agent names, which are the speech model's hotwords, can turn the clipped word into "Claude". A line then wakes Claude for nothing, or the name that opens a call-out is lost. The fix is [joinly-ai/joinly#188](https://github.com/joinly-ai/joinly/pull/188), a change to joinly's transcription controller (the file is on [our fork](https://github.com/amahpour/joinly/commit/1fe384d9deba32f38fabd5bfc77fc5975adef6a7)), that keeps 0.3 s of audio from before each utterance and passes it on with it. It adds no waiting. On a recorded call it took the right agent from 14.8 of 17 call-outs to 16, the false wakes from 1 to 0, and the words wrong from 8.8% to 3.5%. Until a joinly release has it, mount the fixed file read-only over the image's copy, as for the Zoom fix: [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the commands and the cause. On Kubernetes, [a third patch](../DEPLOY.md#meetings-on-kubernetes) mounts it, or `meetings.prerollFix.configMap` in [the Helm chart](../DEPLOY.md#meetings-with-helm). Nothing needs setting in switchboard, and joinly without the file works as before.
 9. **Try it.** In a room, in the web UI, type `/meeting` and a test meeting's link. If the room says it is joining, you are done. If it says no meeting server is set, see [Troubleshooting](#troubleshooting).
 
-Who can start a call: any signed-in person who can see the room, in the web UI. Agents can't. If an agent says `/meeting …` in a room, it is only text. The command line can't either, because a call lets anyone on it reach your agents, and that is your decision. This holds even for the plain `/meeting` that asks whether a call is live.
+Who can start a call: any signed-in person who can see the room, in the web UI. Agents can't. If an agent says `/meeting …` in a room, it is only text. The command line can't either, because a call lets anyone on it reach your agents, and that is your decision. This holds even for the plain `/meeting` that asks whether a call is live. The exception is `/meeting listen <name> off`: the person's own CLI can stop listening, too.
 
 ## Host the bot on your own machine
 
@@ -270,6 +270,39 @@ While a call is on, Members lists it, after the people and the agents, under **C
 
 **An admin can put other images in.** Open **Settings**, then **Appearance**. Under the agents' avatars, **Call icons** has a card each for Zoom, Meet and Teams. **Upload** takes a PNG or a WebP, up to 256 KB and 512 × 512 pixels, one for the light theme and one for the dark (with only one, it is used for both). The new icon shows in Members, the call's details and the bar within a moment, for everyone on the server. **Reset** brings the platform's logo back. An SVG is refused, because it can carry script. Only an admin can do this. It works the same as [the agents' avatars](../USAGE.md#web-ui-notes).
 
+## Let an agent listen
+
+Brief your agent in the room on what matters and when to answer, then type
+`/meeting listen claude-1` in the web UI. A call must be open and the agent must be a room member.
+The command leaves a notice; approvals off or unknown also gets a warning. The agent keeps its
+permissions and still waits at approval prompts. Anyone on the call, a played recording included,
+can now start its turns, so choose who listens with that in mind.
+
+A listening agent wakes after a pause or a stretch of talk, even if it is quiet. Quiet still
+holds ordinary unaddressed agent messages. It can answer in the room with voice off; turn Voice
+on separately if you want it heard. On the Stop path it sees call stubs and a one-line reminder
+to `read()` the words. Call text stays untrusted peer input.
+
+`/meeting listen claude-1 off` stops it, in the web UI or your own CLI. Ending the call also stops
+all its listeners. By default each agent has 40 listening wakes on that call; the last switches
+listening off with a notice. Switching off and back on does not reset it. A new call gets a new
+allowance. The room's hourly wake budget also applies, and a pause or a hold still holds delivery.
+
+The operator can set these in `config.toml`, independently of ordinary chatter timing:
+
+```toml
+[delivery]
+listen_quiet_s = 15.0
+listen_hold_s = 40.0
+listen_max_wakes = 40
+```
+
+Both times must be greater than zero and at most 3,600 seconds; the cap is an integer from 1 to
+10,000. Quiet time starts at the room's latest message, including notices and agent posts.
+The hold starts at the oldest waiting call line. An offer driven by listening
+counts even if delivery later expires. Priority wakes, `read()` and your explicit `/wake` do not
+spend this allowance. Reaching the cap leaves the transcript readable in the room and at `read()`.
+
 ## Let agents speak
 
 Voice is off when a call starts. You turn it on, for that call only.
@@ -439,12 +472,13 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the six step
 
 ## Reference
 
-**Commands** (web UI only; see [A live call](../USAGE.md#a-live-call) in USAGE.md and [DESIGN.md §10](../DESIGN.md#10-commands)):
+**Commands** (web UI; listening off also accepts the person's CLI; see [A live call](../USAGE.md#a-live-call) in USAGE.md and [DESIGN.md §10](../DESIGN.md#10-commands)):
 
 - `/meeting` says whether this room is transcribing a call.
 - `/meeting <link>` joins a call.
 - `/meeting leave` leaves it. **Leave call** on the bar, and **End this call** in [the call's details](#the-call-in-members), do the same.
 - `/meeting voice on` and `/meeting voice off` turn speaking on and off for this call. The **Voice** switch on the bar does the same.
+- `/meeting listen <name>` lets that agent wake on call chatter; `/meeting listen <name> off` stops it.
 - `/meeting snapshot` posts a picture of the shared screen. **Snapshot** on the bar does the same.
 
 **The host script** (`meeting-host`, in either the Claude Code or Codex plugin's `bin`; your agent runs it):

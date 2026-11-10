@@ -68,6 +68,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /meeting <link>     transcribe a Zoom, Meet or Teams call here (web only)
   /meeting <link> mine  ask your own agent to host it; no model sees the link (web only)
   /meeting leave      leave the call and stop transcribing (web only)
+  /meeting listen <name> [off]  wake this agent on call chatter (on: web only)
   /meeting voice on   let agents speak in the call: a say() that starts with @call
                       is read aloud to everyone on it. Off when a call starts (web only)
   /meeting voice off  stop that (web only)
@@ -209,7 +210,7 @@ def parse_command(text: str) -> Command:
     return Command(name=name, args=args, raw=raw)
 
 
-MEETING_USAGE = "usage: /meeting [<link> [mine]|leave|snapshot|voice on|voice off]"
+MEETING_USAGE = "usage: /meeting [<link> [mine]|leave|snapshot|voice on|voice off|listen <name> [off]]"
 
 
 def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
@@ -221,6 +222,13 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     word = args[0].lower()
     if len(args) == 1 and word in ("leave", "snapshot"):
         return Command(name="meeting", args=(word,), raw=raw)
+    if word == "listen":
+        if len(args) not in (2, 3) or (len(args) == 3 and args[2].lower() != "off"):
+            raise CommandError("bad_request", "usage: /meeting listen <name> [off]")
+        target = _screen_name("meeting listen", args[1])
+        return Command(
+            name="meeting", args=("listen", target) + (("off",) if len(args) == 3 else ()), raw=raw
+        )
     if word == "voice":
         if len(args) == 2 and args[1].lower() in ("on", "off"):
             return Command(name="meeting", args=("voice", args[1].lower()), raw=raw)
@@ -385,6 +393,8 @@ def hops_raise(new: int, old: int) -> bool:
 
 
 def required_role(cmd: Command, room: Room) -> str:
+    if cmd.name == "meeting" and cmd.args[:1] == ("listen",) and len(cmd.args) == 3:
+        return "human_cli"
     if cmd.name == "budget":
         if not cmd.args:
             return "human_cli"
@@ -679,6 +689,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         )
     if cmd.args == ("snapshot",):
         return _meeting_snapshot(room, actor, svc)
+    if cmd.args[:1] == ("listen",):
+        return _meeting_listen(cmd, room, svc)
     if cmd.args[:1] == ("voice",):
         return _meeting_voice(cmd.args[1] == "on", room, svc)
     try:
@@ -752,6 +764,32 @@ def _meeting_mine(room: Room, actor: Actor, svc: "RoomService", link: "MeetingLi
         post_skip=tuple(m.id for m in members if m.id not in targets),
         event="meeting_mine",
         event_data={"platform": link.platform},
+    )
+
+
+def _meeting_listen(cmd: Command, room: Room, svc: "RoomService") -> Result:
+    """A person's opt-in to waking on unaddressed call text (§52.1)."""
+    member = svc.store.find_member(room.id, cmd.args[1])
+    if member is None:
+        raise CommandError("not_found", f"no such member in {room.name}: {cmd.args[1]}")
+    on = len(cmd.args) == 2
+    row = svc.store.open_meeting(room.id)
+    if row is None:
+        raise CommandError("conflict", f"{room.name}: no call is being transcribed")
+    if member.listen == on:
+        return Result(True, f"{member.name} is {'already listening' if on else 'not listening'}")
+    if not svc.store.set_listen(member.membership_id, on, row.id, svc.cfg.delivery.listen_max_wakes):
+        raise CommandError("conflict", f"{member.name} has reached the listening wake cap for this call")
+    warning = catchup.approvals_warning(member.name, member.approval_mode) if on else None
+    notice = f"{'started' if on else 'stopped'} {member.name} listening to the call"
+    return Result(
+        True,
+        notice,
+        notice=notice,
+        warnings=(warning,) if warning else (),
+        members_changed=True,
+        event="meeting_listen",
+        event_data={"membership_id": member.membership_id, "on": on},
     )
 
 

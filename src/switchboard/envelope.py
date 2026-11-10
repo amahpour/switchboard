@@ -252,6 +252,7 @@ def render_batch(
     item_limit: int | None = ITEM_LIMIT,
     limits: dict[int, int | None] | None = None,
     room_rules: str = "",
+    listening: bool = False,
 ) -> str:
     """Frame ``items`` for one recipient (DESIGN.md §8.6).
 
@@ -286,6 +287,9 @@ def render_batch(
     lines.append(batch_header(room, label, n_human, n_peer, n_stub, reminder))
     if token:
         lines.append(f"batch {token}")
+    call_count = sum(it.sender_kind == "meeting" for it in items)
+    if listening and not peer_inline and call_count:
+        lines.append(listen_nudge(room, call_count))
     if room_rules:
         lines.append(CUSTOM_RULES_HEADING)
         lines.append(sanitize(room_rules, limit=None))
@@ -373,6 +377,11 @@ class Fit:
     rules_version: int = 0
 
 
+def listen_nudge(room: str, count: int) -> str:
+    """Only a count and a cleaned room name enter elevated context, never call text (§52.1)."""
+    return f'{count} call lines: call read("{_word(room)}") to hear them.'
+
+
 def fit_batch(
     items: Sequence[Any],
     *,
@@ -384,6 +393,7 @@ def fit_batch(
     item_limit: int | None = ITEM_LIMIT,
     shrink: bool = True,
     room_rules: str = "",
+    listening: bool = False,
 ) -> Fit:
     """Keep the prefix of ``items`` whose *rendered* batch fits in ``max_chars``
     (the harness's hook-context limit on elevated paths).
@@ -394,7 +404,11 @@ def fit_batch(
     Items after the first that don't fit stay pending (``more``).
     """
     rule_chars = len(CUSTOM_RULES_HEADING) + len(sanitize(room_rules, limit=None)) + 2 if room_rules else 0
-    budget = max_chars - frame_reserve(room, human_name, len(items)) - rule_chars
+    call_count = sum(it.sender_kind == "meeting" for it in items)
+    nudge_chars = (
+        len(listen_nudge(room, call_count)) + 1 if listening and not peer_inline and call_count else 0
+    )
+    budget = max_chars - frame_reserve(room, human_name, len(items)) - rule_chars - nudge_chars
     kept: list[Any] = []
     limits: dict[int, int | None] = {}
     partial: set[int] = set()
