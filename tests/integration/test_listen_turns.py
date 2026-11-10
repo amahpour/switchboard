@@ -27,6 +27,11 @@ def advance(b: InProcBroker, clock: FakeClock, seconds: float, *, heard: bool = 
     b.on_loop(move)
 
 
+def poll(w: World, **body: object) -> dict:
+    """A speech poll from a relay that reports when each line ends, as every relay since #697 does."""
+    return w.relay.post(SPEECH, {"wait": 0, "turns": True, **body}).json()
+
+
 async def test_bridge_holds_for_a_gap_drops_stale_and_refuses_a_second_line(
     timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
 ) -> None:
@@ -65,27 +70,26 @@ async def test_hosted_turn_completion_and_thirty_second_interval(world: World) -
     try:
         w.command("/meeting voice on")
         await a.say("#build", "@call First.")
-        first = w.relay.speech().json()
+        first = poll(w)
         assert first["lines"] == ["First."] and type(first["speech_id"]) is int
         refused = await other.say("#build", "@call Refused while speaking.")
         assert refused.get("posted_id")
         received = await other.read("#build")
         assert "waiting or being spoken" in received["text"]
         w.clock.advance(31)
-        w.relay.post(SPEECH, {"wait": 0, "done": first["speech_id"] + 1})
+        poll(w, done=first["speech_id"] + 1)
         await other.say("#build", "@call Still refused.")
-        assert w.relay.speech().json()["lines"] == []
-        done = w.relay.post(SPEECH, {"wait": 0, "done": first["speech_id"]})
-        assert done.status_code == 200
+        assert poll(w)["lines"] == []
+        assert w.relay.post(SPEECH, {"wait": 0, "turns": True, "done": first["speech_id"]}).status_code == 200
         await a.say("#build", "@call Next.")
-        second = w.relay.speech().json()
+        second = poll(w)
         assert second["lines"] == ["Next."]
         assert second["speech_id"] != first["speech_id"]
-        w.relay.post(SPEECH, {"wait": 0, "done": second["speech_id"]})
+        poll(w, done=second["speech_id"])
         await a.say("#build", "@call Wait for the interval.")
-        assert w.relay.speech().json()["lines"] == []
+        assert poll(w)["lines"] == []
         w.clock.advance(30)
-        assert w.relay.speech().json()["lines"] == ["Wait for the interval."]
+        assert poll(w)["lines"] == ["Wait for the interval."]
     finally:
         await a.close()
         await other.close()
@@ -111,18 +115,48 @@ async def test_hosted_speech_waits_for_a_gap_and_expires_while_people_keep_talki
         w.command("/meeting voice on")
         w.relay.push([hosted_segment("Still talking.", 0, 1)])
         await a.say("#build", "@call Answer.")
-        assert w.relay.speech().json()["lines"] == []
+        assert poll(w)["lines"] == []
         w.tick(1.5)
-        first = w.relay.speech().json()
+        first = poll(w)
         assert first["lines"] == ["Answer."]
-        w.relay.post(SPEECH, {"wait": 0, "done": first["speech_id"]})
+        poll(w, done=first["speech_id"])
         await a.say("#build", "@call Stale.")
         for i in range(6):
             w.tick(10)
             w.relay.push([hosted_segment("More talk.", 10 + i * 2, 11 + i * 2)])
-            assert w.relay.speech().json()["lines"] == []
+            assert poll(w)["lines"] == []
         received = a.claude.call("read", room="#build")
         assert "waited 60 seconds" in received["text"]
+    finally:
+        await a.close()
+        await other.close()
+
+
+async def test_an_older_relay_that_never_reports_an_end_is_paced_not_silenced(world: World) -> None:
+    """A relay from before #697 polls without "turns" and never sends "done". Its slot is freed when it takes
+    a line, so its call is paced by the 30 s interval, as a relay is paced on a broker that has no turns.
+    Fails if such a call falls silent after its first line until someone restarts the relay."""
+    w = world
+    a, other = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        await a.say("#build", "@call First.")
+        assert w.relay.speech().json()["lines"] == ["First."]
+        await a.say("#build", "@call Second.")
+        assert w.relay.speech().json()["lines"] == []
+        w.clock.advance(30)
+        assert w.relay.speech().json()["lines"] == ["Second."]
+    finally:
+        await a.close()
+        await other.close()
+
+
+@pytest.mark.parametrize("turns", ["yes", 1, 0, None, {}, []])
+async def test_hosted_refuses_a_turns_claim_that_is_not_a_boolean(world: World, turns: object) -> None:
+    """Only true or false says what a relay reports; anything else is refused, never read as either."""
+    a, other = await hosted_call(world)
+    try:
+        assert world.relay.post(SPEECH, {"wait": 0, "turns": turns}).status_code == 400
     finally:
         await a.close()
         await other.close()

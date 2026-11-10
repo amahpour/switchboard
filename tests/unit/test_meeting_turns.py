@@ -39,11 +39,11 @@ def test_a_second_line_is_refused_while_queued_and_while_spoken(turns) -> None:
     assert not turns.offer("second", 0)
     first = turns.take(0)
     assert first is not None
-    assert not turns.offer("third", 100)
+    assert not turns.offer("third", 60)
     assert not turns.finish(first.id + 1)
-    assert not turns.offer("fourth", 100)
+    assert not turns.offer("fourth", 60)
     assert turns.finish(first.id)
-    assert turns.offer("next", 100)
+    assert turns.offer("next", 60)
 
 
 def test_the_next_line_waits_thirty_seconds_from_the_previous_start(turns) -> None:
@@ -87,3 +87,13 @@ def test_voice_off_never_frees_a_line_that_is_still_being_spoken(turns) -> None:
     assert not turns.offer("second", 40)
     turns.finish(first.id)
     assert turns.offer("next", 40)
+
+
+def test_a_line_whose_end_is_never_reported_frees_the_slot_after_ninety_seconds(turns) -> None:
+    """A relay that crashed mid-line, or lost its receipt, must not silence the call for good. A 600-character
+    line is under a minute, so 90 s from its start is past any real line. Fails if the slot stays taken."""
+    turns.offer("first", 0)
+    assert turns.take(0) is not None
+    assert not turns.offer("second", 89.9)
+    assert turns.offer("second", 90)
+    assert turns.take(90).text == "second"

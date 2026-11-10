@@ -11,6 +11,7 @@ from dataclasses import dataclass
 GAP_S = 1.5
 STALE_S = 60.0
 INTERVAL_S = 30.0
+ACTIVE_MAX_S = 90.0  # a 600-character line is under a minute; an end never reported frees the slot then
 MAX_ID = 2**63 - 1
 BUSY_NOTICE = "Another @call line is waiting or being spoken; this line was not spoken."
 STALE_NOTICE = "A queued @call line waited 60 seconds and was dropped instead of being spoken late."
@@ -37,6 +38,7 @@ class Turns:
         self.last_heard = now
 
     def offer(self, text: str, now: float, membership_id: int | None = None) -> bool:
+        self._release_lost(now)
         if self.pending is not None or self.active is not None:
             return False
         self.sequence += 1
@@ -70,6 +72,15 @@ class Turns:
             return False
         self.active = None
         return True
+
+    def _release_lost(self, now: float) -> None:
+        """A relay that crashed mid-line, or lost its receipt, must not silence the call for good."""
+        if (
+            self.active is not None
+            and self.last_started is not None
+            and now - self.last_started >= ACTIVE_MAX_S
+        ):
+            self.active = None
 
     def clear_pending(self) -> Line | None:
         dropped, self.pending = self.pending, None

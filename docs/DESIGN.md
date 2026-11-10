@@ -3087,10 +3087,19 @@ A claimed id that is malformed never means permission to speak; a valid id ident
 one line, even if a response carries more. The call-key door, body bound, rate limit and end
 checks are unchanged. An id is not a credential and grants no harness permission.
 
-The new relay also supports an older broker with no `speech_id` field. An older relay cannot
-report completion to this broker, so after its first line the slot stays occupied until the
-call ends. Upgrade the broker and hosting plugin together; do not guess completion and free
-an unknown slot on a timer. Turn state, including ids and the interval, lives only for the call
+Every speech poll from the new relay says `"turns": true`: it reports when each line ends. Only
+then does the broker keep the slot after the hand-off. A poll without it is from a relay older
+than #697, which never sends `done`, so the broker frees that slot as it hands the line over, and
+the 30-second interval paces the call, as it did before turns. Without this, an older relay's
+call fell silent after its first line until the call was restarted. A `turns` that is not a
+boolean refuses the request. The new relay also supports an older broker with no `speech_id`
+field.
+
+**A slot whose end never comes is freed after 90 seconds** from the line's start (`ACTIVE_MAX_S`).
+A 600-character line takes under a minute to say, so by then the relay has crashed, lost its
+receipt or been cut off from the broker. Freeing the slot cannot make two lines overlap in the
+call: the relay and the bridge each say their lines one after another. Without it, one lost
+receipt silenced the call for good. Turn state, including ids and the interval, lives only for the call
 and resets when a new call starts. No schema changes.
 
 Tests: `test_meeting_turns.py` uses explicit times for the gap, expiry, occupied slot, interval

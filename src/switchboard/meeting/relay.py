@@ -545,7 +545,7 @@ class Relay:
         An empty list and the fallback voice when the relay is stopping.
         """
         while not self.stop.is_set():
-            reply = await self._call(SPEECH_PATH, {"wait": 0}, REQUEST_TIMEOUT_S)
+            reply = await self._call(SPEECH_PATH, {"wait": 0, "turns": True}, REQUEST_TIMEOUT_S)
             if reply is None:
                 continue
             if reply.status != 200:  # a broker that does not have hosted calls answers 404 or 405
@@ -702,7 +702,10 @@ class Relay:
         while not self.stop.is_set():
             began = self._now()
             done = self._speech_done[0] if self._speech_done else None
-            request = {"wait": SPEECH_WAIT_S} if done is None else {"wait": 0, "done": done}
+            # "turns": this relay reports when each line ends, so the broker keeps the call's slot until then
+            request: dict[str, Any] = {"wait": SPEECH_WAIT_S, "turns": True}
+            if done is not None:
+                request = {"wait": 0, "turns": True, "done": done}
             reply = await self._call(SPEECH_PATH, request, SPEECH_WAIT_S + REQUEST_TIMEOUT_S)
             if reply is not None:
                 if done is not None:
@@ -755,7 +758,9 @@ class Relay:
                 if line_id is not None and not self.stop.is_set():
                     # A separate zero-wait poll releases this exact slot promptly, even while the
                     # ordinary long poll waits. Any answer is fed through the same voice checks.
-                    reply = await self._call(SPEECH_PATH, {"wait": 0, "done": line_id}, REQUEST_TIMEOUT_S)
+                    reply = await self._call(
+                        SPEECH_PATH, {"wait": 0, "turns": True, "done": line_id}, REQUEST_TIMEOUT_S
+                    )
                     if reply is not None:
                         self._heard(reply.body)
                     elif not self.stop.is_set():

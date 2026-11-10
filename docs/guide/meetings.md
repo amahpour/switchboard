@@ -80,7 +80,7 @@ You start and end a call from the room's message box.
 **Taking turns.** A call has one slot for an agent's spoken line, including a line waiting for
 silence. Another line is refused with a notice its author receives. Speech waits for a
 1.5-second gap, starts at most once every 30 seconds, and a line still waiting after 60 seconds
-is dropped. With a bot hosted on your machine, update the plugin with the broker so the relay
+is dropped. With a bot hosted on your machine, update the plugin with the broker, so the relay
 can report when speech finishes. [The reference](meetings-reference.md#let-agents-speak) has the rules.
 
 **Listening.** Type `/meeting listen claude-1` in the web UI to let that agent wake during pauses

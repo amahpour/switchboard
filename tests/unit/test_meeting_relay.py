@@ -428,7 +428,7 @@ async def test_it_joins_with_the_rooms_names_and_marks_the_call_live() -> None:
     rig = await joined(Rig())
     assert rig.hints == [["Claude", "Codex"]]
     assert rig.joinly.joins == [(LINK, "switchboard (transcribing)")]
-    assert rig.broker.calls[0] == (relay.SPEECH_PATH, {"wait": 0})  # the names, before anything else
+    assert rig.broker.calls[0] == (relay.SPEECH_PATH, {"wait": 0, "turns": True})  # the names, first
     assert rig.broker.pushes()[0] == []  # and the first push is empty
     assert rig.said[0] == f"relay: key {FP} (the room's call bar shows the same)"
     rig.relay.finish(Exit.ENDED)

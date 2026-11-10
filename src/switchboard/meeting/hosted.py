@@ -213,6 +213,17 @@ def done_in(body: Any) -> int | None:
     return value
 
 
+def turns_in(body: Any) -> bool:
+    """Whether this relay reports when each line ends (every relay since #697). One that doesn't has its
+    slot freed at hand-off. Anything but a boolean is refused, never read as either (§52.2)."""
+    if not isinstance(body, dict) or "turns" not in body:
+        return False
+    value = body["turns"]
+    if type(value) is not bool:
+        raise Refused(400, "bad_request", "turns must be true or false")
+    return value
+
+
 class HostedCalls:
     """The calls hosted on people's machines that are joining or live, on the broker's loop."""
 
@@ -551,7 +562,9 @@ class HostedCalls:
         at = st.turns.ready_at()
         return st.voice and at is not None and self.state.clock.now() >= at
 
-    async def speech(self, row: Meeting, wait_s: float, done: int | None = None) -> dict[str, Any]:
+    async def speech(
+        self, row: Meeting, wait_s: float, done: int | None = None, *, turns: bool = False
+    ) -> dict[str, Any]:
         """The long poll: what the relay is to speak (only while voice is on), the room's names as the
         transcriber's hotwords, the voice switch and whether the call is over. Answered at once when there
         is a line to say or the call ended, and otherwise after ``wait_s`` seconds, or when the voice
@@ -587,6 +600,8 @@ class HostedCalls:
             st.polling -= 1
             st.last_seen = self.state.clock.now()
         line = st.turns.take(self.state.clock.now()) if st.seq == mine and st.voice else None
+        if line is not None and not turns:
+            st.turns.finish(line.id)  # an older relay never says a line ended: the 30 s interval paces it
         words = [w[:40] for w in hotwords(self.state.store.active_names(row.room_id))[:HINTS_MAX]]
         return {
             "lines": [line.text] if line is not None else [],

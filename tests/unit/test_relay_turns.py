@@ -84,3 +84,18 @@ async def test_a_lost_completion_is_retried_without_speaking_the_line_again(
     assert rig.joinly.spoken == ["Once."]
     rig.relay.finish(Exit.ENDED)
     await rig.code()
+
+
+async def test_every_speech_poll_says_this_relay_reports_when_a_line_ends() -> None:
+    """The broker frees an older relay's slot at hand-off, because it never reports an end. So this relay
+    has to say it does, on every poll, or two of its lines could overlap at the broker. Fails if any poll
+    leaves the claim out."""
+    rig = await joined(Rig())
+    rig.broker.answer(lines=["First."], voice=True, speech_id=7)
+    await rig.until(
+        lambda: any(p == SPEECH_PATH and b.get("done") == 7 for p, b in rig.broker.calls), "completion"
+    )
+    polls = [b for p, b in rig.broker.calls if p == SPEECH_PATH]
+    assert len(polls) >= 3 and all(b.get("turns") is True for b in polls)
+    rig.relay.finish(Exit.ENDED)
+    await rig.code()

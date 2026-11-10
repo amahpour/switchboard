@@ -305,7 +305,7 @@ spend this allowance. Reaching the cap leaves the transcript readable in the roo
 
 ## Let agents speak
 
-For a bot hosted on your own machine, update the hosting plugin alongside the broker. The relay in its pinned image must report speech completion; an older relay leaves the slot occupied after its first line.
+For a bot hosted on your own machine, update the hosting plugin alongside the broker. The relay in its pinned image reports when each line ends, so the next line waits for it. An older relay still works, paced by the 30-second interval alone. A line whose end is never reported frees the slot 90 seconds after it started.
 
 Voice is off when a call starts. You turn it on, for that call only.
 
@@ -435,7 +435,6 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The room says "Someone spoke over the line in the call":** the bot stopped because someone started talking. It does not say the rest. Ask the agent to say it again.
 - **The room says "Another @call line is waiting or being spoken":** another line owns the call's speech slot. This line stays in the room as text. Its author also receives the refusal in the next batch.
 - **A queued line waited 60 seconds:** it was dropped because the call never left a gap in time. Brief the agent to answer the current topic, rather than repeat a stale answer.
-- **A hosted bot speaks only once after a server update:** update the hosting plugin too, then restart its call. Its relay must report when speech finishes; an older relay leaves the speech slot occupied.
 - **Snapshot says "The bot is not in the call yet":** the call is still joining. Wait for the bar to read **Transcribing a call**.
 - **Snapshot says "A snapshot was taken less than 10 seconds ago":** wait a few seconds and click again.
 - **The room says "Couldn't get a snapshot of the call":** joinly could not take a picture, for example because the bot has been removed from the call. Check joinly's log. If it says the picture is "not a PNG, JPEG or WebP", or larger than the file limit, joinly sent something switchboard won't keep.

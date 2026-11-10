@@ -1,6 +1,6 @@
 ### Upgrading
 
-- **Update the hosting plugin with the broker.** Its pinned relay image now reports when an agent's spoken line finishes. An older relay cannot complete the speech slot, so only its first line is spoken before the call must be restarted with an updated relay.
+- **Update the hosting plugin with the broker.** Its pinned relay image now reports when an agent's spoken line finishes, so the next line waits for it. An older relay still works, paced by the 30-second interval alone.
 
 ### Changed
 
