@@ -3485,6 +3485,103 @@ def shoot_play_fit(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_board_paint(browser: Any, out: Path, world: Any) -> None:
+    """#684, the whiteboard opening: the moment the board has mounted but not yet been told the app's theme
+    (``boardpaint-mounted-{light,dark,phone-dark}``), then the board as opened (``boardpaint-opened-*``).
+    A hook delays the page's handling of the board's ``ready`` message, so the first picture is the frame as
+    it paints before the theme arrives: before the fix a white frame in a dark app, after it the app's own
+    background."""
+    from playwright.sync_api import expect
+
+    room, b = "#sprint-board", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1",))
+    delay = """(() => {
+      const add = window.addEventListener.bind(window);
+      window.addEventListener = function (type, fn, ...rest) {
+        if (type !== 'message') return add(type, fn, ...rest);
+        return add(type, ev => {
+          if (window.__holdReady && ev.data && ev.data.action === 'ready') { window.__release = () => fn(ev); return; }
+          fn(ev);
+        }, ...rest);
+      };
+    })()"""
+    variants = {
+        "light": dict(viewport={"width": 1100, "height": 560}, color_scheme="light"),
+        "dark": dict(viewport={"width": 1100, "height": 560}, color_scheme="dark"),
+        "phone-dark": {**PHONE, "color_scheme": "dark"},
+    }
+    for name, options in variants.items():
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_init_script(delay)
+        page = ctx.new_page()
+        try:
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            page.evaluate("window.__holdReady = true")
+            page.get_by_role("button", name="Whiteboard", exact=True).click()
+            expect(page.frame_locator("#whiteboard-host iframe").locator("canvas").first).to_be_attached()
+            page.mouse.move(0, 0)
+            shot(page, out, f"boardpaint-mounted-{name}.png")
+            page.evaluate("window.__release()")
+            expect(page.locator("#whiteboard-status")).to_contain_text("Live")
+            expect(page.locator("#whiteboard-host iframe")).to_be_visible()
+            shot(page, out, f"boardpaint-opened-{name}.png")
+        finally:
+            ctx.close()
+
+
+def shoot_header_chips(browser: Any, out: Path, world: Any) -> None:
+    """#704, the room header's chips with the room list and Members both open and hands-free on, a 1280 px
+    window (``headerchips-{light,dark}``); the header's strip alone is ``headerchips-strip-{light,dark}``.
+    Before: Running and Budget scrolled out of sight. After: the chips take a line under the title."""
+    from playwright.sync_api import expect
+
+    room, b = "#sprint-grooming", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    for name in ("claude-1", "codex-1"):
+        world.set_member_harness(room, name, name.split("-")[0])
+    for scheme in ("light", "dark"):
+        ctx = browser.new_context(
+            timezone_id="UTC",
+            locale="en-US",
+            viewport={"width": 1280, "height": 520},
+            device_scale_factor=1.5,
+            color_scheme=scheme,
+        )
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        try:
+            sign_in(page, b)
+            page.locator(f'#tabs .room[data-room="{room}"]').click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            page.get_by_role("button", name="Call settings").click()
+            page.get_by_label("Calls start with Voice on").check()
+            page.get_by_role("button", name="Save").click()
+            expect(page.locator("#st-handsfree")).to_be_visible()
+            expect(page.locator("#pane-toggle")).to_have_attribute("aria-pressed", "true")
+            page.evaluate(
+                """() => document.querySelectorAll('#log .line').forEach(e => {
+                  if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+            )
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            page.mouse.move(0, 0)
+            shot(page, out, f"headerchips-{scheme}.png")
+            head = page.locator(".conv-head").bounding_box()
+            if head:
+                shot(
+                    page, out, f"headerchips-strip-{scheme}.png", clip={**head, "height": head["height"] + 2}
+                )
+        finally:
+            ctx.close()
+
+
 def shoot_attachments_guide(browser: Any, out: Path, world: Any) -> None:
     """#586, the attachments guide: a room of its own with claude-1. A file attached from the composer
     (``guide-attachments-attach-light``), an agent's file that has not been uploaded yet and the same card once
@@ -3612,6 +3709,8 @@ ONLY: dict[str, Any] = {
     "meeting": shoot_meeting_guide,
     "listen": shoot_listen,
     "room_calls": shoot_room_calls,
+    "board_paint": shoot_board_paint,
+    "header_chips": shoot_header_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
 }

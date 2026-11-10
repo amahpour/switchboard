@@ -1971,8 +1971,9 @@ def test_the_room_name_is_the_last_thing_the_header_shortens(ui: UI) -> None:
     """The header's flex row shortened the room's name first: a 1280 px window with Members open
     showed "s…" for #sprint-grooming, while "alice and 1 agent" and every chip stayed whole. The
     name is what a person reads and, since #316, clicks to rename, so the chips give way first
-    (they scroll), then the member count, and the name last, at every text size. Fails if the
-    name or the member count is cut while the chips still have room to give."""
+    (they scroll, and under 1100 px they take a line of their own, #704), then the member count, and the
+    name last, at every text size. Fails if the name or the member count is cut while the chips still
+    have room to give."""
     room = "sprint-grooming"
     ui.world.create_room("#" + room)
     ui.world.add_agents("#" + room, ("claude-1",))
@@ -1988,8 +1989,11 @@ def test_the_room_name_is_the_last_thing_the_header_shortens(ui: UI) -> None:
     page.set_viewport_size({"width": 1040, "height": 800})
     expect(title).to_be_visible()
     assert title.evaluate(whole), "the name is cut at 1040 px"
-    # something had to give at this width, and it was the chips, not the name
-    assert page.locator("#status-chips").evaluate("el => el.scrollWidth > el.clientWidth + 1")
+    # something had to give at this width, and it was not the name: the chips took a line of their own
+    # under it (#704) instead of scrolling out of sight
+    assert page.locator("#status-chips").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+    chips, title_box = page.locator("#status-chips").bounding_box(), title.bounding_box()
+    assert chips and title_box and chips["y"] > title_box["y"] + title_box["height"]
     # the larger text sizes capped the name at 140 px ("sprint-groo…"); they follow the same order
     page.set_viewport_size({"width": 1280, "height": 800})
     page.evaluate("document.documentElement.dataset.textSize = 'larger'")

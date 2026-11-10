@@ -1236,6 +1236,17 @@ def schema_version(con: sqlite3.Connection) -> int | None:
     return int(v[0]) if v else None
 
 
+@contextmanager
+def read_snapshot(con: sqlite3.Connection) -> Iterator[None]:
+    """Pin a deferred WAL read snapshot for a live archive's counts and backup (DESIGN.md §57)."""
+    con.execute("BEGIN")
+    try:
+        schema_version(con)  # the first read pins the snapshot
+        yield
+    finally:
+        con.execute("ROLLBACK")
+
+
 def row_counts(con: sqlite3.Connection, tables: tuple[str, ...] = V1_TABLES) -> dict[str, int]:
     """``COUNT(*)`` of each table (names come from this module, never from input)."""
     return {t: int(con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]) for t in tables}

@@ -3119,6 +3119,15 @@ class Store:
         row = self.con.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
         return None if row is None else StoredFile.from_row(row)
 
+    def backup_files(self, *, limit: int = 100_000) -> list[tuple[str, int, str]]:
+        """Stored immutable attachments in a backup's SQLite snapshot (DESIGN.md §57)."""
+        return [
+            (r[0], r[1], r[2])
+            for r in self.con.execute(
+                "SELECT id, size, sha256 FROM files WHERE state='stored' ORDER BY id LIMIT ?", (limit,)
+            )
+        ]
+
     def file_ids_of_room(self, room_id: int) -> list[str]:
         return [r[0] for r in self.con.execute("SELECT id FROM files WHERE room_id=?", (room_id,))]
 

@@ -788,10 +788,9 @@ def _meeting_mine(room: Room, actor: Actor, svc: "RoomService", link: "MeetingLi
         True,
         f"{room.name}: asked your own agent to host the call. The request expires in ten minutes.",
         notice="asked their own agent to host the call",
-        post=f"{names} Run your host-meeting-bot skill for {room.name} with --from-room and empty stdin. "
-        "This is your person's /meeting mine handoff. The script receives the link privately. "
-        "Do not ask for, read, print or repeat the link. "
-        "The first successful host takes it; do not retry a refusal.",
+        # Short on purpose (#685): it is a chat message under the person's name. What an agent does with
+        # it, and must not do (read or repeat the link, retry a refusal), is in the host-meeting-bot skill.
+        post=f"{names} /meeting mine: host the call in {room.name} with host-meeting-bot (--from-room).",
         post_skip=tuple(m.id for m in members if m.id not in targets),
         event="meeting_mine",
         event_data={"platform": link.platform},

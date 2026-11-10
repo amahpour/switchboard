@@ -32,3 +32,14 @@ def test_codex_registers_its_packaged_host_skill() -> None:
     manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text())
     assert manifest["skills"] == "./skills/"
     assert (plugin / "skills/host-meeting-bot/SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_the_skill_carries_the_rules_of_the_mine_handoff(harness: str) -> None:
+    """The room's `/meeting mine` message is one short line (#685), so the rules the long message used to
+    repeat live in the skill an agent runs it with: empty stdin, never read or repeat the link, the first host
+    takes it and a refusal is not retried. Fails if a skill loses one."""
+    text = (ROOT / "plugins" / harness / "skills/host-meeting-bot/SKILL.md").read_text()
+    for rule in ("--from-room", "empty stdin", "Do not retry", "first successful registration"):
+        assert rule in text, (harness, rule)
+    assert "repeat" in text and "link" in text

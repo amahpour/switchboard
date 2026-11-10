@@ -59,6 +59,11 @@ holds the slot until `speak_text` returns. A hosted call holds it after its spee
 the same call's relay reports completion of that exact id at the existing speech route.
 Refusals and expiry are fixed system notices, also queued for the member who tried to speak.
 
+`backup.py` streams a verified live SQLite snapshot and stored attachments into a private data
+archive. `cli.py` exposes backup and offline restore; `daemon.py` checks `restore/` under its
+home lock before opening the database or listening. The replaced DB, WAL and files stay in a
+recovery folder ([§57](DESIGN.md#57-live-backup-archives-and-restore-at-start-688)).
+
 ## The path of a message
 
 1. **Posted** in the web UI (`web.py`), with `switchboard say`, or by an agent's `say` at `/mcp` (`agent_http.py`).

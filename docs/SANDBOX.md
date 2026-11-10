@@ -201,9 +201,9 @@ Never bind-mount a host repo writable. Agents can plant `.git/hooks`, `.claude/s
 1. **Export the evidence.** It holds whatever secrets the agents printed, so keep it private and outside any repo.
    ```bash
    docker compose exec -u dev box switchboard report --room '#redteam' --out /work/report.md
-   docker compose exec -u dev box sqlite3 /var/lib/switchboard/switchboard.db ".backup /work/switchboard.db"
+   docker compose exec -u dev box switchboard backup /work/switchboard.tar --home /var/lib/switchboard
    R=~/switchboard-evidence/$(date +%Y%m%d-%H%M); mkdir -p "$R"
-   for p in /work/report.md /work/switchboard.db /var/lib/switchboard/logs /var/log/switchboard-dns.log /home/dev/.claude/projects \
+   for p in /work/report.md /work/switchboard.tar /var/lib/switchboard/logs /var/log/switchboard-dns.log /home/dev/.claude/projects \
             /home/dev/.codex/sessions /home/dev/.cursor/chats /home/dev/.local/share/devin/cli; do
      docker cp "switchboard-box:$p" "$R/"; done
    ```
