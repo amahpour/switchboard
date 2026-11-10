@@ -194,9 +194,17 @@ def run_foreground(
         # DESIGN.md §27.6), here: under the single-instance lock and before anything
         # listens, with a refusal on stderr (broker.out, which `switchboard start`
         # shows) and not only in broker.log. The lifespan then finds it current.
+        from switchboard import backup
+
         try:
+            restored = backup.restore_pending(paths, (public or WebOrigin.local(cfg.port)).hostname)
+            if restored:
+                log.warning("restored archive; previous data kept in %s", restored.previous.name)
+                if restored.warning:
+                    log.warning("%s", restored.warning)
+                    print(f"switchboard: {restored.warning}", file=sys.stderr)
             db.open_db(paths.db).close()
-        except db.SchemaError as e:
+        except (db.SchemaError, backup.BackupError) as e:
             log.error("database refused: %s", e)
             print(f"switchboard: {e}", file=sys.stderr)
             return 1

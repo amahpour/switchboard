@@ -160,6 +160,47 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
 
 
+def cmd_backup(args: argparse.Namespace) -> int:
+    from switchboard import backup
+
+    try:
+        dest = backup.create(_paths(args), args.archive)
+    except backup.BackupError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+    print(f"Backup written: {_clean(str(dest))} (private data; keep it safe)")
+    return EXIT_OK
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    from switchboard import backup
+    from switchboard.broker.auth import WebOrigin
+    from switchboard.config import ConfigError, load
+
+    paths = _paths(args)
+    try:
+        cfg = load(paths)
+        url = os.environ.get("SWITCHBOARD_PUBLIC_URL") or cfg.public_url
+        hostname = (WebOrigin.parse(url) if url else WebOrigin.local(cfg.port)).hostname
+    except (ConfigError, ValueError):
+        print(
+            "switchboard: invalid deployment configuration; check config.toml and public URL", file=sys.stderr
+        )
+        return EXIT_ERR
+    try:
+        result = backup.restore(paths, args.archive, hostname=hostname)
+    except backup.BackupError as e:
+        print(f"switchboard: {e}", file=sys.stderr)
+        return EXIT_ERR
+    print(
+        f"Restored. Previous data kept in {_clean(result.previous.name)}. "
+        "Start the broker to migrate if needed."
+    )
+    if result.warning:
+        print(result.warning)
+    return EXIT_OK
+
+
 def cmd_stop(args: argparse.Namespace) -> int:
     from switchboard.broker import daemon
 
@@ -681,6 +722,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--test-mode", action="store_true", help=argparse.SUPPRESS)
     s.add_argument("--test-trust-uds", action="store_true", help=argparse.SUPPRESS)
     s.set_defaults(func=cmd_start)
+
+    for verb, handler, help_text in (
+        ("backup", cmd_backup, "back up the live database and attachments to a private tar archive"),
+        ("restore", cmd_restore, "restore a data archive while the broker is stopped"),
+    ):
+        s = sub.add_parser(verb, parents=[common], help=help_text)
+        s.add_argument("archive", metavar="ARCHIVE")
+        s.set_defaults(func=handler)
 
     s = sub.add_parser("stop", parents=[common], help="stop the broker")
     s.set_defaults(func=cmd_stop)

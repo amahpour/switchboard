@@ -454,19 +454,130 @@ The CPU digest on the CUDA tag, or the other way round, is a different image. Do
 
 ## Backups
 
-- **Disk snapshots:** Render takes them daily. On AWS and GCP, use EBS or persistent-disk snapshots, for example with AWS Backup or a snapshot schedule. A snapshot of a running broker is like a power cut, which SQLite in WAL mode (the broker's setting) is built to recover from.
-- **A copy while it runs**, with SQLite's backup API, then out of the container:
+`switchboard backup` copies a live database with SQLite's backup API. The broker keeps running:
+rooms, agents and sign-in carry on. The copy passes an integrity check and row counts from the
+same read snapshot, then travels with its stored attachments in one uncompressed tar archive.
+It contains every room, private rooms included, people, password and token hashes, sessions and
+passkeys. Keep it private and encrypt it before sending it to storage you do not control.
+`config.toml` stays with the deployment and is never included.
 
-  ```bash
-  docker exec -u switchboard switchboard sh -c 'umask 077; python3 -c "import sqlite3; \
-    sqlite3.connect(\"$SWITCHBOARD_HOME/switchboard.db\").backup(sqlite3.connect(\"/tmp/switchboard-backup.db\"))"'
-  docker cp switchboard:/tmp/switchboard-backup.db ./switchboard-$(date +%F).db
-  ```
+```bash
+switchboard backup ~/switchboard-backup.tar --home ~/.switchboard
+```
 
-- **Continuous replication:** [Litestream](https://litestream.io) can stream the database to S3-compatible storage, running beside the broker on the same volume.
-- **Attached files are not in the database.** A room's files live in `$SWITCHBOARD_HOME/files/` beside it ([the attachments guide](guide/attachments.md)), so a copy of `switchboard.db` alone restores the cards without the files. A disk snapshot has both; with the backup API, copy that folder too (`docker cp switchboard:/data/switchboard/files ./files-$(date +%F)`: the image keeps its home in `/data/switchboard`).
+The command creates a new file of mode 0600 and refuses to overwrite an existing name. It needs
+space for a temporary database copy plus the archive. A stored attachment disappearing during
+its copy (a room deletion or retention sweep) fails the attempt and removes the partial archive;
+try a new backup after the deletion finishes. Uploads completed after the snapshot belong to the
+next backup. Partial uploads and unreferenced files are excluded.
 
-To restore, stop the broker, put the copy at `$SWITCHBOARD_HOME/switchboard.db` owned by uid 10001 with mode 0600 (and no `-wal` or `-shm` files next to it), and start it again.
+On a Docker host, the same command runs as the image's uid 10001:
+
+```bash
+docker exec -u switchboard switchboard switchboard backup /data/switchboard/saved.tar
+docker cp switchboard:/data/switchboard/saved.tar ./switchboard-backup.tar
+```
+
+On Kubernetes, a backup Job can mount the broker's volume while it runs only when that volume
+can be mounted twice (on the same node, or with a ReadWriteMany storage class). Run the Job as
+uid and gid 10001, with `switchboard backup /data/switchboard/saved.tar` and the broker's volume
+mounted at `/data`. Otherwise use a volume snapshot, or scale to zero for that copy. Continuous
+replication is tracked in #689; it is separate from these archives.
+
+### Restore at the next start
+
+1. Stop the broker, or scale the StatefulSet to zero. Keep its existing deployment config.
+2. Put **one archive** in `$SWITCHBOARD_HOME/restore/`. That directory must be owned by the
+   broker's uid and have mode 0700; the archive should have mode 0600. In the container the
+   home is `/data/switchboard`, uid and gid 10001. Use a Job to copy the archive from your own
+   backup storage onto the volume with these permissions. No shell in the broker container
+   is needed: scale to zero, mount the PVC in the Job, wait for it to finish and scale up.
+   A platform volume snapshot restored while scaled to zero is another option.
+3. Start the broker. Before it listens, it verifies the archive's hashes, database integrity,
+   schema, row counts and attachment references. A damaged archive, unsafe tar entry, multiple
+   candidates or newer schema refuses startup and leaves the existing data in place.
+4. The old database, its WAL and shared-memory files, and the old `files/` are moved into a
+   private `before-restore-…` folder in the home, never deleted. The restored database and
+   files are owned by the broker process, mode 0600, in a 0700 directory. The archive becomes
+   `<name>.used`; later restarts ignore it. Older schemas migrate through the normal verified
+   migration path at start. Keep the old folder until you have checked the restored broker.
+
+On a desktop or Docker host you can apply an archive by hand instead, with the broker stopped:
+
+```bash
+switchboard restore ~/switchboard-backup.tar --home ~/.switchboard
+switchboard start --home ~/.switchboard
+```
+
+Restore refuses while the broker holds the home's exclusive lock. It never changes deployment
+configuration. A hostname change warns that old passkeys cannot work: sign in with your password
+and enrol a new passkey under **Settings → Sign-in & security**. For a team, each person does the same.
+If all credentials are lost, the existing `SWITCHBOARD_RESET_OWNER` recovery ([Signing in](#signing-in))
+removes all people and credentials; claim the owner again and invite the team again. Archives
+made before the broker recorded its passkey hostname warn that the old hostname is unknown.
+
+For example, with the broker scaled to zero, this Job copies an archive already available on
+another PVC. Replace the image tag, namespace, claim names and archive name with your own;
+`broker-data` is the broker's existing claim. Wait for the Job to complete before scaling up.
+The source PVC must be readable by uid 10001.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: switchboard-restore
+  namespace: switchboard
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: stage-archive
+          image: ghcr.io/amahpour/switchboard:<version>
+          command: [python3, -c]
+          args:
+            - |
+              import os, shutil
+              from pathlib import Path
+              os.umask(0o077)
+              target = Path('/data/switchboard/restore')
+              target.mkdir(mode=0o700, parents=True, exist_ok=True)
+              with open('/backup/saved.tar', 'rb') as src:
+                  with open(target / 'saved.tar', 'xb') as dst:
+                      shutil.copyfileobj(src, dst)
+                      dst.flush()
+                      os.fsync(dst.fileno())
+          volumeMounts:
+            - {name: broker-data, mountPath: /data}
+            - {name: backup-source, mountPath: /backup, readOnly: true}
+      volumes:
+        - name: broker-data
+          persistentVolumeClaim: {claimName: broker-data}
+        - name: backup-source
+          persistentVolumeClaim: {claimName: backup-source}
+```
+
+### If a restore is interrupted
+
+A durable `restore-in-progress` marker prevents a restart from serving partially replaced data.
+With the broker stopped, read that marker: it names the `before-restore-…` recovery folder. Keep
+both that folder and the current home. To roll back, inspect each of `switchboard.db`,
+`switchboard.db-wal`, `switchboard.db-shm` and `files/`. If it is in the recovery folder, move
+any current entry of that name to a separate private folder, then move the recovered entry
+back into the home. If it is absent from the recovery folder, its original move had not happened:
+keep the original home entry. Move the marker aside only after the complete original set is back.
+Move the pending archive out of `restore/` before restarting, or it will be attempted again.
+Do not mix a database with another copy's WAL or attachments. All recovery steps run as the
+broker's uid (10001 in the image).
+
+Disk snapshots remain an option: Render takes them daily; AWS and GCP provide persistent-volume
+snapshots. SQLite WAL recovery handles a snapshot of a running broker like a power cut. A snapshot
+of the whole volume includes attachments too; a raw database-only copy does not.
 
 ## A meeting bot
 

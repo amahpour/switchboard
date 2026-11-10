@@ -226,6 +226,22 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
         ("dark", "light"),
     )
 
+    archive = base / "switchboard-backup.tar"
+    text = capture(["backup", str(archive), *h])
+    shots.append(
+        (
+            "backup",
+            "switchboard backup ~/switchboard-backup.tar",
+            text.replace(str(archive), "~/switchboard-backup.tar"),
+            ("dark", "light"),
+        )
+    )
+    text = capture(["restore", str(archive), "--home", str(base / "restored")])
+    text = re.sub(r"before-restore-[a-z0-9_]+", "before-restore-<id>", text)
+    shots.append(
+        ("restore", "switchboard restore ~/switchboard-backup.tar --home ~/restored", text, ("dark", "light"))
+    )
+
     u = ["--user-home", str(user_home(base, home))]
     add(
         "uninstall",

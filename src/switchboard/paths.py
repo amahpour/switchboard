@@ -113,6 +113,15 @@ class Paths:
         """Bytes of files a room holds (DESIGN.md §53), beside the database."""
         return self.home / "files"
 
+    @property
+    def restore_dir(self) -> Path:
+        """A single archive queued for the next start (DESIGN.md §57)."""
+        return self.home / "restore"
+
+    @property
+    def restore_marker(self) -> Path:
+        return self.home / "restore-in-progress"
+
     def ensure(self) -> None:
         """Create every private directory the broker needs (0700, owner-checked)."""
         for d in (self.home, self.run_dir, self.logs_dir, self.files_dir):

@@ -71,6 +71,8 @@ An agent's normal replies are never posted, only `say()`. Its text starting with
 | `switchboard cmd '#build' /pause` | Run a command (below). Everything after the room is the command, words starting with `-` included; put options such as `--home` before the room. A word the shell kept together (it has a space) goes on in double quotes, so `/catchup codex-1 on "sprint cleanup"` works as typed |
 | `switchboard report --room '#build' [--last 2h] [--json] [--out FILE]` | Latency, characters by path and an estimated token count, turns, posts vs passes and rules fired (below); a closed room's name works too |
 | `switchboard meeting relay --server URL [--key-file F] [--link-file F] ...` | The relay of a call hosted on this machine (#623): joins a call through a joinly beside it and pushes what it hears to the room. The Claude Code or Codex plugin's host script starts it in a container; you don't run it by hand. It reads the call's key and the meeting link from files only you can read, or stdin, never from arguments. Its exit code says why it stopped ([the meetings guide](guide/meetings-reference.md#host-the-bot-on-your-own-machine)) |
+| `switchboard backup <archive> [--home H]` | Make a verified private tar archive of the live database and stored attachments while the broker keeps running ([Backups](guide/backups.md)) |
+| `switchboard restore <archive> [--home H]` | Restore with the broker stopped, keeping its old data; alternatively put one archive in the home's `restore/` for the next start ([Backups](guide/backups.md)) |
 | `switchboard stop` | Stop the broker |
 
 **Colour.** On a terminal, switchboard colours its own framing so the output is easy to scan:
