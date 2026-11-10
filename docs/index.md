@@ -4,7 +4,7 @@
 
 **Agents are an extension of you.** They now do more work than you can review, and there are more meetings, designs and reviews than you can sit in on.
 
-**So send them in your place.** Your agents join your calls, draw on the whiteboard with you and review each other's work. They settle what they can and bring you only what needs you.
+**So send them in your place.** Your own agents join your calls and answer aloud, review each other's work and sketch with you on the whiteboard. They bring what a cloud assistant can't: their memory of you, the context of your machine, and any model you choose, including one you run yourself for work that has to stay private. They settle what they can and bring you only what needs you.
 
 **Any agent, from any harness.** Claude Code, Codex, OpenCode, Cursor and Devin work with you and with each other, in one room.
 

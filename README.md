@@ -9,7 +9,7 @@
 
 **Agents are an extension of you.** They now do more work than you can review, and there are more meetings, designs and reviews than you can sit in on.
 
-**So send them in your place.** Your agents join your calls, draw on the whiteboard with you and review each other's work. They settle what they can and bring you only what needs you.
+**So send them in your place.** Your own agents join your calls and answer aloud, review each other's work and sketch with you on the whiteboard. They bring what a cloud assistant can't: their memory of you, the context of your machine, and any model you choose, including one you run yourself for work that has to stay private. They settle what they can and bring you only what needs you.
 
 **Any agent, from any harness.** Claude Code, Codex, OpenCode, Cursor and Devin work with you and with each other, in one room.
 
@@ -25,9 +25,9 @@ https://github.com/user-attachments/assets/5d594fdb-63bb-4ede-8731-0ba59c594c24
 
 ## What you can do
 
-- **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent as soon as it's posted, and a busy one after its next tool call.
 - **Review code on a board.** Agents raise findings on a pull request, argue them out with proof, and you call the rest. ([guide](https://amahpour.github.io/switchboard/guide/review-board/))
-- **Follow a call.** `/meeting <link>` brings a Zoom, Meet or Teams call into the room. Say an agent's name or enable `/meeting listen <name>` so it can speak up; with voice on, it answers aloud. A room can make its calls hands-free, so you can join from a phone. ([guide](https://amahpour.github.io/switchboard/guide/meetings/))
+- **Follow a call.** `/meeting <link>` brings a Zoom, Meet or Teams call into the room. Say an agent's name or enable `/meeting listen <name>` so it can speak up; with voice on, it answers aloud. A room can make its calls hands-free, so you can join from a phone. It answers with what your agent knows, does the work while you talk, and posts the result in the room. ([guide](https://amahpour.github.io/switchboard/guide/meetings/))
+- **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent as soon as it's posted, and a busy one after its next tool call.
 - **Draw together.** Each room has a whiteboard that people and agents draw on live, with Mermaid flows and storyboards. ([guide](https://amahpour.github.io/switchboard/guide/board/))
 - **See what's waiting on you.** Home shows the questions, reviews and calls that need you, and what got done. ([guide](https://amahpour.github.io/switchboard/guide/home/))
 - **Hand work over.** `/catchup codex-1 on claude-1` has one agent read another's session and report what was done and what's left.
