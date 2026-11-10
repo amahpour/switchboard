@@ -25,6 +25,11 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
   installed it with a release, never with a merge to main (#462). The tag is made by release.yml
   a minute after the merge; until then an update finds no such tag and keeps the old plugin
   (DESIGN.md §49.5 says when each harness tries again);
+- raises the patch `version` in a plugin's manifest (`plugins/claude/.claude-plugin/plugin.json`,
+  `plugins/codex/.codex-plugin/plugin.json`) when it moved a pin inside that plugin (the relay image in
+  its `meeting/compose.yaml`), because a plugin is kept by its version and a pin moved under an unchanged
+  one never reaches an installed copy (#705). A release PR skips the suite, so the check that makes a
+  change to a plugin bump its version never sees this one;
 - commits that as "release: vX.Y.Z" on `release/vX.Y.Z`, pushes it and opens the PR (`gh`).
 
 Merging the PR releases it: .github/workflows/release.yml tags the merge, publishes the GitHub
@@ -66,8 +71,14 @@ PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/c
              "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml",
              "plugins/claude/meeting/compose.yaml",
              "plugins/codex/meeting/compose.yaml")   # a call's relay on a person's machine (#623)
+# each plugin's folder and its manifest: a plugin is kept by its `version` (§49.5), so a release that
+# moves a pin inside the folder bumps the manifest's patch (#705)
+PLUGIN_MANIFESTS = {"plugins/claude": "plugins/claude/.claude-plugin/plugin.json",
+                    "plugins/codex": "plugins/codex/.codex-plugin/plugin.json"}
+PLUGIN_VERSION_RE = re.compile(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")')
 # with the notes files, all a release PR changes
-RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES, CHART_FILE)
+RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES, CHART_FILE,
+                 *PLUGIN_MANIFESTS.values())
 CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)
 # a release's headings in this order; any other heading follows them, in the order first seen
 HEADING_ORDER = ("Upgrading", "Added", "Changed", "Removed", "Fixed", "Known limitations", "Not included")
@@ -227,6 +238,17 @@ def pin_marketplace(text: str, version: str, where: str = "a marketplace") -> st
     return pinned
 
 
+def bump_plugin(text: str, where: str = "a plugin manifest") -> str:
+    """A plugin manifest with its patch version raised by one (#705). Claude Code and Codex keep an installed
+    plugin by this `version`, so a pin moved inside the plugin that leaves it alone never reaches anyone who
+    has the plugin. A manifest with no `"version": "X.Y.Z"` stops the release instead of passing."""
+    bumped, n = PLUGIN_VERSION_RE.subn(
+        lambda m: f"{m[1]}{m[2]}.{m[3]}.{int(m[4]) + 1}{m[5]}", text, count=1)
+    if n != 1:
+        raise SystemExit(f'{where} has no `"version": "X.Y.Z"` to bump')
+    return bumped
+
+
 def pin_chart(text: str, version: str, where: str = CHART_FILE) -> str:
     """A chart file with its `appVersion` set to the release (#608). The chart installs the image of its
     appVersion unless told otherwise, so one left on the last release would deploy the last release from the
@@ -312,10 +334,17 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
     (root / "CHANGELOG.md").write_text(changelog)
     for p in files:
         p.unlink()   # gathered into the release (`git commit -a` records the deletions)
+    moved: set[str] = set()   # the plugins whose own files a pin moved in
     for rel in PIN_FILES:
         p = root / rel
         if p.exists():
-            p.write_text(update_pins(p.read_text(), version))
+            old = p.read_text()
+            new = update_pins(old, version)
+            p.write_text(new)
+            moved.update(folder for folder in PLUGIN_MANIFESTS if new != old and rel.startswith(f"{folder}/"))
+    for folder in sorted(moved):   # #705
+        manifest = root / PLUGIN_MANIFESTS[folder]
+        manifest.write_text(bump_plugin(manifest.read_text(), PLUGIN_MANIFESTS[folder]))
     for rel in MARKETPLACE_FILES:
         p = root / rel
         if p.exists():
