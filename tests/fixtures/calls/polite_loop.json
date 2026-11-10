@@ -1,0 +1,34 @@
+{
+ "lines": [
+  {
+   "at": 8,
+   "speaker": "alice",
+   "text": "Beta, thank alpha for the help this week.",
+   "tag": "p0",
+   "to": "beta"
+  }
+ ],
+ "reactions": [
+  {
+   "agent": "beta",
+   "on": "p0",
+   "say": "@call Thank you alpha, that was a big help.",
+   "tag": "pp",
+   "to": "alpha"
+  },
+  {
+   "agent": "alpha",
+   "on": "pp",
+   "say": "@call You are welcome beta. Thanks for checking my work.",
+   "tag": "pq",
+   "to": "beta"
+  },
+  {
+   "agent": "beta",
+   "on": "pq",
+   "say": "@call Thank you alpha, that was a big help.",
+   "tag": "pp",
+   "to": "alpha"
+  }
+ ]
+}
