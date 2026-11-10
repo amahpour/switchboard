@@ -3498,6 +3498,10 @@
         markPinned(r);
       }
     } else if (f.t === 'notice') {
+      if (f.backup) {
+        renderBackupNotice(f.backup, f.text);
+        loadBackupStatus(false).catch(function () {});
+      }
       if (!f.room || f.room === state.active) renderLocal(f.text, f.level === 'warn');
     } else if (f.t === 'rooms') {
       // hello every room, not only new ones: a close drops this page's subscription, and a
@@ -3579,6 +3583,12 @@
       state.me = me;
       $('admin-section').classList.toggle('hidden', !(me && me.admin));
       if (!(me && me.admin) && !$('people-panel').classList.contains('hidden')) closeSheet('people-panel');
+      if (!me.can_backup) {
+        $('banner-backup').replaceChildren();
+        $('banner-backup').classList.add('hidden');
+        const backups = document.getElementById('settings-panel-backups');
+        if (backups && $('app-dialog').open) $('app-dialog').close();
+      }
       const content = document.querySelector('#settings-panel-appearance .settings-panel-content');
       if (!content) return;
       const icons = document.getElementById('settings-agent-icons');
@@ -3920,6 +3930,7 @@
     { key: 'rooms', label: 'New rooms', icon: 'hash' },
     { key: 'agents', label: 'Agents', icon: 'terminal' },
     { key: 'files', label: 'Files', icon: 'clip' },
+    { key: 'backups', label: 'Backups', icon: 'clip' },
     { key: 'security', label: 'Sign-in & security', icon: 'key' },
   ];
 
@@ -4818,10 +4829,124 @@
     });
   }
 
+  // Settings → Backups (§57.1): JSON checks precede native downloads, so large archives
+  // never enter JavaScript memory. Creation and the actual GET both require fresh identity.
+  function backupLink(job) {
+    // A button, not an anchor: no script sets a link target but md.js (test_one_vetted_link_path).
+    // The path is fixed text plus a job id of 32 hex digits, and the answer is an attachment, so
+    // the page stays where it is while the browser streams the file to disk.
+    const b = btn('btn', 'Download archive');
+    b.addEventListener('click', async function () {
+      b.setAttribute('aria-busy', 'true');
+      try {
+        await withFreshCheck(function () { return api('GET', '/api/backups/' + job.id); });
+        window.location.assign('/api/backups/' + job.id + '/download');
+      } catch (e) {
+        renderBackupNotice({ id: job.id, state: 'expired' }, String(e.message || e));
+      } finally { b.removeAttribute('aria-busy'); }
+    });
+    return b;
+  }
+
+  function renderBackupNotice(job, text) {
+    if (!(state.me || {}).can_backup || !job || !/^[0-9a-f]{32}$/.test(job.id || '')) return;
+    const band = $('banner-backup');
+    band.replaceChildren(icon('clip'), el('span', 'backup-notice-text', text || 'Backup ready.'));
+    if (job.state === 'ready' && job.download === true) band.append(backupLink(job));
+    const dismiss = btn('btn', 'Dismiss');
+    dismiss.setAttribute('aria-label', 'Dismiss backup notice');
+    dismiss.addEventListener('click', function () {
+      band.classList.add('hidden');
+      if (phone() && tryFocus($('rooms-toggle'))) return;
+      if (!tryFocus($('me-settings'))) tryFocus($('input'));
+    });
+    band.append(dismiss);
+    band.classList.remove('hidden');
+  }
+
+  async function loadBackupStatus(showNotice) {
+    if (!(state.me || {}).can_backup) return;
+    const generation = (state.backupGeneration || 0) + 1;
+    state.backupGeneration = generation;
+    const data = await api('GET', '/api/backups');
+    // An older status read cannot replace a response requested after a ready notice.
+    if (generation !== state.backupGeneration || !(state.me || {}).can_backup) return;
+    state.backupInfo = data;
+    paintBackupSettings();
+    if (showNotice !== false && data.job && data.job.state === 'ready' && data.job.download) {
+      renderBackupNotice(data.job, 'Your backup is ready. Its link expires ten minutes after completion.');
+    }
+  }
+
+  function paintBackupSettings() {
+    const button = document.getElementById('backup-start');
+    const status = document.getElementById('backup-status');
+    const links = document.getElementById('backup-download');
+    if (!button || !status || !links || !state.backupInfo) return;
+    const data = state.backupInfo;
+    const me = state.me || {};
+    const reauth = me.signin || me.password || me.passkeys || me.fresh;
+    const retry = Math.max(0, Math.min(300, Number(data.retry_after) || 0));
+    button.disabled = !reauth || !!data.running || retry > 0;
+    links.replaceChildren();
+    if (!reauth) {
+      status.textContent = 'Web backup needs a password or passkey. On this desktop, use switchboard backup <archive>.';
+    } else if (data.running) {
+      status.textContent = 'Backup running. Rooms and agents can keep working.';
+    } else {
+      const job = data.job;
+      if (job && job.state === 'ready' && job.download && /^[0-9a-f]{32}$/.test(job.id || '')) {
+        status.textContent = 'Backup ready. The download link expires ten minutes after completion.';
+        links.append(backupLink(job));
+      } else if (job && job.state === 'failed') {
+        status.textContent = 'Backup failed. Check free space and stored files.';
+      } else if (job && job.state === 'expired') {
+        status.textContent = 'The download link expired. Make another backup when you need one.';
+      } else status.textContent = 'Ready to back up.';
+      if (retry > 0) status.textContent += ' Another backup is available in ' + Math.ceil(retry / 60) + ' min.';
+    }
+    if (state.backupTimer) clearTimeout(state.backupTimer);
+    if (retry > 0) state.backupTimer = setTimeout(function () {
+      loadBackupStatus(false).catch(function () {});
+    }, retry * 1000 + 100);
+  }
+
+  function buildSettingsBackups(panel) {
+    panel.append(el('h3', null, 'Backups'),
+      el('p', 'fine', 'Save every room, private history, people and stored files in one archive. '
+        + 'It includes password and token hashes, sessions and passkeys. Keep the download private. '
+        + 'Deployment configuration stays with the deployment.'),
+      el('p', 'fine', 'A backup runs in the background while rooms and agents carry on. '
+        + 'Confirm it’s you first. One backup every five minutes; the last three archives are kept. '
+        + 'Restoring an archive needs a restart.'));
+    const actions = el('div', 'backup-actions');
+    const start = btn('btn primary', 'Back up now');
+    start.id = 'backup-start';
+    start.disabled = true;
+    const links = el('div');
+    links.id = 'backup-download';
+    actions.append(start, links);
+    const status = el('p', 'fine', 'Checking backup status…');
+    status.id = 'backup-status';
+    status.setAttribute('role', 'status');
+    panel.append(actions, status);
+    start.addEventListener('click', async function () {
+      start.disabled = true;
+      try {
+        await withFreshCheck(function () { return api('POST', '/api/backups', {}); });
+        await loadBackupStatus();
+      } catch (e) {
+        status.textContent = String(e.message || e);
+        start.disabled = false;
+      }
+    });
+    loadBackupStatus().catch(function (e) { status.textContent = String(e.message || e); });
+  }
+
   const SETTINGS_BUILDERS = {
     profile: buildSettingsProfile, appearance: buildSettingsAppearance,
     rooms: buildSettingsRooms, agents: buildSettingsAgents, files: buildSettingsFiles,
-    security: buildSettingsSecurity,
+    security: buildSettingsSecurity, backups: buildSettingsBackups,
   };
 
   // The phone list's one-line summary for a group, from the current (possibly just-typed) state.
@@ -4871,6 +4996,7 @@
     const groups = SETTINGS_GROUPS.filter(function (g) {
       if (g.key === 'security') return hasSecurity;
       if (g.key === 'files') return !!me.can_set_icons;
+      if (g.key === 'backups') return !!me.can_backup;
       return true;
     });
     const initial = groups.some(function (g) { return g.key === requestedGroup; }) ? requestedGroup : 'profile';
@@ -7829,6 +7955,7 @@
     renderBuddies();
     await loadRooms();
     renderStatus();
+    if (state.me.can_backup) loadBackupStatus().catch(function () {});
     connect();
     // Keep the sliding session (and its cookie) fresh while the page is open.
     setInterval(function () { api('GET', '/api/me').catch(function () {}); }, 30 * 60 * 1000);

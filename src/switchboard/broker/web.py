@@ -1521,6 +1521,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # may this person upload the agents' avatars (§29.11)? Any admin: on a desktop
                 # broker the one person signed in, on a hosted one an admin (§51)
                 "can_set_icons": w.is_admin,
+                "can_backup": w.is_admin,
                 "version": __version__,
                 "commit": build_info.commit(),
                 "test_mode": state.test_mode,
@@ -2050,6 +2051,75 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 slug, text, via="web", person=(w.name, w.person_id), reply_to=body.get("reply_to")
             )
             return _ok({"id": msg.id})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    def backup_admin(request: Request, *, fresh: bool) -> tuple[people.Who | None, Response | None]:
+        w = who(request)
+        if w is None or w.must_reset:
+            return None, unauthorized()
+        if not w.is_admin:
+            return None, _err(403, "forbidden", "only an admin backs up this broker")
+        if fresh and not state.fresh_check(w.h):
+            return None, _err(403, "reauth", "confirm it's you first")
+        return w, None
+
+    @app.get("/api/backups")
+    async def backups_status(request: Request) -> Response:
+        w, no = backup_admin(request, fresh=False)
+        if no is not None:
+            return no
+        assert w is not None and state.backups is not None
+        return _ok(state.backups.status(w))
+
+    @app.post("/api/backups")
+    async def backups_start(request: Request) -> Response:
+        w, no = backup_admin(request, fresh=True)
+        if no is not None:
+            return no
+        assert w is not None and state.backups is not None
+        try:
+            if await _json_body(request):
+                return _err(400, "bad_request", "a backup takes no options")
+            job = state.backups.start(w)
+            return JSONResponse({"id": job.id, "state": job.state}, status_code=202, headers=NO_STORE)
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.get("/api/backups/{job_id}")
+    async def backup_check(request: Request, job_id: str) -> Response:
+        # A JSON preflight lets withFreshCheck confirm identity before a native browser
+        # download, keeping the archive out of JavaScript memory. GET below checks again.
+        _w, no = backup_admin(request, fresh=True)
+        if no is not None:
+            return no
+        assert state.backups is not None
+        try:
+            state.backups.ready(job_id)
+            return _ok({"ok": True})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    @app.get("/api/backups/{job_id}/download")
+    async def backup_download(request: Request, job_id: str) -> Response:
+        w, no = backup_admin(request, fresh=True)
+        if no is not None:
+            return no
+        assert w is not None and state.backups is not None
+        try:
+            job = state.backups.ready(job_id)
+            state.backups.downloaded(job, w)
+            return FileResponse(
+                state.backups.root / f"backup-{job.id}.tar",
+                filename=f"switchboard-backup-{job.id}.tar",
+                media_type="application/x-tar",
+                headers={
+                    **NO_STORE,
+                    "X-Content-Type-Options": "nosniff",
+                    "Cross-Origin-Resource-Policy": "same-origin",
+                    "Content-Security-Policy": "default-src 'none'; sandbox",
+                },
+            )
         except ServiceError as e:
             return _svc_err(e)
 

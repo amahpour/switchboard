@@ -1302,6 +1302,15 @@ class Store:
         r = self.con.execute("SELECT via FROM web_sessions WHERE id_hash=?", (id_hash,)).fetchone()
         return r[0] if r else None
 
+    def web_session_active(self, id_hash: str) -> bool:
+        """Check a notification recipient without sliding a session's expiry (DESIGN.md §57.1)."""
+        return (
+            self.con.execute(
+                "SELECT 1 FROM web_sessions WHERE id_hash=? AND expires_at>?", (id_hash, self.clock.now())
+            ).fetchone()
+            is not None
+        )
+
     def web_session_touch(self, id_hash: str, ttl_s: float) -> bool:
         """True when the session exists and hasn't expired; slides its expiry."""
         now = self.clock.now()

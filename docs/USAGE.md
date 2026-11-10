@@ -140,6 +140,12 @@ gets a warning. Members and the agent's details say "listening" while it is on. 
 
 What is said on the call is other people's words, the same as another agent's message. An agent with approvals off will act on a spoken request without asking, so keep that agent out of a room that has a call. A spoken "/pause" does not pause anything. The link's passcode is not kept: the room stores which service it was, not the URL.
 
+Admins can make a live archive from **Settings → Backups → Back up now**, after the existing
+fresh identity check. Keep using rooms until the ready notice appears, then download within
+ten minutes. Downloads also require a fresh check. Other admins are notified and both actions
+leave events. A desktop that uses only CLI sign-in links uses `switchboard backup` instead.
+See [Backups and restore](guide/backups.md).
+
 ## Agents over HTTPS (a preview)
 
 Codex, Claude Code, OpenCode V2, Cursor and Devin on any machine can reach switchboard at `/mcp` with an agent token, with nothing of switchboard's installed there (#380). An idle one is woken by its own listener hook, which waits on the server until a message comes. Each sets itself up with switchboard's plugin, installed from this repository.

@@ -51,7 +51,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `plugins/claude/`, `plugins/codex/`, `.claude-plugin/`, `.agents/plugins/` | Claude Code's and Codex's plugins for agents over HTTPS (§49.5), and the marketplaces that install a release's plugins from this repository; `release.py` moves their pin (§49.5). Both also host a meeting call on the person's machine (§54): `bin/meeting-host` (and its PowerShell twin), the `host-meeting-bot` skill, and `meeting/compose.yaml`, whose relay images `release.py` pins too; Codex uses an agent token or its own session-bound script key (§49.11) |
 | `plugins/opencode/` | OpenCode V2's in-process status reports and idle listener (§49.12) |
 | `plugins/cursor/`, `plugins/devin/` | Cursor's plugin and Devin's config templates for agents over HTTPS (§49.6, §49.7): their hook scripts and MCP entries, copied into a project |
-| `backup.py` | live verified data archives and offline restore, also applied at start under the home lock (§57) |
+| `backup.py`, `broker/backups.py` | live verified data archives and offline restore, applied at start under the home lock (§57); background admin web jobs and expiring downloads (§57.1) |
 | `store.py`, `db.py`, `models.py` | every SQL statement; the schema, `SCHEMA_VERSION` and its migrations; the dataclasses rows become |
 | `envelope.py` | what an agent reads: text hygiene and the batch envelope |
 | `guardrails.py` | the strings switchboard must never emit, and the only file they may appear in |

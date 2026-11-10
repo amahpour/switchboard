@@ -3,7 +3,29 @@
 Save the broker's rooms, people and stored attachments in one archive. A backup runs while
 rooms and agents keep working. Restoring needs the broker stopped or restarted.
 
-## Make a backup
+<video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/03f70571-1395-4782-a634-94f7b392c054"></video>
+
+## Back up from the web UI
+
+1. Open **Settings → Backups** as an admin. On a hosted broker, only admins see this group.
+2. Press **Back up now**. The existing **Confirm it's you** flow asks for a password or passkey
+   when your last check is no longer fresh.
+3. Keep using rooms while the backup runs. A notice appears when it is ready; press
+   **Download archive** there or in Settings. Download also needs a fresh check. The browser
+   streams the file to disk, so the page does not load the archive into memory.
+
+![Backups in Settings, with a completed archive and its Download archive link](../media/ui/guide-backups-light.png)
+
+A link lasts ten minutes after completion and ends sooner if the broker restarts. Only admins
+can download it. Each backup and download start leaves an event; other admins get a notice.
+One backup runs at a time, starts are at least five minutes apart (failed attempts count too),
+and only the last three archives remain in the broker's private `backups/` directory. Keep your
+own downloaded copies somewhere safe.
+
+A desktop broker that signs in only with CLI links has no password or passkey reauthentication.
+Use the command below there; a login link does not bypass the fresh check for a web backup.
+
+## Make a backup from a terminal
 
 ```bash
 switchboard backup ~/switchboard-backup.tar --home ~/.switchboard

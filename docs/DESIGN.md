@@ -3613,3 +3613,38 @@ A different RP hostname produces a warning without printing the old hostname: us
 and enrol new passkeys. `SWITCHBOARD_RESET_OWNER` remains the destructive last-resort recovery
 and its warning says it removes people and credentials. No archive upload or scheduled backup
 HTTP endpoint is added here.
+
+
+### 57.1. Background web backups and expiring downloads
+
+`broker/backups.py` owns bounded in-memory job state and one worker task, wired by the app's
+lifespan. `POST /api/backups` accepts an empty body, requires `Who.is_admin`, rejects one-time
+password sessions, and uses the existing `fresh_check`/`reauth` rule. There is no client-chosen
+path and no token-based scheduler endpoint. One task at a time and starts at least 300 seconds
+apart bound the work. Failures consume the rate limit. The worker calls `backup.create` through
+`asyncio.to_thread` with its own SQLite connection, never the event loop's store connection.
+It writes a private `.part` file, publishes the completed archive without overwriting a name,
+and prunes only its recognized filenames to retain three archives. Disk work stays off the
+loop. Shutdown waits for the worker before closing the store, so its audit write cannot race
+store teardown; an interrupted partial file is removed before the next attempt.
+
+`GET /api/backups` is admin-only status, with the current running/rate state and the viewer's
+latest job. `GET /api/backups/{id}` is a JSON fresh-check preflight for a native download;
+`GET /api/backups/{id}/download` checks the admin role, fresh proof, ready state and ten-minute
+expiry again, records the download start, and returns a `FileResponse` streamed from disk with
+attachment disposition, no-store, nosniff, same-origin resource policy and a sandbox CSP. Ids
+are generated 32-character hex strings and must identify a known in-memory job. A restart
+invalidates links even when archive files remain. An audit write must succeed before serving.
+
+Start, completion or failure, and each download start are `backup` events, with actor, id and
+size where available. Notices use the existing `notice` WebSocket frame with a `backup` status
+object (id, state, expiry, size, download eligibility). Only current admins with active sessions
+receive them; only the initiating account receives a ready link in a notice. `web_session_active`
+reads the session expiry without extending it. Roles are read again at notification and at every
+HTTP request, so a demoted or removed admin cannot download an existing archive.
+
+Settings has an admin-only Backups group. Creation and download preflight use `withFreshCheck`.
+The archive goes through a native browser download, never a JavaScript blob. A global notice
+stays visible on Home and in rooms; Settings also keeps the ready link. The existing password
+or passkey guard is unchanged: a desktop login-link session has no fresh-check path, and its
+panel directs the owner to the CLI instead. Desktop reauthentication needs a maintainer decision.

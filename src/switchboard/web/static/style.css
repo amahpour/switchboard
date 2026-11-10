@@ -3310,7 +3310,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .app.home-open #log, .app.home-open #room-empty, .app.home-open #board, .app.home-open #composer,
 .app.home-open #pane, .app.home-open #pane-toggle, .app.home-open #buddy-toggle, .app.home-open .head-divider,
 .app.home-open #pins, .app.home-open #claim-board, .app.home-open .head-tools,
-.app.home-open .band:not(#banner-offline):not(#banner-test) { display: none; }
+.app.home-open .band:not(#banner-offline):not(#banner-test):not(#banner-backup) { display: none; }
 .app.no-rooms #home { display: none; }
 .home {
   flex: 1;
@@ -3457,3 +3457,8 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .whiteboard-playing #whiteboard-status, .whiteboard-playing #whiteboard-close { display: none; }
 #whiteboard-caption { flex: 1; min-width: 100px; overflow-wrap: anywhere; font-size: calc(14px * var(--text-scale)); }
 .whiteboard-playing #whiteboard-host { min-height: 0; }
+
+/* A completed admin backup stays reachable while browsing rooms or Home (§57.1). */
+.band-backup { background: var(--chip-bg); color: var(--ink-2); flex-wrap: wrap; }
+.band-backup > .backup-notice-text { flex: 1 1 18em; min-width: 0; overflow-wrap: anywhere; }
+.backup-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px; }

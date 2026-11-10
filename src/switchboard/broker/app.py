@@ -24,6 +24,7 @@ from switchboard.adapters.base import waits_over_client_limit
 from switchboard.broker import agent_http, call_http, listener_keys, oauth, oidc, web
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
+from switchboard.broker.backups import Backups
 from switchboard.broker.hub import Hub, WsSubscriber
 from switchboard.broker.passkeys import (
     CLAIM_TTL_S,
@@ -80,6 +81,7 @@ class BrokerState:
     # calls hosted on people's machines (meeting/hosted.py, §54); None until the lifespan wires it
     hosted_calls: Any = None
     attachments: Any = None  # files a room holds (files.py, §53)
+    backups: Backups | None = None
     files_swept: float = 0.0  # when the retention sweep last ran (broker clock)
     shutdown_cb: Callable[[], None] | None = None
     recovery: dict[str, int] = field(default_factory=dict)
@@ -271,6 +273,7 @@ def create_app(
             state.store, FolderStore(paths.files_dir), clock, cfg, web_origin.origin, state.hub
         )
         state.attachments.ensure()
+        state.backups = Backups(state)
         state.service.attachments = state.attachments
         state.engine.attachments = state.attachments
         state.files_swept = clock.now()
@@ -298,6 +301,8 @@ def create_app(
         try:
             yield
         finally:
+            if state.backups is not None:
+                await state.backups.close()
             # a live call leaves the meeting before anything else is torn down (§52)
             if state.hosted_calls is not None:
                 with contextlib.suppress(Exception):
