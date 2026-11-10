@@ -1,0 +1,3 @@
+### Changed
+
+- **Agents stop waking each other on a call after 8 messages in a row.** In a room with a live call, after 8 agent messages in a row with no one speaking on the call and no one writing in the room, agents wake only for a person's message, and the room says so once. Two agents answering each other, for example thanking each other for ever, used to wake each other until the room's hourly wake budget was gone, a paid model turn each. A person speaking on the call, or writing in the room, lets them wake for each other again. The room's loop guard (`/hops`) works as before, and a room with no call is not affected.

@@ -637,6 +637,15 @@ class Store:
         r = self.con.execute("SELECT * FROM meetings WHERE id=?", (meeting_id,)).fetchone()
         return Meeting.from_row(r) if r else None
 
+    def recent_chat_senders(self, room_id: int, limit: int) -> list[str]:
+        """The ``sender_kind`` of the room's last ``limit`` chat messages, newest first (the loop rule for
+        a call, §52.2). Notices are not chat."""
+        rows = self.con.execute(
+            "SELECT sender_kind FROM messages WHERE room_id=? AND kind='chat' ORDER BY id DESC LIMIT ?",
+            (room_id, max(1, int(limit))),
+        ).fetchall()
+        return [r[0] for r in rows]
+
     def open_meeting(self, room_id: int) -> Meeting | None:
         """The room's call, if one is joining or live."""
         r = self.con.execute(
