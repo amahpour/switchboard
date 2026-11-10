@@ -700,6 +700,22 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   scrollbar-width: none;
 }
 .chips::-webkit-scrollbar { display: none; }
+/* The chips take a line of their own under the title when the header is too narrow for them (#704). With
+   the room list and Members both open a 1280 px window leaves the header about 740 px, room for a chip
+   and a half, and the row scrolled: with hands-free on, Running and Budget were out of sight, and whether a
+   room is paused is worth seeing at a glance. The header's own width decides (a container, so a panel that
+   opens or a text size that grows counts), not the window's; .conv-head-box is only there to be that
+   container, since containment on <main> would trap the fixed-position whiteboard player. A phone has its
+   own layout (below). */
+.conv-head-box { container: conv-head / inline-size; flex-shrink: 0; }
+@media (min-width: 761px) {
+  @container conv-head (max-width: 1100px) {
+    .conv-head { flex-wrap: wrap; height: auto; min-height: 52px; row-gap: 0; align-content: flex-start; }
+    .head-title { min-height: 52px; }
+    .conv-head > .chips { order: 1; flex: 1 0 100%; min-width: 100%; padding: 0 0 10px; overflow-x: visible; flex-wrap: wrap; }
+    .head-divider { display: none; }
+  }
+}
 .head-divider { width: 1px; height: 20px; flex-shrink: 0; margin: 0 2px; background: var(--side-border); }
 /* The room's buttons: part of the header's own row on a desktop; a row of their own on a phone */
 .head-tools { display: contents; }
