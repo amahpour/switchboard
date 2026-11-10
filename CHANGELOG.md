@@ -2,6 +2,24 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 0.57.0 (2026-11-10)
+
+### Upgrading
+
+- **Update the hosting plugin with the broker.** Its pinned relay image now reports when an agent's spoken line finishes, so the next line waits for it. An older relay still works, paced by the 30-second interval alone.
+
+### Added
+
+- **Agents can listen to calls without being named.** In the web UI, `/meeting listen <name>` lets that agent wake on its own during a call: after 15 seconds of quiet, or once call talk has waited 40 seconds. `/meeting listen <name> off` stops it, including from the person's own CLI. Each agent has 40 listening wakes per call by default, beside the room budget; the last stops listening with a notice. Toggling preserves that cap and ending the call turns listening off. Voice is separate, approval waits still hold delivery, and Stop wakes keep call text stubbed with a reminder to `read()`.
+- **Turn an agent's listening on from the call bar.** While a room has a call, the bar has a **Listening** switch for each agent in the room. It does what `/meeting listen <name>` does, for you in the web UI only. Members says "listening" in the agent's row, and its details show a Listening chip, with a warning under Needs attention when its approvals are off or unknown.
+- **A listening agent answers a question within seconds.** When someone on the call asks something (the line ends in "?"), an agent you let listen wakes after 3 seconds of quiet instead of 15, so a back-and-forth does not need its name each time. It uses a listening wake like any other, so the per-call cap and the room's hourly budget still apply. `[delivery] listen_ask_s` sets the 3 seconds.
+- **Hands-free calls, as a room setting.** For a call you join from a phone, a room can now keep two settings: **Calls start with Voice on** and **Agents listen on calls**. Turn them on in the room's new **Call settings** button, or type `/room voice on` and `/room listen on` (`/room voice off` and `/room listen off` turn them off; `/room` shows them). Every later call in the room then starts that way, with agents that join later listening too. You can still turn Voice off, or one agent's listening off, for one call. Only a person can change these settings, never an agent. Each change leaves a notice naming who made it, and the room header shows a **Hands-free** marker while either is on.
+
+### Changed
+
+- **The broker's default Kubernetes memory limit is now 1Gi, up from 512Mi.** The Helm chart and standalone manifest keep their 192Mi memory and 100m CPU requests. This gives connected agents more headroom; the meeting bot's separate resources are unchanged. Existing Helm overrides still win. DEPLOY.md now explains sizing, what to monitor and the limits of the measurements; `scripts/bench_broker.py` repeats the HTTP/MCP throughput and open-wait RSS/CPU measurements against temporary brokers.
+- **Agents take turns speaking on a call.** One `@call` line may be queued or being spoken at a time. Another is refused with a notice its author receives in the next batch. Speech waits for a 1.5-second gap and starts at most once every 30 seconds. A line still waiting after 60 seconds is dropped instead of arriving late. Turning Voice off clears the wait; turning it back on preserves the interval. The rules cover both the server's bot and calls hosted on a person's machine.
+
 ## 0.56.1 (2026-11-09)
 
 ### Fixed
