@@ -45,6 +45,7 @@ Agents: a device's agent token made, shown once and revoked, #382),
 connect-opencode-{light,dark,phone-light} (OpenCode V2's plugin, mcp.servers config and environment, #513),
 connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
 environment lines, now with the server's address for the plugin's approval hook, #472),
+voices-{default,pinned}-{light,dark,phone} (Members and the Inspector with each agent's voice on a call, #713),
 oauth-consent-{light,dark,phone-light} (the card an agent that signs in through the browser sends the
 person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
 it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
@@ -3371,6 +3372,81 @@ def shoot_listen(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_voices(browser: Any, out: Path, world: Any) -> None:
+    """#713, a voice for each agent: a live call in a room with claude-1 and codex-1, Members showing the voice each
+    speaks in (``voices-default-{light,dark,phone}``, picked from their names) and after a person typed
+    ``/meeting voice claude-1 bf_emma`` (``voices-pinned-{light,dark,phone}``, with the Inspector's chip on the
+    desktop)."""
+    from playwright.sync_api import expect
+
+    room, b = "#voices", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    for name in ("claude-1", "codex-1"):
+        world.set_member_harness(room, name, name.split("-")[0])
+    world.set_approval_modes(room, {"claude-1": "prompting", "codex-1": "prompting"})
+
+    def begin() -> None:
+        r = b.state.store.get_room(room)
+        row = b.state.store.insert_meeting(r.id, started_by="alice", platform="meet")
+        b.state.store.set_meeting_live(row.id)
+        b.state.service.publish_settings(r.id)
+
+    b.on_loop(begin)
+    variants = {
+        "light": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="light"),
+        "dark": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    pages = {}
+    try:
+        for name, options in variants.items():
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+            ctx.set_default_timeout(WAIT_MS)
+            page = ctx.new_page()
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            expect(page.locator("#banner-meeting")).to_contain_text("Transcribing a call")
+            pages[name] = page
+
+        def take(prefix: str) -> None:
+            for name, page in pages.items():
+                page.evaluate(
+                    """() => document.querySelectorAll('#log .line').forEach(e => {
+                      if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+                )
+                if (
+                    name == "phone"
+                ):  # Members is a panel on a phone: open it, as a person does, to show the voices
+                    page.click("#buddy-toggle")
+                    expect(page.locator("#buddy-list .member").first).to_be_visible()
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                page.mouse.move(0, 0)
+                shot(page, out, f"voices-{prefix}-{name}.png")
+                if name == "phone":
+                    page.keyboard.press("Escape")
+
+        for page in pages.values():
+            expect(page.locator(".m-status", has_text="voice ").first).to_be_visible()
+        take("default")
+        page = pages["light"]
+        page.locator("#input").fill("/meeting voice claude-1 bf_emma")
+        page.keyboard.press("Enter")
+        for other in pages.values():
+            expect(other.locator(".m-status", has_text="voice bf_emma (set)")).to_be_visible()
+        row = page.locator("#buddy-list .member", has=page.locator(".m-name", has_text="claude-1"))
+        row.locator(".m-name").click()
+        expect(page.locator(".insp-chips .chip-voice")).to_have_text("Voice bf_emma")
+        take("pinned")
+    finally:
+        for page in pages.values():
+            page.context.close()
+
+
 def shoot_room_calls(browser: Any, out: Path, world: Any) -> None:
     """#697 phase 5, a room's hands-free calls: the room before (``roomcalls-before-{light,dark,phone}``), the Call
     settings dialog with both boxes ticked (``roomcalls-dialog-*``), and the header marker after Save
@@ -3708,6 +3784,7 @@ ONLY: dict[str, Any] = {
     "admins": shoot_admins,
     "meeting": shoot_meeting_guide,
     "listen": shoot_listen,
+    "voices": shoot_voices,
     "room_calls": shoot_room_calls,
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,

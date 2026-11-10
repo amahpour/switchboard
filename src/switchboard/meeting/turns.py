@@ -31,6 +31,7 @@ class Line:
     queued_at: float
     membership_id: int | None
     answering: bool = False
+    voice: str | None = None  # the Kokoro voice of its speaker, or None: the session's (§52.6)
 
 
 @dataclass
@@ -64,7 +65,13 @@ class Turns:
         self.chain = 0
 
     def offer(
-        self, text: str, now: float, membership_id: int | None = None, *, answering: bool = False
+        self,
+        text: str,
+        now: float,
+        membership_id: int | None = None,
+        *,
+        answering: bool = False,
+        voice: str | None = None,
     ) -> bool:
         """Queue ``text``. ``answering``: the broker knows this agent's last batch put a question to it.
         Never decided from the text."""
@@ -77,7 +84,7 @@ class Turns:
             return False
         self.sequence += 1
         self.chain += 1
-        self.pending = Line(self.sequence, text, now, membership_id, answering)
+        self.pending = Line(self.sequence, text, now, membership_id, answering, voice)
         return True
 
     def ready_at(self) -> float | None:

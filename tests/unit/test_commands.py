@@ -107,6 +107,14 @@ def test_parse_ok(text: str, name: str, args: tuple[str, ...]) -> None:
         "/meeting voice",
         "/meeting voice loud",
         "/meeting voice on now",
+        "/meeting voice claude-1",
+        "/meeting voice claude-1 Bad!",
+        "/meeting voice claude-1 ../x",
+        "/meeting voice claude-1 am-adam",
+        "/meeting voice claude-1 " + "x" * 33,
+        "/meeting voice claude-1 am_adam extra",
+        "/meeting voice bad*name am_adam",
+        "/meeting voice off am_adam",
         "/meeting snapshot now",
         "/meeting leave now",
         "/meeting a b",
@@ -355,3 +363,24 @@ def test_mentions_cover_members_and_the_human(svc: RoomService) -> None:
         "SELECT prio, mentioned FROM deliveries WHERE message_id=?", (m.id,)
     ).fetchall()
     assert [tuple(r) for r in rows] == [(2, 1)]  # human message: prio 2 regardless
+
+
+def test_a_voice_for_a_member_parses_to_its_name_and_a_lowercase_voice() -> None:
+    """``/meeting voice <name> <voice>`` (#713): the name is a screen name, the voice a-z, 0-9 and _, or
+    ``default``. Case is folded; ``on`` and ``off`` stay the switch."""
+    cmd = parse_command("/meeting voice @Claude-1 AM_Adam")
+    assert (cmd.name, cmd.args) == ("meeting", ("voice", "claude-1", "am_adam"))
+    assert parse_command("/meeting voice claude-1 default").args == ("voice", "claude-1", "default")
+    assert parse_command("/meeting voice on").args == ("voice", "on")
+
+
+def test_pinning_a_voice_is_a_persons_command_on_the_web_and_never_the_cli_or_an_agents() -> None:
+    """The role is ``human`` (the web), like ``/meeting voice on``. Fails if the command line, which a script
+    can reach, may pin a voice."""
+    from switchboard.broker.commands import ROLE_RANK, required_role
+
+    class _Room:
+        budget_remaining = 60
+
+    need = required_role(parse_command("/meeting voice claude-1 am_adam"), _Room())  # type: ignore[arg-type]
+    assert need == "human" and ROLE_RANK[CLI.role] < ROLE_RANK[need] <= ROLE_RANK[WEB.role]

@@ -136,6 +136,8 @@ class Joinly:
         self.left = 0
         self.closed = 0
         self.spoken: list[str] = []
+        self.voices: list[str | None] = []  # the voice each line was asked for
+        self.speak_answers: list[str] = []  # answers to give in turn, before speak_answer
         self.speak_answer = "Finished speaking."
         self.fail_speak = False
         self.hold_speech = asyncio.Event()
@@ -179,13 +181,14 @@ class Joinly:
             await asyncio.gather(waiting, stopping, return_exceptions=True)
         self._update.clear()
 
-    async def speak(self, text: str) -> str:
+    async def speak(self, text: str, voice: str | None = None) -> str:
         self.spoken.append(text)
+        self.voices.append(voice)
         if self.gate_speech:
             await self.hold_speech.wait()
         if self.fail_speak:
             raise RuntimeError("could not speak")
-        return self.speak_answer
+        return self.speak_answers.pop(0) if self.speak_answers else self.speak_answer
 
     async def leave(self) -> None:
         self.left += 1

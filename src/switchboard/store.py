@@ -14,6 +14,7 @@ from typing import Any
 
 from switchboard import claims, db, reviews
 from switchboard.clock import Clock, SystemClock
+from switchboard.meeting import voices
 from switchboard.models import (
     ICON_MAX_BYTES,
     ICON_MAX_SIDE,
@@ -940,7 +941,8 @@ class Store:
     def members(self, room_id: int) -> list[Member]:
         rows = self.con.execute(
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
-            " m.held, m.quiet, m.listen, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
+            " m.held, m.quiet, m.listen, m.call_voice, m.joined_at, p.harness, p.status, p.tier,"
+            " p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -966,6 +968,7 @@ class Store:
                 held=bool(r["held"]),
                 quiet=bool(r["quiet"]),
                 listen=bool(r["listen"]),
+                call_voice=r["call_voice"],
                 joined_at=r["joined_at"],
                 queued=r["queued"],
                 inflight=r["inflight"],
@@ -985,6 +988,14 @@ class Store:
             )
             for r in rows
         ]
+
+    def set_call_voice(self, membership_id: int, voice: str | None) -> None:
+        """Pin the Kokoro voice this member speaks with on calls, or None for its default (§52.6). The shape
+        is checked here and by the table; a bad one raises ``ValueError`` and changes nothing."""
+        if voice is not None and not voices.valid(voice):
+            raise ValueError("a voice is a-z, 0-9 and _, 1 to 32 characters")
+        with db.tx(self.con):
+            self.con.execute("UPDATE memberships SET call_voice=? WHERE id=?", (voice, membership_id))
 
     def find_member(self, room_id: int, name: str) -> Member | None:
         for m in self.members(room_id):

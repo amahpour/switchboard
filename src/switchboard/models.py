@@ -328,6 +328,7 @@ class Member:
     held: bool
     joined_at: float
     listen: bool = False  # call chatter may start a turn (§52.1)
+    call_voice: str | None = None  # the voice a person pinned for it on calls; None: its default (§52.6)
     quiet: bool = False  # wake only for what is addressed (#548, §50); off until a person sets it
     queued: int = 0
     inflight: int = 0
@@ -678,6 +679,7 @@ class Membership:
     quiet: bool = False  # wake only for what is addressed (#548, §50)
     listen_call_id: int | None = None
     listen_wakes: int = 0
+    call_voice: str | None = None  # the Kokoro voice a person pinned for its lines on calls (§52.6)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Membership":

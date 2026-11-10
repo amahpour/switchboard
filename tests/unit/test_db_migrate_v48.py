@@ -28,7 +28,7 @@ def test_both_settings_default_off_and_old_rows_and_backup_survive(
         old.close()
     assert rooms > 0
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 48
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 49
     assert [tuple(r) for r in con.execute("SELECT * FROM messages")] == messages
     assert (
         con.execute("SELECT COUNT(*) FROM rooms WHERE call_voice=0 AND call_listen=0").fetchone()[0] == rooms

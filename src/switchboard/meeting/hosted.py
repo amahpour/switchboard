@@ -38,13 +38,14 @@ from typing import TYPE_CHECKING, Any
 
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
-from switchboard.meeting import ingest, keys
+from switchboard.meeting import ingest, keys, voices
 from switchboard.meeting.ingest import LINE_GAP_S
 from switchboard.meeting.lines import CAP, Assembler, Line, Segment
 from switchboard.meeting.links import PLATFORM_LABEL, MeetingLink
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.speech import call_text, speakable
 from switchboard.meeting.turns import MAX_ID, STALE_NOTICE, Turns
+from switchboard.meeting.voices import voice_of
 from switchboard.models import InvalidName, Meeting, Room, normalize_room, split_session_key
 from switchboard.store import Conflict
 
@@ -140,6 +141,7 @@ class _Call:
     last_post: float | None = None
     voice: bool = False
     turns: Turns = field(default_factory=Turns)
+    missing: set[str] = field(default_factory=set)  # voices Kokoro lacked, already told to the room (§52.6)
     waiters: set[asyncio.Event] = field(default_factory=set)
     polling: int = 0
     seq: int = 0  # the newest speech poll: an older one is answered empty at once
@@ -210,6 +212,17 @@ def done_in(body: Any) -> int | None:
         return None
     if type(value) is not int or not 1 <= value <= MAX_ID:
         raise Refused(400, "bad_request", "done must be a positive speech id")
+    return value
+
+
+def voice_missing_in(body: Any) -> bool:
+    """Whether a finished line's voice was not found by Kokoro (a relay since #713). Anything but a boolean is
+    refused, never read as either."""
+    if not isinstance(body, dict) or "voice_missing" not in body:
+        return False
+    value = body["voice_missing"]
+    if type(value) is not bool:
+        raise Refused(400, "bad_request", "voice_missing must be true or false")
     return value
 
 
@@ -561,7 +574,8 @@ class HostedCalls:
         if not line:
             return
         self._expire_speech(st)
-        if not st.turns.offer(line, self.state.clock.now(), membership_id, answering=answering):
+        voice = voice_of(self.state.store, membership_id)
+        if not st.turns.offer(line, self.state.clock.now(), membership_id, answering=answering, voice=voice):
             self.state.service.call_voice_notice(room_id, st.turns.refusal_notice, membership_id)
             return
         self._wake(st)
@@ -577,7 +591,13 @@ class HostedCalls:
         return st.voice and at is not None and self.state.clock.now() >= at
 
     async def speech(
-        self, row: Meeting, wait_s: float, done: int | None = None, *, turns: bool = False
+        self,
+        row: Meeting,
+        wait_s: float,
+        done: int | None = None,
+        *,
+        turns: bool = False,
+        voice_missing: bool = False,
     ) -> dict[str, Any]:
         """The long poll: what the relay is to speak (only while voice is on), the room's names as the
         transcriber's hotwords, the voice switch and whether the call is over. Answered at once when there
@@ -589,6 +609,7 @@ class HostedCalls:
         st.last_seen = now
         self._take(st, 1, now)
         if done is not None:
+            self._voice_missing(st, done, voice_missing)
             st.turns.finish(done)
         st.seq += 1
         mine = st.seq
@@ -621,11 +642,25 @@ class HostedCalls:
         return {
             "lines": [line.text] if line is not None else [],
             "speech_id": line.id if line is not None else None,
+            # the Kokoro voice for that line, or null: the relay checks its shape again; an older relay
+            # ignores the field and speaks in the call's one voice (§52.6)
+            "line_voice": line.voice if line is not None else None,
             "hints": words,
             "voice": st.voice,
             "ended": st.ended,
             "tts_voice": self.state.cfg.meeting.tts_voice,
         }
+
+    def _voice_missing(self, st: _Call, done: int, missing: bool) -> None:
+        """The relay says the line it just finished had a voice Kokoro lacks: tell the room, once a call for
+        each voice. Only the active line's own id counts, and only its own voice is named."""
+        line = st.turns.active
+        if not missing or line is None or line.id != done or line.voice is None or line.voice in st.missing:
+            return
+        st.missing.add(line.voice)
+        self.state.service.notice_in(
+            st.room_id, voices.missing_notice(self.state.store, line.membership_id, line.voice)
+        )
 
     @staticmethod
     def _wake(st: _Call) -> None:
