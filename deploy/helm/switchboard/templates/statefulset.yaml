@@ -184,6 +184,18 @@ spec:
               subPath: transcription.py
               readOnly: true
             {{- end }}
+            {{- with .Values.meetings.voicePatch.configMap }}
+            # joinly 0.5.4 has one voice for a whole call (#713): the patched server and Kokoro files go over
+            # the image's copies, read-only, the same way, so a line can name its voice.
+            - name: joinly-voice-patch
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/server.py
+              subPath: server.py
+              readOnly: true
+            - name: joinly-voice-patch
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py
+              subPath: kokoro.py
+              readOnly: true
+            {{- end }}
           # joinly has GET /health ({"status":"healthy"}). It listens on 127.0.0.1 only, and a kubelet's
           # httpGet and tcpSocket probes go to the pod's IP, so the probe runs inside the container, with
           # the image's Python (there is no curl).
@@ -240,6 +252,11 @@ spec:
         {{- end }}
         {{- with .Values.meetings.prerollFix.configMap }}
         - name: joinly-preroll-fix
+          configMap:
+            name: {{ . | quote }}
+        {{- end }}
+        {{- with .Values.meetings.voicePatch.configMap }}
+        - name: joinly-voice-patch
           configMap:
             name: {{ . | quote }}
         {{- end }}

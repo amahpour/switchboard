@@ -12,7 +12,7 @@ Two tests:
    joinly and is heard from. A person's End call makes it leave and exit 0 and takes joinly down with it,
    and ``stop`` removes what is left. This is the test to run on any machine with Docker and the joinly
    image.
-2. **Every meetings feature with a hosted bot in a real call.** The same six steps as
+2. **Every meetings feature with a hosted bot in a real call.** The same seven steps as
    ``test_meeting_selftest.py`` against a real call (``SWITCHBOARD_MEETING_URL_FILE``, mode 0600, as
    there), with one difference in how the bot gets there: step 1 is the host script, not ``/meeting
    <link>``. The scripted agent ``claude-1`` hears the call and answers as before. The hosting person's
@@ -94,7 +94,7 @@ READY_S = 240.0  # joinly's start, in the container
 STOP_S = 60.0
 REMOTE_WAIT_S = 1800.0
 
-# The six steps as a hosted bot has them: the same, but for where the bot comes from and what step 5 can do.
+# The seven steps as a hosted bot has them: the same, but for where the bot comes from and what step 5 can do.
 HOSTED_STEPS = {
     **base.STEPS,
     1: (
@@ -106,7 +106,7 @@ HOSTED_STEPS = {
         "a hosted call has no snapshot yet, and says so",
         "/meeting snapshot is answered with a sentence that says a hosted call has none, and posts no card",
     ),
-    6: (
+    7: (
         "the bots leave and the containers stop",
         "the bar ends and the speaker no longer sees the bot; the speaker leaves; relay and joinly are gone",
     ),
@@ -303,7 +303,7 @@ async def test_a_hosted_bot_starts_and_stops_cleanly_without_a_call(tmp_home: Pa
         shutil.rmtree(root, ignore_errors=True)
 
 
-# ----------------------------------------------------------------------- 2: a real call, six steps
+# ----------------------------------------------------------------------- 2: a real call, seven steps
 class HostedWorld(base.World):
     """``World`` with step 1 done by the host script (or by a person on the other machine), step 5 asking
     what a
@@ -427,10 +427,20 @@ class HostedWorld(base.World):
         await self.step(3, self.wake, [self.needs_bot, self.needs_speaker])
         await self.step(4, self.hear, [self.needs_bot, self.needs_speaker])
         await self.step(5, self.snapshot, [self.needs_bot])
-        await self.step(6, self.leave, [self.needs_bot, self.needs_speaker])
+        if self.voice_patch:
+            await self.step(6, self.voices, [self.needs_bot, self.needs_speaker])
+        await self.step(7, self.leave, [self.needs_bot, self.needs_speaker])
         if self.observer is not None:
             with contextlib.suppress(Exception):
                 await self.observer.leave()
+
+
+def hosted_specs(link: SecretLink) -> dict[int, tuple[str, str]]:
+    """The step table, without the voices step (6) when joinly runs stock: it needs the voice patch."""
+    specs = selftest.step_specs(HOSTED_STEPS, PLATFORM_LABEL[link.platform])
+    if not base.World.voice_patch:
+        del specs[6]
+    return specs
 
 
 def speaker_fixes(link: SecretLink, containers: dict[str, base.Joinly], stock: bool) -> None:
@@ -439,6 +449,12 @@ def speaker_fixes(link: SecretLink, containers: dict[str, base.Joinly], stock: b
     ``SWITCHBOARD_LIVE_FIXES_DIR`` when it has the pinned files, else fetched and checked by sha256."""
     if stock:
         return
+    for name, (voice_sha256, target) in base.VOICE_PATCH.items():  # this repository's own files (#713)
+        copy = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / name
+        copy.write_bytes(selftest.check_pinned((base.VOICE_PATCH_DIR / name).read_bytes(), voice_sha256))
+        copy.chmod(0o644)
+        for box in containers.values():
+            box.mounts.append((copy, target))
     wanted = [(base.PREROLL_FIX_URL, base.PREROLL_FIX_SHA256, "transcription.py", base.CONTROLLER_PY)]
     if link.platform == "zoom":
         wanted.append((base.ZOOM_FIX_URL, base.ZOOM_FIX_SHA256, "zoom.py", base.ZOOM_PY))
@@ -459,7 +475,7 @@ def speaker_fixes(link: SecretLink, containers: dict[str, base.Joinly], stock: b
 async def test_every_meetings_feature_against_a_real_call_with_a_hosted_bot(
     tmp_home: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The six steps with the bot hosted: the same words, the same call, but the bot is the script's joinly
+    """The seven steps with the bot hosted: the same words, the same call, but the bot is the script's joinly
     and relay (here, or on another machine in ``remote`` mode). Fails (naming the steps) like the other
     self-test, and also if a container is left behind or any piece of the link is found in the broker's
     database, messages
@@ -501,7 +517,7 @@ async def test_every_meetings_feature_against_a_real_call_with_a_hosted_bot(
         try:
             # The speaker (and the observer) are still up. A failed step keeps their logs, scrubbed,
             # before they are removed. The host's own containers were saved inside the run, before stop.
-            selftest.fill_unattempted(steps, selftest.step_specs(HOSTED_STEPS, PLATFORM_LABEL[link.platform]))
+            selftest.fill_unattempted(steps, hosted_specs(link))
             saved.extend(base.kept_logs(containers, out_dir, pieces, steps))
         finally:
             removed = [box.remove() for box in containers.values()]
@@ -595,9 +611,7 @@ async def run_hosted_in_a_broker(
                 try:
                     if world.project:
                         # stop removes these containers. A failed step has to read their logs first.
-                        selftest.fill_unattempted(
-                            steps, selftest.step_specs(HOSTED_STEPS, PLATFORM_LABEL[link.platform])
-                        )
+                        selftest.fill_unattempted(steps, hosted_specs(link))
                         saved.extend(hosted_container_logs(world.project, out_dir, link.parts(), steps))
                 finally:
                     if machine is not None:

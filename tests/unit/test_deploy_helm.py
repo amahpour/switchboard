@@ -221,12 +221,19 @@ def _merge(base: Any, patch: Any) -> Any:
         for key, value in patch.items():
             out[key] = _merge(base[key], value) if key in base else copy.deepcopy(value)
         return out
-    named = [i for i in (*(base or []), *(patch or [])) if isinstance(i, dict) and "name" in i]
-    if isinstance(base, list) and isinstance(patch, list) and len(named) == len(base) + len(patch):
-        merged = {i["name"]: i for i in base}
-        for item in patch:
-            merged[item["name"]] = _merge(merged[item["name"]], item) if item["name"] in merged else item
-        return list(merged.values())
+    if isinstance(base, list) and isinstance(patch, list):
+        # a mount is keyed by where it goes (Kubernetes' patch key for volumeMounts), the rest by name: the
+        # voice patch (#713) mounts two files from one volume
+        def key(i: Any) -> Any:
+            return i.get("mountPath", i.get("name")) if isinstance(i, dict) else None
+
+        keyed = [key(i) for i in (*base, *patch)]
+        if all(k is not None for k in keyed):
+            merged = {key(i): i for i in base}
+            for item in patch:
+                k = key(item)
+                merged[k] = _merge(merged[k], item) if k in merged else item
+            return list(merged.values())
     return copy.deepcopy(patch)
 
 
@@ -291,19 +298,31 @@ def test_the_defaults_render_the_manifest(render: Callable[..., Rendered]) -> No
 @needs_helm
 @pytest.mark.parametrize(
     "fixes",
-    [(), ("zoom",), ("preroll",), ("zoom", "preroll")],
-    ids=["bot", "bot-and-zoom-fix", "bot-and-preroll-fix", "bot-and-both-fixes"],
+    [(), ("zoom",), ("preroll",), ("zoom", "preroll"), ("voice",), ("zoom", "preroll", "voice")],
+    ids=[
+        "bot",
+        "bot-and-zoom-fix",
+        "bot-and-preroll-fix",
+        "bot-and-both-fixes",
+        "bot-and-voice-patch",
+        "bot-and-all-three",
+    ],
 )
 def test_the_meeting_bot_renders_the_patch(render: Callable[..., Rendered], fixes: tuple[str, ...]) -> None:
     """``meetings.enabled`` is deploy/kubernetes/meetings/joinly.yaml applied to the manifest, and
-    ``meetings.zoomFix.configMap`` and ``meetings.prerollFix.configMap`` are joinly-zoom-fix.yaml and
-    joinly-preroll-fix.yaml: joinly beside the broker on the pod's loopback with no port, the exec probes
+    ``meetings.zoomFix.configMap``, ``meetings.prerollFix.configMap`` and
+    ``meetings.voicePatch.configMap`` are joinly-zoom-fix.yaml, joinly-preroll-fix.yaml and
+    joinly-voice-patch.yaml: joinly beside the broker on the pod's loopback with no port, the exec probes
     and no readiness probe, uid 1001, the same volumes, the default-container annotation. What differs is
     named: the broker is told how many calls (the variable), and joinly's memory comes from ``maxCalls``
     (the next test). Fails on any other line."""
     sets = [*SET_BASE, "meetings.enabled=true"]
     patches = [_patch("joinly.yaml")]
     for fix in fixes:  # the ConfigMap names the patches use
+        if fix == "voice":  # #713: two files in one ConfigMap, `meetings.voicePatch`
+            sets.append("meetings.voicePatch.configMap=joinly-voice-patch")
+            patches.append(_patch("joinly-voice-patch.yaml"))
+            continue
         sets.append(f"meetings.{fix}Fix.configMap=joinly-{fix}-fix")
         patches.append(_patch(f"joinly-{fix}-fix.yaml"))
     chart = render(*sets)

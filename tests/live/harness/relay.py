@@ -90,12 +90,14 @@ def relay_image() -> str:
 
 
 def pinned() -> dict[str, str]:
-    """``{file name: sha256}`` of the fixes the plugin pins."""
+    """``{file name: sha256}`` of the fixes the plugin pins that are downloaded. The ones it ships itself
+    (``plugin:joinly/server.py``, the voice patch) need no folder: the script copies them from the plugin."""
     out = {}
     for line in PINS.read_text().splitlines():
         if line.strip() and not line.startswith("#"):
-            name, sha, _url = line.split()
-            out[name] = sha
+            name, sha, url = line.split()
+            if not url.startswith("plugin:"):
+                out[name] = sha
     return out
 
 

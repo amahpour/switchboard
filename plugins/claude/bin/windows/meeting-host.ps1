@@ -235,12 +235,23 @@ function Ensure-Fixes([string]$data) {
         if (Test-Path -LiteralPath $file) { $have = Sha256Hex ([IO.File]::ReadAllBytes($file)) }
         if ($have -cne $sum) {
             $tmp = Join-Path $fixes ('.fetch.' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
-            try {
-                try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
-                Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp -TimeoutSec 120 | Out-Null
-            } catch {
-                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
-                Die "could not fetch $name from the address in meeting/fixes.pins; run again when it can be reached"
+            if ($url.StartsWith('plugin:')) {
+                # a file this plugin ships: no download, and the same check as for one that was fetched
+                $rel = $url.Substring(7)
+                if ($rel -match '(^|[\\/])\.\.?([\\/]|$)') { Die "meeting/fixes.pins: $name has a path that leaves the plugin" }
+                $src = Join-Path (Join-Path $plugin 'meeting') $rel
+                try { Copy-Item -LiteralPath $src -Destination $tmp -Force -ErrorAction Stop } catch {
+                    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                    Die "the plugin has no ${src}: reinstall the plugin"
+                }
+            } else {
+                try {
+                    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
+                    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmp -TimeoutSec 120 | Out-Null
+                } catch {
+                    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                    Die "could not fetch $name from the address in meeting/fixes.pins; run again when it can be reached"
+                }
             }
             $got = Sha256Hex ([IO.File]::ReadAllBytes($tmp))
             if ($got -cne $sum) {

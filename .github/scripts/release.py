@@ -53,12 +53,14 @@ ROOT = Path(__file__).resolve().parents[2]
 TYPES = ("feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert")
 TITLE_RE = re.compile(r"^(?P<type>[a-z]+)(?:\((?P<scope>[a-z0-9._/-]+)\))?(?P<bang>!)?: (?P<subject>\S.*)$")
 RELEASE_PREFIX = "release: "
-RELEASE_TITLE_RE = re.compile(r"^release: v(?P<version>\d+\.\d+\.\d+)$")       # a release PR's title
+RELEASE_TITLE_RE = re.compile(r"^release: v(?P<version>\d+\.\d+\.\d+)$")  # a release PR's title
 MERGED_RELEASE_RE = re.compile(r"^release: v(?P<version>\d+\.\d+\.\d+)(?: \(#\d+\))?$")  # its squash commit
 VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 TAG_RE = re.compile(r"^v(\d+\.\d+\.\d+)$")
 PIN_RE = re.compile(r"(git\+https://github\.com/amahpour/switchboard@)v\d+\.\d+\.\d+")
 IMAGE_PIN_RE = re.compile(r"(ghcr\.io/amahpour/switchboard:)\d+\.\d+\.\d+(?![\w.-])")
+# the joinly voice patch's files in this repository, downloaded from a release's tag (#713)
+RAW_PIN_RE = re.compile(r"(raw\.githubusercontent\.com/amahpour/switchboard/)v\d+\.\d+\.\d+(/deploy/joinly/)")
 # a plugin pinned to a release tag (#462)
 MARKETPLACE_REF_RE = re.compile(r'("ref"\s*:\s*")v\d+\.\d+\.\d+(")')
 VERSION_FILES = ("pyproject.toml", "src/switchboard/__init__.py", "uv.lock")
@@ -67,19 +69,34 @@ MARKETPLACE_FILES = (".claude-plugin/marketplace.json", ".agents/plugins/marketp
 # `version` is the chart's, and stays.
 CHART_FILE = "deploy/helm/switchboard/Chart.yaml"
 CHART_APP_VERSION_RE = re.compile(r'(?m)^(appVersion:[ \t]*")\d+\.\d+\.\d+(")')
-PIN_FILES = ("README.md", "docs/INSTALL.md", "docs/DEPLOY.md", "deploy/compose/compose.yaml",
-             "deploy/kubernetes/switchboard.yaml", "deploy/render/render.yaml",
-             "plugins/claude/meeting/compose.yaml",
-             "plugins/codex/meeting/compose.yaml")   # a call's relay on a person's machine (#623)
+PIN_FILES = (
+    "README.md",
+    "docs/INSTALL.md",
+    "docs/DEPLOY.md",
+    "deploy/compose/compose.yaml",
+    "deploy/kubernetes/switchboard.yaml",
+    "deploy/render/render.yaml",
+    "plugins/claude/meeting/compose.yaml",
+    "plugins/codex/meeting/compose.yaml",  # a call's relay on a person's machine (#623)
+    "deploy/kubernetes/meetings/joinly-voice-patch.yaml",
+)  # the patch's files at the tag (#713)
 # each plugin's folder and its manifest: a plugin is kept by its `version` (§49.5), so a release that
 # moves a pin inside the folder bumps the manifest's patch (#705)
-PLUGIN_MANIFESTS = {"plugins/claude": "plugins/claude/.claude-plugin/plugin.json",
-                    "plugins/codex": "plugins/codex/.codex-plugin/plugin.json"}
+PLUGIN_MANIFESTS = {
+    "plugins/claude": "plugins/claude/.claude-plugin/plugin.json",
+    "plugins/codex": "plugins/codex/.codex-plugin/plugin.json",
+}
 PLUGIN_VERSION_RE = re.compile(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")')
 # with the notes files, all a release PR changes
-RELEASE_FILES = (*VERSION_FILES, "CHANGELOG.md", *PIN_FILES, *MARKETPLACE_FILES, CHART_FILE,
-                 *PLUGIN_MANIFESTS.values())
-CHANGES_DIR = "changes"   # a PR's notes: changes/<name>.md (changes/README.md)
+RELEASE_FILES = (
+    *VERSION_FILES,
+    "CHANGELOG.md",
+    *PIN_FILES,
+    *MARKETPLACE_FILES,
+    CHART_FILE,
+    *PLUGIN_MANIFESTS.values(),
+)
+CHANGES_DIR = "changes"  # a PR's notes: changes/<name>.md (changes/README.md)
 # a release's headings in this order; any other heading follows them, in the order first seen
 HEADING_ORDER = ("Upgrading", "Added", "Changed", "Removed", "Fixed", "Known limitations", "Not included")
 
@@ -109,7 +126,7 @@ def is_breaking(subject: str, body: str) -> bool:
 
 
 def bump_kind(commits: list[tuple[str, str]]) -> str | None:
-    """"minor", "patch" or None (nothing to release), from (subject, body) pairs."""
+    """ "minor", "patch" or None (nothing to release), from (subject, body) pairs."""
     kind = None
     for subject, body in commits:
         if subject.startswith(RELEASE_PREFIX):
@@ -165,21 +182,22 @@ def gather_notes(texts: list[str]) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def cut_changelog(text: str, version: str, date: str, notes_files: list[str],
-                  fallback: list[str]) -> tuple[str, str]:
+def cut_changelog(
+    text: str, version: str, date: str, notes_files: list[str], fallback: list[str]
+) -> tuple[str, str]:
     """(the new CHANGELOG, this release's notes). The notes files' texts, and an old-style
     "## Unreleased" section's (which goes), become "## X.Y.Z (date)" above the last release."""
     if f"\n## {version} (" in text:
         raise SystemExit(f"CHANGELOG.md already has a {version} section")
     unreleased = ""
-    if m := re.search(r"(?m)^## Unreleased[ \t]*\n", text):   # the one shared section, before changes/
+    if m := re.search(r"(?m)^## Unreleased[ \t]*\n", text):  # the one shared section, before changes/
         nxt = text.find("\n## ", m.end() - 1)
         end = len(text) if nxt < 0 else nxt + 1
-        unreleased, text = text[m.end():end], text[:m.start()] + text[end:]
+        unreleased, text = text[m.end() : end], text[: m.start()] + text[end:]
     notes = gather_notes([unreleased, *notes_files]) or "\n".join(f"- {line}" for line in fallback)
     section = f"## {version} ({date})\n\n{notes}\n\n"
     if first := re.search(r"(?m)^## ", text):
-        return text[:first.start()] + section + text[first.start():], notes + "\n"
+        return text[: first.start()] + section + text[first.start() :], notes + "\n"
     return text.rstrip("\n") + "\n\n" + section.rstrip("\n") + "\n", notes + "\n"
 
 
@@ -189,7 +207,7 @@ def notes_for(text: str, version: str) -> str:
     if not m:
         raise SystemExit(f"CHANGELOG.md has no {version} section")
     nxt = text.find("\n## ", m.end())
-    return text[m.end():len(text) if nxt < 0 else nxt].strip("\n") + "\n"
+    return text[m.end() : len(text) if nxt < 0 else nxt].strip("\n") + "\n"
 
 
 def merged_release(title: str, root: Path) -> str | None:
@@ -201,8 +219,9 @@ def merged_release(title: str, root: Path) -> str | None:
         return None
     have = re.search(r'(?m)^version = "([^"]+)"', (root / "pyproject.toml").read_text())
     if not have or have[1] != m["version"]:
-        raise SystemExit(f"{title!r} releases {m['version']}, "
-                         f"but pyproject.toml says {have[1] if have else 'nothing'}")
+        raise SystemExit(
+            f"{title!r} releases {m['version']}, but pyproject.toml says {have[1] if have else 'nothing'}"
+        )
     return m["version"]
 
 
@@ -223,7 +242,9 @@ def set_version(root: Path, version: str) -> None:
 
 
 def update_pins(text: str, version: str) -> str:
-    """The install pins (``…switchboard@vX.Y.Z``) and the image pins (``…/switchboard:X.Y.Z``)."""
+    """The install pins (``…switchboard@vX.Y.Z``), the image pins (``…/switchboard:X.Y.Z``) and the voice
+    patch's download address (``…/switchboard/vX.Y.Z/deploy/joinly/…``)."""
+    text = RAW_PIN_RE.sub(rf"\g<1>v{version}\g<2>", text)
     return IMAGE_PIN_RE.sub(rf"\g<1>{version}", PIN_RE.sub(rf"\g<1>v{version}", text))
 
 
@@ -242,8 +263,7 @@ def bump_plugin(text: str, where: str = "a plugin manifest") -> str:
     """A plugin manifest with its patch version raised by one (#705). Claude Code and Codex keep an installed
     plugin by this `version`, so a pin moved inside the plugin that leaves it alone never reaches anyone who
     has the plugin. A manifest with no `"version": "X.Y.Z"` stops the release instead of passing."""
-    bumped, n = PLUGIN_VERSION_RE.subn(
-        lambda m: f"{m[1]}{m[2]}.{m[3]}.{int(m[4]) + 1}{m[5]}", text, count=1)
+    bumped, n = PLUGIN_VERSION_RE.subn(lambda m: f"{m[1]}{m[2]}.{m[3]}.{int(m[4]) + 1}{m[5]}", text, count=1)
     if n != 1:
         raise SystemExit(f'{where} has no `"version": "X.Y.Z"` to bump')
     return bumped
@@ -329,12 +349,13 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
     set_version(root, version)
     fallback = [s for s, _ in commits if not s.startswith(RELEASE_PREFIX)]
     files = notes_files(root)
-    changelog, notes = cut_changelog((root / "CHANGELOG.md").read_text(), version, today,
-                                     [p.read_text() for p in files], fallback)
+    changelog, notes = cut_changelog(
+        (root / "CHANGELOG.md").read_text(), version, today, [p.read_text() for p in files], fallback
+    )
     (root / "CHANGELOG.md").write_text(changelog)
     for p in files:
-        p.unlink()   # gathered into the release (`git commit -a` records the deletions)
-    moved: set[str] = set()   # the plugins whose own files a pin moved in
+        p.unlink()  # gathered into the release (`git commit -a` records the deletions)
+    moved: set[str] = set()  # the plugins whose own files a pin moved in
     for rel in PIN_FILES:
         p = root / rel
         if p.exists():
@@ -342,7 +363,7 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
             new = update_pins(old, version)
             p.write_text(new)
             moved.update(folder for folder in PLUGIN_MANIFESTS if new != old and rel.startswith(f"{folder}/"))
-    for folder in sorted(moved):   # #705
+    for folder in sorted(moved):  # #705
         manifest = root / PLUGIN_MANIFESTS[folder]
         manifest.write_text(bump_plugin(manifest.read_text(), PLUGIN_MANIFESTS[folder]))
     for rel in MARKETPLACE_FILES:
@@ -360,8 +381,10 @@ def open_pr(root: Path, today: str) -> str | None:
     """Cut the next release on `release/vX.Y.Z` from origin/main and open its PR; the PR's URL,
     or None with nothing to release. Works in a temporary worktree, so the checkout it runs
     from (its branch, its changes) is never touched."""
-    listed = json.loads(gh("pr", "list", "--state", "open", "--json", "number,headRefName",
-                           "--limit", "200", root=root) or "[]")
+    listed = json.loads(
+        gh("pr", "list", "--state", "open", "--json", "number,headRefName", "--limit", "200", root=root)
+        or "[]"
+    )
     if stale := [f"#{p['number']}" for p in listed if p["headRefName"].startswith("release/")]:
         raise SystemExit(f"release PR {', '.join(stale)} is still open: merge it or close it first")
     git("fetch", "-q", "--tags", "origin", "main", root=root)
@@ -377,11 +400,24 @@ def open_pr(root: Path, today: str) -> str | None:
             git("commit", "-q", "-am", f"release: v{version}", root=tree)
             # a branch left over from a closed release PR is replaced (no release PR is open)
             git("push", "-q", "--force", "origin", f"HEAD:refs/heads/{branch}", root=tree)
-            notes.write_text(notes.read_text() + "\n---\n\nOpened by `.github/scripts/release.py --open-pr`. "
-                             f"Merging it tags `v{version}` and publishes the GitHub Release and the image "
-                             "(`.github/workflows/release.yml`).\n")
-            return gh("pr", "create", "--base", "main", "--head", branch, "--title", f"release: v{version}",
-                      "--body-file", str(notes), root=tree).strip()
+            notes.write_text(
+                notes.read_text() + "\n---\n\nOpened by `.github/scripts/release.py --open-pr`. "
+                f"Merging it tags `v{version}` and publishes the GitHub Release and the image "
+                "(`.github/workflows/release.yml`).\n"
+            )
+            return gh(
+                "pr",
+                "create",
+                "--base",
+                "main",
+                "--head",
+                branch,
+                "--title",
+                f"release: v{version}",
+                "--body-file",
+                str(notes),
+                root=tree,
+            ).strip()
         finally:
             git("worktree", "remove", "--force", str(tree), root=root)
 

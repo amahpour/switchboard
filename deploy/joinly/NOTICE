@@ -1,0 +1,27 @@
+joinly v0.5.4 files, changed by switchboard (#713, DESIGN.md section 52.5)
+
+server.py and kokoro.py are copies of two files of joinly v0.5.4
+(https://github.com/joinly-ai/joinly, tag v0.5.4), which is MIT licensed:
+Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. The licence is
+at the top of each file, as it requires. switchboard is not affiliated with joinly.
+
+They are mounted read-only over the image's own copies, pinned by sha256 (docs/DEPLOY.md,
+"A meeting bot"), until a joinly release lets `speak_text` take a voice.
+
+What changed from v0.5.4
+
+  joinly/server.py
+    - `speak_text` takes an optional `voice` (a Kokoro voice name: a-z, 0-9 and _, 1 to 32
+      characters), for that call of the tool only.
+    - It sets the voice for the length of the call and clears it afterwards.
+    - When Kokoro did not know the voice, the answer reads "Finished speaking. The voice was
+      not found, so the session's voice was used." instead of "Finished speaking."
+
+  joinly/services/tts/kokoro.py
+    - A context variable holds the voice of the line being spoken. `_tts` reads it and falls
+      back to the session's voice (`tts_args`) when it is unset or Kokoro has no such voice.
+
+Both files are also formatted with this repository's ruff settings, so its lint passes (line
+breaks and an import order only). Without a `voice`, joinly behaves as v0.5.4.
+The same two files are in plugins/claude/meeting/joinly/ and plugins/codex/meeting/joinly/;
+tests/unit/test_joinly_voice_patch.py keeps the three copies identical.
