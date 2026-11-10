@@ -195,6 +195,8 @@ class Engine:
         room = self.store.room_by_id(m.room_id)
         if p is None or room is None or room.paused or room.budget_remaining <= 0:
             return None
+        if self._voice_loop(room):
+            return None  # only a person's message wakes this member now (#713): nothing waits on a hold
         sink = self.sinks.open_for(p.id, m.id)
         if not rules.is_idle(rules.effective_status(p.status, sink is not None)):
             return None
@@ -435,6 +437,7 @@ class Engine:
             listen_quiet_s=self.d.listen_quiet_s,
             listen_hold_s=self.d.listen_hold_s,
             listen_ask_s=self.d.listen_ask_s,
+            voice_loop=self._voice_loop(room),
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
@@ -1193,9 +1196,34 @@ class Engine:
                 " is paused; /resume in the web UI to continue."
                 f" /hops <n> changes the limit (now {room.hop_limit}).",
             )
+        if msg.sender_kind == "agent" and self._voice_loop(room, exactly=True):
+            self._event("voice_loop", room_id=room.id, lines=rules.VOICE_LOOP_LINES)
+            out.append(
+                Notice(
+                    room.id,
+                    "warn",
+                    f"{rules.VOICE_LOOP_LINES} agent messages in a row on a live call with no one speaking"
+                    f" on it or writing here: agents now wake only for {self._whose()} messages until"
+                    " someone speaks on the call or writes in the room.",
+                )
+            )
         out += self.evaluate_room(room.id)
         out.append(Snapshot(room.id))
         return out
+
+    def _voice_loop(self, room: Room, *, exactly: bool = False) -> bool:
+        """Whether this room's agents are waking only for a person, because its call has had
+        ``VOICE_LOOP_LINES`` agent messages in a row (#713, §52.2). ``exactly``: only at the message that
+        makes it so (the one that earns the notice), not at every one after it. Read from the stored
+        messages, so a restart forgets nothing and no counter can drift."""
+        call = self.store.open_meeting(room.id)
+        if call is None or call.state != "live":
+            return False
+        n = rules.VOICE_LOOP_LINES
+        kinds = self.store.recent_chat_senders(room.id, 4 * n)
+        if exactly:
+            return rules.voice_loop_run(kinds, n + 1) == n
+        return rules.voice_loop_tripped(kinds, True)
 
     # ============================================================== commands
     def pause_room(
@@ -1589,6 +1617,7 @@ class Engine:
                 listen_quiet_s=self.d.listen_quiet_s,
                 listen_hold_s=self.d.listen_hold_s,
                 listen_ask_s=self.d.listen_ask_s,
+                voice_loop=self._voice_loop(room),
             )
             if rel is None or rel.kind != "wake":
                 continue
@@ -1751,6 +1780,7 @@ class Engine:
                 listen_quiet_s=self.d.listen_quiet_s,
                 listen_hold_s=self.d.listen_hold_s,
                 listen_ask_s=self.d.listen_ask_s,
+                voice_loop=self._voice_loop(room),
             )
             if rel is None:
                 continue

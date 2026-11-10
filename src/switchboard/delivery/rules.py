@@ -295,6 +295,34 @@ def chatter_wakes_at(
     return min(deadlines) if deadlines else None
 
 
+# Agent messages in a row, in a room with a live call, with no person speaking on the call or writing in
+# the room, after which agents wake only for a person (#713, §52.2). Tighter than ``hop_limit``, which a
+# call line does not reset.
+VOICE_LOOP_LINES = 8
+
+
+def voice_loop_run(senders: Sequence[str], limit: int = VOICE_LOOP_LINES) -> int:
+    """How many agent messages are in a row at the end of a room's chat (#713), counted up to ``limit``.
+
+    ``senders`` are the ``sender_kind`` of the room's chat messages, newest first. Only a person's message
+    (``human``) or a participant's line from the call (``meeting``) ends the run: a kind this code doesn't
+    know neither ends it nor counts, so it can't be used to reset the count."""
+    run = 0
+    for kind in senders:
+        if kind == "agent":
+            run += 1
+            if run >= limit:
+                break
+        elif kind in ("human", "meeting"):
+            break
+    return run
+
+
+def voice_loop_tripped(senders: Sequence[str], call_live: bool, limit: int = VOICE_LOOP_LINES) -> bool:
+    """True when a room with a live call has ``limit`` agent messages in a row (#713)."""
+    return call_live and limit > 0 and voice_loop_run(senders, limit) >= limit
+
+
 def releasable(
     pending: Sequence[Item],
     *,
@@ -315,6 +343,7 @@ def releasable(
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
     listen_ask_s: float = 3.0,
+    voice_loop: bool = False,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
 
@@ -331,9 +360,14 @@ def releasable(
     - ``addressed_only``: a quiet member (#548, §50). Unaddressed chatter never starts
       the turn. A person's message, an @mention, a reply and ``wake_now`` still do,
       and they take that chatter along. Busy stays priority only: chatter is not added.
+    - ``voice_loop``: the room has a live call and ``VOICE_LOOP_LINES`` agent messages in a row (#713).
+      Only a person's message (priority 2) is released, to a busy or an idle member, and chatter is
+      released only with it or on ``wake_now``: the budget, whatever is left of it, is not the gate.
     """
     eligible = [d for d in pending if d.notified_at is None]
     prio = [d for d in eligible if d.prio >= 1]
+    if voice_loop:
+        prio = [d for d in prio if d.prio == 2]
     chatter = [d for d in eligible if d.prio == 0]
     ok = peer_ok(peer_batch_boundary, boundary_seq)
 
@@ -351,7 +385,7 @@ def releasable(
         return done(prio + (chatter if ok or wake_now else []), "wake", True)
     if chatter and wake_now:
         return done(chatter, "wake", True)
-    if chatter and ok and room.budget_remaining > 0:
+    if chatter and ok and room.budget_remaining > 0 and not voice_loop:
         ordinary_due = chatter_due(
             room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=addressed_only
         )

@@ -58,3 +58,14 @@ def test_no_agent_starts_two_of_its_own_unmarked_lines_less_than_thirty_seconds_
     t.offer("two", 1, 1)
     assert t.take(INTERVAL_S - 0.01) is None
     assert t.take(INTERVAL_S).text == "two"
+
+
+def test_a_polite_loop_stops_waking_agents_after_eight_messages(tmp_path: Path) -> None:
+    """Without the engine rule (#713, phase 2) the loop woke the two agents 60 times in 10 minutes, until the
+    room's hourly budget was gone, a paid model turn each. Now the 8th agent message in a row stops it: 8
+    wakes, 52 of the 60 left. Fails if the loop runs on, or if the rule ever stops a normal call (the
+    three-way test above keeps its 10 lines)."""
+    r = run("polite_loop.json", tmp_path, tail_s=1200.0)
+    assert sum(r.wakes.values()) == 8
+    assert r.min_budget == 52
+    assert r.paused_at is None  # it holds the room's agents, it does not pause the room

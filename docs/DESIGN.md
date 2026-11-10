@@ -832,6 +832,8 @@ A say the limit refuses is **queued**, not dropped: a `rate_limited` event, and 
 
   When the room has a limit (`hop_limit > 0`) and `hop_count >= hop_limit` after an insert, the room gets `paused=1, paused_reason='loop guard'`, then a `loop_guard` event, a warn notice, and the pause actions below.
 
+  A room with a live call has a second, tighter rule that leaves this count alone (§52.4, #713): after 8 agent messages in a row with no person's message and no participant line from the call, agents wake only for a person.
+
   `hop_limit` is per room: `[delivery] hop_limit` at creation, then `/hops <n>` (§10, §22), and `0` turns the guard off. The engine reads the room row on every agent message, so a new limit applies to the next one; a limit lowered below the current count trips on the next agent message, not at once.
 
   **The guard is off by default (#406).** The built-in `hop_limit` is 0 (it was 6), so a new room's guard is off unless the person creating it has a default of their own in Settings or config.toml sets one (§42). It got in the way: agents that review and fix a pull request between themselves hit the limit within minutes, and the person had to `/resume` again and again. The wake budget (§8.3, 60 an hour) still limits wakes: at 0 only a person's messages wake anyone. It doesn't end chatter on its own, though: mid-turn context, steers and pulls are free, so busy agents can keep trading messages, slowed only by the say rate limit (10 s, which `rate_limit_exempt` lifts for a reply to a person or to a message that mentions the sender). With the guard off, nothing else stops a conversation between agents that stay busy. The counter keeps running with the guard off (the room's header and `/hops` show it), so a limit set later counts the run so far. A room that exists keeps its limit: a room's limit is that room's setting, and no migration touches `rooms.hop_limit`.
@@ -3204,6 +3206,37 @@ frame; the bot's call and a hosted call start with voice on; every agent listens
 a person's off stays; a live call follows a setting turned on), `test_commands_room.py` (parsing and
 roles), `test_db_migrate_v48.py` (a real old database), and the page in `test_room_calls_ui.py`.
 
+
+### 52.4 A voice loop stops waking agents (#713)
+
+A cap on spoken lines (§52.2) stops the *speaking* of two agents who answer each other, not the
+answering: each reply is a paid model turn. The spike (#706) replayed two agents thanking each other
+and they woke 60 times in 10 minutes, until the room's hourly budget was gone. `hop_limit` cannot be
+the answer on a call, because it does not take a call line as a person's message (a recording played
+into the call would then reset it for good), and a healthy call tripped a limit of 6 in the replay.
+
+In a room with a **live call**, after `VOICE_LOOP_LINES` (8) agent `chat` messages in a row with no
+`human` message and no `meeting` participant line after them (`rules.voice_loop_run`, pure),
+`Engine._voice_loop` holds the room. `rules.releasable` is then called with `voice_loop=True` and
+releases only a person's message (priority 2), to a busy member (hook context) and to an idle one;
+chatter rides along only with that message or on `/wake`. The budget is not the gate, and the
+member list shows no hold time for an agent. The message that makes the eighth in a row gets one
+warn notice (`8 agent messages in a row on a live call with no one speaking on it or writing here:
+agents now wake only for alice's messages until someone speaks on the call or writes in the room.`)
+and a `voice_loop` event; later agent messages add none.
+
+The count is read from the stored messages (`Store.recent_chat_senders`, the newest 32 chat
+messages), so it needs no column, survives a restart and cannot drift. It ends the moment a person
+writes in the room or says something on the call. Call audio, a played recording included, can end a
+run that way, but it can't un-pause a room that `hop_limit` stopped, and it can't make an agent
+speak: Voice stays a person's switch. A `sender_kind` the code does not know neither ends nor counts in
+the run, so it can't be used to reset it. The rule does not pause the room, leaves `hop_limit` and
+`hop_count` alone, and is off in a room with no live call. It is 8 and not 4 because a text
+discussion costs less than a spoken one.
+
+Tests: `test_rules_voice_loop.py` (the pure rule, with the unknown kind; the seventh message still
+wakes and the eighth holds; no call, no hold; a person in the room and a line from the call each
+end it; one notice per run; a busy agent; `hop_limit` untouched).
 
 ## 53. Attachments (#544)
 

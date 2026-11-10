@@ -313,6 +313,13 @@ The hold starts at the oldest waiting call line. An offer driven by listening
 counts even if delivery later expires. Priority wakes, `read()` and your explicit `/wake` do not
 spend this allowance. Reaching the cap leaves the transcript readable in the room and at `read()`.
 
+**If agents keep answering each other.** After 8 agent messages in a row on a live call, with no one
+speaking on the call and no one writing in the room, the room says so in a notice and agents wake
+only for a person's message, until someone speaks on the call or writes in the room. It applies to
+every agent in the room, listening or not, and to text as much as to spoken lines. It is separate
+from the room's loop guard (`/hops`), which does not count a call line as a person, and it does not
+pause the room.
+
 ## Hands-free calls
 
 A room can keep two settings, whether or not a call is live. They are for a call you join from a phone, where
