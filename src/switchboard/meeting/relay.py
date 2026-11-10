@@ -52,6 +52,7 @@ from typing import Any, Protocol, TextIO
 from switchboard.meeting import joinly, keys
 from switchboard.meeting.lines import Segment
 from switchboard.meeting.links import LinkError, parse_link
+from switchboard.meeting.turns import MAX_ID
 
 PUSH_PATH = "/mcp/meeting/push"
 SPEECH_PATH = "/mcp/meeting/speech"
@@ -402,8 +403,9 @@ class Relay:
         self.fingerprint = keys.fingerprint(keys.key_hash(key.reveal()))
         self.exit: Exit | None = None
         self.stop = asyncio.Event()
-        self._speech: deque[str] = deque()
+        self._speech: deque[tuple[str, int | None]] = deque()
         self._speech_ready = asyncio.Event()
+        self._speech_done: deque[int] = deque()
         self._down_since: float | None = None
         self._pause = BACKOFF_FIRST_S
         self._pending: deque[dict[str, Any]] = deque()
@@ -699,8 +701,12 @@ class Relay:
         """Long-poll the broker for what to say, the voice switch and the end."""
         while not self.stop.is_set():
             began = self._now()
-            reply = await self._call(SPEECH_PATH, {"wait": SPEECH_WAIT_S}, SPEECH_WAIT_S + REQUEST_TIMEOUT_S)
+            done = self._speech_done[0] if self._speech_done else None
+            request = {"wait": SPEECH_WAIT_S} if done is None else {"wait": 0, "done": done}
+            reply = await self._call(SPEECH_PATH, request, SPEECH_WAIT_S + REQUEST_TIMEOUT_S)
             if reply is not None:
+                if done is not None:
+                    self._speech_done.popleft()
                 self._heard(reply.body)
             gap = SPEECH_MIN_GAP_S - (self._now() - began)
             if gap > 0 and not self.stop.is_set():
@@ -710,13 +716,24 @@ class Relay:
         if body.get("ended"):
             self.finish(Exit.ENDED)
         if not body.get("voice"):
-            self._speech.clear()  # voice is off: what was waiting is dropped, the line being said finishes
+            self._drop_speech()  # the line being said finishes; queued claims are completed as dropped
         lines = body.get("lines")
+        line_id = body.get("speech_id")
+        tagged = "speech_id" in body
+        if tagged and (type(line_id) is not int or not 1 <= line_id <= MAX_ID):
+            lines = []  # absent ids mean an older broker; malformed ids never mean permission to speak
         for line in lines if isinstance(lines, list) else []:
             if isinstance(line, str) and line.strip() and body.get("voice"):
-                self._speech.append(line)
+                self._speech.append((line, line_id if tagged else None))
+                if tagged:
+                    break  # a turn id identifies one line, never a batch
         if self._speech:
             self._speech_ready.set()
+
+    def _drop_speech(self) -> None:
+        """Locally dropped claimed lines cannot remain reserved at the broker (§52.2)."""
+        self._speech_done.extend(line_id for _, line_id in self._speech if line_id is not None)
+        self._speech.clear()
 
     async def _speaker(self, jy: Joinly) -> None:
         """Say the waiting lines one after another. ``speak_text`` returns when the speech has ended."""
@@ -725,15 +742,24 @@ class Relay:
                 self._speech_ready.clear()
                 await self._wait_event(self._speech_ready)
                 continue
-            line = self._speech.popleft()
+            line, line_id = self._speech.popleft()
             try:
                 said = await jy.speak(line)
             except Exception:
                 self.say("could not speak in the call")
-                self._speech.clear()
-                continue
-            if said.startswith(joinly.INTERRUPTED):
-                self.say("someone spoke over a line, so it stopped early")
+                self._drop_speech()
+            else:
+                if said.startswith(joinly.INTERRUPTED):
+                    self.say("someone spoke over a line, so it stopped early")
+            finally:
+                if line_id is not None and not self.stop.is_set():
+                    # A separate zero-wait poll releases this exact slot promptly, even while the
+                    # ordinary long poll waits. Any answer is fed through the same voice checks.
+                    reply = await self._call(SPEECH_PATH, {"wait": 0, "done": line_id}, REQUEST_TIMEOUT_S)
+                    if reply is not None:
+                        self._heard(reply.body)
+                    elif not self.stop.is_set():
+                        self._speech_done.append(line_id)  # retry the receipt, never the speech
 
     async def _wait_event(self, ev: asyncio.Event) -> None:
         waiting = asyncio.ensure_future(ev.wait())

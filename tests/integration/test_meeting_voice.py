@@ -80,6 +80,20 @@ async def start_call(b: InProcBroker, joinly: FakeJoinly, link: str = MEET) -> N
     await wait_until(lambda: (call_state(b) or {}).get("state") == "live")
 
 
+def advance_voice(b: InProcBroker, clock: FakeClock, seconds: float) -> None:
+    """Move the speech policy clock and wake its worker to observe that time."""
+
+    def advance() -> None:
+        clock.advance(seconds)
+        b.state.meetings._live[b.state.store.get_room("#build").id].changed.set()
+
+    b.on_loop(advance)
+
+
+def speech_finished(b: InProcBroker) -> bool:
+    return b.on_loop(lambda: b.state.meetings._live[b.state.store.get_room("#build").id].turns.active is None)
+
+
 def refused(b: InProcBroker, text: str) -> Any:
     return b.web.post(  # type: ignore[attr-defined]
         "/api/rooms/build/command", json={"text": text}, headers=b.write_headers()
@@ -157,12 +171,13 @@ async def test_a_malformed_voice_command_is_refused(broker: InProcBroker, text: 
 
 
 async def test_an_at_call_line_is_spoken_only_while_voice_is_on(
-    broker: InProcBroker, joinly: FakeJoinly
+    timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
 ) -> None:
     """With voice on, what follows ``@call`` is spoken, made speakable, and the room still gets the
     message as written. With voice off, or a message that does not start with ``@call``, it is
     only text. The last line proves the earlier ones were never queued: it is the only one spoken.
     Fails if voice-off lines are spoken, a later mention starts speech, or the room loses the line."""
+    broker, clock = timed
     async with FakeAgent(broker.home, "k1") as agent:
         await agent.join("#build", "claude-1")
         await start_call(broker, joinly)
@@ -173,9 +188,11 @@ async def test_an_at_call_line_is_spoken_only_while_voice_is_on(
         said = await agent.say("#build", "@call **All** green, see [the run](https://example.com/run/1).")
         assert said.get("posted_id")
         await wait_until(lambda: len(joinly.spoken) == 1)
+        await wait_until(lambda: speech_finished(broker))
         command(broker, "/meeting voice off")
         await agent.say("#build", "@call this is said after voice went off")
         command(broker, "/meeting voice on")
+        advance_voice(broker, clock, 30)
         await agent.say("#build", "@call the last one")
         await wait_until(lambda: len(joinly.spoken) == 2)
     assert joinly.spoken == ["All green, see the run.", "the last one"]
@@ -195,47 +212,47 @@ async def test_voice_does_nothing_without_a_call(broker: InProcBroker, joinly: F
     assert notices(broker) == "" or "voice" not in notices(broker).lower()
 
 
-async def test_speaking_never_holds_up_a_say_and_a_full_queue_drops_with_one_notice(
-    broker: InProcBroker, joinly: FakeJoinly
+async def test_speaking_never_holds_up_a_say_and_busy_lines_are_refused(
+    timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
 ) -> None:
-    """``speak_text`` returns only when the speech is over. While joinly is mid-line the agent's
-    says still return at once; three more lines wait and the fifth and sixth are dropped, with one
-    notice. Then the waiting lines are spoken in order. Fails if a say waits on speech, the queue
-    grows without a bound, or each dropped line adds a notice."""
+    """The call has one slot, including speech in progress; refusals still leave the room posts intact."""
+    broker, clock = timed
     joinly.hold_speech = True
     async with FakeAgent(broker.home, "k1") as agent:
         await agent.join("#build", "claude-1")
         await start_call(broker, joinly)
         command(broker, "/meeting voice on")
-        first = await agent.say("#build", "@call line one")
-        assert first.get("posted_id")
-        await wait_until(lambda: joinly.spoken == ["line one"])  # joinly is now holding it
+        assert (await agent.say("#build", "@call line one")).get("posted_id")
+        await wait_until(lambda: joinly.spoken == ["line one"])
         for text in ("two", "three", "four", "five", "six"):
             assert (await agent.say("#build", f"@call line {text}")).get("posted_id")
-        await wait_until(lambda: count(notice_texts(broker), "waiting to be spoken") == 1)
+        assert count(notice_texts(broker), "waiting or being spoken") == 5
         joinly.release_speech()
-        await wait_until(lambda: len(joinly.spoken) == 4)
+        await wait_until(lambda: speech_finished(broker))
+        advance_voice(broker, clock, 30)
         await agent.say("#build", "@call after the burst")
-        await wait_until(lambda: len(joinly.spoken) == 5)
-    assert joinly.spoken == ["line one", "line two", "line three", "line four", "after the burst"]
-    assert count(notice_texts(broker), "waiting to be spoken") == 1
+        await wait_until(lambda: len(joinly.spoken) == 2)
+    assert joinly.spoken == ["line one", "after the burst"]
+    assert all(f"@call line {name}" in [m["text"] for m in history(broker)] for name in ("two", "six"))
 
 
-async def test_turning_voice_off_drops_what_was_waiting(broker: InProcBroker, joinly: FakeJoinly) -> None:
-    """Lines already queued are not spoken once a person turns voice off. Fails if the queue is
-    left to drain into a call the person has just silenced."""
-    joinly.hold_speech = True
+async def test_turning_voice_off_drops_what_was_waiting(
+    timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
+) -> None:
+    """A line waiting for its interval must not drain after Voice was switched off and back on."""
+    broker, clock = timed
     async with FakeAgent(broker.home, "k1") as agent:
         await agent.join("#build", "claude-1")
         await start_call(broker, joinly)
         command(broker, "/meeting voice on")
         await agent.say("#build", "@call spoken")
         await wait_until(lambda: joinly.spoken == ["spoken"])
-        await agent.say("#build", "@call queued one")
-        await agent.say("#build", "@call queued two")
+        await wait_until(lambda: speech_finished(broker))
+        await agent.say("#build", "@call queued for the interval")
+        assert broker.on_loop(lambda: broker.state.meetings._live[1].turns.pending is not None)
         command(broker, "/meeting voice off")
-        joinly.release_speech()
         command(broker, "/meeting voice on")
+        advance_voice(broker, clock, 30)
         await agent.say("#build", "@call sentinel")
         await wait_until(lambda: len(joinly.spoken) == 2)
     assert joinly.spoken == ["spoken", "sentinel"]

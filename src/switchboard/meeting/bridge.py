@@ -35,8 +35,8 @@ from switchboard.meeting.lines import Assembler, Line
 from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
-from switchboard.meeting.speech import QUEUE_MAX as SPEAK_QUEUE_MAX
 from switchboard.meeting.speech import call_text, speakable
+from switchboard.meeting.turns import BUSY_NOTICE, STALE_NOTICE, STALE_S, Turns
 
 log = logging.getLogger("switchboard.meeting")
 
@@ -50,9 +50,9 @@ class _Live:
     waiting to be spoken, and when a snapshot last began (the broker's clock)."""
 
     client: Any
-    speech: deque[str] = field(default_factory=deque)
+    turns: Turns = field(default_factory=Turns)
+    changed: asyncio.Event = field(default_factory=asyncio.Event)
     worker: asyncio.Task[None] | None = None
-    overflowed: bool = False  # told the room this burst of lines was too many
     last_snapshot: float | None = None
 
 
@@ -197,6 +197,8 @@ class MeetingBridge:
                 seen.add(key)
                 if seg.role != "participant":
                     continue
+                live.turns.hear(self.state.clock.now())
+                live.changed.set()
                 for line in asm.add(seg, now):
                     warned = self._enqueue(queue, line, room_id, warned)
             for line in asm.poll(now):
@@ -244,13 +246,12 @@ class MeetingBridge:
             self._voice.discard(room_id)
             live = self._live.get(room_id)
             if live is not None:
-                live.speech.clear()
+                live.turns.clear_pending()
+                live.changed.set()
         return True
 
-    def speak(self, room_id: int, text: str) -> None:
-        """An agent's message, already posted in the room. If voice is on, the bot is in the call and
-        the message starts with ``@call``, what follows is queued to be spoken; otherwise this does
-        nothing and the message is only text. It never waits on speech: a worker task speaks."""
+    def speak(self, room_id: int, text: str, *, membership_id: int | None = None) -> None:
+        """Offer one line to the call without delaying its room post (§52.2)."""
         if room_id not in self._voice:
             return
         live = self._live.get(room_id)
@@ -260,43 +261,55 @@ class MeetingBridge:
         line = speakable(body)
         if not line:
             return
-        if len(live.speech) >= SPEAK_QUEUE_MAX:
-            if not live.overflowed:
-                live.overflowed = True
-                self.state.service.notice_in(
-                    room_id, "More lines are waiting to be spoken than the call can say. Some were dropped."
-                )
+        if not live.turns.offer(line, self.state.clock.now(), membership_id):
+            self.state.service.call_voice_notice(room_id, BUSY_NOTICE, membership_id)
             return
-        live.speech.append(line)
+        live.changed.set()
         if live.worker is None or live.worker.done():
             try:
                 live.worker = asyncio.get_running_loop().create_task(self._speak(room_id, live))
             except RuntimeError:
-                live.speech.clear()
+                live.turns.clear_pending()
 
     async def _speak(self, room_id: int, live: _Live) -> None:
-        """Speak the waiting lines one after another. ``speak_text`` returns when the speech has ended."""
-        try:
-            while live.speech:
-                line = live.speech.popleft()
+        """Wait for a speech gap and the interval; reserve the slot until speak_text finishes."""
+        while live.turns.pending is not None:
+            now = self.state.clock.now()
+            stale = live.turns.expire(now)
+            if stale is not None:
+                self.state.service.call_voice_notice(room_id, STALE_NOTICE, stale.membership_id)
+                return
+            line = live.turns.take(now)
+            if line is None:
+                live.changed.clear()
+                pending = live.turns.pending
+                at = live.turns.ready_at()
+                if pending is None or at is None:
+                    return  # cleared meanwhile (voice off, call over): nothing left to wait for
+                delay = min(at, pending.queued_at + STALE_S) - now
                 try:
-                    result = await live.client.call_tool(
-                        "speak_text", {"text": line}, timeout=SPEAK_TIMEOUT_S
-                    )
-                except Exception:
-                    log.warning("meeting room %s: speak_text failed", room_id)
-                    live.speech.clear()
-                    self.state.service.notice_in(room_id, "Couldn't speak in the call.")
-                    return
+                    await asyncio.wait_for(live.changed.wait(), max(0.001, delay))
+                except TimeoutError:
+                    pass
+                continue
+            try:
+                result = await live.client.call_tool(
+                    "speak_text", {"text": line.text}, timeout=SPEAK_TIMEOUT_S
+                )
                 if joinly.reply(result).startswith(INTERRUPTED):
                     self.state.service.notice_in(
                         room_id, "Someone spoke over the line in the call, so it stopped early."
                     )
-        finally:
-            live.overflowed = False
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.warning("meeting room %s: speak_text failed", room_id)
+                self.state.service.notice_in(room_id, "Couldn't speak in the call.")
+            finally:
+                live.turns.finish(line.id)
 
     async def _stop_speech(self, live: _Live) -> None:
-        live.speech.clear()
+        live.turns.clear_pending()
         worker = live.worker
         if worker is not None and not worker.done():
             worker.cancel()

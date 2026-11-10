@@ -43,8 +43,8 @@ from switchboard.meeting.ingest import LINE_GAP_S
 from switchboard.meeting.lines import CAP, Assembler, Line, Segment
 from switchboard.meeting.links import PLATFORM_LABEL, MeetingLink
 from switchboard.meeting.names import hotwords
-from switchboard.meeting.speech import QUEUE_MAX as SPEAK_QUEUE_MAX
 from switchboard.meeting.speech import call_text, speakable
+from switchboard.meeting.turns import BUSY_NOTICE, MAX_ID, STALE_NOTICE, Turns
 from switchboard.models import InvalidName, Meeting, Room, normalize_room, split_session_key
 from switchboard.store import Conflict
 
@@ -139,8 +139,7 @@ class _Call:
     warned: bool = False  # told the room this burst of lines was too many
     last_post: float | None = None
     voice: bool = False
-    speech: deque[str] = field(default_factory=deque)
-    spoke_overflow: bool = False
+    turns: Turns = field(default_factory=Turns)
     waiters: set[asyncio.Event] = field(default_factory=set)
     polling: int = 0
     seq: int = 0  # the newest speech poll: an older one is answered empty at once
@@ -202,6 +201,16 @@ def wait_in(body: Any) -> float:
     if isinstance(asked, bool) or not isinstance(asked, (int, float)) or not math.isfinite(asked):
         raise Refused(400, "bad_request", "wait is a number of seconds")
     return min(max(float(asked), 0.0), SPEECH_WAIT_MAX_S)
+
+
+def done_in(body: Any) -> int | None:
+    """Only a bounded integer can complete a spoken line; malformed claims fail closed (§52.2)."""
+    value = body.get("done") if isinstance(body, dict) else None
+    if value is None:
+        return None
+    if type(value) is not int or not 1 <= value <= MAX_ID:
+        raise Refused(400, "bad_request", "done must be a positive speech id")
+    return value
 
 
 class HostedCalls:
@@ -443,6 +452,8 @@ class HostedCalls:
             if not st.first_time(seg):
                 continue  # a retry of a push the broker already took
             taken += 1
+            st.turns.hear(now)
+            self._wake(st)
             for line in st.asm.add(seg, now):
                 self._enqueue(row, st, line)
         for line in st.asm.poll(now):
@@ -511,14 +522,12 @@ class HostedCalls:
             return False
         st.voice = on
         if not on:
-            st.speech.clear()
+            st.turns.clear_pending()
         self._wake(st)
         return True
 
-    def speak(self, room_id: int, text: str) -> None:
-        """An agent's message, already posted in the room. While voice is on and the host is in the call, an
-        ``@call`` line is queued for its relay's next poll, as the bridge queues one for its own bot (§52):
-        otherwise this does nothing and the message is only text. It never waits."""
+    def speak(self, room_id: int, text: str, *, membership_id: int | None = None) -> None:
+        """Offer the call's one speech slot; its relay reports completion before it is free again."""
         st = self._calls.get(self._rooms.get(room_id, -1))
         if st is None or not st.voice or not st.live:
             return
@@ -526,17 +535,23 @@ class HostedCalls:
         line = speakable(body) if body is not None else ""
         if not line:
             return
-        if len(st.speech) >= SPEAK_QUEUE_MAX:
-            if not st.spoke_overflow:
-                st.spoke_overflow = True
-                self.state.service.notice_in(
-                    room_id, "More lines are waiting to be spoken than the call can say. Some were dropped."
-                )
+        self._expire_speech(st)
+        if not st.turns.offer(line, self.state.clock.now(), membership_id):
+            self.state.service.call_voice_notice(room_id, BUSY_NOTICE, membership_id)
             return
-        st.speech.append(line)
         self._wake(st)
 
-    async def speech(self, row: Meeting, wait_s: float) -> dict[str, Any]:
+    def _expire_speech(self, st: _Call) -> None:
+        expired = st.turns.expire(self.state.clock.now())
+        if expired is not None:
+            self.state.service.call_voice_notice(st.room_id, STALE_NOTICE, expired.membership_id)
+
+    def _speech_ready(self, st: _Call) -> bool:
+        self._expire_speech(st)
+        at = st.turns.ready_at()
+        return st.voice and at is not None and self.state.clock.now() >= at
+
+    async def speech(self, row: Meeting, wait_s: float, done: int | None = None) -> dict[str, Any]:
         """The long poll: what the relay is to speak (only while voice is on), the room's names as the
         transcriber's hotwords, the voice switch and whether the call is over. Answered at once when there
         is a line to say or the call ended, and otherwise after ``wait_s`` seconds, or when the voice
@@ -546,6 +561,8 @@ class HostedCalls:
         st = self._state(row)
         st.last_seen = now
         self._take(st, 1, now)
+        if done is not None:
+            st.turns.finish(done)
         st.seq += 1
         mine = st.seq
         self._wake(st)  # an older poll that is still waiting is answered, empty
@@ -554,7 +571,7 @@ class HostedCalls:
             started = st.voice
             loop = asyncio.get_running_loop()
             deadline = loop.time() + wait_s
-            while not (st.ended or st.speech or st.voice != started or st.seq != mine):
+            while not (st.ended or self._speech_ready(st) or st.voice != started or st.seq != mine):
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     break
@@ -569,14 +586,11 @@ class HostedCalls:
         finally:
             st.polling -= 1
             st.last_seen = self.state.clock.now()
-        lines: list[str] = []
-        if st.seq == mine and st.voice:
-            lines = list(st.speech)
-            st.speech.clear()
-            st.spoke_overflow = False
+        line = st.turns.take(self.state.clock.now()) if st.seq == mine and st.voice else None
         words = [w[:40] for w in hotwords(self.state.store.active_names(row.room_id))[:HINTS_MAX]]
         return {
-            "lines": lines,
+            "lines": [line.text] if line is not None else [],
+            "speech_id": line.id if line is not None else None,
             "hints": words,
             "voice": st.voice,
             "ended": st.ended,
@@ -635,7 +649,7 @@ class HostedCalls:
             log.warning("hosted call %s: could not record the end", row.id)
         if st is not None:
             st.ended = True
-            st.speech.clear()
+            st.turns.clear_pending()
             self._wake(st)
 
     def shutdown(self) -> None:
@@ -665,6 +679,8 @@ class HostedCalls:
             elif now - st.last_seen >= QUIET_S:
                 self.end(row, "quiet")
             else:
+                if self._speech_ready(st):
+                    self._wake(st)
                 for line in st.asm.poll(now):
                     self._enqueue(row, st, line)
                 self._drain(row, st, now)

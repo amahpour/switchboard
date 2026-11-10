@@ -98,6 +98,9 @@ class Broker:
             if got.status == 200:
                 self.pushed.extend(body["segments"])
             return got
+        if "done" in body:
+            assert body.get("wait") == 0
+            return ok(lines=[], voice=True, ended=False, speech_id=None)
         if body.get("wait") == 0 and self.first is not None:
             first, self.first = self.first, None  # type: ignore[assignment]
             if isinstance(first, Exception):

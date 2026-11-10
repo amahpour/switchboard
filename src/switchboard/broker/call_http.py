@@ -36,7 +36,7 @@ from starlette.routing import Route
 from switchboard.broker.agent_http import ID_MAX, Receive, Scope, Send, _header, _id, _reply
 from switchboard.broker.service import ServiceError
 from switchboard.meeting import keys
-from switchboard.meeting.hosted import BODY_MAX, Refused, parse_segments, wait_in
+from switchboard.meeting.hosted import BODY_MAX, Refused, done_in, parse_segments, wait_in
 from switchboard.models import Meeting
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -147,7 +147,7 @@ class MeetingSpeech(_CallRoute):
             return
         call, body = got
         try:
-            poll = asyncio.ensure_future(self.state.hosted_calls.speech(call, wait_in(body)))
+            poll = asyncio.ensure_future(self.state.hosted_calls.speech(call, wait_in(body), done_in(body)))
         except Refused as e:
             await _refused(send, e)
             return

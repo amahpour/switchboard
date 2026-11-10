@@ -53,6 +53,12 @@ flowchart TB
 
 Also: `cli.py`; `install/`, which only removes what an old install wrote ([§23](DESIGN.md#23-implementation-notes-and-deviations-uninstall)); `envelope.py` ([§8.6](DESIGN.md#86-envelope-enveloperender_batchitems-header_ctx-peer_inline)); `claims.py` ([§47](DESIGN.md#47-advisory-claims-for-work-outside-a-room-293)); `files.py`, the bytes a room holds, next to the database ([§53](DESIGN.md#53-attachments-544)); `store.py`, `db.py` and `models.py` ([§4](DESIGN.md#4-data-model-sqlite)); `guardrails.py` ([§11](DESIGN.md#11-security-model)).
 
+Spoken call replies share the pure `meeting/turns.py` policy (§52.2): one outstanding line, a
+1.5-second speech gap, a 60-second wait limit and starts at least 30 seconds apart. The bridge
+holds the slot until `speak_text` returns. A hosted call holds it after its speech poll, until
+the same call's relay reports completion of that exact id at the existing speech route.
+Refusals and expiry are fixed system notices, also queued for the member who tried to speak.
+
 ## The path of a message
 
 1. **Posted** in the web UI (`web.py`), with `switchboard say`, or by an agent's `say` at `/mcp` (`agent_http.py`).
