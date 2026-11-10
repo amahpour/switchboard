@@ -93,6 +93,7 @@
 
   <!-- ============ Conversation ============ -->
   <main class="conv" id="main" aria-labelledby="room-title">
+    <div class="conv-head-box">
     <header class="conv-head">
       <button type="button" class="rooms-toggle narrow-only" id="rooms-toggle" aria-controls="sidebar"
               aria-expanded="false" aria-label="Rooms">
@@ -164,6 +165,7 @@
         <span class="badge danger hidden" id="buddy-alert"></span>
       </button>
     </header>
+    </div>
 
     <!-- Pinned decisions (#292): drawn by app.js from the room's pins; hidden when it has none. -->
     <section class="pins hidden" id="pins" aria-label="Pinned messages">
