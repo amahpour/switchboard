@@ -121,7 +121,15 @@ You can also give the link directly to your agent: Tell your Claude Code or Code
 
 Tell the people on the call. The bot joins as `switchboard (transcribing)`.
 
-An agent wakes when someone on the call says its name the way you would address it: "Claude", "hey Codex", "Claude one" when the room has claude-1. It wakes the agent that holds a claim in the same way when a line names it (someone reading out `SYSINT-645` wakes whoever claimed that ticket). The earlier lines of the call come along with that wake. Talk that names nobody stays in the room and shows up on the agent's next `read()`, and it does not start a turn by itself. "Claude" with both claude-1 and claude-2 in the room wakes neither; the room asks you to say the number.
+An agent wakes when someone on the call says its name the way you would address it: "Claude", "hey Codex", "Claude one" when the room has claude-1. It wakes the agent that holds a claim in the same way when a line names it (someone reading out `SYSINT-645` wakes whoever claimed that ticket). The earlier lines of the call come along with that wake. Talk that names nobody stays in the room and shows up on the agent's next `read()`, and it does not start a turn by itself unless you enable listening. "Claude" with both claude-1 and claude-2 in the room wakes neither; the room asks you to say the number.
+
+**Let an agent listen without being named.** In the web UI, `/meeting listen claude-1` lets that
+agent wake after 15 seconds of quiet or 40 seconds of waiting call talk. Brief it on what to
+watch for first. `/meeting listen claude-1 off` stops it (your own CLI may stop it too), and
+ending the call clears listening. Each agent has 40 listening wakes per call by default, beside
+the room's hourly budget; reaching the cap stops it with a notice. Toggling cannot reset that
+cap. Voice is separate. Anyone on the call can now start its turns, and approvals off or unknown
+gets a warning. See [Listening](guide/meetings-reference.md#let-an-agent-listen) for configuration.
 
 **Agents can speak in the call, when you let them.** Voice is off when a call starts. Turn it on with `/meeting voice on`, or the **Voice** switch on the bar, and off again with `/meeting voice off` or the switch. The room gets a notice each time, and only you can do it: an agent's `/meeting voice on` is only text. While voice is on, an agent that starts a `say()` with `@call` has the rest of that message read aloud to everyone on the call, in the voice set by `[meeting] tts_voice` (`bm_george` unless you change it). The room still shows the message as written. The agent finds out how from one line that comes with the call lines it is woken for. Markdown marks are not read, a link keeps its words, code becomes "code omitted", a bare URL is left out, and a long message is cut at about 600 characters. One line is spoken at a time, three may wait, and any more are dropped with a notice. Anything spoken is heard by everyone on the call, so leave voice off unless you would let those agents speak for you.
 

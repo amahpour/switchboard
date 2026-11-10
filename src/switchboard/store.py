@@ -317,8 +317,8 @@ class Store:
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
-        ("meetings", "meetings WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
+        ("meetings", "meetings WHERE room_id=?", 1),
         ("rooms", "rooms WHERE id=?", 1),
     )
 
@@ -664,6 +664,7 @@ class Store:
                 "UPDATE meetings SET state='ended', ended_at=?, error=? WHERE id=? AND state!='ended'",
                 (now, note, meeting_id),
             )
+            self.con.execute("UPDATE memberships SET listen=0 WHERE listen_call_id=?", (meeting_id,))
 
     def get_message(self, message_id: int) -> Message | None:
         r = self.con.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
@@ -920,7 +921,7 @@ class Store:
     def members(self, room_id: int) -> list[Member]:
         rows = self.con.execute(
             "SELECT m.id AS membership_id, m.participant_id, m.room_id, m.screen_name,"
-            " m.held, m.quiet, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
+            " m.held, m.quiet, m.listen, m.joined_at, p.harness, p.status, p.tier, p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -945,6 +946,7 @@ class Store:
                 approval_mode=r["approval_mode"],
                 held=bool(r["held"]),
                 quiet=bool(r["quiet"]),
+                listen=bool(r["listen"]),
                 joined_at=r["joined_at"],
                 queued=r["queued"],
                 inflight=r["inflight"],
@@ -1025,6 +1027,32 @@ class Store:
                 "UPDATE memberships SET held=?, held_at=? WHERE id=? AND left_at IS NULL",
                 (int(held), now if held else None, membership_id),
             )
+
+    def set_listen(self, membership_id: int, on: bool, call_id: int, limit: int = 40) -> bool:
+        """Set listening for an open call. Switching off/on never resets that call's cap (§52.1)."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE memberships SET listen=?, listen_wakes=CASE WHEN listen_call_id IS ?"
+                " THEN listen_wakes ELSE 0 END, listen_call_id=?"
+                " WHERE id=? AND left_at IS NULL AND EXISTS"
+                " (SELECT 1 FROM meetings c WHERE c.id=? AND c.room_id=memberships.room_id"
+                " AND c.state!='ended')"
+                " AND (?=0 OR listen_call_id IS NOT ? OR listen_wakes<?)",
+                (int(on), call_id, call_id, membership_id, call_id, int(on), call_id, limit),
+            )
+            return cur.rowcount == 1
+
+    def count_listen_wake(self, membership_id: int, limit: int) -> bool:
+        """Spend a listening turn when offered, even if lost. True only when it reaches the cap."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE memberships SET listen_wakes=listen_wakes+1,"
+                " listen=CASE WHEN listen_wakes+1>=? THEN 0 ELSE listen END"
+                " WHERE id=? AND listen=1",
+                (limit, membership_id),
+            )
+            row = self.con.execute("SELECT listen FROM memberships WHERE id=?", (membership_id,)).fetchone()
+            return cur.rowcount == 1 and row is not None and not row[0]
 
     def set_quiet(self, membership_id: int, quiet: bool) -> None:
         """Wake this member only for what is addressed to it (#548, §50), or not."""
@@ -2273,7 +2301,7 @@ class Store:
         "SELECT d.membership_id, d.message_id, d.prio, d.mentioned, d.state, d.batch_id,"
         " d.attempts, d.notified_at, d.redelivered, d.reminders, d.in_context_at,"
         " m.ts, m.sender_name, m.sender_kind,"
-        " m.sender_harness, m.text, m.reply_to, m.mentions, m.sender_host,"
+        " m.sender_harness, m.text, m.reply_to, m.mentions, m.sender_host, m.meeting_id,"
         # a reply to this member's own message addresses it, like an @mention (#137)
         " COALESCE((SELECT r.sender_membership_id FROM messages r WHERE r.id=m.reply_to)"
         "   = d.membership_id, 0) AS reply_to_me"

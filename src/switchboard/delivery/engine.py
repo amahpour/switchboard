@@ -183,8 +183,9 @@ class Engine:
     def wakes_at(self, membership_id: int) -> float | None:
         """When the hold on unaddressed chatter (#137) lets this member's waiting messages wake
         it, for the member list; None when nothing waits on the hold. A quiet member (§50) has
-        none: unaddressed chatter never wakes it. Only for a member that such a wake would reach
-        now: idle, not held or parked (no wake path: the Inspector says to poke it instead), in a
+        none for ordinary chatter; listening call lines have their own deadline (§52.1).
+        Only for a member that such a wake would reach now: idle, not held or parked (no wake
+        path: the Inspector says to poke it instead), in a
         room that isn't paused and has budget, and not already in its own wait() (which gets
         chatter without the hold)."""
         m = self.store.get_membership(membership_id)
@@ -200,7 +201,13 @@ class Engine:
         if not rules.peer_ok(m.peer_batch_boundary, p.boundary_seq):
             return None
         return rules.chatter_wakes_at(
-            self.store.pending_items(m.id), self._hold_s(sink), addressed_only=m.quiet
+            self.store.pending_items(m.id),
+            self._hold_s(sink),
+            addressed_only=m.quiet,
+            listening_call=m.listen_call_id if m.listen else None,
+            room=room,
+            listen_quiet_s=self.d.listen_quiet_s,
+            listen_hold_s=self.d.listen_hold_s,
         )
 
     # the humans (DESIGN.md §32): the owner, and on a hosted broker everyone the owner added
@@ -240,6 +247,7 @@ class Engine:
                 item_limit=item_limit,
                 shrink=shrink,
                 room_rules=text,
+                listening=m.listen,
             )
 
         pending = m.rules_seen < room.rules_version
@@ -258,6 +266,7 @@ class Engine:
                 item_limit=item_limit,
                 limits=fit.limits,
                 room_rules=room.rules_text,
+                listening=m.listen,
             )
             if len(preview) <= max_chars:
                 return replace(fit, rules_version=room.rules_version)
@@ -287,6 +296,7 @@ class Engine:
             item_limit=item_limit,
             limits=fit.limits,
             room_rules=fit.room_rules,
+            listening=m.listen,
         )
         if mark_seen and fit.rules_version:
             self.store.mark_rules_seen(m.id, fit.rules_version)
@@ -420,6 +430,9 @@ class Engine:
             wake_now=self._wake_now(m.id, pending),
             peers_stubbed=peers_stubbed,
             addressed_only=m.quiet,
+            listening_call=m.listen_call_id if m.listen else None,
+            listen_quiet_s=self.d.listen_quiet_s,
+            listen_hold_s=self.d.listen_hold_s,
         )
         if rel is None:
             unread = rules.unread_stubs(pending) if sink is not None and sink.kind == "wait" else []
@@ -443,6 +456,7 @@ class Engine:
                 peer_batch_boundary=m.peer_batch_boundary,
                 boundary_seq=p.boundary_seq,
                 addressed_only=m.quiet,
+                listening_call=m.listen_call_id if m.listen else None,
             ):
                 out += self._budget_exhausted(room)
             return out + unparked()
@@ -490,6 +504,22 @@ class Engine:
         return out
 
     # ------------------------------------------------------------ offer paths
+    def _count_listening(self, m: Membership, rel: Release) -> list[Action]:
+        """Charge listening offers, not explicit pulls or ordinary chatter/priority wakes (§52.1)."""
+        if not m.listen or not rel.listen_wake:
+            return []
+        if not self.store.count_listen_wake(m.id, self.d.listen_max_wakes):
+            return []
+        self._event("listen_cap", room_id=m.room_id, membership_id=m.id, call_id=m.listen_call_id)
+        return [
+            Notice(
+                m.room_id,
+                "info",
+                f"{m.screen_name} stopped listening: listening wake cap reached for this call",
+            ),
+            Snapshot(m.room_id),
+        ]
+
     def _after_counted(self, room_id: int) -> list[Action]:
         room = self.store.room_by_id(room_id)
         if room is not None and room.budget_remaining <= 0:
@@ -562,6 +592,7 @@ class Engine:
         )
         out += self._arm_pull(b, p)
         if rel.counted:
+            out += self._count_listening(m, rel)
             out += self._after_counted(room.id)
         out.append(Snapshot(room.id))
         return out
@@ -616,6 +647,7 @@ class Engine:
         # the follow-up starts a turn: busy until a hook says otherwise
         self._set_status_quiet(p, "busy", "stop:followup")
         if rel.counted:
+            out += self._count_listening(m, rel)
             out += self._after_counted(room.id)
         out += self._snap(self._rooms_of(p.id))
         return out
@@ -1202,7 +1234,7 @@ class Engine:
         if name == "hold" and membership_id is not None:
             self._unpark(membership_id)
             return [Snapshot(room_id)]
-        if name in ("quiet", "unquiet") and membership_id is not None:
+        if name in ("quiet", "unquiet", "meeting") and membership_id is not None:
             # on: a due chatter release stops; off: chatter already past the hold goes now
             return self.evaluate(membership_id) + [Snapshot(room_id)]
         if name == "wake" and membership_id is not None:
@@ -1551,6 +1583,9 @@ class Engine:
                 # Devin's Stop block stubs peer text, same as a held Stop hook (#548).
                 peers_stubbed="stop_block" not in caps.inline_paths,
                 addressed_only=m.quiet,
+                listening_call=m.listen_call_id if m.listen else None,
+                listen_quiet_s=self.d.listen_quiet_s,
+                listen_hold_s=self.d.listen_hold_s,
             )
             if rel is None or rel.kind != "wake":
                 continue
@@ -1596,6 +1631,7 @@ class Engine:
             )
             out += self.set_status(p, "busy", "stop:block")
             if rel.counted:
+                out += self._count_listening(m, rel)
                 out += self._after_counted(room.id)
             return HookOut("continue", text, b.id, ack), out + [Snapshot(room.id)]
         per_prompt, per_hour = adapter.rearm_caps()
@@ -1708,6 +1744,9 @@ class Engine:
                 max_chars=min(self.d.batch_max_chars, caps.ctx_max_chars),
                 hold_s=self.d.unaddressed_hold_s,
                 addressed_only=m.quiet,
+                listening_call=m.listen_call_id if m.listen else None,
+                listen_quiet_s=self.d.listen_quiet_s,
+                listen_hold_s=self.d.listen_hold_s,
             )
             if rel is None:
                 continue

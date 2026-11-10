@@ -57,7 +57,7 @@ def test_a_file_may_come_from_the_call_and_older_files_and_the_backup_are_kept(
     before.close()
 
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 46
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 47
     assert db.row_counts(con, held) == counts
     assert list(con.execute("PRAGMA foreign_key_check")) == []
     assert db.integrity_ok(con) is None

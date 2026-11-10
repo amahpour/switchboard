@@ -323,6 +323,7 @@ class Member:
     approval_mode: str
     held: bool
     joined_at: float
+    listen: bool = False  # call chatter may start a turn (§52.1)
     quiet: bool = False  # wake only for what is addressed (#548, §50); off until a person sets it
     queued: int = 0
     inflight: int = 0
@@ -669,7 +670,10 @@ class Membership:
     peer_batch_boundary: int
     rules_seen: int = 0
     join_code_hash: str | None = None  # the join code it was given, hashed (#304)
+    listen: bool = False  # call chatter may start a turn (§52.1)
     quiet: bool = False  # wake only for what is addressed (#548, §50)
+    listen_call_id: int | None = None
+    listen_wakes: int = 0
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Membership":
@@ -677,6 +681,7 @@ class Membership:
         d["kicked"] = bool(d["kicked"])
         d["held"] = bool(d["held"])
         d["quiet"] = bool(d["quiet"])
+        d["listen"] = bool(d["listen"])
         return cls(**d)
 
     @property
@@ -709,6 +714,7 @@ class Item:
     reminders: int = 0
     in_context_at: float | None = None
     sender_host: str | None = None  # a remote agent sender's host (DESIGN.md §27.11)
+    meeting_id: int | None = None  # the call that supplied this line (§52.1)
     reply_to_me: bool = False  # a reply to the recipient's own message (#137, §8.2)
 
     @classmethod
@@ -718,7 +724,7 @@ class Item:
         except (ValueError, IndexError, KeyError):
             mentions = ()
         opt: dict[str, Any] = {}
-        for k in ("redelivered", "reminders", "in_context_at", "sender_host", "reply_to_me"):
+        for k in ("redelivered", "reminders", "in_context_at", "sender_host", "reply_to_me", "meeting_id"):
             try:
                 opt[k] = r[k]
             except (IndexError, KeyError):
@@ -744,6 +750,7 @@ class Item:
             in_context_at=opt.get("in_context_at"),
             sender_host=opt.get("sender_host"),
             reply_to_me=bool(opt.get("reply_to_me") or 0),
+            meeting_id=opt.get("meeting_id"),
         )
 
     @property
@@ -809,6 +816,7 @@ class Release:
     kind: str  # 'priority' (mid-task) | 'wake' (idle) | 'pull'
     counted: bool  # decrements the room's wake budget
     reason: str  # 'human' | 'reminder' | 'mention' | 'chatter' (report split)
+    listen_wake: bool = False  # listening, rather than ordinary chatter, drove this offer (§52.1)
 
     @property
     def has_chatter(self) -> bool:

@@ -43,6 +43,7 @@ MEMBER_KEYS = {
     "away",
     "approval_mode",
     "held",
+    "listen",  # opt-in to call chatter (#697), a boolean, never transcript text
     "quiet",  # wake only for what is addressed (#548); false until a person sets it
     "queued",
     "inflight",

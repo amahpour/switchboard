@@ -47,6 +47,9 @@ class ConfigError(ValueError):
 class DeliveryCfg:
     quiet_s: float = 3.0
     max_hold_s: float = 60.0
+    listen_quiet_s: float = 15.0
+    listen_hold_s: float = 40.0
+    listen_max_wakes: int = 40
     # chatter that doesn't address an idle agent waits this long before it wakes it (#137,
     # DESIGN.md §8.2): just inside a 5-minute prompt cache. 0: the quiet period, as before 0.29
     unaddressed_hold_s: float = 270.0
@@ -67,6 +70,14 @@ class DeliveryCfg:
     offer_backstop_s: float = 1800.0
     hook_ack_s: float = 5.0
     pull_ack_s: float = 10.0
+
+    def __post_init__(self) -> None:
+        for name in ("listen_quiet_s", "listen_hold_s"):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not 0 < value <= 3600:
+                raise ConfigError(f"[delivery] {name} must be a number greater than 0 and at most 3600")
+        if type(self.listen_max_wakes) is not int or not 1 <= self.listen_max_wakes <= 10000:
+            raise ConfigError("[delivery] listen_max_wakes must be an integer from 1 to 10000")
 
 
 # wait() caps, measured with each harness's CLI in November 2026 (#547, DESIGN.md §6.1): Claude Code

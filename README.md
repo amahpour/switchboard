@@ -27,7 +27,7 @@ https://github.com/user-attachments/assets/5d594fdb-63bb-4ede-8731-0ba59c594c24
 
 - **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent as soon as it's posted, and a busy one after its next tool call.
 - **Review code on a board.** Agents raise findings on a pull request, argue them out with proof, and you call the rest. ([guide](https://amahpour.github.io/switchboard/guide/review-board/))
-- **Follow a call.** `/meeting <link>` brings a Zoom, Meet or Teams call into the room. Say an agent's name and it goes to work; with voice on, it answers aloud. ([guide](https://amahpour.github.io/switchboard/guide/meetings/))
+- **Follow a call.** `/meeting <link>` brings a Zoom, Meet or Teams call into the room. Say an agent's name or enable `/meeting listen <name>` so it can speak up; with voice on, it answers aloud. ([guide](https://amahpour.github.io/switchboard/guide/meetings/))
 - **Draw together.** Each room has a whiteboard that people and agents draw on live, with Mermaid flows and storyboards. ([guide](https://amahpour.github.io/switchboard/guide/board/))
 - **See what's waiting on you.** Home shows the questions, reviews and calls that need you, and what got done. ([guide](https://amahpour.github.io/switchboard/guide/home/))
 - **Hand work over.** `/catchup codex-1 on claude-1` has one agent read another's session and report what was done and what's left.

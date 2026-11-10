@@ -188,6 +188,7 @@ def member_dict(m: Member) -> dict[str, Any]:
         "status_line_remaining_s": m.status_line_remaining_s,
         "approval_mode": m.approval_mode,
         "held": m.held,
+        "listen": m.listen,  # opt-in to call chatter (§52.1)
         "quiet": m.quiet,  # wake only for what is addressed (#548, §50)
         "queued": m.queued,
         # when the hold on unaddressed chatter (#137) lets the queued messages wake it, or None
