@@ -519,6 +519,7 @@ class AgentService:
             )
         else:
             m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
+            self.svc.join_hands_free(room, m.id)
             self.store.add_event(
                 "join",
                 room_id=room.id,

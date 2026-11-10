@@ -387,6 +387,16 @@ class Store:
                 )
         return self._room_or_raise(room_id)
 
+    def set_room_call(self, room_id: int, setting: str, on: bool) -> bool:
+        """Set a room's hands-free call setting, ``voice`` or ``listen`` (§52.3). True when that
+        changed it. Kept by the room whether or not a call is live."""
+        col = {"voice": "call_voice", "listen": "call_listen"}[setting]  # a KeyError, never SQL from outside
+        with db.tx(self.con):
+            cur = self.con.execute(
+                f"UPDATE rooms SET {col}=? WHERE id=? AND {col}!=?", (int(on), room_id, int(on))
+            )
+            return cur.rowcount == 1
+
     def set_budget(self, room_id: int, remaining: int) -> Room:
         if remaining < 0:
             raise ValueError("budget must be >= 0")
@@ -1029,16 +1039,25 @@ class Store:
             )
 
     def set_listen(self, membership_id: int, on: bool, call_id: int, limit: int = 40) -> bool:
-        """Set listening for an open call. Switching off/on never resets that call's cap (§52.1)."""
+        """Set listening for an open call. Switching off/on never resets that call's cap (§52.1), and
+        neither does leaving and joining again: a membership new to this call starts from the most an
+        earlier membership of the same participant or name in this room spent on it (§52.3)."""
         with db.tx(self.con):
+            spent = self.con.execute(
+                "SELECT COALESCE(MAX(o.listen_wakes), 0) FROM memberships m JOIN memberships o"
+                " ON o.room_id=m.room_id AND o.id!=m.id AND o.listen_call_id=?"
+                " AND (o.participant_id=m.participant_id OR o.screen_name=m.screen_name)"
+                " WHERE m.id=?",
+                (call_id, membership_id),
+            ).fetchone()[0]
             cur = self.con.execute(
                 "UPDATE memberships SET listen=?, listen_wakes=CASE WHEN listen_call_id IS ?"
-                " THEN listen_wakes ELSE 0 END, listen_call_id=?"
+                " THEN listen_wakes ELSE ? END, listen_call_id=?"
                 " WHERE id=? AND left_at IS NULL AND EXISTS"
                 " (SELECT 1 FROM meetings c WHERE c.id=? AND c.room_id=memberships.room_id"
                 " AND c.state!='ended')"
-                " AND (?=0 OR listen_call_id IS NOT ? OR listen_wakes<?)",
-                (int(on), call_id, call_id, membership_id, call_id, int(on), call_id, limit),
+                " AND (?=0 OR (CASE WHEN listen_call_id IS ? THEN listen_wakes ELSE ? END)<?)",
+                (int(on), call_id, spent, call_id, membership_id, call_id, int(on), call_id, spent, limit),
             )
             return cur.rowcount == 1
 

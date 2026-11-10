@@ -24,7 +24,8 @@ person's machine, with a key per call, and stores each line it pushes with that 
 records when a call went live and lets an admin upload the icon of each platform a call can be on, in
 ``agent_icons`` (§29.11); 44 (#637) binds script keys to their harness (§49.11); 45 (#663) adds what
 each person has seen of each room and which board cards they set aside, for the home page (§55.8);
-46 adds room whiteboards (§56); 47 adds membership listening and its per-call wake count (§52.1).
+46 adds room whiteboards (§56); 47 adds membership listening and its per-call wake count (§52.1);
+48 adds a room's hands-free call settings (§52.3).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -45,7 +46,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 47
+SCHEMA_VERSION = 48
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -61,7 +62,9 @@ CREATE TABLE rooms(
   rules_text TEXT NOT NULL DEFAULT '' CHECK(length(rules_text) <= 2000),
   rules_version INTEGER NOT NULL DEFAULT 1 CHECK(rules_version >= 1),
   private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
-  renamed_from TEXT NOT NULL DEFAULT '[]');
+  renamed_from TEXT NOT NULL DEFAULT '[]',
+  call_voice INTEGER NOT NULL DEFAULT 0 CHECK(call_voice IN (0, 1)),
+  call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -1016,6 +1019,14 @@ V46_TO_V47 = (
 )
 
 
+# v47 -> v48 (#697, DESIGN.md §52.3): a room's hands-free call settings, kept with or without a live call.
+V47_TO_V48 = (
+    "ALTER TABLE rooms ADD COLUMN call_voice INTEGER NOT NULL DEFAULT 0 CHECK(call_voice IN (0, 1))",
+    "ALTER TABLE rooms ADD COLUMN call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1))",
+    "UPDATE meta SET value='48' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1081,6 +1092,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         44: MigrationStep(45, V44_TO_V45, ("home_seen", "home_snoozes")),
         45: MigrationStep(46, V45_TO_V46, ("room_boards", "room_board_changes")),
         46: MigrationStep(47, V46_TO_V47, ()),
+        47: MigrationStep(48, V47_TO_V48, ()),
     }
     out = []
     v = frm

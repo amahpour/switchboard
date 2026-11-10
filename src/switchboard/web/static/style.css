@@ -428,6 +428,8 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
 .chip .ic { width: 13px; height: 13px; }
 .chip-label { color: var(--muted-2); }
 .chip-num { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
+.chip-handsfree { background: var(--amber-bg); color: var(--amber-fg); font-weight: 500; }
+.calls-hint { margin: -4px 0 4px 26px; font-size: calc(12.5px * var(--text-scale)); color: var(--muted); }
 .chip-danger { background: var(--danger-bg); color: var(--danger); font-weight: 500; }
 button.chip-danger { border: 0; cursor: pointer; }
 button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }

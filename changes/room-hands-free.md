@@ -1,0 +1,3 @@
+### Added
+
+- **Hands-free calls, as a room setting.** For a call you join from a phone, a room can now keep two settings: **Calls start with Voice on** and **Agents listen on calls**. Turn them on in the room's new **Call settings** button, or type `/room voice on` and `/room listen on` (`/room voice off` and `/room listen off` turn them off; `/room` shows them). Every later call in the room then starts that way, with agents that join later listening too. You can still turn Voice off, or one agent's listening off, for one call. Only a person can change these settings, never an agent. Each change leaves a notice naming who made it, and the room header shows a **Hands-free** marker while either is on.

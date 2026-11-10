@@ -111,6 +111,7 @@
       <span class="head-spacer"></span>
 
       <div class="chips" id="status-chips" role="group" aria-label="Room status">
+        <span class="chip chip-handsfree hidden" id="st-handsfree"></span>
         <span class="chip" id="st-state"></span>
         <span class="chip" id="st-budget"></span>
         <span class="chip" id="st-hops"></span>
@@ -145,6 +146,10 @@
         <button type="button" class="icon-btn head-btn" id="room-wake" aria-label="Wake settings"
                 title="Edit this room's wake budget and hop limit">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12.5a5 5 0 1 1 10 0M3 12.5h10M8 12.5 10.3 8.3"/></svg>
+        </button>
+        <button type="button" class="icon-btn head-btn" id="room-calls" aria-label="Call settings"
+                title="Edit what this room's calls start with: Voice and listening">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.2 2.5h2.3l1 3-1.5 1a8 8 0 0 0 3.5 3.5l1-1.5 3 1v2.3a1.5 1.5 0 0 1-1.6 1.5A10.6 10.6 0 0 1 2.7 4.1 1.5 1.5 0 0 1 4.2 2.5Z"/></svg>
         </button>
         <button type="button" class="icon-btn head-btn" id="pane-toggle" aria-controls="pane" aria-pressed="true"
                 aria-label="Hide members" title="Hide members">

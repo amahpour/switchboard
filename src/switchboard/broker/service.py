@@ -316,6 +316,8 @@ class RoomService:
             "hop_limit": room.hop_limit,
             "test_mode": self.info.test_mode,
             "meeting": self.meeting_state(room),
+            # the room's hands-free calls (§52.3): shown to everyone in the room, so nobody is surprised
+            "hands_free": {"voice": room.call_voice, "listen": room.call_listen},
         }
 
     def room_dict(self, room: Room) -> dict[str, Any]:
@@ -1209,6 +1211,47 @@ class RoomService:
             }
         voice = self.meetings is not None and self.meetings.voice(room.id)
         return {"state": row.state, "platform": row.platform, "voice": voice}
+
+    # ------------------------------------------------------ hands-free calls (§52.3)
+    HANDS_FREE_VOICE_NOTE = "Voice is on: this room's setting."
+    HANDS_FREE_LISTEN_NOTE = "Agents listen: this room's setting."
+
+    def hands_free_note(self, room: Room) -> str:
+        """The sentence a call's first notice adds when this room's settings start it hands-free."""
+        parts = []
+        if room.call_voice:
+            parts.append(self.HANDS_FREE_VOICE_NOTE)
+        if room.call_listen:
+            parts.append(self.HANDS_FREE_LISTEN_NOTE)
+        return " ".join(parts)
+
+    def start_hands_free(self, room_id: int, call_id: int, voices: Any) -> None:
+        """A call has just started in this room: carry out its settings. ``voices`` is whoever holds the
+        call's voice (the bridge, or the hosted calls). Only the settings a person made turn anything on;
+        an agent's text never reaches here (§52.3)."""
+        room = self.store.room_by_id(room_id)
+        if room is None:
+            return
+        if room.call_voice and voices is not None:
+            voices.set_voice(room.id, True)
+        if room.call_listen:
+            self.listen_everyone(room.id, call_id)
+
+    def listen_everyone(self, room_id: int, call_id: int) -> None:
+        """Every agent in the room listens to this call, up to the per-call cap (§52.1). One that a
+        person turned off keeps that until the setting is turned on again."""
+        cap = self.cfg.delivery.listen_max_wakes
+        for m in self.store.room_memberships(room_id):
+            if not m.listen:
+                self.store.set_listen(m.id, True, call_id, cap)
+
+    def join_hands_free(self, room: Room, membership_id: int) -> None:
+        """An agent has joined: when the room's setting is on and a call is open, it listens too."""
+        if not room.call_listen:
+            return
+        row = self.store.open_meeting(room.id)
+        if row is not None:
+            self.store.set_listen(membership_id, True, row.id, self.cfg.delivery.listen_max_wakes)
 
     def call_detail(self, room: Room, person_id: int | None, admin: bool) -> dict[str, Any] | None:
         """The room's open call, for the one person looking (§54, the call's details in the page): what
