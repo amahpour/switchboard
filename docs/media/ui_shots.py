@@ -3431,6 +3431,60 @@ def shoot_room_calls(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_play_fit(browser: Any, out: Path, world: Any) -> None:
+    """#686, Play frames with a small frame: ``playfit-{light,dark,phone}``, each taken a moment after Play
+    starts. Before: the frame at 100%, small in an empty screen. After: it fills the view, as a slide does."""
+    import re
+
+    from playwright.sync_api import expect
+    from ui_world import wait_js
+
+    room, b = "#sprint-story", world.broker
+    world.create_room(room)
+    for i, title in enumerate(("Kickoff", "Plan")):
+        b.on_loop(
+            lambda i=i, title=title: b.state.room_board.agent(
+                b.state.store.get_room(room),
+                "alice",
+                {"action": "frame", "text": title, "x": i * 700, "y": 0},
+                None,
+            )
+        )
+    variants = {
+        "light": dict(viewport={"width": 1100, "height": 560}, color_scheme="light"),
+        "dark": dict(viewport={"width": 1100, "height": 560}, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    for name, options in variants.items():
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        try:
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            page.get_by_role("button", name="Whiteboard", exact=True).click()
+            expect(page.locator("#whiteboard-status")).to_contain_text("2 shapes")
+            board = page.frame(url=re.compile(r"/board$"))
+            # a small frame, as a person drew one: 240 x 150
+            board.evaluate(
+                """() => { const api = window.sbBoard.api;
+                  api.updateScene({ elements: api.getSceneElementsIncludingDeleted().map(
+                    e => e.type === 'frame' ? { ...e, width: 240, height: 150, version: e.version + 1 } : e) });
+                  window.sbBoard.flush(); }"""
+            )
+            page.get_by_role("button", name="Play frames").click()
+            expect(page.locator("#whiteboard-caption")).to_have_text("1 / 2 \u00b7 Kickoff")
+            wait_js(board, "() => window.sbBoard.api.getAppState().viewModeEnabled === true")
+            page.mouse.move(0, 0)
+            shot(page, out, f"playfit-{name}.png")
+        finally:
+            ctx.close()
+
+
 def shoot_attachments_guide(browser: Any, out: Path, world: Any) -> None:
     """#586, the attachments guide: a room of its own with claude-1. A file attached from the composer
     (``guide-attachments-attach-light``), an agent's file that has not been uploaded yet and the same card once
@@ -3558,6 +3612,7 @@ ONLY: dict[str, Any] = {
     "meeting": shoot_meeting_guide,
     "listen": shoot_listen,
     "room_calls": shoot_room_calls,
+    "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
 }
 

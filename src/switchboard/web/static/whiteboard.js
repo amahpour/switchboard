@@ -19,6 +19,16 @@
     el('prev').disabled = i === 0; el('next').disabled = i === all.length-1;
     post('present', { id: f.id });
   }
+  // A step is fitted to the view when it is shown, so a view that changes size afterwards (a phone turned
+  // sideways, a window dragged, full screen settling after Play) asks for the same step again, which fits it
+  // again. It waits a moment for the frame's own size to settle, and sends nothing when nothing is playing.
+  let refitTimer = 0;
+  if (window.ResizeObserver && el('host')) {
+    new ResizeObserver(() => {
+      clearTimeout(refitTimer);
+      refitTimer = setTimeout(() => { if (playing && selected) post('present', { id: selected }); }, 120);
+    }).observe(el('host'));
+  }
   function stopPlay() {
     playing = false; selected = null;
     if (document.fullscreenElement === el('panel')) document.exitFullscreen().catch(() => {});

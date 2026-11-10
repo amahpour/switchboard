@@ -58,7 +58,7 @@ window.addEventListener('message', async ev => {
     dirty = false; playing = m.id;
     api.updateScene({ appState: { viewModeEnabled: !!playing, selectedElementIds: {} } });
     apply(fullScene);
-    api.scrollToContent(undefined, { fitToContent: true, viewportZoomFactor: 0.85 });
+    api.scrollToContent(undefined, { fitToViewport: true, viewportZoomFactor: 0.85, maxZoom: 8 });
   } else if (m.session === session && m.room === room && m.action === 'convert' && typeof m.request === 'string' && /^[0-9a-f]{32}$/.test(m.request)) {
     try {
       const { convert } = await import('./mermaid.js');
