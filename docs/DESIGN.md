@@ -3040,6 +3040,14 @@ room name enter that line, and fitting reserves space for it. `read()` and `wait
 results that show peer text inline. Opening up the Stop path is a separate issue and needs the
 maintainer's yes.
 
+**The web UI (phase 3).** The call bar has a row of switches, one for each agent in the room, shown only while the room
+has a call (`renderListenSwitches`, §29). A switch sends `/meeting listen <name>` or `... off` through the
+composer's own command path, as the Voice switch sends `/meeting voice`, so the `human` role check above is the only
+gate: the page adds no route, no field and no way for an agent to turn it on. A state that is not `true` in the member
+frame draws as off. Members adds "listening" to the agent's status line, and the Inspector a Listening chip and, for approvals off or
+unknown, a Needs attention note that repeats the warning. The buttons are kept between frames so a frame does not take the
+focus from one; each is a `role="switch"` named "Listening: <agent>".
+
 Tests: `test_listen_mode.py` covers the clocks, holds, gates, private and shared caps, stored state,
 old call lines, ending a call, command roles and warnings, and the #694 status-meeting replay.
 `test_db_migrate_v47.py` migrates the real release fixture, checks the backup, defaults and CHECKs.

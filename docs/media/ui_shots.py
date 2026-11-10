@@ -3294,6 +3294,83 @@ def shoot_meeting_guide(browser: Any, out: Path, world: Any) -> None:
         page.context.close()
 
 
+def shoot_listen(browser: Any, out: Path, world: Any) -> None:
+    """#697 phase 3, the call bar's Listening switches: a live call in a room with claude-1 and codex-1 (codex-1 with
+    approvals off), before (``listen-before-{light,dark,phone}``) and after a person turned both on
+    (``listen-after-{light,dark,phone}``, with Members and the Inspector's warning on the desktop), and the guide's
+    picture (``guide-meeting-listen-light``)."""
+    from playwright.sync_api import expect
+
+    room, b = "#standup", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    for name in ("claude-1", "codex-1"):
+        world.set_member_harness(room, name, name.split("-")[0])
+    world.set_approval_modes(room, {"claude-1": "prompting", "codex-1": "bypass"})
+
+    def begin() -> None:
+        r = b.state.store.get_room(room)
+        row = b.state.store.insert_meeting(r.id, started_by="alice", platform="meet")
+        b.state.store.set_meeting_live(row.id)
+        b.state.service.publish_settings(r.id)
+
+    b.on_loop(begin)
+    variants = {
+        "light": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="light"),
+        "dark": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    pages = {}
+    try:
+        for name, options in variants.items():
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+            ctx.set_default_timeout(WAIT_MS)
+            page = ctx.new_page()
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            expect(page.locator("#banner-meeting")).to_contain_text("Transcribing a call")
+            pages[name] = page
+
+        def take(prefix: str) -> None:
+            for name, page in pages.items():
+                # the sign-in notices of the throwaway home are not what this shows
+                page.evaluate(
+                    """() => document.querySelectorAll('#log .line').forEach(e => {
+                      if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+                )
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                page.mouse.move(0, 0)
+                shot(page, out, f"listen-{prefix}-{name}.png")
+
+        take("before")
+        page = pages["light"]
+        for who in ("claude-1", "codex-1"):
+            page.get_by_role("switch", name=f"Listening: {who}").click()
+            expect(page.get_by_role("switch", name=f"Listening: {who}")).to_have_attribute(
+                "aria-checked", "true"
+            )
+        for other in pages.values():
+            expect(other.get_by_role("switch", name="Listening: codex-1")).to_have_attribute(
+                "aria-checked", "true"
+            )
+        take("after")
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        shot(
+            page,
+            out,
+            "guide-meeting-listen-light.png",
+            clip=pane_clip(page, "#banner-meeting", "#banner-meeting"),
+        )
+    finally:
+        for page in pages.values():
+            page.context.close()
+
+
 def shoot_attachments_guide(browser: Any, out: Path, world: Any) -> None:
     """#586, the attachments guide: a room of its own with claude-1. A file attached from the composer
     (``guide-attachments-attach-light``), an agent's file that has not been uploaded yet and the same card once
@@ -3419,6 +3496,7 @@ ONLY: dict[str, Any] = {
     "admin_names": shoot_admin_names,
     "admins": shoot_admins,
     "meeting": shoot_meeting_guide,
+    "listen": shoot_listen,
     "attachments": shoot_attachments_guide,
 }
 

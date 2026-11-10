@@ -515,7 +515,7 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   line-height: calc(22px * var(--text-scale));
 }
 .chip-held .ic { width: 12px; height: 12px; }
-.chip-quiet {
+.chip-quiet, .chip-listening {
   display: inline-flex;
   align-items: center;
   padding: 0 7px;
@@ -800,8 +800,16 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   background: #ffffff;
   transition: transform 120ms;
 }
-.meeting-voice[aria-checked="true"] .switch-track { background: var(--accent); }
-.meeting-voice[aria-checked="true"] .switch-knob { transform: translateX(10px); }
+.meeting-voice[aria-checked="true"] .switch-track,
+.meeting-listen-btn[aria-checked="true"] .switch-track { background: var(--accent); }
+.meeting-voice[aria-checked="true"] .switch-knob,
+.meeting-listen-btn[aria-checked="true"] .switch-knob { transform: translateX(10px); }
+/* one switch per agent, on a row of the bar's own: a phone wraps them, and a long name is cut, never the row */
+.meeting-listen { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.meeting-listen-label { font-size: calc(12px * var(--text-scale)); font-weight: 600; }
+.meeting-listen-list { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.meeting-listen-btn { max-width: 100%; min-width: 0; }
+.meeting-listen-btn > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .band > .ic { width: 15px; height: 15px; }
 
 /* ==== 7. Log rows (spec 1.3) ========================================================= */
@@ -1880,7 +1888,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .insp-status { margin-top: 1px; font-size: calc(12.5px * var(--text-scale)); color: var(--muted-2); }
 .insp-owner { margin: 1px 0 0; font-size: calc(12.5px * var(--text-scale)); }
 .insp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.insp-chips .host-chip, .insp-chips .chip-held, .insp-chips .chip-quiet { padding: 0 6px; }  /* tier + host + Held + quiet fit in 264 px */
+.insp-chips .host-chip, .insp-chips .chip-held, .insp-chips .chip-quiet, .insp-chips .chip-listening { padding: 0 6px; }  /* tier + host + Held + quiet fit in 264 px */
 .group-label .group-count { font-weight: 400; }     /* "Delivery · last 5": the count is lighter */
 
 .insp-attn, .insp-details, .insp-timeline { display: flex; flex-direction: column; gap: 8px; }
