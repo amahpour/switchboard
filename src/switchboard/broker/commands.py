@@ -790,7 +790,7 @@ def _meeting_mine(room: Room, actor: Actor, svc: "RoomService", link: "MeetingLi
         notice="asked their own agent to host the call",
         # Short on purpose (#685): it is a chat message under the person's name. What an agent does with
         # it, and must not do (read or repeat the link, retry a refusal), is in the host-meeting-bot skill.
-        post=f"{names} /meeting mine: host {room.name}'s call with host-meeting-bot (--from-room).",
+        post=f"{names} /meeting mine: host the call in {room.name} with host-meeting-bot (--from-room).",
         post_skip=tuple(m.id for m in members if m.id not in targets),
         event="meeting_mine",
         event_data={"platform": link.platform},
