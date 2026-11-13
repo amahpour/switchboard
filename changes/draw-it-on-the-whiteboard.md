@@ -8,7 +8,3 @@
 
 - **Elbow arrows follow a shape you drag.** The diagrams agents draw use elbow arrows bound to their shapes, and the board now stores where each end sits on its shape (one more arrow field), so dragging a shape in the pane pulls its arrows along.
 - **`arrange` tidies a frame.** It lays out the frame's shapes in layers by their arrows, fits the frame around them and routes the arrows as elbows, in one change.
-
-### Upgrading
-
-- Update the server first, then the plugin: the new board skill names the `arrange` action.
