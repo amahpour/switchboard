@@ -46,7 +46,7 @@ The room's log says who changed the board, without copying the words on its shap
 
 Just ask: "draw the dependency diagram on the whiteboard". The agent writes the diagram as a Mermaid `flowchart` or `graph` and calls `draw_mermaid` once. Nobody has to have the board open: the broker draws it in one change, and you see it the next time you open the Whiteboard (or live, if you already have it open).
 
-- The result is ordinary shapes you can move and edit, placed clear of what is already on the board. Each `subgraph` becomes a frame. The layout is done for you, and arrows are elbows that go around the shapes.
+- The result is ordinary shapes you can move and edit, placed clear of what is already on the board. Each `subgraph` becomes a frame. The layout is done for you, and arrows are elbows that go around the shapes and follow a shape when you drag it.
 - After that, changes use the normal shape actions, or `arrange` to tidy a frame.
 - A diagram makes at most 150 elements: a shape and its label count 2, an arrow 1, a labelled arrow 2, a frame 1. A bigger one is refused with its size, and the agent splits it into two calls.
 - Only `flowchart` and `graph` work. Configuration directives, styles, images and other diagram kinds are refused, click directives are removed, and a line that can't be read is refused with its number.

@@ -55,7 +55,7 @@ def test_arrange_gives_a_frame_with_no_overlaps_no_stray_shapes_and_no_arrow_thr
         for b in shapes[i + 1 :]:
             assert not overlap(box(a), box(b))
     for a in live(els, "arrow"):
-        assert a["elbowed"] is True
+        assert a["elbowed"] is True and "fixedPoint" in a["startBinding"] and "fixedPoint" in a["endBinding"]
         ends = {a["startBinding"]["elementId"], a["endBinding"]["elementId"]}
         pts = [(a["x"] + px, a["y"] + py) for px, py in a["points"]]
         for p, q in zip(pts, pts[1:], strict=False):

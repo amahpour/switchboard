@@ -454,6 +454,26 @@ def test_random_graphs_meet_the_bar(seed):
     check_bar(els)
 
 
+def test_every_elbow_arrow_carries_the_fixed_point_where_its_ends_sit():
+    """Excalidraw keeps an elbow arrow attached by `fixedPoint`, the fraction of the bound box where the end
+    sits. Each end's fraction, applied to its shape's box, must land exactly on the arrow's first and last
+    points, so a dragged shape moves the end from where it really is. Fails if the ratio is missing,
+    outside the box, or not the point the router drew to."""
+    els = draw(DEPS)
+    by_id = {e["id"]: e for e in els}
+    arrows = kinds(els, "arrow")
+    assert arrows
+    for a in arrows:
+        pts = absolute(a)
+        for key, point in (("startBinding", pts[0]), ("endBinding", pts[-1])):
+            bind = a[key]
+            fx, fy = bind["fixedPoint"]
+            assert 0 <= fx <= 1 and 0 <= fy <= 1
+            t = by_id[bind["elementId"]]
+            assert abs(t["x"] + fx * t["width"] - point[0]) < 0.01
+            assert abs(t["y"] + fy * t["height"] - point[1]) < 0.01
+
+
 def test_a_node_with_more_than_40_bound_elements_is_refused_naming_it():
     """A shape holds 40 bound elements: its label and 39 arrows. A hub with 40 links is refused whole,
     naming the node and saying to split it; 39 are drawn. Else its list would be dropped by the guard."""

@@ -98,3 +98,19 @@ def test_a_bound_list_longer_than_a_shape_call_may_make_is_still_dropped():
         return board.clean_element(hub, agent=True).get("boundElements")
 
     assert len(kept(40)) == 40 and kept(41) is None
+
+
+def test_an_elbow_arrows_binding_keeps_its_fixed_point_only_when_it_is_two_numbers_from_0_to_1():
+    """An elbow arrow needs the fraction of the box it leaves from; anything else in that field (a
+    string, a long list, a number outside 0 to 1, NaN, a boolean) is dropped and the binding stays plain.
+    `board-rules.js` has the same rule (test_board_browser.py compares them)."""
+
+    def bound(fixed):
+        arrow = shape(
+            type="arrow", points=[[0, 0], [10, 0]], startBinding={"elementId": "b", "fixedPoint": fixed}
+        )
+        return board.clean_element(arrow, agent=True)["startBinding"]
+
+    assert bound([0.5, 1]) == {"elementId": "b", "focus": 0, "gap": 0, "fixedPoint": [0.5, 1]}
+    for bad in ("x", [0.5], [0, 1, 2], [-0.1, 0.5], [0.5, 1.1], [float("nan"), 0], [True, 0], {"a": 1}):
+        assert "fixedPoint" not in bound(bad), bad

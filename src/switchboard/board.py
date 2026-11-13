@@ -164,7 +164,17 @@ def _binding(raw: Any) -> dict[str, Any] | None:
     gap = _clamp(raw.get("gap", 0), 0, 100)
     if focus is None or gap is None:
         return None
-    return {"elementId": eid, "focus": focus, "gap": gap}
+    out: dict[str, Any] = {"elementId": eid, "focus": focus, "gap": gap}
+    # An elbow arrow's end sits at a fraction of the box it is bound to (Excalidraw's `fixedPoint`): exactly
+    # two finite numbers from 0 to 1, or nothing. The maintainer's yes, 2026-11-13, "I'll go with your
+    # recommendations", to "Elbow arrows following shapes you drag ... means letting the board store one
+    # more arrow field and rebuilding the board page. I recommend yes." `board-rules.js` has the same rule.
+    fixed = raw.get("fixedPoint")
+    if isinstance(fixed, (list, tuple)) and len(fixed) == 2:
+        fx, fy = _finite(fixed[0]), _finite(fixed[1])
+        if fx is not None and fy is not None and 0 <= fx <= 1 and 0 <= fy <= 1:
+            out["fixedPoint"] = [fx, fy]
+    return out
 
 
 def _bound_list(raw: Any) -> list[dict[str, str]] | None:

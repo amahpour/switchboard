@@ -585,9 +585,9 @@ def _elements(
         arrow["startArrowhead"], arrow["endArrowhead"] = e.head_a, e.head_b
         if frame:
             arrow["frameId"] = frame_of[frame]
-        for end, key in (("startBinding", e.src), ("endBinding", e.dst)):
+        for end, key, at in (("startBinding", e.src, route.src_at), ("endBinding", e.dst, route.dst_at)):
             if key in el_of:  # a nested subgraph has no element of its own to bind to
-                arrow[end] = {"elementId": el_of[key], "focus": 0.0, "gap": 0.0}
+                arrow[end] = {"elementId": el_of[key], "focus": 0.0, "gap": 0.0, "fixedPoint": list(at)}
                 target = shape_el.get(key) or next(o for o in out if o["id"] == el_of[key])
                 ref = {"id": arrow["id"], "type": "arrow"}
                 if ref not in target.setdefault("boundElements", []):  # a loop binds both ends to one shape
@@ -734,6 +734,8 @@ def arrange(
         arrow = _arrow(a["id"], route, now, 0)
         change: dict[str, Any] = {k: arrow[k] for k in ("x", "y", "width", "height", "points", "elbowed")}
         change["roundness"] = None
+        for end, at in (("startBinding", route.src_at), ("endBinding", route.dst_at)):
+            change[end] = {**(a.get(end) or {}), "fixedPoint": list(at)}
         out.append(board._bump(a, now, new_nonce(), **change))
         label = texts.get(a["id"])
         if label is not None and route.label is not None:
