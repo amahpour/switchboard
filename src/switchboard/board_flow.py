@@ -19,7 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from switchboard import board, board_checks, board_layout
+from switchboard import board, board_checks, board_layout, board_style
 from switchboard.board import MAX_DIAGRAM, MAX_TEXT, Reject
 from switchboard.board_layout import Group, Item, Link
 
@@ -29,7 +29,8 @@ LINE = board_checks.LINE
 NOTHING = "write A[label] --> B[label]"
 _HEADER = re.compile(r"(?:flowchart|graph)\s+(TD|TB|BT|RL|LR)\b")
 _ID = re.compile(r"\w+(?:-\w+)*")
-_CLASS = re.compile(r"class\s+[\w,\s-]+\s+[\w-]+")
+_CLASS = re.compile(r"class\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s+([\w-]+)")
+_STYLE = re.compile(r"(style|classDef)\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s+(\S.*)", re.DOTALL)
 _HEADS = {"<": "arrow", ">": "arrow", "x": "bar", "o": "dot"}
 # opener, the closers that can end it, the shape it makes, whether a missing closer may fall back
 _OPENERS: tuple[tuple[str, tuple[str, ...], str, bool], ...] = (
@@ -66,6 +67,8 @@ class _Node:
     group: str | None
     order: int
     named: bool = False  # a label or shape was written for it
+    classes: list[str] = field(default_factory=list)  # ``A:::name`` and ``class A name``
+    style: dict[str, str] = field(default_factory=dict)  # ``style A fill:...``: the palette's hex
 
 
 @dataclass
@@ -93,6 +96,7 @@ class _Ref:
     id: str
     kind: str | None = None
     label: str | None = None
+    klass: str | None = None
 
 
 @dataclass
@@ -105,6 +109,10 @@ class _Flow:
     labeled: int = 0
     hidden: int = 0
     counter: int = 0
+    classdefs: dict[str, dict[str, str]] = field(default_factory=dict)
+    pending: list[tuple[int, str, str, dict[str, str]]] = field(
+        default_factory=list
+    )  # line, ids, kind, props
 
     def order(self) -> int:
         self.counter += 1
@@ -167,7 +175,13 @@ def _statements(text: str) -> list[tuple[int, str]]:
         elif ch == "\n":
             flush()
             line += 1
-        elif ch == ";" and not re.search(r"#\w+$", "".join(buf[-12:])):  # `#quot;` is a character
+        elif (
+            ch == ";"
+            and not re.match(r"\s*(?:style|classDef)\b", "".join(buf[:10]))
+            and re.search(r"#\w+$", "".join(buf[-12:]))
+        ):  # `#quot;` is a character, but a colour's `#f9f;` in a style line ends it
+            buf.append(ch)
+        elif ch == ";":
             flush()
         elif ch == "%" and text.startswith("%%", i):
             while i < len(text) and text[i] != "\n":
@@ -215,9 +229,10 @@ class _Reader:
             text, self.i = got
             ref.kind, ref.label = kind, text
             break
-        m2 = re.compile(r":::[\w-]+").match(self.s, self.i)  # a class name: styles are not drawn (yet)
+        m2 = re.compile(r":::([\w-]+)").match(self.s, self.i)  # a class name, for ``classDef`` to colour
         if m2:
             self.i = m2.end()
+            ref.klass = m2.group(1)
         return ref
 
     def _label(self, j: int, closers: tuple[str, ...]) -> tuple[str, int] | None:
@@ -343,10 +358,24 @@ def _statement(flow: _Flow, stack: list[str], line: int, stmt: str) -> None:
         sub_ = flow.subs[stack[-1]]
         sub_.direction = DIRECTIONS[d.group(1)]
         return
-    if _CLASS.fullmatch(stmt):
-        return  # a class is a name for a style, and styles are not drawn yet
+    cls = _CLASS.fullmatch(stmt)
+    if cls:
+        flow.pending.append((line, cls.group(1), "class", {"class": cls.group(2)}))
+        return
+    st = _STYLE.fullmatch(stmt)
+    if st:
+        props = _paint(st.group(3))
+        if st.group(1) == "classDef":
+            for name in re.split(r"\s*,\s*", st.group(2)):
+                flow.classdefs.setdefault(name, {}).update(props)
+        else:
+            flow.pending.append((line, st.group(2), "style", props))
+        return
     if re.match(r"(?:style|classDef|linkStyle|click)\b", stmt):
-        raise _Bad("styles and clicks are not drawn; remove this line")
+        raise _Bad(
+            "write style A fill:blue,stroke:red (a palette name or a hex colour; only fill and stroke); "
+            "linkStyle and clicks are not drawn"
+        )
     r = _Reader(stmt)
     groups = [r.group()]
     links: list[tuple[str, str | None, str | None, str]] = []
@@ -375,6 +404,28 @@ def _statement(flow: _Flow, stack: list[str], line: int, stmt: str) -> None:
                 flow.edges.append(_Edge(u.id, v.id, style, a, b, text))
 
 
+def _paint(text: str) -> dict[str, str]:
+    """``fill:red,stroke:#c0392b`` as the palette's hex for each. Only fill and stroke; each value is a
+    palette name or a ``#rgb``/``#rrggbb`` hex (mapped to the nearest palette colour). Everything else,
+    fonts, widths, dashes, ``url(``, is refused rather than dropped."""
+    out: dict[str, str] = {}
+    for part in text.split(","):
+        key, colon, value = part.partition(":")
+        key, value = key.strip(), value.strip()
+        if not colon or not key or not value:
+            raise _Bad(f"can't read {board.clean(part)[:40]!r}; write fill:blue,stroke:red")
+        if key not in ("fill", "stroke"):
+            raise _Bad(f"only fill and stroke are drawn; remove {board.clean(key)[:30]!r}")
+        try:
+            out[key] = board_style.mermaid_color(value, key)
+        except board_style.StyleError:
+            raise _Bad(
+                f"{key}:{board.clean(value)[:30]!r} is not a colour the board draws; use a palette name "
+                f"({', '.join(board_style.COLOR_NAMES)}) or a #rrggbb hex"
+            ) from None
+    return out
+
+
 def _register(flow: _Flow, stack: list[str], ref: _Ref) -> None:
     if ref.id in flow.subs:
         if ref.kind or ref.label is not None:
@@ -392,6 +443,8 @@ def _register(flow: _Flow, stack: list[str], ref: _Ref) -> None:
     if ref.label is not None:
         node.label = _label(ref.label) or node.id
         node.named = True
+    if ref.klass:
+        node.classes.append(ref.klass)
 
 
 def _parse(text: str) -> _Flow:
@@ -410,6 +463,17 @@ def _parse(text: str) -> _Flow:
     if stack:
         s = flow.subs[stack[-1]]
         raise Reject(f"line {s.line}: subgraph {s.id} is never closed; add end after its nodes")
+    for line, ids, kind, props in flow.pending:  # a style may come before or after the node it names
+        for key in re.split(r"\s*,\s*", ids):
+            if key in flow.subs:
+                raise Reject(f"line {line}: {key} is a subgraph; the board draws every frame the same")
+            node = flow.nodes.get(key)
+            if node is None:
+                raise Reject(f"line {line}: {key} is not a node of this diagram; name a node you drew")
+            if kind == "class":
+                node.classes.append(props["class"])
+            else:
+                node.style.update(props)
     return flow
 
 
@@ -521,6 +585,14 @@ def _elements(
             vn(),
         )
         shape["backgroundColor"] = "#ffffff"
+        look: dict[str, str] = dict(flow.classdefs.get("default", {}))
+        for name in n.classes:
+            look.update(flow.classdefs.get(name, {}))
+        look.update(n.style)  # a node's own style wins over its classes
+        if "fill" in look:
+            shape["backgroundColor"] = look["fill"]
+        if "stroke" in look:
+            shape["strokeColor"] = look["stroke"]
         if n.kind in ("round", "stadium"):
             shape["roundness"] = {"type": 3}
         top = _top(flow, n.id)

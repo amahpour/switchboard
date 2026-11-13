@@ -68,22 +68,26 @@ def _rgb(h: str) -> tuple[int, int, int] | None:
     return int(d[0:2], 16), int(d[2:4], 16), int(d[4:6], 16)
 
 
-def nearest_name(value: Any, role: str) -> str:
+def nearest_name(value: Any, role: str = "fill") -> str:
     """The palette name closest to a stored colour, for what a person picked by hand.
 
-    ``transparent`` and an unreadable value stay ``transparent``; the rest is the nearest of the
-    palette's colours for that role in RGB, ties to the earlier name.
+    ``transparent`` and an unreadable value stay ``transparent``. The rest is the nearest in RGB of
+    every shade the palette uses (a hue's light fill and its dark stroke, black and white), so a
+    saturated ``#ff0000`` is red whether it was meant as a fill or a stroke, not black because the
+    light fill shade is far away. Ties go to the earlier name. ``role`` is kept for callers; the
+    name does not depend on it.
     """
     rgb = _rgb(value)
     if rgb is None:
         return "transparent"
     best, gap = "transparent", None
-    for name in (*PALETTE, "black", "white"):
-        cand = _rgb(color_hex(name, role))
-        assert cand is not None
-        d = sum((a - b) ** 2 for a, b in zip(rgb, cand, strict=True))
-        if gap is None or d < gap:
-            best, gap = name, d
+    for name, shades in (*PALETTE.items(), ("black", (DEFAULT_STROKE,)), ("white", ("#ffffff",))):
+        for shade in shades:
+            cand = _rgb(shade)
+            assert cand is not None
+            d = sum((a - b) ** 2 for a, b in zip(rgb, cand, strict=True))
+            if gap is None or d < gap:
+                best, gap = name, d
     return best
 
 
@@ -153,6 +157,15 @@ def accepted(target: str = "shape") -> str:
         else:
             parts.append(f"{k}={'|'.join(_CHOICES[k])}")
     return "; ".join(parts)
+
+
+def mermaid_color(value: str, role: str) -> str:
+    """A Mermaid ``fill``/``stroke`` value as the palette's hex for ``role`` (``fill`` or ``stroke``):
+    a palette name as it is, or a ``#rgb``/``#rrggbb`` hex mapped to the nearest palette colour. Anything
+    else, ``url(...)``, ``rgb(...)``, a CSS name, ``none``, fails closed."""
+    if isinstance(value, str) and re.fullmatch(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})", value):
+        return color_hex(nearest_name(value, role), role)
+    return color_hex(value, role)
 
 
 def parse_style(value: Any) -> dict[str, str]:

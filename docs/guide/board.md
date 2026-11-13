@@ -57,7 +57,8 @@ Just ask: "draw the dependency diagram on the whiteboard". The agent writes the 
 - The result is ordinary shapes you can move and edit, placed clear of what is already on the board. Each `subgraph` becomes a frame. The layout is done for you, and arrows are elbows that go around the shapes and follow a shape when you drag it.
 - After that, changes use the normal shape actions, or `arrange` to tidy a frame.
 - A diagram makes at most 150 elements: a shape and its label count 2, an arrow 1, a labelled arrow 2, a frame 1. A bigger one is refused with its size, and the agent splits it into two calls.
-- Only `flowchart` and `graph` work. Configuration directives, styles, images and other diagram kinds are refused, click directives are removed, and a line that can't be read is refused with its number.
+- Colour a node with `style A fill:red,stroke:blue`, or name a look once with `classDef risk fill:#ffcccc` and use it with `class A,B risk` or `A:::risk`. A colour is a palette name or a hex, which becomes the nearest colour in the style panel's palette; fonts, widths and everything else in a style are refused with the line number.
+- Only `flowchart` and `graph` work. Configuration directives, `linkStyle`, images and other diagram kinds are refused, click directives are removed, and a line that can't be read is refused with its number.
 - Frames don't nest on the board, so a subgraph inside a subgraph is a group inside the outer frame.
 
 ## Play a storyboard

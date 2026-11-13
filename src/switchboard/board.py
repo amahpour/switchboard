@@ -1078,8 +1078,8 @@ def mermaid_source(value: Any) -> str:
     source = re.sub(r"(?im)^\s*click\b[^\n]*", "", source).strip()
     if re.search(r"\bclick\b", source, re.IGNORECASE):
         raise Reject("put click directives on separate lines; they are removed")
-    if re.search(r"(?im)^\s*(?:style|classDef|linkStyle)\b|@\s*\{|!\[", source):
-        raise Reject("use plain flow shapes and labels without styles or images")
+    if re.search(r"(?im)^\s*linkStyle\b|@\s*\{|!\[", source):
+        raise Reject("use plain flow shapes and labels; linkStyle and images are not drawn")
     return source.replace("\r\n", "\n").replace("\r", "\n")
 
 

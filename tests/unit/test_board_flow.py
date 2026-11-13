@@ -360,7 +360,7 @@ def test_hostile_labels_stay_inert_text_cut_to_200():
         ("flowchart TD\nA --> B; B --> ", 2),
         ("flowchart TD\nA --> B\nA --> B C", 3),
         ('flowchart TD\nA["never closed --> B', 2),
-        ("flowchart TD\nA --> B; style A fill:red", 2),
+        ("flowchart TD\nA --> B; style A color:red", 2),
         ("flowchart TD\nsubgraph\nA\nend", 2),
     ],
 )
@@ -375,17 +375,18 @@ def test_an_unreadable_line_is_refused_with_its_number_and_the_form(source, line
         or "end" in caught.value.reason
         or "quote" in caught.value.reason
         or "style" in caught.value.reason
+        or "fill and stroke" in caught.value.reason
     )
 
 
 def test_the_guard_still_refuses_what_mermaid_source_refused():
-    """The converter reads only what ``mermaid_source`` accepts: configuration, styles, clicks inline,
-    other diagram types and oversize stay refused."""
+    """The converter reads only what ``mermaid_source`` accepts: configuration, linkStyle, clicks inline,
+    other diagram types and oversize stay refused (``style`` and ``classDef`` are read for fill and stroke
+    only: tests/unit/test_board_flow_style.py)."""
     for source in (
         "sequenceDiagram\nA->>B: x",
         "%%{init: {}}%%\nflowchart TD\nA-->B",
-        "flowchart TD\nstyle A fill:red",
-        "flowchart TD\nclassDef a fill:red",
+        "flowchart TD\nA-->B\nlinkStyle 0 stroke:red",
         "flowchart TD;click A cb",
         "x" * 8001,
     ):
@@ -394,8 +395,8 @@ def test_the_guard_still_refuses_what_mermaid_source_refused():
     assert len(draw('flowchart TD\nA-->B\nclick A href "https://example.com"')) == 5
 
 
-def test_a_class_line_and_a_class_suffix_are_ignored_not_misread():
-    """`class A x` and `A:::x` change nothing about the shapes, and are not drawn as text."""
+def test_a_class_line_and_a_class_suffix_with_no_definition_change_nothing():
+    """`class A x` and `A:::x` with no `classDef x` colour nothing, and are not drawn as text."""
     els = draw("flowchart TD\nA:::hot --> B\nclass A,B x")
     assert {label_of(els, s) for s in kinds(els, *SHAPE_TYPES)} == {"A", "B"}
 
