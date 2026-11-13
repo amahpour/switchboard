@@ -49,6 +49,30 @@ _COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 _INDEX = re.compile(r"^[A-Za-z0-9]{1,120}$")
 
 
+# Excalidraw's own colour palette, so an agent's colours match the picker a person uses. Taken from
+# the pinned build (``web/static/vendor/board/chunks/chunk-42LTX363.js``, its Open Color table
+# ``Jt``): the background picker's shade is index 2 of a hue, the stroke picker's index 8.
+# ``black`` is the default stroke the picker shows (``#1e1e1e``), not the table's ``#000000``.
+# ``indigo`` and ``lime`` are in the build but not in the picker's main list, so they are not names.
+# name -> (fill, stroke)
+PALETTE: dict[str, tuple[str, str]] = {
+    "gray": ("#e9ecef", "#343a40"),
+    "red": ("#ffc9c9", "#e03131"),
+    "pink": ("#fcc2d7", "#c2255c"),
+    "grape": ("#eebefa", "#9c36b5"),
+    "violet": ("#d0bfff", "#6741d9"),
+    "blue": ("#a5d8ff", "#1971c2"),
+    "cyan": ("#99e9f2", "#0c8599"),
+    "teal": ("#96f2d7", "#099268"),
+    "green": ("#b2f2bb", "#2f9e44"),
+    "yellow": ("#ffec99", "#f08c00"),
+    "orange": ("#ffd8a8", "#e8590c"),
+}
+COLOR_NAMES = (*PALETTE, "black", "white", "transparent")
+DEFAULT_STROKE = "#1e1e1e"
+_NEUTRAL = {"black": DEFAULT_STROKE, "white": "#ffffff", "transparent": "transparent"}
+
+
 class Reject(Exception):
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -126,6 +150,59 @@ def _color(v: Any) -> str | None:
     if isinstance(v, str) and _COLOR.fullmatch(v):
         return v
     return None
+
+
+def color_hex(name: Any, role: str) -> str:
+    """The hex for a palette name as a ``fill`` (the background picker's shade) or a ``stroke``.
+
+    Names only, in lower case: raw hex, any other word and a non-string fail closed with the list.
+    """
+    if isinstance(name, str):
+        if name in PALETTE:
+            return PALETTE[name][0 if role == "fill" else 1]
+        if name in _NEUTRAL:
+            return _NEUTRAL[name]
+    raise Reject(f"unknown colour; use one of: {', '.join(COLOR_NAMES)}")
+
+
+def _rgb(h: str) -> tuple[int, int, int] | None:
+    if not isinstance(h, str) or not _COLOR.fullmatch(h):
+        return None
+    d = h[1:]
+    if len(d) in (3, 4):
+        d = "".join(c * 2 for c in d)
+    return int(d[0:2], 16), int(d[2:4], 16), int(d[4:6], 16)
+
+
+def nearest_name(value: Any, role: str) -> str:
+    """The palette name closest to a stored colour, for what a person picked by hand.
+
+    ``transparent`` and an unreadable value stay ``transparent``; the rest is the nearest of the
+    palette's colours for that role in RGB, ties to the earlier name.
+    """
+    rgb = _rgb(value)
+    if rgb is None:
+        return "transparent"
+    best, gap = "transparent", None
+    for name in (*PALETTE, "black", "white"):
+        cand = _rgb(color_hex(name, role))
+        assert cand is not None
+        d = sum((a - b) ** 2 for a, b in zip(rgb, cand, strict=True))
+        if gap is None or d < gap:
+            best, gap = name, d
+    return best
+
+
+def _paint(el: dict[str, Any]) -> str:
+    """`` fill=<name> stroke=<name>`` for the colours that are not the defaults, else empty."""
+    out = ""
+    bg = el.get("backgroundColor")
+    if bg not in (None, "transparent", "#ffffff"):
+        out += f" fill={nearest_name(bg, 'fill')}"
+    stroke = el.get("strokeColor")
+    if stroke not in (None, DEFAULT_STROKE):
+        out += f" stroke={nearest_name(stroke, 'stroke')}"
+    return out
 
 
 def _choice(v: Any, allowed: frozenset[str]) -> str | None:
@@ -410,14 +487,16 @@ def summary(elements: list[dict[str, Any]], seq: int) -> str:
         where = f" in {s['frameId']}" if s.get("frameId") else ""
         lines.append(
             f'{s["type"]} id={s["id"]} "{_label(elements, s)}" at ({round(s["x"])},{round(s["y"])}) '
-            f"{round(s['width'])}x{round(s['height'])}{where}"
+            f"{round(s['width'])}x{round(s['height'])}{where}{_paint(s)}"
         )
     for t in loose:
         lines.append(f'text id={t["id"]} "{t.get("text") or ""}" at ({round(t["x"])},{round(t["y"])})')
     for a in arrows:
         start = (a.get("startBinding") or {}).get("elementId")
         end = (a.get("endBinding") or {}).get("elementId")
-        lines.append(f'arrow id={a["id"]} {start or "(free)"} -> {end or "(free)"} "{_label(elements, a)}"')
+        lines.append(
+            f'arrow id={a["id"]} {start or "(free)"} -> {end or "(free)"} "{_label(elements, a)}"{_paint(a)}'
+        )
     return "\n".join(lines)
 
 
