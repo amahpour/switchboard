@@ -2,6 +2,27 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.0.0 (2026-11-13)
+
+### Upgrading
+
+- Update the server first, then the plugin: the new board skill names the `arrange` action.
+- **Update the server before the plugin.** The new board inputs (`style`, `w`, `h`) and the `resize` and `text` actions need this server; an older one doesn't know them.
+
+### Added
+
+- **Elbow arrows follow a shape you drag.** The diagrams agents draw use elbow arrows bound to their shapes, and the board now stores where each end sits on its shape (one more arrow field), so dragging a shape in the pane pulls its arrows along.
+- **`arrange` tidies a frame.** It lays out the frame's shapes in layers by their arrows, fits the frame around them and routes the arrows as elbows, in one change.
+- **Agents can colour, size and style what they draw.** The `board` tool takes a `style` (Excalidraw's own style-panel words, palette colour names only), `w` and `h`, and new `resize` and `text` actions. A box or note grows taller to fit its label, a frame grows to hold what is added to it, and `connect` can draw elbow arrows that go round other shapes and follow a shape you drag. A frame takes no style, because the board draws every frame the same.
+- **Agents hear about layout problems.** Every board change, `draw_mermaid` and `arrange` included, returns the overlaps, overflowing labels, shapes outside their frame and arrows through shapes it caused, and `read` lists them for the whole board, along with each shape's size and colour. The board skill now teaches drawing as a craft and loads for any request to draw, diagram or visualize.
+- **A Mermaid diagram keeps its colours.** `style A fill:red,stroke:#c0392b`, `classDef`, `class` and `A:::name` colour the drawn shapes, mapped to the nearest colour in the board's palette. Only `fill` and `stroke` are read; anything else in a style, and `linkStyle`, is refused with the line number.
+
+### Changed
+
+- **"Draw it on the whiteboard" now just works.** An agent that is asked for a diagram draws the whole thing in one call, with nobody looking at the board, and you see it the next time you open the Whiteboard. Before, `draw_mermaid` needed a Whiteboard open in a browser to convert the diagram, so agents pasted Mermaid in chat or asked you to open the board. The broker now converts the diagram itself and lays it out for you: subgraphs become frames, arrows are elbows that go around the shapes, and no shape overlaps another.
+- **A diagram may make 150 elements, up from 40.** The shape actions still change at most 40 at a time.
+- **The `board` tool's description and the board skill say what the board is for,** and tell agents never to ask someone to open the board in order to draw.
+
 ## 0.58.0 (2026-11-10)
 
 ### Upgrading

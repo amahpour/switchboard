@@ -10,8 +10,8 @@
 # by sha256 in DEPLOY.md. Create the ConfigMap first, because the pod can't start without it
 # (`kubectl describe pod` says the ConfigMap is not found):
 #
-#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/server.py
-#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v0.58.0/deploy/joinly/kokoro.py
+#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/server.py
+#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/kokoro.py
 #   kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 #   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
 #
