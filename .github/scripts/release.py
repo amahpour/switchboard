@@ -1,6 +1,7 @@
 """Cut a release through a release PR (issue #46; CONTRIBUTING.md, "Releases").
 
     python3 .github/scripts/release.py --open-pr                    # cut a release: open its PR
+    python3 .github/scripts/release.py --open-pr --major            # the same, as the next major (1.0.0)
     python3 .github/scripts/release.py --check-title "feat: …"      # CI's `pr-title` check
     python3 .github/scripts/release.py --merged "release: v1.2.3 (#9)"   # release.yml: the version
     python3 .github/scripts/release.py --notes-for 1.2.3             # release.yml: its notes
@@ -10,7 +11,9 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
 - reads the commits since the last `vX.Y.Z` tag, skipping earlier `release:` commits. Every
   squash merge is one Conventional Commits message (the PR's title);
 - picks the bump: a minor for `feat:` or a breaking change (`!` or `BREAKING CHANGE`), a patch
-  for anything else. Below 1.0 a breaking change is a minor too;
+  for anything else. Below 1.0 a breaking change is a minor too; from 1.0 it is a major. `--major`
+  (with `--open-pr` only, on the maintainer's explicit ask) makes it the next major whatever the commits
+  say (0.58.x to 1.0.0, 1.x to 2.0.0), and the PR's body says so. It is the only way to reach 1.0.0;
 - writes the new version into pyproject.toml, switchboard/__init__.py and uv.lock;
 - gathers the notes files in changes/ (one per PR, changes/README.md) into a "## X.Y.Z (date)"
   section of CHANGELOG.md, each heading once, and deletes them. An old-style "## Unreleased"
@@ -138,9 +141,9 @@ def bump_kind(commits: list[tuple[str, str]]) -> str | None:
     return kind
 
 
-def next_version(current: str, kind: str, *, breaking_major: bool = False) -> str:
+def next_version(current: str, kind: str, *, breaking_major: bool = False, force_major: bool = False) -> str:
     major, minor, patch = (int(x) for x in VERSION_RE.match(current).groups())  # type: ignore[union-attr]
-    if breaking_major and major >= 1:
+    if force_major or (breaking_major and major >= 1):
         return f"{major + 1}.0.0"
     if kind == "minor":
         return f"{major}.{minor + 1}.0"
@@ -333,8 +336,10 @@ def output(**kv: str) -> None:
     print(lines, end="")
 
 
-def release(root: Path, notes_path: Path, today: str) -> str | None:
-    """Apply the next release to the working tree; the new version, or None."""
+def release(root: Path, notes_path: Path, today: str, *, major: bool = False) -> str | None:
+    """Apply the next release to the working tree; the new version, or None. `major` makes it the
+    next major version whatever the commits say (a deliberate 1.0.0); with nothing to release it
+    still returns None."""
     if behind_main(root):
         print("main has moved on since this checkout: release from origin/main (--open-pr)")
         return None
@@ -345,7 +350,7 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
         print(f"nothing to release since v{current}")
         return None
     breaking = any(is_breaking(s, b) for s, b in commits if not s.startswith(RELEASE_PREFIX))
-    version = next_version(current, kind, breaking_major=breaking)
+    version = next_version(current, kind, breaking_major=breaking, force_major=major)
     set_version(root, version)
     fallback = [s for s, _ in commits if not s.startswith(RELEASE_PREFIX)]
     files = notes_files(root)
@@ -377,7 +382,7 @@ def release(root: Path, notes_path: Path, today: str) -> str | None:
     return version
 
 
-def open_pr(root: Path, today: str) -> str | None:
+def open_pr(root: Path, today: str, *, major: bool = False) -> str | None:
     """Cut the next release on `release/vX.Y.Z` from origin/main and open its PR; the PR's URL,
     or None with nothing to release. Works in a temporary worktree, so the checkout it runs
     from (its branch, its changes) is never touched."""
@@ -392,7 +397,7 @@ def open_pr(root: Path, today: str) -> str | None:
         tree, notes = Path(tmp) / "tree", Path(tmp) / "notes.md"
         git("worktree", "add", "-q", "--detach", str(tree), "origin/main", root=root)
         try:
-            version = release(tree, notes, today)
+            version = release(tree, notes, today, major=major)
             if version is None:
                 return None
             branch = f"release/v{version}"
@@ -400,8 +405,16 @@ def open_pr(root: Path, today: str) -> str | None:
             git("commit", "-q", "-am", f"release: v{version}", root=tree)
             # a branch left over from a closed release PR is replaced (no release PR is open)
             git("push", "-q", "--force", "origin", f"HEAD:refs/heads/{branch}", root=tree)
+            how = "`.github/scripts/release.py --open-pr`"
+            deliberate = ""
+            if major:
+                how += " with `--major`"
+                deliberate = (
+                    f"This is a deliberate major release: it was cut with `--major`, so v{version} is the "
+                    "next major version whatever the commits say, not the bump they would give.\n\n"
+                )
             notes.write_text(
-                notes.read_text() + "\n---\n\nOpened by `.github/scripts/release.py --open-pr`. "
+                notes.read_text() + f"\n---\n\n{deliberate}Opened by {how}. "
                 f"Merging it tags `v{version}` and publishes the GitHub Release and the image "
                 "(`.github/workflows/release.yml`).\n"
             )
@@ -432,9 +445,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     act.add_argument("--notes-for", metavar="VERSION", help="print a release's CHANGELOG section")
     act.add_argument("--notes", help="apply the next release to this tree and write its notes here")
+    ap.add_argument(
+        "--major", action="store_true", help="with --open-pr: release the next major version (e.g. 1.0.0)"
+    )
     ap.add_argument("--root", default=str(ROOT), help=argparse.SUPPRESS)
     ap.add_argument("--today", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    if args.major and not args.open_pr:
+        ap.error("--major only works with --open-pr")
     root = Path(args.root)
     today = args.today or dt.datetime.now(dt.timezone.utc).date().isoformat()
     if args.check_title is not None:
@@ -451,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
         print(notes_for((root / "CHANGELOG.md").read_text(), args.notes_for), end="")
         return 0
     if args.open_pr:
-        url = open_pr(root, today)
+        url = open_pr(root, today, major=args.major)
         print(url or "nothing to release: no PR opened")
         return 0
     version = release(root, Path(args.notes), today)
