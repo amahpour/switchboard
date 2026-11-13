@@ -68,6 +68,9 @@ def test_next_version() -> None:
     assert rel.next_version("0.4.9", "minor") == "0.5.0"
     assert rel.next_version("0.4.0", "minor", breaking_major=True) == "0.5.0"  # below 1.0: a minor
     assert rel.next_version("1.2.3", "minor", breaking_major=True) == "2.0.0"
+    assert rel.next_version("0.58.0", "patch", force_major=True) == "1.0.0"  # a deliberate major
+    assert rel.next_version("1.2.3", "patch", force_major=True) == "2.0.0"
+    assert rel.next_version("1.2.3", "patch") == "1.2.4"  # without it, nothing changes
 
 
 CHANGELOG = (
@@ -410,6 +413,56 @@ def test_the_script_needs_an_action() -> None:
         rel.main([])
 
 
+def test_major_without_open_pr_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`--major` is a way to cut a PR, so alone or with another action it is an argparse error and
+    nothing is changed (a release that went out as 1.0.0 by accident can't be taken back)."""
+    repo = make_repo(tmp_path)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "fix: a (#1)")
+    for argv in (["--major"], ["--notes", str(tmp_path / "n.md"), "--major"], ["--merged", "x", "--major"]):
+        with pytest.raises(SystemExit) as stop:
+            rel.main([*argv, "--root", str(repo)])
+        assert stop.value.code == 2
+        err = capsys.readouterr().err
+        assert "--major only works with --open-pr" in err or "is required" in err  # bare: no action at all
+    assert 'version = "0.4.0"' in (repo / "pyproject.toml").read_text()
+
+
+def test_a_deliberate_major_from_below_1_0_is_1_0_0_whatever_the_commits_say(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)  # 0.4.0
+    git(repo, "commit", "-q", "--allow-empty", "-m", "fix: a (#1)")  # a patch by the commits
+    assert rel.release(repo, tmp_path / "n.md", "2026-09-29", major=True) == "1.0.0"
+    assert 'version = "1.0.0"' in (repo / "pyproject.toml").read_text()
+    assert "@v1.0.0" in (repo / "README.md").read_text()
+    assert ":1.0.0\n" in (repo / "deploy/compose/compose.yaml").read_text()
+
+
+def test_a_deliberate_major_from_1_x_is_the_next_major(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    git(repo, "tag", "v1.2.3")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "docs: a (#1)")
+    assert rel.release(repo, tmp_path / "n.md", "2026-09-29", major=True) == "2.0.0"
+
+
+def test_without_major_the_bump_is_the_commits_own(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    git(repo, "commit", "-q", "--allow-empty", "-m", "fix: a (#1)")
+    assert rel.release(repo, tmp_path / "n.md", "2026-09-29") == "0.4.1"
+
+
+def test_a_major_with_nothing_to_release_still_releases_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repo = make_repo(tmp_path)  # tagged v0.4.0, nothing since
+    assert rel.release(repo, tmp_path / "n.md", "2026-09-29", major=True) is None
+    assert "nothing to release" in capsys.readouterr().out
+    assert 'version = "0.4.0"' in (repo / "pyproject.toml").read_text()
+
+
+def test_the_title_of_a_major_release_is_the_usual_one() -> None:
+    assert rel.check_title("release: v1.0.0") is None
+    assert rel.MERGED_RELEASE_RE.match("release: v1.0.0 (#9)")
+
+
 # ------------------------------------------------------------------ release PRs (#46)
 def test_notes_for_reads_a_release_back_out_of_the_changelog() -> None:
     text, notes = rel.cut_changelog(CHANGELOG, "0.4.1", "2026-09-29", [], [])
@@ -505,6 +558,34 @@ def test_open_pr_cuts_the_release_on_a_branch_and_leaves_the_checkout_alone(
     assert (repo / "README.md").read_text() == "an edit in progress\n"
     assert 'version = "0.4.0"' in (repo / "pyproject.toml").read_text()
     assert len(git(repo, "worktree", "list").splitlines()) == 1
+
+
+def test_open_pr_major_cuts_1_0_0_and_the_body_says_why(remote: tuple[Path, Path]) -> None:
+    repo, origin = remote  # 0.4.0 with a feat since: the commits alone would give 0.5.0
+    assert rel.open_pr(repo, "2026-09-30", major=True) == "https://github.com/amahpour/switchboard/pull/99"
+    assert 'version = "1.0.0"' in git(origin, "show", "release/v1.0.0:pyproject.toml")
+    assert git(origin, "log", "-1", "--format=%s", "release/v1.0.0").strip() == "release: v1.0.0"
+    log = (repo.parent / "gh.log").read_text().splitlines()
+    assert log[1].startswith(
+        "pr create --base main --head release/v1.0.0 --title release: v1.0.0 --body-file "
+    )
+
+
+def test_open_pr_major_body_is_marked(remote: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, _ = remote
+    bodies: list[str] = []
+    real = rel.gh
+
+    def spy(*args: str, root: Path = rel.ROOT) -> str:
+        if args[:2] == ("pr", "create"):
+            bodies.append(Path(args[args.index("--body-file") + 1]).read_text())
+        return real(*args, root=root)
+
+    monkeypatch.setattr(rel, "gh", spy)
+    rel.open_pr(repo, "2026-09-30", major=True)
+    assert "deliberate major release" in bodies[0] and "`--major`" in bodies[0]
+    rel.open_pr(repo, "2026-09-30")  # the usual release says nothing of the sort
+    assert "deliberate major" not in bodies[1]
 
 
 def test_open_pr_refuses_while_a_release_pr_is_open(
