@@ -1,6 +1,6 @@
 ### Upgrading
 
-- **Update the server before the plugin.** The new board inputs (`style`, `w`, `h`) and the `resize` and `text` actions need this server; an older one doesn't know them.
+- **Update the server before the plugin.** The board skill now uses the `arrange`, `resize` and `text` actions and the `style`, `w` and `h` inputs, which an older server doesn't know.
 
 ### Added
 
