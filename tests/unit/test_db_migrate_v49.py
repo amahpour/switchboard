@@ -29,7 +29,7 @@ def test_the_column_is_empty_for_every_old_member_and_its_shape_is_checked(
         old.close()
     assert members, "the fixture has members to carry over"
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 49
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 50
     assert con.execute("SELECT COUNT(*) FROM memberships WHERE call_voice IS NULL").fetchone()[0] == len(
         members
     )

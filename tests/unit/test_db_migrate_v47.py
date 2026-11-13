@@ -26,7 +26,7 @@ def test_listening_defaults_off_and_old_rows_and_backup_survive(
         members = old.execute("SELECT COUNT(*) FROM memberships").fetchone()[0]
         old.close()
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 49
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 50
     assert [tuple(r) for r in con.execute("SELECT * FROM messages")] == messages
     assert (
         con.execute(

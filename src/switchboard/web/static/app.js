@@ -1336,7 +1336,8 @@
     let lastDay = null;
     let prev = null;
     const frag = document.createDocumentFragment();
-    for (const m of r.msgs) {
+    // a room opened at a search result shows the window around it, not its latest (#724, §58.5)
+    for (const m of (state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
       const k = dayKey(m.ts);
       if (k !== lastDay) {
         frag.append(dayRow(m.ts));
@@ -1375,6 +1376,7 @@
     renderPins();
     renderClaimBoard();
     log.scrollTop = log.scrollHeight;
+    syncAround();
   }
 
   // Focus mode (#99): collapse agent chat not addressed to you to one line, so what needs you
@@ -1412,6 +1414,7 @@
       renderTabs();
       return;
     }
+    if (state.around && state.around.room === r.name) return;  // a window around a search result stays as it is
     const log = $('log');
     const stick = nearBottom(log);
     const newDay = !prev || dayKey(prev.ts) !== dayKey(m.ts);
@@ -1480,10 +1483,17 @@
   function updateTitle() {
     let unread = 0;
     state.rooms.forEach(function (r) { if (r.name !== state.active) unread += r.unread; });
-    const base = state.home ? 'switchboard — Home' : state.active ? 'switchboard — ' + state.active : 'switchboard';
+    const base = state.searchOn ? 'switchboard — Search' : state.home ? 'switchboard — Home' : state.active ? 'switchboard — ' + state.active : 'switchboard';
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
     const heading = $('room-title');
+    if (state.searchOn) {
+      heading.textContent = 'Search';
+      $('room-sub').textContent = searchStatusText();
+      const g = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
+      if (g) g.setAttribute('d', SEARCH_PATH);
+      return;
+    }
     if (state.home) {
       heading.textContent = 'Home';
       $('room-sub').textContent = '';
@@ -2045,8 +2055,12 @@
     refocus(list, focused);
   }
 
-  function selectRoom(name) {
+  // `around`: { room, id, msgs } shows the room at a search result (#724) instead of at its latest
+  function selectRoom(name, around) {
     if (!state.rooms.has(name)) return;
+    if (state.searchOn) closeSearch(false);
+    if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
+    if (around) state.around = around;
     if (state.home) leaveHome();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
@@ -2057,9 +2071,11 @@
     if (state.active !== name) closeWhiteboard();
     state.active = name;
     const activeR = state.rooms.get(name);
-    markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
-    activeR.unread = 0;
-    activeR.quiet = false;
+    if (!state.around) {  // a window around a search result has not shown the room's latest
+      markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
+      activeR.unread = 0;
+      activeR.quiet = false;
+    }
     if (location.hash !== '#' + state.rooms.get(name).slug) {
       history.replaceState(null, '', '#' + state.rooms.get(name).slug);
     }
@@ -5967,6 +5983,7 @@
       $('create-build').focus();
       return false;
     }
+    if (state.around) exitAround(false);  // what is posted belongs to the live log
     // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
         !await confirmDialog('Close ' + r.name + '?',
@@ -6925,6 +6942,8 @@
 
   function showHome() {
     if (!state.rooms.size) return;
+    if (state.searchOn) closeSearch(false);
+    if (state.around) { state.around = null; resetSearch(); }
     const was = state.home;
     if (state.inspect) closeInspector(false);
     closePop();
@@ -7572,6 +7591,12 @@
   // the narrow drawer or sheet, then the Inspector. Focus goes back to what opened it.
   function onEscape() {
     if ($('app-dialog').open || $('confirm-dialog').open) return;
+    if (state.searchOn) {  // Esc clears the box and goes back to the page under it
+      closeSearch(false);
+      updateTitle();
+      searchFocusBack();
+      return;
+    }
     const ui = state.inspUi;
     if (state.inspect && ui && ui.menu) return setMenu(false);
     if (state.pop) {
@@ -7828,6 +7853,11 @@
 
     document.addEventListener('keydown', function (ev) {
       if (ev.key === 'Escape') onEscape();
+      else if (ev.key === '/' && !ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.isComposing &&
+          !typingTarget(ev.target) && !$('app-dialog').open && !$('confirm-dialog').open) {
+        ev.preventDefault();  // "/" focuses the search box, unless a field has it (the composer's own "/" is a command)
+        focusSearch();
+      }
     });
     // a click outside the catch-up menu closes it (click-driven: closest is fine here)
     document.addEventListener('click', function (ev) {
@@ -7844,6 +7874,505 @@
     setPaneView(false);
     setOverlay();
     updateWelcome();
+  }
+
+  // ------------------------------------------------------------ search (#724, DESIGN.md §58)
+  // A box at the top of the sidebar, and a page of results in place of the log (#app.search-open, as Home
+  // is). The broker searches only the rooms this person can see and answers each hit with a snippet and
+  // highlight offsets; this draws the snippet with textContent and <mark> elements it makes itself. Opening a
+  // hit loads the messages around it (GET /api/rooms/{slug}/messages?around=) and shows them in the room, with
+  // a banner to go back to the results or jump to the latest. Nothing here writes anything.
+  const SEARCH_WAIT_MS = 250;        // after the last key, before asking
+  const SEARCH_GROUP_SHOW = 2;       // hits a room's group shows before "N more in #room"
+  const SEARCH_PATH = 'M7 2.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9ZM10.5 10.5 14 14';
+  const SEARCH_TIMES = [['any', 'Any time'], ['today', 'Today'], ['week', 'This week'], ['month', 'This month']];
+
+  function freshSearch() {
+    return {
+      q: '', room: '', from: '', time: 'any', calls: true,
+      hits: [], total: null, capped: false, next: null,   // the last answer
+      ran: null,         // the query string that answer was for
+      loading: false, error: '', seq: 0, timer: null, retry: null,
+      sel: 0,            // the hit Enter opens, in the page's order
+      expanded: new Set(),  // groups shown whole
+      chips: null,       // { room, from, time, calls } nodes, built once
+    };
+  }
+  state.search = freshSearch();
+  state.searchOn = false;
+  state.searchKept = false;   // the results are kept while a hit's room is open, for "Back to results"
+  state.around = null;        // { room, id, msgs }: the active room shown around a search result
+
+  function searchBoxes() { return [$('search-input'), $('search-page-input')]; }
+
+  // A time filter as the broker's `since`: calendar day, week (from Monday) or month, in this browser's time.
+  function searchSince(time) {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    if (time === 'today') return d.getTime() / 1000;
+    if (time === 'week') { d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d.getTime() / 1000; }
+    if (time === 'month') { d.setDate(1); return d.getTime() / 1000; }
+    return null;
+  }
+
+  function searchStatusText() {
+    const s = state.search;
+    const q = s.q.trim();
+    if (!q) return 'Type to search your rooms';
+    if (s.error) return s.error;
+    if (s.loading && s.ran === null) return 'Searching…';
+    if (s.total === null) return '';
+    if (s.total === 0) return 'No messages match “' + q + '”';
+    return (s.capped ? s.total + '+ messages' : plural(s.total, 'message', 'messages')) +
+      (s.total === 1 && !s.capped ? ' matches “' : ' match “') + q + '”';
+  }
+
+  function openSearch() {
+    if (state.searchOn) return;
+    closePop();
+    if (state.inspect) closeInspector(false);
+    state.searchOn = true;
+    $('app').classList.add('search-open');
+    $('app').classList.remove('sheet-open');
+    $('search').classList.remove('hidden');
+    buildSearchChips();
+    renderSearch();
+  }
+
+  // Leave the Search page. The box is emptied (it only ever shows what the page shows); `keep` holds the results
+  // for "Back to results" and otherwise they are dropped, filters and all.
+  function closeSearch(keep) {
+    if (!state.searchOn && !state.searchKept) return;
+    const was = state.searchOn;
+    state.searchOn = false;
+    $('app').classList.remove('search-open');
+    $('search').classList.add('hidden');
+    clearTimeout(state.search.timer);
+    state.search.timer = null;
+    state.search.seq += 1;  // an answer still on its way is not drawn
+    for (const b of searchBoxes()) b.value = '';
+    if (keep) state.searchKept = true;
+    else resetSearch();
+    if (was) updateTitle();
+  }
+
+  function resetSearch() {
+    const old = state.search;
+    clearTimeout(old.timer);
+    clearTimeout(old.retry);
+    const next = freshSearch();
+    next.chips = old.chips;  // the filter controls stay built
+    next.seq = old.seq + 1;
+    state.search = next;
+    state.searchKept = false;
+    if (next.chips) syncSearchChips();
+  }
+
+  function searchFocusBack() {
+    if (state.active) $('input').focus();
+    else if (state.home) $('home').focus();
+  }
+
+  function scheduleSearch(now) {
+    const s = state.search;
+    clearTimeout(s.timer);
+    clearTimeout(s.retry);
+    s.timer = null;
+    if (now) runSearch(false);
+    else s.timer = setTimeout(function () { s.timer = null; runSearch(false); }, SEARCH_WAIT_MS);
+  }
+
+  async function runSearch(more) {
+    const s = state.search;
+    const q = s.q.trim();
+    const seq = ++s.seq;
+    s.error = '';
+    if (!q) {
+      s.hits = []; s.total = null; s.next = null; s.ran = null; s.loading = false;
+      renderSearch();
+      return;
+    }
+    s.loading = true;
+    renderSearch();
+    const p = new URLSearchParams();
+    p.set('q', q);
+    if (s.room) p.set('room', s.room);
+    if (s.from) p.set('from', s.from);
+    const since = searchSince(s.time);
+    if (since !== null) p.set('since', String(since));
+    if (!s.calls) p.set('calls', '0');
+    if (more && s.next) p.set('before', String(s.next));
+    let data;
+    try {
+      data = await api('GET', '/api/search?' + p.toString());
+    } catch (e) {
+      if (seq !== s.seq) return;
+      s.loading = false;
+      s.error = e.status === 429 ? 'Searching too fast: trying again in a moment' : 'Search failed: ' + String(e.message || e);
+      if (e.status === 429) s.retry = setTimeout(function () { runSearch(false); }, 4000);
+      renderSearch();
+      return;
+    }
+    if (seq !== s.seq) return;
+    s.loading = false;
+    s.hits = more ? s.hits.concat(data.hits) : data.hits;
+    if (!more) {
+      s.total = data.total;
+      s.capped = !!data.capped;
+      s.sel = 0;
+      s.expanded = new Set();
+    }
+    s.next = data.next || null;
+    s.ran = q;
+    renderSearch();
+    const live = $('search-live');
+    live.textContent = searchStatusText();
+  }
+
+  // ---- the filter chips: native selects, so the keyboard, a phone's picker and a screen reader work as
+  // they do everywhere, and one toggle for calls
+  function searchNames() {
+    const seen = new Map();
+    const add = function (n) { if (typeof n === 'string' && n) seen.set(n.toLowerCase(), n); };
+    if (state.me) add(state.me.human);
+    for (const n of state.everyone) add(n);
+    for (const r of state.rooms.values()) for (const m of r.members) add(m.name);
+    for (const h of state.search.hits) add(h.from);
+    return Array.from(seen.values()).sort(function (a, b) { return a.toLowerCase() < b.toLowerCase() ? -1 : 1; });
+  }
+
+  function fillSelect(sel, options, value) {
+    const sig = JSON.stringify(options);
+    if (sel.dataset.sig !== sig && !(document.activeElement === sel)) {
+      sel.replaceChildren();
+      for (const o of options) {
+        const opt = el('option', null, o[1]);
+        opt.value = o[0];
+        sel.append(opt);
+      }
+      sel.dataset.sig = sig;
+    }
+    sel.value = value;
+    if (sel.value !== value && !options.some(function (o) { return o[0] === value; })) sel.value = options[0][0];
+  }
+
+  function buildSearchChips() {
+    const s = state.search;
+    if (!s.chips) {
+      const box = $('search-chips');
+      const make = function (label, key) {
+        const wrap = el('label', 'search-chip');
+        wrap.append(el('span', 'sr-only', label));
+        const sel = el('select');
+        sel.dataset.focus = 'search-' + key;
+        sel.addEventListener('change', function () {
+          const st = state.search;
+          st[key] = sel.value;
+          syncSearchChips();
+          scheduleSearch(true);
+        });
+        wrap.append(sel);
+        box.append(wrap);
+        return sel;
+      };
+      const calls = btn('search-chip search-chip-toggle');
+      calls.dataset.focus = 'search-calls';
+      calls.addEventListener('click', function () {
+        state.search.calls = !state.search.calls;
+        syncSearchChips();
+        scheduleSearch(true);
+      });
+      s.chips = { room: make('Room', 'room'), from: make('From', 'from'), time: make('Time', 'time'), calls: calls };
+      box.append(calls);
+    }
+    syncSearchChips();
+  }
+
+  function syncSearchChips() {
+    const s = state.search;
+    const c = s.chips;
+    if (!c) return;
+    const rooms = Array.from(state.rooms.values()).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+    fillSelect(c.room, [['', 'Any room']].concat(rooms.map(function (r) { return [r.slug, r.name.replace(/^#/, '')]; })), s.room);
+    fillSelect(c.from, [['', 'Anyone']].concat(searchNames().map(function (n) { return [n, n]; })), s.from);
+    fillSelect(c.time, SEARCH_TIMES, s.time);
+    c.calls.textContent = s.calls ? 'Calls too ✓' : 'Calls off';
+    c.calls.setAttribute('aria-pressed', String(s.calls));
+    c.room.parentNode.classList.toggle('on', !!s.room);
+    c.from.parentNode.classList.toggle('on', !!s.from);
+    c.time.parentNode.classList.toggle('on', s.time !== 'any');
+    c.calls.classList.toggle('on', !s.calls);
+  }
+
+  // ---- the results
+  function hitTime(ts) {
+    return new Date(ts * 1000).toLocaleString(undefined,
+      { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  }
+
+  // The snippet's text with its highlight ranges (UTF-16 offsets, so string slices land right). A range that is
+  // out of order or past the end is skipped: the broker's answer is a claim, and the worst a bad one does here
+  // is highlight nothing.
+  function snippetNode(sn) {
+    const out = el('span', 'search-hit-text');
+    const text = String((sn && sn.text) || '');
+    let pos = 0;
+    for (const r of (sn && Array.isArray(sn.marks) ? sn.marks : [])) {
+      const a = r[0];
+      const b = r[1];
+      if (!Number.isInteger(a) || !Number.isInteger(b) || a < pos || b <= a || b > text.length) continue;
+      if (a > pos) out.append(text.slice(pos, a));
+      out.append(el('mark', null, text.slice(a, b)));
+      pos = b;
+    }
+    if (pos < text.length) out.append(text.slice(pos));
+    return out;
+  }
+
+  function hitButton(h, index) {
+    const b = btn('search-hit');
+    b.dataset.index = String(index);
+    b.dataset.id = String(h.id);
+    b.dataset.focus = 'hit-' + h.id;
+    const head = el('span', 'search-hit-head');
+    head.append(el('span', 'search-hit-name', h.from));
+    head.append(el('span', 'search-hit-kind',
+      h.call ? 'on the call' : h.kind === 'agent' ? 'agent' + (h.harness ? ' · ' + h.harness : '') : 'person'));
+    const t = el('span', 'search-hit-time', hitTime(h.ts));
+    t.title = new Date(h.ts * 1000).toLocaleString();
+    head.append(t);
+    b.append(head, snippetNode(h.snippet));
+    b.setAttribute('aria-label', h.from + ' in ' + h.room + (h.call ? ' (call)' : '') + ', ' + hitTime(h.ts));
+    b.addEventListener('click', function () { openHit(index); });
+    return b;
+  }
+
+  function renderSearch() {
+    if (!state.searchOn) return;
+    const s = state.search;
+    const root = $('search-results');
+    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.focus : null;
+    root.replaceChildren();
+    syncSearchChips();
+    $('search-live').textContent = '';
+    updateTitle();
+    const note = function (text, cls) {
+      const p = el('p', 'search-none' + (cls ? ' ' + cls : ''), text);
+      root.append(p);
+    };
+    if (!s.q.trim()) note('Type a word or a “quoted phrase” to search what was said in your rooms and on their calls.');
+    else if (s.error && !s.hits.length) note(s.error, 'error');
+    else if (s.loading && s.ran === null) note('Searching…');
+    else if (s.ran !== null && !s.hits.length) note('No messages match “' + s.ran + '”. Try fewer words, or widen the filters.');
+    const groups = new Map();
+    s.hits.forEach(function (h, i) {
+      const key = h.slug + (h.call ? '|call' : '');
+      if (!groups.has(key)) groups.set(key, { key: key, hit: h, items: [] });
+      groups.get(key).items.push([h, i]);
+    });
+    for (const g of groups.values()) {
+      const head = el('h3', 'search-group-h', '# ' + g.hit.room.replace(/^#/, ''));
+      if (g.hit.call) head.append(el('span', 'search-call', ' · call'));
+      root.append(head);
+      const ul = el('ul', 'search-list');
+      const whole = g.items.length <= SEARCH_GROUP_SHOW + 1 || s.expanded.has(g.key);
+      const shown = whole ? g.items : g.items.slice(0, SEARCH_GROUP_SHOW);
+      for (const pair of shown) {
+        const li = el('li');
+        li.append(hitButton(pair[0], pair[1]));
+        ul.append(li);
+      }
+      root.append(ul);
+      if (!whole) {
+        const more = btn('search-more', (g.items.length - shown.length) + ' more in ' + g.hit.room + (g.hit.call ? ' (call)' : ''));
+        more.dataset.focus = 'more-' + g.key;
+        more.addEventListener('click', function () {
+          s.expanded.add(g.key);
+          renderSearch();
+        });
+        root.append(more);
+      }
+    }
+    if (s.next) {
+      const load = btn('search-load', s.loading ? 'Loading…' : 'Show older matches');
+      load.dataset.focus = 'search-load';
+      load.disabled = s.loading;
+      load.addEventListener('click', function () { runSearch(true); });
+      root.append(load);
+    }
+    markSearchSel();
+    if (focused) {
+      const again = Array.from(root.querySelectorAll('[data-focus]')).find(function (n) { return n.dataset.focus === focused; });
+      if (again) again.focus();
+    }
+  }
+
+  function hitButtons() { return Array.from($('search-results').querySelectorAll('.search-hit')); }
+
+  // the hit Enter would open rings while a search box has the focus
+  function markSearchSel() {
+    const inBox = searchBoxes().indexOf(document.activeElement) >= 0;
+    const btns = hitButtons();
+    btns.forEach(function (b) { b.classList.toggle('sel', inBox && Number(b.dataset.index) === state.search.sel); });
+  }
+
+  function moveSearchSel(delta, fromHit) {
+    const btns = hitButtons();
+    if (!btns.length) return;
+    const s = state.search;
+    let at = btns.findIndex(function (b) { return Number(b.dataset.index) === s.sel; });
+    if (at < 0) at = 0;
+    if (fromHit && at + delta < 0) {  // up from the first hit: back to the box
+      (searchBoxes().find(function (b) { return b.offsetParent !== null; }) || $('search-input')).focus();
+      return;
+    }
+    at = Math.max(0, Math.min(btns.length - 1, at + delta));
+    s.sel = Number(btns[at].dataset.index);
+    markSearchSel();
+    if (fromHit) btns[at].focus();  // arrows on a hit move the focus; from the box they move the ring only
+    else if (typeof btns[at].scrollIntoView === 'function') btns[at].scrollIntoView({ block: 'nearest' });
+  }
+
+  // ---- opening a result: the room around it, with a way back
+  async function openHit(index) {
+    const s = state.search;
+    const h = s.hits[index];
+    if (!h) return;
+    const r = state.rooms.get(h.room);
+    if (!r) {
+      s.error = h.room + ' is not open any more';
+      renderSearch();
+      return;
+    }
+    let data;
+    try {
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(h.slug) + '/messages?around=' + h.id);
+    } catch (e) {
+      s.error = 'Could not open that message: ' + String(e.message || e);
+      renderSearch();
+      return;
+    }
+    s.sel = index;
+    if (state.home) leaveHome();
+    closeSearch(true);
+    selectRoom(h.room, { room: h.room, id: h.id, msgs: data.messages });
+    focusAroundTarget();
+  }
+
+  function focusAroundTarget() {
+    const a = state.around;
+    if (!a) return;
+    const row = Array.from($('log').children).find(function (n) { return n.dataset && n.dataset.id === String(a.id); });
+    if (!row) return;
+    row.classList.add('search-target');
+    row.tabIndex = -1;
+    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'center' });
+    row.focus({ preventScroll: true });
+  }
+
+  // Called by renderLog: the banner shows while the active room is the one shown around a result
+  function syncAround() {
+    const a = state.around;
+    if (a && a.room !== state.active) state.around = null;
+    const on = !!state.around;
+    $('banner-around').classList.toggle('hidden', !on);
+    $('around-back').classList.toggle('hidden', !state.searchKept);
+  }
+
+  // Back to the live log of the active room (the person asked for the latest, or posted, or left)
+  function exitAround(keepResults) {
+    if (!state.around) return;
+    state.around = null;
+    if (!keepResults) resetSearch();
+    renderLog();
+    const r = activeRoom();
+    if (r) {
+      r.unread = 0;
+      r.quiet = false;
+      markRoomSeen(r, true);
+      renderTabs();
+    }
+  }
+
+  function backToResults() {
+    if (!state.around) return;
+    const s = state.search;
+    exitAround(true);
+    state.searchKept = false;
+    for (const b of searchBoxes()) b.value = s.q;
+    openSearch();
+    const b = hitButtons().find(function (n) { return Number(n.dataset.index) === s.sel; });
+    if (b) b.focus();
+    else (searchBoxes().find(function (n) { return n.offsetParent !== null; }) || $('search-input')).focus();
+  }
+
+  // ---- wiring
+  function typingTarget(t) {
+    if (!t || !t.tagName) return false;
+    const tag = String(t.tagName).toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!t.isContentEditable;
+  }
+
+  function focusSearch() {
+    if (phone()) {
+      openSearch();
+      setNav(false);
+      $('search-page-input').focus();
+    } else {
+      setNav(false);
+      const box = $('search-input');
+      box.focus();
+      if (typeof box.select === 'function') box.select();
+    }
+  }
+
+  function onSearchInput(ev) {
+    const v = ev.target.value;
+    for (const b of searchBoxes()) if (b !== ev.target) b.value = v;
+    state.search.q = v;
+    if (state.around) exitAround(false);
+    openSearch();
+    scheduleSearch(!v.trim());
+  }
+
+  function onSearchEnter(ev) {
+    ev.preventDefault();
+    const s = state.search;
+    if (!s.q.trim()) return;
+    openSearch();
+    if (s.timer === null && s.ran === s.q.trim() && s.hits.length && !s.loading) openHit(s.sel);
+    else scheduleSearch(true);
+  }
+
+  function bindSearch() {
+    for (const form of [$('search-form'), $('search-page-form')]) form.addEventListener('submit', onSearchEnter);
+    for (const box of searchBoxes()) {
+      box.addEventListener('input', onSearchInput);
+      box.addEventListener('focus', markSearchSel);
+      box.addEventListener('blur', markSearchSel);
+      box.addEventListener('keydown', function (ev) {
+        if (ev.key === 'ArrowDown') { ev.preventDefault(); moveSearchSel(1, false); }
+        else if (ev.key === 'ArrowUp') { ev.preventDefault(); moveSearchSel(-1, false); }
+      });
+    }
+    // on a phone the sidebar is a drawer: its box hands over to the page's own
+    $('search-input').addEventListener('focus', function () {
+      if (!phone()) return;
+      openSearch();
+      setNav(false);
+      $('search-page-input').focus();
+    });
+    $('search-results').addEventListener('keydown', function (ev) {
+      const t = ev.target;
+      if (!t || !t.classList || !t.classList.contains('search-hit')) return;
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); state.search.sel = Number(t.dataset.index); moveSearchSel(1, true); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); state.search.sel = Number(t.dataset.index); moveSearchSel(-1, true); }
+    });
+    $('around-back').addEventListener('click', backToResults);
+    $('around-latest').addEventListener('click', function () {
+      exitAround(false);
+      $('input').focus();
+    });
   }
 
   // --------------------------------------------------------------- boot
@@ -7925,6 +8454,7 @@
 
   async function boot() {
     bindInput();
+    bindSearch();
     $('pins-toggle').addEventListener('click', function () {
       state.pinsOpen = !state.pinsOpen;
       renderPins();

@@ -67,6 +67,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, board, build_info, db
 from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people
+from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
 from switchboard.broker.hub import WsSubscriber
@@ -1976,6 +1977,35 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    # Search (§58, #724): a page of hits for the signed-in person, from the rooms they can see now. A read
+    # of what is stored; the query is made safe in switchboard.search before the index sees it.
+    @app.get("/api/search")
+    async def search_messages(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        key = state.service.person_key(w.person_id)
+        wait = state.search_limiter.wait_s(key)
+        if wait > 0:
+            return _err(429, "slow_down", f"too many searches: wait {int(wait) + 1} s and try again")
+        qp = request.query_params
+        try:
+            return _ok(
+                search_api.run(
+                    state,
+                    viewer(request),
+                    q=qp.get("q", ""),
+                    room=qp.get("room"),
+                    sender=qp.get("from"),
+                    since=qp.get("since"),
+                    until=qp.get("until"),
+                    calls=qp.get("calls"),
+                    before=qp.get("before"),
+                )
+            )
+        except ServiceError as e:
+            return _svc_err(e)
+
     @app.get("/api/rooms/{slug}/messages")
     async def messages(request: Request, slug: str) -> Response:
         if session(request) is None:
@@ -1983,7 +2013,11 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         try:
             after = _qint(request, "after")
             limit = _qint(request, "limit") or 200
-            state.service.room_for(slug, viewer(request))
+            around = _qint(request, "around")
+            room = state.service.room_for(slug, viewer(request))
+            if around is not None:
+                # the room opened at a search result (§58.5): the same visibility check, then a window
+                return _ok({"messages": state.service.history_around(room, around), "around": around})
             return _ok({"messages": state.service.history(slug, after, min(limit, 1000))})
         except ServiceError as e:
             return _svc_err(e)

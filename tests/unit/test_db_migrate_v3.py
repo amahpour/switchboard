@@ -35,6 +35,16 @@ V2_TABLES = (
 NEW_TABLES = ("passkeys",)  # and link_machines, which schema 29 dropped again (#385)
 
 
+# the search index (schema 50, §58) is derived data: an FTS5 table and its shadow tables, not in ``db.TABLES``
+SEARCH_INDEX = {
+    "messages_fts",
+    "messages_fts_data",
+    "messages_fts_idx",
+    "messages_fts_docsize",
+    "messages_fts_config",
+}
+
+
 def make_v2(path: Path) -> list[str]:
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text(encoding="utf-8"))
@@ -86,7 +96,7 @@ def test_a_fresh_db_has_what_v3_added(tmp_path: Path) -> None:
     via = {c[1]: c for c in columns(con, "web_sessions")}["via"]
     assert via[2] == "TEXT" and via[3] == 0  # nullable: a session made before schema 3 has none
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
+    assert set(NEW_TABLES) <= tables and tables - SEARCH_INDEX == set(db.TABLES) | {"sqlite_sequence"}
     assert (
         db.kept_tables(1) == db.kept(db.V1_TABLES)
         and db.kept_tables(2) == db.kept(db.V2_TABLES)

@@ -45,6 +45,16 @@ PERSON_COLUMNS = {
 # schema 4 also put one on link_machines, which schema 29 dropped (#385)
 
 
+# the search index (schema 50, §58) is derived data: an FTS5 table and its shadow tables, not in ``db.TABLES``
+SEARCH_INDEX = {
+    "messages_fts",
+    "messages_fts_data",
+    "messages_fts_idx",
+    "messages_fts_docsize",
+    "messages_fts_config",
+}
+
+
 def make_v3(path: Path) -> list[str]:
     con = sqlite3.connect(path)
     con.executescript(FIXTURE.read_text(encoding="utf-8"))
@@ -93,12 +103,12 @@ def test_fixture_is_a_v3_database_with_rows_in_every_table(tmp_path: Path) -> No
 
 def test_fresh_db_keeps_the_v4_person_columns(tmp_path: Path) -> None:
     con = db.open_db(tmp_path / "switchboard.db")
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 49
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 50
     for t, col in PERSON_COLUMNS.items():
         c = {x[1]: x for x in columns(con, t)}[col]
         assert c[2] == "INTEGER" and c[3] == 0 and c[4] is None  # nullable, no default: NULL is the owner
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert set(NEW_TABLES) <= tables and tables == set(db.TABLES) | {"sqlite_sequence"}
+    assert set(NEW_TABLES) <= tables and tables - SEARCH_INDEX == set(db.TABLES) | {"sqlite_sequence"}
     assert db.kept_tables(3) == db.kept(db.V3_TABLES) and db.kept_tables(4) == db.kept(db.V4_TABLES)
     assert backups(tmp_path / "switchboard.db") == []
 
