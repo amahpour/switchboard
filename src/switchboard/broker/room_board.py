@@ -11,14 +11,17 @@ import asyncio
 import base64
 import binascii
 import secrets
+from collections.abc import Callable
 from typing import Any
 
-from switchboard import board, db
+from switchboard import board, board_flow, db
 from switchboard.broker.agent_icons import PNG_SIGNATURE, IconError, png_size
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean, sanitize
 from switchboard.models import Room
 from switchboard.store import Conflict
+
+MAX_CONVERSIONS = 4  # drawings being converted at once, for all rooms
 
 
 class RoomBoard:
@@ -74,53 +77,37 @@ class RoomBoard:
         pending[2].set_result(result)
         return True
 
-    async def convert(self, room: Room, source: str, participant: int) -> list[Any]:
-        """Conversion runs only in an open board, with one request per agent and a global cap."""
-        if participant in self._converting or len(self._pending) >= 16:
-            raise ServiceError("busy", "a board conversion is already pending")
-        request = secrets.token_hex(16)
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._pending[request] = (room.id, 0, future, "mermaid")
+    async def convert(self, source: Any, participant: int) -> board_flow.Converted:
+        """The parse, layout and routing of a diagram, off the event loop: a dense diagram is real work,
+        and nothing else in the broker may wait for it. One conversion per agent and a few at once."""
+        if participant in self._converting or len(self._converting) >= MAX_CONVERSIONS:
+            raise ServiceError("busy", "a board drawing is already being made; ask again in a moment")
         self._converting.add(participant)
         try:
-            self.state.hub.room_board(
-                room.name, {"task": {"id": request, "kind": "mermaid", "source": source}}
-            )
-            try:
-                result = await asyncio.wait_for(future, 8.0)
-            except TimeoutError as e:
-                raise ServiceError("no_board_page", "open this room's whiteboard, then ask again") from e
-            if isinstance(result, dict):
-                raise ServiceError("bad_request", "cannot convert this flow within the board limits")
-            return result
-        finally:
-            self._pending.pop(request, None)
-            self._converting.discard(participant)
-
-    def mermaid_result(self, room: Room, request: Any, result: Any) -> bool:
-        if not isinstance(request, str):
-            return False
-        pending = self._pending.get(request)
-        if pending is None or pending[0] != room.id or pending[3] != "mermaid" or pending[2].done():
-            return False
-        if result == {"error": "cannot_convert"}:
-            pending[2].set_result(result)
-            return True
-        try:
-            board.mermaid_elements([], result, now=self.state.clock.now())
-        except board.Reject:
-            return False
-        pending[2].set_result(result)
-        return True
-
-    def imported(self, room: Room, actor: str, participant: int, raw: list[Any]) -> dict[str, Any]:
-        _, current = self.state.store.board_load(room.id)
-        try:
-            elements = board.mermaid_elements(current, raw, now=self.state.clock.now())
+            return await asyncio.to_thread(board_flow.convert, source)
         except board.Reject as e:
             raise ServiceError("bad_request", e.reason) from e
+        finally:
+            self._converting.discard(participant)
+
+    def drawn(self, room: Room, actor: str, participant: int, flow: board_flow.Converted) -> dict[str, Any]:
+        """A converted flowchart as one change. The caller has just rechecked membership and the rate
+        limit; the board is loaded, and the diagram placed clear of it, inside the transaction, so a
+        change that landed while the conversion ran is respected (§56.9)."""
+        now = self.state.clock.now()
+
+        def place(current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return board.mermaid_elements(current, flow.elements, now=now)
+
         return self._commit(
-            room, actor, participant, action="draw_mermaid", params=None, raw=elements, agent_raw=True
+            room,
+            actor,
+            participant,
+            action="draw_mermaid",
+            params=None,
+            raw=place,
+            agent_raw=True,
+            summary=flow.summary,
         )
 
     def snapshot(self, room: Room) -> dict[str, Any]:
@@ -153,8 +140,9 @@ class RoomBoard:
         *,
         action: str | None,
         params: dict[str, Any] | None,
-        raw: list[Any] | None,
+        raw: list[Any] | Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None,
         agent_raw: bool = False,
+        summary: str = "",
     ) -> dict[str, Any]:
         who = clean(actor).strip()[:100] or "someone"
         now = self.state.clock.now()
@@ -171,11 +159,17 @@ class RoomBoard:
                 added = outcome.added
                 agent = True
             else:
+                if callable(raw):
+                    try:
+                        raw = raw(elements)
+                    except board.Reject as e:
+                        raise ServiceError("bad_request", e.reason) from e
                 incoming = raw
                 agent = agent_raw
                 if agent_raw:
                     added = tuple(e["id"] for e in incoming)
-            result = board.merge(elements, incoming, agent=agent)
+            big = board.MAX_DIAGRAM if agent_raw or action == "arrange" else None
+            result = board.merge(elements, incoming, agent=agent, cap=big)
             if agent_raw and (len(result.taken) != len(incoming) or result.rejected):
                 raise ServiceError("bad_request", "the diagram does not fit on this board")
             if not result.taken:
@@ -206,7 +200,7 @@ class RoomBoard:
         assert published is not None
         self.state.hub.room_board(room.name, published)
         ids = list(added) or published["ids"]
-        return {"seq": published["seq"], "changed": True, "ids": ids, "text": _done(action, ids)}
+        return {"seq": published["seq"], "changed": True, "ids": ids, "text": summary or _done(action, ids)}
 
 
 def _done(action: str | None, ids: list[str]) -> str:
@@ -214,6 +208,8 @@ def _done(action: str | None, ids: list[str]) -> str:
         return "ok"
     if action == "delete":
         return f"deleted {ids[0]}"
+    if action == "arrange":
+        return f"arranged {ids[0]}"
     if action in ("move", "edit"):
         return f"updated {ids[0]}"
     if action is None:

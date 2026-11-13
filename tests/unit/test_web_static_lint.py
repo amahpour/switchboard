@@ -427,7 +427,7 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("994fe801eff225f86ec84043948c84d58ab145f63ac409ec58d82a37c9072b46"),
+    "vendor/board/NOTICE": ("d9af4ae3081fb55c9cbb2d602e956273b6b6562c2f2ed39b497e1741597b73e7"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
     "vendor/board/board.js": ("f2602ade4304b4679edef674e79467814d068ce842ede6810bdc1e86639b41a4"),
     "vendor/board/chunks/chunk-42LTX363.js": (
@@ -437,7 +437,7 @@ BOARD_ASSETS = {
         "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31"
     ),
     "vendor/board/chunks/chunk-4RIBWQVO.js": (
-        "775c963eff6c9d40c6f799cbe3fe95b6bd89feb8341ef967a8663757cf72dbcf"
+        "b645f17fa47e923dce21b42bda8abeb5373053be11d8e9f351fa18eb2f1ffe4b"
     ),
     "vendor/board/chunks/chunk-4RIBWQVO.js.LEGAL.txt": (
         "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"

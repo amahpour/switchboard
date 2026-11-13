@@ -23,6 +23,12 @@ from switchboard.envelope import clean
 # stays bounded; a person drawing by hand meets the same cut.
 MAX_TEXT = 200
 MAX_CALL = 40  # shapes one agent call may add or change
+# Elements one Mermaid diagram, or one arranged frame, may make or change in a single change. The
+# maintainer's yes, 2026-11-13: "Raise how many shapes one Mermaid diagram can make, from 40 to 150? ... Yes?"
+# "Yes". The per-call cap of the shape actions stays MAX_CALL. `arrange` may change as many: the maintainer's
+# "I'll go with your recommendations", 2026-11-13, to "`arrange` moving up to 150 shapes at once ... I
+# recommend yes."
+MAX_DIAGRAM = 150
 MAX_ELEMENTS = 1500  # live and deleted, together
 MAX_BYTES = 1_000_000
 MAX_CHANGES = 200  # change records kept per room (who, when, which ids)
@@ -36,7 +42,7 @@ AGENT_TYPES = frozenset({"rectangle", "ellipse", "diamond", "arrow", "text", "fr
 # A person's page can also send a line or a pen stroke. Anything else, including an image, fails closed.
 PERSON_TYPES = AGENT_TYPES | frozenset({"line", "freedraw"})
 NEVER_TYPES = frozenset({"image", "embeddable", "iframe", "magicframe"})
-ACTIONS = ("note", "box", "connect", "frame", "move", "edit", "delete", "read", "draw_mermaid")
+ACTIONS = ("note", "box", "connect", "frame", "move", "edit", "delete", "read", "draw_mermaid", "arrange")
 BOX_SHAPES = frozenset({"rectangle", "ellipse", "diamond"})
 _FILL = frozenset({"hachure", "cross-hatch", "solid", "zigzag"})
 _STROKE = frozenset({"solid", "dashed", "dotted"})
@@ -158,7 +164,17 @@ def _binding(raw: Any) -> dict[str, Any] | None:
     gap = _clamp(raw.get("gap", 0), 0, 100)
     if focus is None or gap is None:
         return None
-    return {"elementId": eid, "focus": focus, "gap": gap}
+    out: dict[str, Any] = {"elementId": eid, "focus": focus, "gap": gap}
+    # An elbow arrow's end sits at a fraction of the box it is bound to (Excalidraw's `fixedPoint`): exactly
+    # two finite numbers from 0 to 1, or nothing. The maintainer's yes, 2026-11-13, "I'll go with your
+    # recommendations", to "Elbow arrows following shapes you drag ... means letting the board store one
+    # more arrow field and rebuilding the board page. I recommend yes." `board-rules.js` has the same rule.
+    fixed = raw.get("fixedPoint")
+    if isinstance(fixed, (list, tuple)) and len(fixed) == 2:
+        fx, fy = _finite(fixed[0]), _finite(fixed[1])
+        if fx is not None and fy is not None and 0 <= fx <= 1 and 0 <= fy <= 1:
+            out["fixedPoint"] = [fx, fy]
+    return out
 
 
 def _bound_list(raw: Any) -> list[dict[str, str]] | None:
@@ -327,15 +343,18 @@ def _nbytes(elements: list[dict[str, Any]]) -> int:
     return len(json.dumps(elements, separators=(",", ":"), ensure_ascii=False).encode())
 
 
-def merge(current: list[dict[str, Any]], incoming: list[Any], *, agent: bool) -> MergeResult:
-    """Merge ``incoming`` into ``current``. ``agent`` selects the type allowlist and the per-call cap."""
+def merge(
+    current: list[dict[str, Any]], incoming: list[Any], *, agent: bool, cap: int | None = None
+) -> MergeResult:
+    """Merge ``incoming`` into ``current``. ``agent`` selects the type allowlist and the per-call cap
+    (``cap`` is the larger one a whole diagram or an arranged frame gets)."""
     by_id: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for e in current:
         if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"] not in by_id:
             by_id[e["id"]] = e
             order.append(e["id"])
-    cap = MAX_CALL if agent else MAX_ELEMENTS
+    cap = (cap or MAX_CALL) if agent else MAX_ELEMENTS
     taken: list[dict[str, Any]] = []
     rejected: list[str] = []
     for i, raw in enumerate(incoming):
@@ -596,6 +615,10 @@ def _act(
         return _add_frame(elements, params, now, new_id, new_nonce)
     if action == "connect":
         return _connect(elements, params, now, new_id, new_nonce)
+    if action == "arrange":
+        from switchboard import board_flow
+
+        return board_flow.arrange(elements, params, now=now, new_nonce=new_nonce)
     if action == "move":
         return _move(elements, params, now, new_nonce)
     if action == "edit":
@@ -766,7 +789,9 @@ def _delete(
 
 
 def mermaid_source(value: Any) -> str:
-    """Only bounded fresh flows; diagram configuration cannot override the sandbox's renderer (§56.9)."""
+    """Only bounded fresh flows (§56.9): the source with its click lines removed, or a ``Reject`` for
+    anything the board does not draw. This is the guard in front of the converter, which reads the text
+    as written, so `A & B` and `#quot;` keep their meaning."""
     if not isinstance(value, str) or len(value) > 8000 or len(value.encode(errors="replace")) > 16000:
         raise Reject("Mermaid source exceeds 8000 characters or 16000 bytes")
     source = value.strip()
@@ -777,11 +802,7 @@ def mermaid_source(value: Any) -> str:
         raise Reject("put click directives on separate lines; they are removed")
     if re.search(r"(?im)^\s*(?:style|classDef|linkStyle)\b|@\s*\{|!\[", source):
         raise Reject("use plain flow shapes and labels without styles or images")
-    # Fullwidth punctuation is inert during Mermaid's temporary DOM layout. The element cleaner
-    # normalizes it back only after conversion, when labels are canvas text. Encoded tags stay inert too.
-    source = re.sub(r"&(?=[#a-z0-9])", "＆", source, flags=re.IGNORECASE)
-    source = re.sub(r"#(?=(?:[a-z]+|[0-9]+);)", "＃", source, flags=re.IGNORECASE)
-    return re.sub(r"<(?=[a-z/!])", "＜", source, flags=re.IGNORECASE)
+    return source.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _drawing_bounds(e: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -804,8 +825,8 @@ def _drawing_bounds(e: dict[str, Any]) -> tuple[float, float, float, float]:
 
 def mermaid_elements(current: list[dict[str, Any]], raw: Any, *, now: float) -> list[dict[str, Any]]:
     """Validate a whole conversion, mint its ids, and place it clear of the latest live board."""
-    if not isinstance(raw, list) or not 0 < len(raw) <= MAX_CALL:
-        raise Reject("a diagram must have 1 to 40 elements")
+    if not isinstance(raw, list) or not 0 < len(raw) <= MAX_DIAGRAM:
+        raise Reject(f"a diagram must have 1 to {MAX_DIAGRAM} elements")
     elements = [clean_element(e, agent=True) for e in raw]
     ids = {e["id"]: mint("m") for e in elements}
     if len(ids) != len(elements) or any(e["isDeleted"] for e in elements):

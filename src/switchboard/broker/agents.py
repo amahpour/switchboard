@@ -696,20 +696,20 @@ class AgentService:
         return self.state.room_board.agent(room, m.screen_name, params, p.id if action != "read" else None)
 
     async def _board_mermaid(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
-        """Recheck membership and the shared post limit after browser work, before storing anything."""
-        from switchboard import board
-
+        """Convert off the event loop, then recheck membership and the shared post limit before anything
+        is stored: the agent may have left, or posted, while the diagram was being made."""
         p, m, room = self._member(conn, params)
-        try:
-            source = board.mermaid_source(params.get("text"))
-        except board.Reject as e:
-            raise ServiceError("bad_request", e.reason) from e
-        elements = await self.state.room_board.convert(room, source, p.id)
+        flow = await self.state.room_board.convert(params.get("text"), p.id)
         p, m, room = self._member(conn, params)
         retry = self.engine.check_say(p, m, None)
         if retry is not None:
-            return {"changed": False, "reason": "rate_limited", "retry_after_s": retry}
-        return self.state.room_board.imported(room, m.screen_name, p.id, elements)
+            return {
+                "changed": False,
+                "reason": "rate_limited",
+                "retry_after_s": retry,
+                "error": f"rate limited: try again in about {retry:.0f} s",
+            }
+        return self.state.room_board.drawn(room, m.screen_name, p.id, flow)
 
     def _hand_back(
         self,

@@ -1,6 +1,6 @@
 # A room's whiteboard
 
-Each room has one whiteboard. You draw on it by hand, your agents draw on it with a tool, and everyone in the room sees each change live. Agents can turn a Mermaid flowchart into shapes you can edit, and you can play named frames as a storyboard.
+Each room has one whiteboard. You draw on it by hand, your agents draw on it with a tool, and everyone in the room sees each change live. Agents can draw a whole flowchart as shapes you can edit, and you can play named frames as a storyboard.
 
 ## See it work
 
@@ -33,7 +33,8 @@ Agents have one `board` tool. Ask in plain words ("put the three options in a fr
 - `note`, `box`, `frame` and `connect` add a shape or an arrow between two shapes.
 - `move`, `edit` and `delete` change a shape that is already there.
 - `read` returns a short summary of the board, with each shape's id.
-- `draw_mermaid` turns a Mermaid flowchart into shapes ([below](#turn-a-flow-into-shapes)).
+- `draw_mermaid` draws a whole flowchart as shapes in one change ([below](#draw-a-whole-diagram)).
+- `arrange` tidies a frame: it lays out the frame's shapes by their arrows, fits the frame around them and routes the arrows as elbows.
 
 Leave out `x` and `y` and switchboard places the shape for the agent. A note added to a frame goes inside that frame.
 
@@ -41,14 +42,15 @@ Claude Code, Codex and Cursor load a `board` skill with the details of each acti
 
 The room's log says who changed the board, without copying the words on its shapes.
 
-## Turn a flow into shapes
+## Draw a whole diagram
 
-Ask an agent to use `draw_mermaid` with a Mermaid `flowchart` or `graph`. Keep a board open while it converts: the conversion runs in that page.
+Just ask: "draw the dependency diagram on the whiteboard". The agent writes the diagram as a Mermaid `flowchart` or `graph` and calls `draw_mermaid` once. Nobody has to have the board open: the broker draws it in one change, and you see it the next time you open the Whiteboard (or live, if you already have it open).
 
-- The result is ordinary shapes you can move and edit, placed clear of what is already on the board.
-- After that, changes use the normal shape actions.
-- Only `flowchart` and `graph` work. Configuration directives, styles, images and other diagram kinds are refused, and click directives are removed.
-- A flow that can't fit adds nothing.
+- The result is ordinary shapes you can move and edit, placed clear of what is already on the board. Each `subgraph` becomes a frame. The layout is done for you, and arrows are elbows that go around the shapes and follow a shape when you drag it.
+- After that, changes use the normal shape actions, or `arrange` to tidy a frame.
+- A diagram makes at most 150 elements: a shape and its label count 2, an arrow 1, a labelled arrow 2, a frame 1. A bigger one is refused with its size, and the agent splits it into two calls.
+- Only `flowchart` and `graph` work. Configuration directives, styles, images and other diagram kinds are refused, click directives are removed, and a line that can't be read is refused with its number.
+- Frames don't nest on the board, so a subgraph inside a subgraph is a group inside the outer frame.
 
 ## Play a storyboard
 
@@ -78,7 +80,7 @@ Playing changes nothing on the board. It works on a phone too. A storyboard can'
 - Text on a shape is cut to 200 characters.
 - A board holds up to 1,500 elements, deleted ones included, and 1 MB of data. A pen stroke has at most 500 points. If a drawing is too big, simplify it and try again.
 - A picture for an agent is at most 1,200 pixels a side and 600 KB. It is made on request and isn't saved.
-- `draw_mermaid` takes up to 8,000 characters (16,000 bytes) and makes at most 40 elements.
+- `draw_mermaid` takes up to 8,000 characters (16,000 bytes) and makes at most 150 elements. The other actions change at most 40 at a time.
 
 ## Reference
 

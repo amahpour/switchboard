@@ -56,7 +56,12 @@
       const b = raw[k];
       if (b && id(b.elementId)) {
         const focus = clamp(b.focus === undefined ? 0 : b.focus, -1, 1), gap = clamp(b.gap === undefined ? 0 : b.gap, 0, 100);
-        if (focus !== null && gap !== null) e[k] = { elementId: b.elementId, focus, gap };
+        if (focus !== null && gap !== null) {
+          e[k] = { elementId: b.elementId, focus, gap };
+          // an elbow arrow's end is a fraction of its box: two numbers from 0 to 1, or nothing
+          const f = b.fixedPoint;
+          if (Array.isArray(f) && f.length === 2 && f.every(v => num(v) && v >= 0 && v <= 1)) e[k].fixedPoint = [f[0], f[1]];
+        }
       }
     }
     for (const k of ['startArrowhead', 'endArrowhead']) {

@@ -4,7 +4,7 @@
   const rules = window.SBBoardRules;
   let frame = null, current = null, options = null, serial = 0, session = '', ready = false;
   const cache = new Map();
-  const pendingImages = new Set(), pendingConversions = new Set();
+  const pendingImages = new Set();
   let playing = false, selected = null;
   const el = id => document.getElementById('whiteboard-' + id);
   // Match the summary's round-to-even row grouping, including negative coordinates and half rows.
@@ -73,7 +73,7 @@
     stopPlay();
     clearTimeout(revealTimer);
     if (frame) frame.remove();
-    frame = null; current = null; ready = false; pendingImages.clear(); pendingConversions.clear();
+    frame = null; current = null; ready = false; pendingImages.clear();
     if (options) options.host.classList.remove('whiteboard-loading');
     if (options) options.host.classList.add('hidden');
   }
@@ -85,12 +85,7 @@
       ready = true; init(); return;
     }
     if (m.session !== session || m.room !== current) return;
-    if (m.action === 'converted' && Object.keys(m).every(k => ['t','action','session','room','request','elements','error'].includes(k)) && pendingConversions.has(m.request)) {
-      if (m.error === 'cannot_convert') { pendingConversions.delete(m.request); options.result(current, m.request, { error: 'cannot_convert' }); return; }
-      const elements = rules.batch(m.elements);
-      if (!elements || !elements.length || elements.length > 40 || elements.some(e => !['rectangle','ellipse','diamond','arrow','text','frame'].includes(e.type))) return;
-      pendingConversions.delete(m.request); options.result(current, m.request, elements);
-    } else if (m.action === 'navigate' && Object.keys(m).length === 5 && ['ArrowRight','ArrowLeft','Escape'].includes(m.key)) { navigate(m.key);
+    if (m.action === 'navigate' && Object.keys(m).length === 5 && ['ArrowRight','ArrowLeft','Escape'].includes(m.key)) { navigate(m.key);
     } else if (m.action === 'change' && Object.keys(m).every(k => ['t', 'action', 'session', 'room', 'elements'].includes(k))) {
       const elements = rules.batch(m.elements);
       if (!elements || !elements.length) return;
@@ -145,10 +140,6 @@
       }
     },
     task(room, task) {
-      if (room === current && ready && task && task.kind === 'mermaid' && typeof task.id === 'string' && /^[0-9a-f]{32}$/.test(task.id) && typeof task.source === 'string' && task.source.length <= 8000 && pendingConversions.size < 16) {
-        pendingConversions.add(task.id); post('convert', { request: task.id, source: task.source });
-        setTimeout(() => pendingConversions.delete(task.id), 8000);
-      }
       if (room === current && ready && task && task.kind === 'image' && typeof task.id === 'string' && /^[0-9a-f]{32}$/.test(task.id) && pendingImages.size < 16) {
         pendingImages.add(task.id);
         post('export', { request: task.id });
