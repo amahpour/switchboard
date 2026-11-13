@@ -191,7 +191,7 @@ def fields(style: dict[str, str], target: str) -> tuple[dict[str, Any], dict[str
         elif key == "background":
             el["backgroundColor"] = color_hex(val, "fill")
         elif key == "opacity":
-            if not (val.isdigit() and len(val) <= 3 and 10 <= int(val) <= 100):
+            if not (re.fullmatch(r"[0-9]{1,3}", val) and 10 <= int(val) <= 100):
                 raise StyleError("opacity must be a whole number from 10 to 100")
             (label if target == "text" else el)["opacity"] = int(val)
         else:

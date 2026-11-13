@@ -94,6 +94,9 @@ def test_every_style_key_and_value_maps_to_what_excalidraws_panel_stores() -> No
         "opacity=5",
         "opacity=101",
         "opacity=1e2",
+        "opacity=²",  # str.isdigit() is True for it and int() then raises
+        "opacity=١٠٠",  # Arabic-Indic digits are not 100
+        "opacity=\n50",
         "font-size=huge",
         "colour=red",  # unknown key
         "stroke",  # no value
@@ -309,3 +312,83 @@ def test_an_elbow_arrow_starts_and_ends_on_the_facing_edges_not_at_the_target_ce
     straight.do("box", text="b", x=0, y=300)
     straight.do("connect", id="b1", to="b2")
     assert straight.get("a1")["points"][1] == [-70, 300]  # unchanged: aimed at the centre
+
+
+def three_with_a_blocker() -> World:
+    """b1 top left, b3 far lower right, and b2 on the straight line between them but off an elbow's."""
+    w = World()
+    w.do("box", text="a", x=0, y=0)
+    w.do("box", text="blocker", x=180, y=120)
+    w.do("box", text="c", x=600, y=300)
+    return w
+
+
+def test_a_straight_arrow_through_a_blocker_warns_and_an_elbow_or_bent_one_around_it_does_not() -> None:
+    """Warnings follow the arrow's own route, not a line between the centres: an elbow that goes
+    round a shape, and an arrow stored with several points, are clean; the straight one is not."""
+    w = three_with_a_blocker()
+    straight = w.do("connect", id="b1", to="b3")
+    assert straight.warnings == ("arrow a1 passes through b2",)
+    w = three_with_a_blocker()
+    assert w.do("connect", id="b1", to="b3", style="arrow-type=elbow").warnings == ()
+    assert board_layout.warnings(w.elements) == []
+    bent = three_with_a_blocker()
+    bent.do("connect", id="b1", to="b3")
+    a = bent.get("a1")
+    around = {**a, "points": [[0, 0], [226, 0], [226, 300], [452, 300]]}
+    others = [e for e in bent.elements if e["id"] != "a1"]
+    assert board_layout.warnings([*others, around]) == []
+    through = {**a, "points": [[0, 0], [200, 120], [452, 300]]}
+    assert any("passes through b2" in x for x in board_layout.warnings([*others, through]))
+
+
+def test_an_arrow_label_sits_at_the_middle_of_the_route() -> None:
+    """Two labelled straight arrows crossing at their middles collide; the middle of a bent route
+    is half-way along its length, not half-way between its ends."""
+    straight = World()
+    for i, (x, y) in enumerate([(0, 0), (600, 400), (0, 400), (600, 0)]):
+        straight.do("box", text=f"s{i}", x=x, y=y)
+    straight.do("connect", id="b1", to="b2", text="one")
+    straight.do("connect", id="b3", to="b4", text="two")
+    assert any(x.startswith("arrow labels overlap") for x in board_layout.warnings(straight.elements))
+    mid = board_layout._midpoint([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])
+    assert mid == (10.0, 0.0)
+
+
+def test_edit_font_size_on_a_loose_text_resizes_its_box_to_the_words() -> None:
+    w = World()
+    t = w.do("text", text="A caption that is fairly long", style="font-size=s").added[0]
+    small = (w.get(t)["width"], w.get(t)["height"])
+    w.do("edit", id=t, style="font-size=xl")
+    big = w.get(t)
+    assert big["fontSize"] == 36 and big["width"] > small[0] and big["height"] >= small[1]
+    w.do("edit", id=t, text="x " * 80)
+    assert w.get(t)["height"] > big["height"]  # wrapped: the box is taller, not just wider
+
+
+def test_a_label_style_with_no_words_is_refused_not_dropped() -> None:
+    w = World()
+    assert w.do("box", style="font-size=l").error == "that shape has no text"
+    assert w.do("box", style="align=left").error and not w.elements
+    w.do("box", text="a", x=0, y=0)
+    w.do("box", text="b", x=300, y=0)
+    assert w.do("connect", id="b1", to="b2", style="font-size=l").error == "that arrow has no text"
+    assert not w.do("box", style="stroke=red").error  # a plain style on an empty box is fine
+
+
+def test_a_frame_grows_in_every_direction_for_a_shape_placed_outside_it() -> None:
+    w = World()
+    w.do("frame", text="F", x=100, y=100)
+    w.do("box", text="left and up", to="f1", x=-50, y=0)
+    f = w.get("f1")
+    assert (f["x"], f["y"]) == (-70, -20)
+    s = w.get("b1")
+    assert f["x"] <= s["x"] - 20 and f["y"] <= s["y"] - 20
+    assert f["x"] + f["width"] >= 700 and f["y"] + f["height"] >= 460  # the old right and bottom kept
+    assert [x for x in board_layout.warnings(w.elements) if "frame" in x] == []
+    w.do("box", text="right and down", to="f1", x=900, y=700)
+    f = w.get("f1")
+    s = w.get("b2")
+    assert (
+        f["x"] + f["width"] >= s["x"] + s["width"] + 20 and f["y"] + f["height"] >= s["y"] + s["height"] + 20
+    )

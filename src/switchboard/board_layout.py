@@ -61,15 +61,6 @@ def _live(elements: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [e for e in elements if not e.get("isDeleted")]
 
 
-def _label_of(elements: list[dict[str, Any]], el: dict[str, Any]) -> dict[str, Any] | None:
-    for b in el.get("boundElements") or []:
-        if isinstance(b, dict) and b.get("type") == "text":
-            t = next((e for e in elements if e["id"] == b.get("id")), None)
-            if t and t["type"] == "text" and not t.get("isDeleted"):
-                return t
-    return None
-
-
 def _text(t: dict[str, Any]) -> str:
     return str(t.get("originalText") or t.get("text") or "")
 
@@ -104,21 +95,77 @@ def _segment_hits(
     return True
 
 
+def elbow_route(p: tuple[float, float], q: tuple[float, float]) -> list[tuple[float, float]]:
+    """The right-angled route the pane draws for an elbow arrow stored with only its two end points:
+    along the longer axis to the middle, across, then along again."""
+    if abs(q[0] - p[0]) >= abs(q[1] - p[1]):
+        mx = (p[0] + q[0]) / 2
+        return [p, (mx, p[1]), (mx, q[1]), q]
+    my = (p[1] + q[1]) / 2
+    return [p, (p[0], my), (q[0], my), q]
+
+
+def route(a: dict[str, Any], src: dict[str, Any], dst: dict[str, Any]) -> list[tuple[float, float]]:
+    """Where an arrow runs. Its stored points when it has a route of its own (an elbow, or several
+    points); a plain two-point arrow is drawn by the pane from its bindings, centre to centre."""
+    raw = a.get("points")
+    pts = [
+        (a["x"] + pt[0], a["y"] + pt[1])
+        for pt in (raw if isinstance(raw, list) else [])
+        if isinstance(pt, (list, tuple)) and len(pt) == 2
+    ]
+    if len(pts) == 2 and a.get("elbowed"):
+        return elbow_route(pts[0], pts[1])
+    if len(pts) > 2:
+        return pts
+    p = (src["x"] + src["width"] / 2, src["y"] + src["height"] / 2)
+    q = (dst["x"] + dst["width"] / 2, dst["y"] + dst["height"] / 2)
+    return [p, q]
+
+
+def _midpoint(poly: list[tuple[float, float]]) -> tuple[float, float]:
+    """The point half-way along the polyline's length."""
+    lengths = [math.dist(a, b) for a, b in zip(poly, poly[1:], strict=False)]
+    half = sum(lengths) / 2
+    for (a, b), n in zip(zip(poly, poly[1:], strict=False), lengths, strict=True):
+        if n and half <= n:
+            t = half / n
+            return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+        half -= n
+    return poly[0]
+
+
 def warnings(elements: list[dict[str, Any]], only: set[str] | None = None) -> list[str]:
     """Layout problems found from geometry. Empty means nothing to fix.
 
-    ``only`` keeps the problems that name one of those ids (a write's result is about what it touched).
+    ``only`` keeps the problems that name one of those ids (a write's result is about what it touched),
+    and checks only the pairs that involve one, so a write on a full board stays cheap.
     """
     live = _live(elements)
     by_id = {e["id"]: e for e in live}
+    labels_of: dict[str, dict[str, Any]] = {}
+    for e in live:
+        if e["type"] == "text" and e.get("containerId"):
+            labels_of.setdefault(e["containerId"], e)
     shapes = [e for e in live if e["type"] in _SHAPES]
+    arrows = [e for e in live if e["type"] == "arrow"]
+
+    def hot(*ids: str) -> bool:
+        return only is None or any(i in only for i in ids)
+
     found: list[tuple[tuple[str, ...], str]] = []
-    for i, a in enumerate(shapes):
-        for b in shapes[i + 1 :]:
+    touched_shapes = [s for s in shapes if hot(s["id"])]
+    seen: set[tuple[str, str]] = set()
+    for a in touched_shapes:
+        for b in shapes:
+            key = (a["id"], b["id"]) if a["id"] < b["id"] else (b["id"], a["id"])
+            if a is b or key in seen:
+                continue
+            seen.add(key)
             if _hit(_box(a), _box(b)):
-                found.append(((a["id"], b["id"]), f"overlap: {a['id']} and {b['id']}"))
-    for s in shapes:
-        label = _label_of(live, s)
+                found.append((key, f"overlap: {key[0]} and {key[1]}"))
+    for s in touched_shapes:
+        label = labels_of.get(s["id"])
         if label is not None:
             fs = float(label.get("fontSize") or 16)
             inner = inner_width(s["type"], s["width"])
@@ -141,31 +188,34 @@ def warnings(elements: list[dict[str, Any]], only: set[str] | None = None) -> li
                 kind = "straddles" if _hit(sb, fb) else "is outside"
                 found.append(((s["id"], frame["id"]), f"{s['id']} {kind} its frame {frame['id']}"))
     labels: list[tuple[str, tuple[float, float, float, float]]] = []
-    for a in live:
-        if a["type"] != "arrow":
-            continue
+    for a in arrows:
         ends = [(a.get(k) or {}).get("elementId") for k in ("startBinding", "endBinding")]
         src, dst = by_id.get(ends[0] or ""), by_id.get(ends[1] or "")
         if src is None or dst is None:
             continue
-        p = (src["x"] + src["width"] / 2, src["y"] + src["height"] / 2)
-        q = (dst["x"] + dst["width"] / 2, dst["y"] + dst["height"] / 2)
-        for s in shapes:
+        poly = route(a, src, dst)
+        for s in shapes if hot(a["id"]) else touched_shapes:
             if s["id"] in (src["id"], dst["id"]):
                 continue
             x0, y0, x1, y1 = _box(s)
-            if _segment_hits(p, q, (x0 + 2, y0 + 2, x1 - 2, y1 - 2)):
+            r = (x0 + 2, y0 + 2, x1 - 2, y1 - 2)
+            if any(_segment_hits(p, q, r) for p, q in zip(poly, poly[1:], strict=False)):
                 found.append(((a["id"], s["id"]), f"arrow {a['id']} passes through {s['id']}"))
-        label = _label_of(live, a)
+        label = labels_of.get(a["id"])
         if label is not None:
             fs = float(label.get("fontSize") or 16)
             w = min(len(_text(label)), 40) * CHAR * fs
-            mx, my = (p[0] + q[0]) / 2, (p[1] + q[1]) / 2
+            mx, my = _midpoint(poly)
             labels.append((a["id"], (mx - w / 2, my - fs, mx + w / 2, my + fs)))
-    for i, (ia, ba) in enumerate(labels):
-        for ib, bb in labels[i + 1 :]:
+    pairs: set[tuple[str, str]] = set()
+    for ia, ba in (item for item in labels if hot(item[0])):
+        for ib, bb in labels:
+            key = (ia, ib) if ia < ib else (ib, ia)
+            if ia == ib or key in pairs:
+                continue
+            pairs.add(key)
             if _hit(ba, bb):
-                found.append(((ia, ib), f"arrow labels overlap: {ia} and {ib}"))
+                found.append((key, f"arrow labels overlap: {key[0]} and {key[1]}"))
     out = [text for ids, text in found if only is None or only.intersection(ids)]
     if len(out) > MAX_WARNINGS:
         out = [*out[:MAX_WARNINGS], f"... and {len(out) - MAX_WARNINGS} more"]

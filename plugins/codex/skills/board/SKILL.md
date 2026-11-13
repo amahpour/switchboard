@@ -15,7 +15,7 @@ One whiteboard per room. You and the other members share it. Text you put on a s
 2. **Plan first.** What must the reader see, and in how many frames? Write the frames and their shapes down before the first call.
 3. **Pick the tool.** `draw_mermaid` for anything that is a graph: boxes and arrows, subgraphs for groups. The shape actions for what a graph cannot say: a comparison grid, a timeline, notes around a shape, a legend.
 4. **One idea per frame.** At most 8 shapes and 10 arrows in a frame. More becomes a storyboard of frames, which Play frames walks through. Labels of at most 6 words; details go in a note beside the shape. Arrow labels at most 3 words, or none.
-5. **A grid, one direction of flow,** left to right: columns about 300 apart, rows about 140. Connect neighbours. Between groups, one arrow from frame to frame instead of many crossing ones.
+5. **A grid, one direction of flow,** left to right: columns about 300 apart, rows about 140. Connect neighbours. Between groups, one arrow from frame to frame (`connect` the two frame ids) instead of many crossing ones.
 6. **Colour by meaning, and say what it means.** Inputs, the change under review, gates, risks each get one colour, and a small legend note says so. Never colour for decoration.
 7. **Check before you announce.** Every write result lists layout warnings for what it touched (overlaps, a label that may overflow, a shape outside its frame, an arrow through a shape), and `read` lists them for the whole board. Fix each one, then say you are done. When a pane is open, also look at the picture (`read` with `text="image"`).
 

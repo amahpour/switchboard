@@ -185,8 +185,7 @@ def _binding(raw: Any) -> dict[str, Any] | None:
     gap = _clamp(raw.get("gap", 0), 0, 100)
     if focus is None or gap is None:
         return None
-    out = {"elementId": eid, "focus": focus, "gap": gap}
-    return out
+    return {"elementId": eid, "focus": focus, "gap": gap}
 
 
 def _bound_list(raw: Any) -> list[dict[str, str]] | None:
@@ -679,14 +678,25 @@ def _frame_for(elements: list[dict[str, Any]], params: dict[str, Any]) -> dict[s
 def _grow_frame(
     frame: dict[str, Any] | None, x: float, y: float, w: float, h: float, now: float, vn: int
 ) -> list[dict[str, Any]]:
-    """The frame, bumped and enlarged so a shape at (x, y, w, h) sits inside it with a margin."""
+    """The frame, bumped and enlarged (in any direction) so a shape at (x, y, w, h) sits inside it."""
     if frame is None:
         return []
-    width = max(frame["width"], x + w + 20 - frame["x"])
-    height = max(frame["height"], y + h + 20 - frame["y"])
-    if width == frame["width"] and height == frame["height"]:
+    left, top = min(frame["x"], x - 20), min(frame["y"], y - 20)
+    right = max(frame["x"] + frame["width"], x + w + 20)
+    bottom = max(frame["y"] + frame["height"], y + h + 20)
+    if (left, top, right - left, bottom - top) == (frame["x"], frame["y"], frame["width"], frame["height"]):
         return []
-    return [_bump(frame, now, vn, width=min(width, DIM_MAX), height=min(height, DIM_MAX))]
+    return [
+        _bump(
+            frame,
+            now,
+            vn,
+            x=max(left, -COORD),
+            y=max(top, -COORD),
+            width=min(right - left, DIM_MAX),
+            height=min(bottom - top, DIM_MAX),
+        )
+    ]
 
 
 def _place_label(shape: dict[str, Any], label: dict[str, Any], text: str, fs: float) -> dict[str, Any]:
@@ -720,6 +730,8 @@ def _add_box(
     frame = _frame_for(elements, params)
     style, label_style = _style(params, "shape")
     asked_w, asked_h = _size(params, "w"), _size(params, "h")
+    if label_style and not text:
+        raise Reject("that shape has no text")
     fs = float(label_style.get("fontSize", 16))
     w = asked_w or (max(140, min(260, 9 * len(text) // 2 + 40)) if text else 160)
     h = asked_h or board_layout.fit_height(kind, w, text, fs)
@@ -751,6 +763,12 @@ def _add_box(
     return out, added
 
 
+def _loose_size(text: str, fs: float) -> tuple[float, float]:
+    """The box of a text with no shape around it: one line up to 520 wide, then wrapped."""
+    w = max(40.0, min(520.0, len(text) * board_layout.CHAR * fs + 10))
+    return w, max(25.0, board_layout.text_height(text, fs, w))
+
+
 def _add_text(
     elements: list[dict[str, Any]],
     params: dict[str, Any],
@@ -766,8 +784,7 @@ def _add_text(
     _, own = _style(params, "text")  # for a loose text, every key lands on the text itself
     fs = float(own.get("fontSize", 20))
     own.setdefault("fontSize", 20)
-    w = max(40.0, min(520.0, len(text) * board_layout.CHAR * fs + 10))
-    h = max(25.0, board_layout.text_height(text, fs, w))
+    w, h = _loose_size(text, fs)
     x, y = _coord(params, "x"), _coord(params, "y")
     if x is None or y is None:
         x, y = _free_slot(elements, w, h, frame)
@@ -833,6 +850,8 @@ def _connect(
     if label is None:
         raise Reject("bad text")
     style, label_style = _style(params, "arrow")
+    if label_style and not label:
+        raise Reject("that arrow has no text")
     x = src["x"] + src["width"]
     y = src["y"] + src["height"] / 2
     dx = (dst["x"] + dst["width"] / 2) - x
@@ -917,6 +936,10 @@ def _edit(
         return [_bump(el, now, new_nonce(), **({"name": text} if text else {}))], [el["id"]]
     if el["type"] == "text":
         change = {**style, **label_style, **({"text": text, "originalText": text} if text else {})}
+        words = text or _text_of(el)
+        fs = float(change.get("fontSize") or el.get("fontSize") or 20)
+        if text or "fontSize" in change:  # the box must match the words, as when it was drawn
+            change["width"], change["height"] = _loose_size(words, fs)
         return [_bump(el, now, new_nonce(), **change)], [el["id"]]
     label = _label_el(elements, el)
     if (text or label_style) and label is None:

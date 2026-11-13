@@ -28,8 +28,8 @@ One frame per layer or service group, at most 8 shapes in each.
 
 1. `frame` text="Clients", then `frame` text="Broker", then `frame` text="Storage".
 2. `box` text="Web UI" to=<Clients>, `box` text="Agents" to=<Clients>. The frame grows to fit.
-3. `connect` between neighbours; one `connect` from a shape in Clients to one in Broker with
-   `style="arrow-type=elbow"` for the hand-off between groups.
+3. `connect` between neighbours inside a frame. Between groups, one `connect` from frame to frame
+   (`id=<Clients>`, `to=<Broker>`) instead of many arrows crossing from shape to shape.
 
 ## A sequence, as a storyboard
 
@@ -63,5 +63,5 @@ text text="week 1" x=0 y=100 style="font-size=s"
 
 `overlap`: `move` one shape 300 right or 140 down. `label may overflow`: shorten it, or `resize`
 wider. `outside its frame`: `resize` the frame, or `move` the shape in. `arrow passes through`:
-`move` the blocking shape, or connect through an elbow (`style="arrow-type=elbow"`).
+`move` the blocking shape, or draw the arrow as an elbow (`style="arrow-type=elbow"`), which goes round it when the two shapes are not in line.
 `arrow labels overlap`: drop one label.

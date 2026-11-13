@@ -329,7 +329,8 @@ async def test_a_styled_shape_reaches_the_page_and_the_result_names_layout_probl
             clock.advance(10)
             second = await drawer.call("board", room="#build", action="box", text="b", x=50, y=20)
             assert "layout warnings, fix before announcing" in second["text"]
-            assert f"overlap: {first['ids'][0]} and {second['ids'][0]}" in second["text"]
+            low, high = sorted((first["ids"][0], second["ids"][0]))  # a pair is named in id order
+            assert f"overlap: {low} and {high}" in second["text"]
             seen = await drawer.call("board", room="#build", action="read")
             assert "fill=yellow stroke=red" in seen["text"] and "layout warnings:" in seen["text"]
     finally:
