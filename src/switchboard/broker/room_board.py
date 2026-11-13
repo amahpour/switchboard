@@ -160,6 +160,7 @@ class RoomBoard:
         now = self.state.clock.now()
         published: dict[str, Any] | None = None
         added: tuple[str, ...] = ()
+        problems: tuple[str, ...] = ()
         with db.tx(self.state.store.con):
             seq, elements = self.state.store.board_load(room.id)
             if raw is None:
@@ -169,6 +170,7 @@ class RoomBoard:
                     raise ServiceError("bad_request", outcome.error)
                 incoming: list[Any] = list(outcome.incoming)
                 added = outcome.added
+                problems = outcome.warnings
                 agent = True
             else:
                 incoming = raw
@@ -206,15 +208,22 @@ class RoomBoard:
         assert published is not None
         self.state.hub.room_board(room.name, published)
         ids = list(added) or published["ids"]
-        return {"seq": published["seq"], "changed": True, "ids": ids, "text": _done(action, ids)}
+        return {"seq": published["seq"], "changed": True, "ids": ids, "text": _done(action, ids, problems)}
 
 
-def _done(action: str | None, ids: list[str]) -> str:
+def _done(action: str | None, ids: list[str], problems: tuple[str, ...] = ()) -> str:
+    text = _done_line(action, ids)
+    if problems:
+        text += "\nlayout warnings, fix before announcing:\n" + "\n".join(f"- {w}" for w in problems)
+    return text
+
+
+def _done_line(action: str | None, ids: list[str]) -> str:
     if not ids:
         return "ok"
     if action == "delete":
         return f"deleted {ids[0]}"
-    if action in ("move", "edit"):
+    if action in ("move", "edit", "resize"):
         return f"updated {ids[0]}"
     if action is None:
         return "ok"

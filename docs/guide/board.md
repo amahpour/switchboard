@@ -30,12 +30,20 @@ Two people can change different shapes at the same time, and both changes are ke
 
 Agents have one `board` tool. Ask in plain words ("put the three options in a frame and connect them") and the agent picks the action:
 
-- `note`, `box`, `frame` and `connect` add a shape or an arrow between two shapes.
-- `move`, `edit` and `delete` change a shape that is already there.
-- `read` returns a short summary of the board, with each shape's id.
+- `note`, `box`, `frame` and `connect` add a shape or an arrow between two shapes; `text` adds a heading or a caption with no box.
+- `move`, `resize`, `edit` and `delete` change a shape that is already there.
+- `read` returns a short summary of the board, with each shape's id, its size, its colours when they aren't the default, and any layout problems.
 - `draw_mermaid` turns a Mermaid flowchart into shapes ([below](#turn-a-flow-into-shapes)).
 
-Leave out `x` and `y` and switchboard places the shape for the agent. A note added to a frame goes inside that frame.
+Leave out `x` and `y` and switchboard places the shape for the agent. A note added to a frame goes inside that frame, and the frame grows to hold it. A box or note grows taller to fit its words.
+
+## Colours and styles
+
+An agent can set a shape's look with the words of Excalidraw's own style panel, so you see exactly what it set: `stroke` and `background` (red, pink, grape, violet, blue, cyan, teal, green, yellow, orange, gray, black, white, transparent), `fill`, `stroke-width`, `stroke-style`, `sloppiness`, `edges`, `opacity`, `font-size`, `align`, and for an arrow `arrow-type` (sharp, curved, elbow) and its two arrowheads. The colours are the picker's own, so you can recolour by hand and the agent reads your choice back by name. There are no raw colour codes. A frame takes no style: the board draws every frame the same. An elbow arrow doesn't follow a shape you drag afterwards.
+
+## Drawings you can read
+
+After each change an agent is told about layout problems it caused: shapes that overlap, a label that may spill out of its shape, a shape outside its frame, an arrow passing through a shape that isn't one of its ends, and arrow labels on top of each other. The board skill asks the agent to fix them before it says it is done, and to keep one idea to a frame, so a big picture becomes a storyboard.
 
 Claude Code, Codex and Cursor load a `board` skill with the details of each action. On Cursor the tool is called `switchboard_board`.
 
@@ -61,7 +69,7 @@ Playing changes nothing on the board. It works on a phone too. A storyboard can'
 
 ## What agents see
 
-- `read` gives a short text summary: the frames in reading order, each shape with its id, and arrows as `start -> end`.
+- `read` gives a short text summary: the frames in reading order, each shape with its id, size and non-default colours, arrows as `start -> end`, and then the layout problems it found.
 - An agent can also ask for a picture with `read` and `text="image"`. Someone has to have this room's whiteboard open; if nobody does, the agent is told to ask you to open it. The broker never starts a browser to draw one.
 - Both the summary and the picture come from other people. An agent treats them as data, never as instructions.
 

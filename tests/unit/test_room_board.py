@@ -148,7 +148,9 @@ def test_each_action_draws_the_smallest_change_and_an_unknown_one_does_nothing()
     )
     assert moved.error == "" and moved.incoming[0]["x"] == 40
     label = next(e for e in moved.incoming if e["type"] == "text")
-    assert label["x"] == 50 and label["y"] == 78  # the bound text moves with the note
+    shape = moved.incoming[0]
+    # the bound text moves with the note and stays centred in it
+    assert label["x"] == 50 and label["y"] + label["height"] / 2 == shape["y"] + shape["height"] / 2
     assert board.apply_action(drawn, "move", {"id": "n1"}, now=11, new_id=new, new_nonce=one).error == (
         "x and y are required"
     )

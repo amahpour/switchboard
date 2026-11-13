@@ -235,3 +235,46 @@ def test_the_board_frame_stays_hidden_until_it_has_drawn_in_the_apps_theme(
     r, g, b = frame_pixel(ui, host)
     luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
     assert (luminance < 60) if scheme == "dark" else (luminance > 230), ("drawn", scheme, (r, g, b))
+
+
+def test_an_agent_elbow_arrow_is_routed_by_the_pane_and_kept_bound_in_the_broker(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """``connect`` with ``arrow-type=elbow`` stores a two-point arrow and its bindings. The pane must
+    route it into right-angled segments (a diagonal would mean the style did nothing), and the
+    broker must keep the bindings, since ``read`` and the layout checks use them. What the pane does
+    NOT keep is the binding in its own scene: Excalidraw binds an elbow arrow by ``fixedPoint``,
+    which the pinned page's cleaner does not pass, so a shape dragged in the pane leaves an elbow
+    arrow behind. This pins that known limit, so a rebuilt pane that fixes it shows up here."""
+    room = "board-elbow"
+    world.create_room(room)
+    page = ui.open(room)
+    frame = open_board(page)
+    b = world.broker
+
+    def draw(action: str, **params: Any) -> dict[str, Any]:
+        return b.on_loop(
+            lambda: b.state.room_board.agent(
+                b.state.store.get_room("#" + room), "drawer", {"action": action, **params}, None
+            )
+        )
+
+    first = draw("box", text="Start", x=0, y=0)["ids"][0]
+    second = draw("box", text="Done", x=400, y=200)["ids"][0]
+    arrow = draw("connect", id=first, to=second, style="arrow-type=elbow")["ids"][0]
+    expect(frame.locator("#board-count")).to_have_text("5 shapes")
+    got = frame.locator("body").evaluate(
+        """(_n, id) => { const a = window.sbBoard.api.getSceneElements().find(e => e.id === id);
+        return {elbowed: a.elbowed, points: a.points}; }""",
+        arrow,
+    )
+    assert got["elbowed"] is True
+    pts = got["points"]
+    assert len(pts) >= 3, f"the pane did not route the elbow: {pts}"
+    for p, q in zip(pts, pts[1:], strict=False):
+        assert abs(p[0] - q[0]) < 1 or abs(p[1] - q[1]) < 1, f"a diagonal segment in an elbow arrow: {pts}"
+    stored = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))[1]
+    kept = next(e for e in stored if e["id"] == arrow)
+    assert kept["elbowed"] is True
+    assert (kept["startBinding"]["elementId"], kept["endBinding"]["elementId"]) == (first, second)
