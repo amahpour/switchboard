@@ -177,7 +177,7 @@ def _statements(text: str) -> list[tuple[int, str]]:
             line += 1
         elif (
             ch == ";"
-            and not re.match(r"\s*(?:style|classDef)\b", "".join(buf[:10]))
+            and not re.match(r"\s*(?:style|classDef)\b", "".join(buf))
             and re.search(r"#\w+$", "".join(buf[-12:]))
         ):  # `#quot;` is a character, but a colour's `#f9f;` in a style line ends it
             buf.append(ch)
@@ -681,6 +681,135 @@ def _arrow(eid: str, route: board_layout.Route, now: float, vn: int) -> dict[str
 
 # ----------------------------------------------------------------------------------- arrange
 
+GAP = 80.0  # clear space left between an arranged frame and what it pushed aside
+
+
+def _hits(a: board_layout.Rect, b: board_layout.Rect) -> bool:
+    return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
+
+
+def _rect(e: dict[str, Any]) -> board_layout.Rect:
+    return e["x"], e["y"], e["width"], e["height"]
+
+
+def _clear_of(
+    live: list[dict[str, Any]], fid: str, inside: set[str], box: board_layout.Rect
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
+    """What an arranged frame's new box runs into, and how far right to move each: other frames and
+    loose shapes, in reading order, each to ``GAP`` past whatever it overlapped, cascading when a moved
+    one lands on the next. Returns ``({top-level id: dx}, those elements in the order moved)``."""
+    others = [
+        e
+        for e in live
+        if e["id"] != fid
+        and e["id"] not in inside
+        and not e.get("frameId")
+        and (e["type"] in ("frame", *board.BOX_SHAPES) or (e["type"] == "text" and not e.get("containerId")))
+    ]
+    orig = {e["id"]: _rect(e) for e in others}
+    cur = dict(orig)
+    solid: list[board_layout.Rect] = [box]  # the new frame, then each item as it is placed
+    moved: dict[str, float] = {}
+    order: list[dict[str, Any]] = []
+    for e in sorted(others, key=lambda e: (e["y"] // 100, e["x"])):
+        r = cur[e["id"]]
+        if not any(_hits(r, b) for b in solid):
+            continue
+        while True:
+            blockers = list(solid) + [
+                cur[o["id"]]
+                for o in others
+                if o is not e and o["id"] not in moved and not _hits(orig[o["id"]], orig[e["id"]])
+            ]
+            hit = [b for b in blockers if _hits(r, b)]
+            if not hit:
+                break
+            r = (max(b[0] + b[2] for b in hit) + GAP, r[1], r[2], r[3])
+        cur[e["id"]] = r
+        moved[e["id"]] = r[0] - orig[e["id"]][0]
+        order.append(e)
+        solid.append(r)
+    return moved, order
+
+
+def _carried(
+    live: list[dict[str, Any]], by_id: dict[str, dict[str, Any]], shift: dict[str, float]
+) -> dict[str, float]:
+    """Every element that goes along when the top-level items in ``shift`` move: a frame's children
+    and its bound labels, a loose shape's label. Arrows are handled apart (``_push``)."""
+    out: dict[str, float] = dict(shift)
+    for e in live:
+        if e["type"] == "arrow":
+            continue
+        if e.get("frameId") in shift:
+            out[e["id"]] = shift[e["frameId"]]
+    for e in live:
+        if e["type"] == "text" and e.get("containerId") in out and e["id"] not in out:
+            out[e["id"]] = out[e["containerId"]]
+    del by_id
+    return out
+
+
+def _push(
+    live: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    moved: dict[str, float],
+    skip: set[str],
+    now: float,
+    new_nonce: Callable[[], int],
+) -> list[dict[str, Any]]:
+    """The moved elements as changes, and their arrows: one that has both ends in what moved by the same
+    distance goes along; one that has a single end moved is routed again (an elbow or a bent arrow) or
+    simply sent again (a straight one, which the pane draws from its bindings)."""
+    out: list[dict[str, Any]] = []
+    if not moved:
+        return out
+    for e in live:
+        if e["id"] in moved and e["id"] not in skip and e["type"] != "arrow":
+            out.append(board._bump(e, now, new_nonce(), x=e["x"] + moved[e["id"]]))
+    shifted = {
+        e["id"]: ({**e, "x": e["x"] + moved[e["id"]]} if e["id"] in moved else e)
+        for e in live
+        if e["type"] != "arrow"
+    }
+    obstacles = {k: _rect(v) for k, v in shifted.items() if v["type"] in board.BOX_SHAPES}
+    labels = {e["containerId"]: e for e in live if e["type"] == "text" and e.get("containerId")}
+    for a in live:
+        if a["type"] != "arrow" or a["id"] in skip:
+            continue
+        s = (a.get("startBinding") or {}).get("elementId")
+        d = (a.get("endBinding") or {}).get("elementId")
+        if not isinstance(s, str) or not isinstance(d, str) or (s not in moved and d not in moved):
+            continue
+        if s in moved and d in moved and moved[s] == moved[d]:
+            out.append(board._bump(a, now, new_nonce(), x=a["x"] + moved[s]))
+            if a["id"] in labels:
+                lb = labels[a["id"]]
+                out.append(board._bump(lb, now, new_nonce(), x=lb["x"] + moved[s]))
+            continue
+        bent = a.get("elbowed") or len(a.get("points") or []) > 2
+        if not bent or s not in shifted or d not in shifted or s == d:
+            out.append(board._bump(a, now, new_nonce()))
+            continue
+        boxes = {s: _rect(shifted[s]), d: _rect(shifted[d])}
+        obstacles.update(boxes)
+        horizontal = abs(boxes[d][0] - boxes[s][0]) >= abs(boxes[d][1] - boxes[s][1])
+        label = labels.get(a["id"])
+        size = (max(20.0, label["width"]), max(10.0, label["height"])) if label else None
+        route = board_layout.route(boxes, obstacles, [Link(s, d, size)], horizontal=horizontal).get(0)
+        if route is None:
+            out.append(board._bump(a, now, new_nonce()))
+            continue
+        arrow = _arrow(a["id"], route, now, 0)
+        change: dict[str, Any] = {k: arrow[k] for k in ("x", "y", "width", "height", "points", "elbowed")}
+        change["roundness"] = None
+        for end, at in (("startBinding", route.src_at), ("endBinding", route.dst_at)):
+            change[end] = {**(a.get(end) or {}), "fixedPoint": list(at)}
+        out.append(board._bump(a, now, new_nonce(), **change))
+        if label is not None and route.label is not None:
+            out.append(board._bump(label, now, new_nonce(), x=route.label[0], y=route.label[1]))
+    return out
+
 
 def arrange(
     elements: list[dict[str, Any]], params: dict[str, Any], *, now: float, new_nonce: Callable[[], int]
@@ -752,6 +881,8 @@ def arrange(
     right = max(x + w for x, _y, w, _h in placed.values())
     bottom = max(y + h for _x, y, _w, h in placed.values())
     new_w, new_h = max(200.0, right + 2 * pad), max(120.0, bottom + 2 * pad)
+    shift, pushed = _clear_of(live, fid, inside, (frame["x"], frame["y"], new_w, new_h))
+    carried_by = _carried(live, by_id, shift)  # every element that moves, and by how much
     ox, oy = frame["x"] + pad, frame["y"] + pad
     boxes: dict[str, board_layout.Rect] = {k: (ox + x, oy + y, w, h) for k, (x, y, w, h) in placed.items()}
     obstacles = dict(boxes)
@@ -759,10 +890,10 @@ def arrange(
         for k in (s, d):
             if k not in boxes:
                 e = by_id[k]
-                boxes[k] = (e["x"], e["y"], e["width"], e["height"])
+                boxes[k] = _rect({**e, "x": e["x"] + carried_by.get(k, 0.0)})
     for e in live:
         if e["type"] in board.BOX_SHAPES and e["id"] not in boxes and e["id"] != fid:
-            obstacles[e["id"]] = (e["x"], e["y"], e["width"], e["height"])
+            obstacles[e["id"]] = _rect({**e, "x": e["x"] + carried_by.get(e["id"], 0.0)})
     for k in boxes:
         obstacles.setdefault(k, boxes[k])
     routes = board_layout.route(boxes, obstacles, links, horizontal=True)
@@ -787,9 +918,22 @@ def arrange(
         label = texts.get(a["id"])
         if label is not None and route.label is not None:
             out.append(board._bump(label, now, new_nonce(), x=route.label[0], y=route.label[1]))
-    if len(out) > MAX_DIAGRAM:
+    done = {o["id"] for o in out}
+    pushed_out = _push(live, by_id, carried_by, {a["id"] for a, _s, _d in arrows} | done, now, new_nonce)
+    if len(out) + len(pushed_out) > MAX_DIAGRAM:
+        if pushed:
+            first = pushed[0]
+            name = first.get("name") or next(
+                (t["text"] for t in live if t.get("containerId") == first["id"]), first["id"]
+            )
+            raise Reject(
+                f"growing this frame would also move {len(pushed_out)} elements of other frames and shapes, "
+                f'and arrange changes {MAX_DIAGRAM} at most: move "{str(name)[:40]}" clear of it first, '
+                "or split the frame in two"
+            )
         raise Reject(
             f"this frame would change {len(out)} elements and arrange changes {MAX_DIAGRAM} at most: "
             "split the frame in two"
         )
+    out.extend(pushed_out)
     return out, [fid]

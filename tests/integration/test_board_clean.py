@@ -52,8 +52,9 @@ async def test_a_twenty_node_dependency_map_has_no_warnings_in_its_result_or_in_
 def test_twenty_shapes_and_25_arrows_arranged_by_frame_give_no_warnings_in_any_result(
     broker: InProcBroker,  # noqa: F811
 ) -> None:
-    """Draw into two frames with the shape actions and no coordinates, join them with a frame-to-frame
-    arrow, ``arrange`` each frame, then ``read``: no result along the way names a problem."""
+    """Draw into two frames at their default places with the shape actions and no coordinates, join
+    them with a frame-to-frame arrow, ``arrange`` each frame, then ``read``: no result along the way names a
+    problem."""
     b = broker
     room = b.state.store.get_room("#build")
     results: list[str] = []
@@ -63,9 +64,8 @@ def test_twenty_shapes_and_25_arrows_arranged_by_frame_give_no_warnings_in_any_r
         results.append(got["text"])
         return got
 
-    # An arranged frame grows to fit its shapes, so each gets a region of its own (`arrange` does not
-    # move other frames out of the way, and the skill says to leave room).
-    frames = [do("frame", text=f"Part {n}", x=n * 6000, y=0)["ids"][0] for n in (0, 1)]
+    # Default placement, 640 apart: the first frame outgrows its slot and `arrange` moves the second.
+    frames = [do("frame", text=f"Part {n}")["ids"][0] for n in (0, 1)]
     shapes: list[list[str]] = [[], []]
     for n, frame in enumerate(frames):
         for i in range(10):

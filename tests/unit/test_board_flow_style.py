@@ -170,3 +170,15 @@ def test_the_skills_mermaid_recipe_converts_and_is_clean() -> None:
     assert node(els, "Spec")["backgroundColor"] == FILL("blue", "fill")
     assert node(els, "Risk: rework")["strokeColor"] == RED_STROKE
     assert board_checks.warnings(els) == []
+
+
+@pytest.mark.parametrize("indent", [0, 4, 10, 12, 40])
+def test_an_indented_style_line_ending_in_a_semicolon_is_read_whatever_the_indent(indent: int) -> None:
+    """`#f9f;` ends a statement in a style line, however far it is indented: the check looks at the
+    statement's first word, not at a fixed number of leading characters."""
+    pad = " " * indent
+    els = draw(
+        f"flowchart TD\nA[One] --> B[Two]\n{pad}style A fill:#f9f;\n{pad}classDef k fill:#ffcccc;\nB:::k"
+    )
+    assert node(els, "One")["backgroundColor"] in {FILL(n, "fill") for n in board_style.PALETTE}
+    assert node(els, "Two")["backgroundColor"] == RED_FILL

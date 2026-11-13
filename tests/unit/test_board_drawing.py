@@ -435,3 +435,41 @@ def test_shapes_the_actions_size_match_the_converters_measure() -> None:
         want = board_checks.fit(w.label(eid)["text"], kind)
         assert (s["width"], s["height"]) == (want.w, max(want.h, s["height"]))
     assert board_checks.warnings(w.elements) == []
+
+
+def hub_world(leaves: int) -> World:
+    w = World()
+    w.do("box", text="hub", x=0, y=0)
+    for i in range(leaves):
+        w.do("box", text=f"leaf {i}", x=400, y=i * 100)
+    return w
+
+
+def test_the_41st_bound_element_is_refused_and_the_shape_keeps_its_arrows() -> None:
+    """A shape holds 40 bound elements (its label and its arrows). The cleaner drops a longer list
+    whole, which used to unbind the hub on the 40th elbow connect; now the call that would pass 40
+    is refused, names the shape and stores nothing, and what was bound stays bound."""
+    w = hub_world(41)
+    for i in range(39):  # the label plus 39 arrows is 40
+        got = w.do("connect", id=f"b{i + 2}", to="b1", style="arrow-type=elbow")
+        assert not got.error, (i, got.error)
+    assert len(w.get("b1")["boundElements"]) == 40
+    before = list(w.elements)
+    over = w.do("connect", id="b41", to="b1", style="arrow-type=elbow")
+    assert '"hub" already carries 40 bound elements' in over.error
+    assert "split its links" in over.error and not over.incoming
+    assert w.elements == before  # nothing stored
+    hub = w.get("b1")
+    assert len(hub["boundElements"]) == 40 and {"id": "t1", "type": "text"} in hub["boundElements"]
+    assert len([e for e in w.elements if e["type"] == "arrow"]) == 39
+
+
+def test_an_action_that_would_bind_more_than_40_is_refused_centrally(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever builds it, an incoming element with more than 40 bound elements fails the whole action
+    rather than reaching the cleaner, which would strip the list."""
+    w = hub_world(1)
+    hub = w.get("b1")
+    over = {**hub, "boundElements": [{"id": f"a{i}", "type": "arrow"} for i in range(41)]}
+    monkeypatch.setattr(board, "_act", lambda *a, **k: ([over], ["b1"]))
+    got = board.apply_action(w.elements, "move", {"id": "b1", "x": 1, "y": 1}, now=1)
+    assert '"hub" would carry 41 bound elements' in got.error and not got.incoming

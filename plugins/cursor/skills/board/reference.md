@@ -32,7 +32,7 @@ shape actions. Then `read`, fix every warning, and answer with one line that poi
 
 One frame per layer or service group, at most 8 shapes in each.
 
-1. `frame` text="Clients", then `frame` text="Broker", then `frame` text="Storage", each placed in a region of its own (`x` 0, 3000, 6000): `arrange` makes a frame as large as its shapes need and does not move other frames.
+1. `frame` text="Clients", then `frame` text="Broker", then `frame` text="Storage".
 2. `box` text="Web UI" to=<Clients>, `box` text="Agents" to=<Clients>. The frame grows to fit.
 3. `connect` between neighbours inside a frame. Between groups, one `connect` from frame to frame
    (`id=<Clients>`, `to=<Broker>`) instead of many arrows crossing from shape to shape.

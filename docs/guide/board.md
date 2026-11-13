@@ -34,7 +34,7 @@ Agents have one `board` tool. Ask in plain words ("put the three options in a fr
 - `move`, `resize`, `edit` and `delete` change a shape that is already there.
 - `read` returns a short summary of the board, with each shape's id, its size, its colours when they aren't the default, and any layout problems.
 - `draw_mermaid` draws a whole flowchart as shapes in one change ([below](#draw-a-whole-diagram)).
-- `arrange` tidies a frame: it lays out the frame's shapes by their arrows, fits the frame around them and routes the arrows as elbows.
+- `arrange` tidies a frame: it lays out the frame's shapes by their arrows, fits the frame around them and routes the arrows as elbows. If the frame grows into a neighbouring frame or shape, that one is moved to the right to make room.
 
 Leave out `x` and `y` and switchboard places the shape for the agent. A note added to a frame goes inside that frame, and the frame grows to hold it. A box or note grows taller to fit its words.
 

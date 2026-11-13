@@ -608,6 +608,14 @@ def _coord(params: dict[str, Any], key: str) -> float | None:
     return n
 
 
+def _name_of(elements: list[dict[str, Any]], el: dict[str, Any]) -> str:
+    """A shape's words (or its id) for an error that names it."""
+    for c in elements:
+        if c.get("containerId") == el["id"] and c["type"] == "text" and not c.get("isDeleted"):
+            return str(c.get("originalText") or c.get("text") or el["id"])[:60]
+    return str(el.get("name") or el["id"])[:60]
+
+
 def apply_action(
     elements: list[dict[str, Any]],
     action: str,
@@ -626,6 +634,12 @@ def apply_action(
         incoming, added = _act(elements, action, params, now=now, new_id=new_id, new_nonce=new_nonce)
     except Reject as e:
         return ActionResult(error=e.reason)
+    for el in incoming:  # the cleaner drops a list past the cap, which would unbind a shape: refuse instead
+        if len(el.get("boundElements") or []) > MAX_CALL:
+            return ActionResult(
+                error=f'"{_name_of(elements, el)}" would carry {len(el["boundElements"])} bound elements '
+                f"(its label and its arrows) and a shape holds {MAX_CALL}: split its links across two shapes"
+            )
     touched = {e["id"] for e in incoming}
     merged = {**_by_id(elements), **{e["id"]: e for e in incoming}}
     problems = board_checks.warnings(list(merged.values()), only=touched)
@@ -882,6 +896,13 @@ def _connect(
     y = src["y"] + src["height"] / 2
     dx = (dst["x"] + dst["width"] / 2) - x
     dy = (dst["y"] + dst["height"] / 2) - y
+    if style.get("elbowed"):
+        for end_shape in {src["id"]: src, dst["id"]: dst}.values():
+            if len(end_shape.get("boundElements") or []) + 1 > MAX_CALL:
+                raise Reject(
+                    f'"{_name_of(elements, end_shape)}" already carries {MAX_CALL} bound elements (its label '
+                    f"and its arrows) and a shape holds {MAX_CALL}: split its links across two shapes"
+                )
     routed = _elbow(elements, src, dst) if style.get("elbowed") else None
     eid = new_id("a")
     vn = new_nonce()
