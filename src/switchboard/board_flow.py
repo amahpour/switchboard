@@ -48,6 +48,7 @@ _OPENERS: tuple[tuple[str, tuple[str, ...], str, bool], ...] = (
     (">", ("]",), "rect", False),
 )
 _MAX_LINKS = 400
+MAX_BOUND = board.MAX_CALL  # what one shape's ``boundElements`` may hold: its label and its arrows
 
 
 class _Bad(Exception):
@@ -452,7 +453,7 @@ def _count(flow: _Flow) -> int:
 
 def convert(value: Any) -> Converted:
     """The elements for a whole flowchart, ready for ``board.mermaid_elements``."""
-    flow = _parse(board.mermaid_text(value))
+    flow = _parse(board.mermaid_source(value))
     if not flow.nodes and not flow.subs:
         raise Reject(f"line 1: nothing to draw; {NOTHING}")
     total = _count(flow)
@@ -472,6 +473,18 @@ def convert(value: Any) -> Converted:
             parts.append(Item(n.id, f.w, f.h, n.group))
     known = {*flow.nodes, *flow.subs}
     drawn = [e for e in flow.edges if e.src in known and e.dst in known]
+    bound = {k: 1 if k in flow.nodes else 0 for k in known}  # a node's label is bound to it
+    for e in drawn:
+        if e.style != "invisible":
+            for end in {e.src, e.dst}:
+                bound[end] += 1
+    for k, count in bound.items():
+        if count > MAX_BOUND:
+            name = flow.nodes[k].label if k in flow.nodes else flow.subs[k].title
+            raise Reject(
+                f'"{name}" would carry {count} bound elements (its label and its arrows) and a shape holds '
+                f"{MAX_BOUND}: split its links across two nodes, or draw it in two calls"
+            )
     sizes = {}
     for i, e in enumerate(drawn):
         if e.label:
@@ -572,11 +585,13 @@ def _elements(
         arrow["startArrowhead"], arrow["endArrowhead"] = e.head_a, e.head_b
         if frame:
             arrow["frameId"] = frame_of[frame]
-        for end, key, at in (("startBinding", e.src, route.src_at), ("endBinding", e.dst, route.dst_at)):
+        for end, key in (("startBinding", e.src), ("endBinding", e.dst)):
             if key in el_of:  # a nested subgraph has no element of its own to bind to
-                arrow[end] = {"elementId": el_of[key], "focus": 0.0, "gap": 0.0, "fixedPoint": list(at)}
+                arrow[end] = {"elementId": el_of[key], "focus": 0.0, "gap": 0.0}
                 target = shape_el.get(key) or next(o for o in out if o["id"] == el_of[key])
-                target.setdefault("boundElements", []).append({"id": arrow["id"], "type": "arrow"})
+                ref = {"id": arrow["id"], "type": "arrow"}
+                if ref not in target.setdefault("boundElements", []):  # a loop binds both ends to one shape
+                    target["boundElements"].append(ref)
         out.append(arrow)
         arrows += 1
         if e.label and route.label is not None:
@@ -663,6 +678,20 @@ def arrange(
             if by_id[s]["type"] in ("frame", "arrow") or by_id[d]["type"] in ("frame", "arrow"):
                 continue
             arrows.append((a, s, d))
+    for e in members:
+        carried = (1 if e["id"] in texts else 0) + sum(
+            1
+            for a in live
+            if a["type"] == "arrow"
+            and e["id"]
+            in ((a.get("startBinding") or {}).get("elementId"), (a.get("endBinding") or {}).get("elementId"))
+        )
+        if carried > MAX_BOUND:
+            name = texts[e["id"]]["text"] if e["id"] in texts else e["id"]
+            raise Reject(
+                f'"{name}" carries {carried} bound elements (its label and its arrows) and a shape holds '
+                f"{MAX_BOUND}: split its links across two shapes"
+            )
     nodes: list[board_layout.Node] = [Item(e["id"], e["width"], e["height"]) for e in members]
     sizes: dict[int, tuple[float, float]] = {}
     links = []
@@ -705,13 +734,13 @@ def arrange(
         arrow = _arrow(a["id"], route, now, 0)
         change: dict[str, Any] = {k: arrow[k] for k in ("x", "y", "width", "height", "points", "elbowed")}
         change["roundness"] = None
-        for end, at in (("startBinding", route.src_at), ("endBinding", route.dst_at)):
-            old = a.get(end) or {}
-            change[end] = {**old, "fixedPoint": list(at)}
         out.append(board._bump(a, now, new_nonce(), **change))
         label = texts.get(a["id"])
         if label is not None and route.label is not None:
             out.append(board._bump(label, now, new_nonce(), x=route.label[0], y=route.label[1]))
     if len(out) > MAX_DIAGRAM:
-        raise Reject(f"this frame holds {len(out)} elements and arrange changes {MAX_DIAGRAM} at most")
+        raise Reject(
+            f"this frame would change {len(out)} elements and arrange changes {MAX_DIAGRAM} at most: "
+            "split the frame in two"
+        )
     return out, [fid]

@@ -80,31 +80,21 @@ def test_free_space_counts_rotated_shapes_and_points_outside_a_strokes_declared_
     assert board.mermaid_elements(current, [shape()], now=1)[0]["x"] >= 2080
 
 
-def test_the_converter_reads_the_text_as_written_and_the_guard_still_runs_first():
-    """`A & B` and `#quot;` mean something to the parser, so it reads the checked text, not the one with
-    fullwidth stand-ins; but a source the guard refuses is refused before it is read."""
-    assert board.mermaid_text("flowchart LR\r\nA & B --> C") == "flowchart LR\nA & B --> C"
-    assert "＆" in board.mermaid_source("flowchart LR\nA &B --> C")
+def test_the_guard_returns_the_text_as_written_and_normalizes_only_line_breaks():
+    """The converter reads what the guard returns, so `A & B` and `#quot;` keep their meaning (no
+    fullwidth stand-ins), a CRLF becomes a newline, and the rejections are the ones above."""
+    assert board.mermaid_source("flowchart LR\r\nA & B --> C #quot;x#quot;") == (
+        "flowchart LR\nA & B --> C #quot;x#quot;"
+    )
     with pytest.raises(board.Reject):
-        board.mermaid_text("flowchart LR\nstyle A fill:red")
+        board.mermaid_source("flowchart LR\nstyle A fill:red")
 
 
-def test_an_elbow_arrows_binding_keeps_its_fixed_point_only_when_it_is_two_numbers_from_0_to_1():
-    """An elbow arrow needs the fraction of the box it leaves from; anything else in that field (a
-    string, a long list, a number outside 0 to 1, NaN) is dropped and the binding stays plain."""
+def test_a_bound_list_longer_than_a_shape_call_may_make_is_still_dropped():
+    """The element guard is unchanged: 40 bound elements are kept and 41 are dropped, for everyone."""
 
-    def bound(fixed):
-        arrow = shape(
-            type="arrow", points=[[0, 0], [10, 0]], startBinding={"elementId": "b", "fixedPoint": fixed}
-        )
-        return board.clean_element(arrow, agent=True)["startBinding"]
+    def kept(n):
+        hub = shape(boundElements=[{"id": f"a{i}", "type": "arrow"} for i in range(n)])
+        return board.clean_element(hub, agent=True).get("boundElements")
 
-    assert bound([0.5, 1]) == {"elementId": "b", "focus": 0, "gap": 0, "fixedPoint": [0.5, 1]}
-    for bad in ("x", [0.5], [0, 1, 2], [-0.1, 0.5], [0.5, 1.1], [float("nan"), 0], [True, 0], {"a": 1}):
-        assert "fixedPoint" not in bound(bad), bad
-
-
-def test_a_node_with_more_arrows_than_a_shape_call_may_make_keeps_its_bound_list():
-    """A hub with 60 arrows bound to it is a normal diagram now that a diagram may hold 150 elements."""
-    hub = shape(boundElements=[{"id": f"a{i}", "type": "arrow"} for i in range(60)])
-    assert len(board.clean_element(hub, agent=True)["boundElements"]) == 60
+    assert len(kept(40)) == 40 and kept(41) is None

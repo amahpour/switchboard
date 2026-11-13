@@ -25,7 +25,9 @@ MAX_TEXT = 200
 MAX_CALL = 40  # shapes one agent call may add or change
 # Elements one Mermaid diagram, or one arranged frame, may make or change in a single change. The
 # maintainer's yes, 2026-11-13: "Raise how many shapes one Mermaid diagram can make, from 40 to 150? ... Yes?"
-# "Yes". The per-call cap of the shape actions stays MAX_CALL.
+# "Yes". The per-call cap of the shape actions stays MAX_CALL. `arrange` may change as many: the maintainer's
+# "I'll go with your recommendations", 2026-11-13, to "`arrange` moving up to 150 shapes at once ... I
+# recommend yes."
 MAX_DIAGRAM = 150
 MAX_ELEMENTS = 1500  # live and deleted, together
 MAX_BYTES = 1_000_000
@@ -162,20 +164,13 @@ def _binding(raw: Any) -> dict[str, Any] | None:
     gap = _clamp(raw.get("gap", 0), 0, 100)
     if focus is None or gap is None:
         return None
-    out: dict[str, Any] = {"elementId": eid, "focus": focus, "gap": gap}
-    # An elbow arrow's end sits at a fraction of the box it is bound to: two numbers from 0 to 1, or nothing.
-    fixed = raw.get("fixedPoint")
-    if isinstance(fixed, (list, tuple)) and len(fixed) == 2:
-        fx, fy = _finite(fixed[0]), _finite(fixed[1])
-        if fx is not None and fy is not None and 0 <= fx <= 1 and 0 <= fy <= 1:
-            out["fixedPoint"] = [fx, fy]
-    return out
+    return {"elementId": eid, "focus": focus, "gap": gap}
 
 
 def _bound_list(raw: Any) -> list[dict[str, str]] | None:
     if raw is None:
         return None
-    if not isinstance(raw, list) or len(raw) > MAX_DIAGRAM:
+    if not isinstance(raw, list) or len(raw) > MAX_CALL:
         return None
     out = []
     for item in raw:
@@ -783,8 +778,10 @@ def _delete(
     return out, [el["id"]]
 
 
-def _mermaid_checked(value: Any) -> str:
-    """The source with its click lines removed, or a ``Reject`` for anything the board does not draw."""
+def mermaid_source(value: Any) -> str:
+    """Only bounded fresh flows (§56.9): the source with its click lines removed, or a ``Reject`` for
+    anything the board does not draw. This is the guard in front of the converter, which reads the text
+    as written, so `A & B` and `#quot;` keep their meaning."""
     if not isinstance(value, str) or len(value) > 8000 or len(value.encode(errors="replace")) > 16000:
         raise Reject("Mermaid source exceeds 8000 characters or 16000 bytes")
     source = value.strip()
@@ -795,24 +792,7 @@ def _mermaid_checked(value: Any) -> str:
         raise Reject("put click directives on separate lines; they are removed")
     if re.search(r"(?im)^\s*(?:style|classDef|linkStyle)\b|@\s*\{|!\[", source):
         raise Reject("use plain flow shapes and labels without styles or images")
-    return source
-
-
-def mermaid_source(value: Any) -> str:
-    """Only bounded fresh flows (§56.9). The rejections are the guard; the text it returns has
-    Mermaid's markup characters swapped for fullwidth ones, which a browser's Mermaid renderer could
-    have laid out safely. The broker draws diagrams itself now, so ``mermaid_text`` is what it parses."""
-    source = _mermaid_checked(value)
-    source = re.sub(r"&(?=[#a-z0-9])", "＆", source, flags=re.IGNORECASE)
-    source = re.sub(r"#(?=(?:[a-z]+|[0-9]+);)", "＃", source, flags=re.IGNORECASE)
-    return re.sub(r"<(?=[a-z/!])", "＜", source, flags=re.IGNORECASE)
-
-
-def mermaid_text(value: Any) -> str:
-    """What the converter reads: the same checks as ``mermaid_source``, on the text as the agent wrote
-    it (``A & B`` and ``#quot;`` mean something to the parser), with line breaks made plain."""
-    mermaid_source(value)
-    return _mermaid_checked(value).replace("\r\n", "\n").replace("\r", "\n")
+    return source.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _drawing_bounds(e: dict[str, Any]) -> tuple[float, float, float, float]:

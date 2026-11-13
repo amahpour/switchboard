@@ -11,6 +11,7 @@ import asyncio
 import base64
 import binascii
 import secrets
+from collections.abc import Callable
 from typing import Any
 
 from switchboard import board, board_flow, db
@@ -20,10 +21,13 @@ from switchboard.envelope import clean, sanitize
 from switchboard.models import Room
 from switchboard.store import Conflict
 
+MAX_CONVERSIONS = 4  # drawings being converted at once, for all rooms
+
 
 class RoomBoard:
     def __init__(self, state: Any) -> None:
         self.state = state
+        self._converting: set[int] = set()
         self._pending: dict[str, tuple[int, int, asyncio.Future[Any], str]] = {}
 
     async def image(self, room: Room) -> dict[str, Any]:
@@ -73,29 +77,37 @@ class RoomBoard:
         pending[2].set_result(result)
         return True
 
-    def drawn(self, room: Room, actor: str, participant: int, source: Any) -> dict[str, Any]:
-        """A whole Mermaid flowchart as one change. The broker converts it here, whether or not any page
-        is open (§56.9); the result is placed clear of what is already on the board."""
-        _, current = self.state.store.board_load(room.id)
+    async def convert(self, source: Any, participant: int) -> board_flow.Converted:
+        """The parse, layout and routing of a diagram, off the event loop: a dense diagram is real work,
+        and nothing else in the broker may wait for it. One conversion per agent and a few at once."""
+        if participant in self._converting or len(self._converting) >= MAX_CONVERSIONS:
+            raise ServiceError("busy", "a board drawing is already being made; ask again in a moment")
+        self._converting.add(participant)
         try:
-            flow = board_flow.convert(source)
-            elements = board.mermaid_elements(current, flow.elements, now=self.state.clock.now())
+            return await asyncio.to_thread(board_flow.convert, source)
         except board.Reject as e:
             raise ServiceError("bad_request", e.reason) from e
-        return self.imported(room, actor, participant, elements, flow.summary)
+        finally:
+            self._converting.discard(participant)
 
-    def imported(
-        self, room: Room, actor: str, participant: int, elements: list[Any], summary: str = ""
-    ) -> dict[str, Any]:
+    def drawn(self, room: Room, actor: str, participant: int, flow: board_flow.Converted) -> dict[str, Any]:
+        """A converted flowchart as one change. The caller has just rechecked membership and the rate
+        limit; the board is loaded, and the diagram placed clear of it, inside the transaction, so a
+        change that landed while the conversion ran is respected (§56.9)."""
+        now = self.state.clock.now()
+
+        def place(current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return board.mermaid_elements(current, flow.elements, now=now)
+
         return self._commit(
             room,
             actor,
             participant,
             action="draw_mermaid",
             params=None,
-            raw=elements,
+            raw=place,
             agent_raw=True,
-            summary=summary,
+            summary=flow.summary,
         )
 
     def snapshot(self, room: Room) -> dict[str, Any]:
@@ -128,7 +140,7 @@ class RoomBoard:
         *,
         action: str | None,
         params: dict[str, Any] | None,
-        raw: list[Any] | None,
+        raw: list[Any] | Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None,
         agent_raw: bool = False,
         summary: str = "",
     ) -> dict[str, Any]:
@@ -147,6 +159,11 @@ class RoomBoard:
                 added = outcome.added
                 agent = True
             else:
+                if callable(raw):
+                    try:
+                        raw = raw(elements)
+                    except board.Reject as e:
+                        raise ServiceError("bad_request", e.reason) from e
                 incoming = raw
                 agent = agent_raw
                 if agent_raw:

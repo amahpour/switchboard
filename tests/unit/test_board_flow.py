@@ -452,3 +452,42 @@ def test_random_graphs_meet_the_bar(seed):
         return
     els = board.mermaid_elements([], flow.elements, now=1)
     check_bar(els)
+
+
+def test_a_node_with_more_than_40_bound_elements_is_refused_naming_it():
+    """A shape holds 40 bound elements: its label and 39 arrows. A hub with 40 links is refused whole,
+    naming the node and saying to split it; 39 are drawn. Else its list would be dropped by the guard."""
+    hub = "flowchart LR\n" + "\n".join(f"Hub[Hub] --> n{i}" for i in range(40))
+    with pytest.raises(board.Reject, match=r'"Hub" would carry 41 bound elements.*split'):
+        board_flow.convert(hub)
+    # 39 arrows and the label are 40, which fits, but the diagram is 2*40 + 39 = 119 elements
+    ok = board_flow.convert("flowchart LR\n" + "\n".join(f"Hub[Hub] --> n{i}" for i in range(39)))
+    hub_el = next(e for e in ok.elements if e["type"] == "rectangle" and len(e["boundElements"]) == 40)
+    assert hub_el["boundElements"][0]["type"] == "text"
+
+
+def test_the_densest_diagram_the_cap_allows_is_bounded_work(monkeypatch):
+    """16 nodes and 118 links (150 elements) took over four seconds in the router. The search now has a
+    step budget, shared by the whole call, after which an arrow is a plain elbow: the steps are bounded
+    exactly and the time is a loose guard, not a stopwatch."""
+    import time
+
+    from switchboard import board_layout
+
+    spent = []
+    original = board_layout._search
+
+    def spy(*args):
+        before = args[-1][0]
+        got = original(*args)
+        spent.append(before - max(args[-1][0], 0))
+        return got
+
+    monkeypatch.setattr(board_layout, "_search", spy)
+    pairs = [(i, j) for i in range(16) for j in range(i + 1, 16)][:118]
+    src = "flowchart LR\n" + "\n".join(f"n{i}-->n{j}" for i, j in pairs)
+    started = time.process_time()
+    flow = board_flow.convert(src)
+    assert len(flow.elements) == 150
+    assert sum(spent) <= board_layout.TOTAL_BUDGET + len(spent)
+    assert time.process_time() - started < 3.0

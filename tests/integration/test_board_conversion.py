@@ -6,7 +6,9 @@ same rate limit and membership check as the other actions. What it drew is edita
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 
 import pytest
 from conftest import FakeClock, InProcBroker, cookie_of, ws_connect
@@ -154,9 +156,104 @@ async def test_arrange_is_one_change_over_the_tool(broker: InProcBroker, clock: 
 
 @pytest.mark.parametrize("text", ["flowchart LR\nA-->B", "graph TB\nA & B --> C"])
 async def test_no_pending_conversion_state_is_left_behind(broker: InProcBroker, text: str):  # noqa: F811
-    """There is no browser round trip to leak: the room board holds no pending conversion."""
+    """There is no browser round trip to leak, and the one conversion slot is given back."""
     async with FakeAgent(broker.home, "drawer") as drawer:
         await drawer.join("#build", "claude-1")
         await drawer.call("board", room="#build", action="draw_mermaid", text=text)
     assert broker.on_loop(lambda: len(broker.state.room_board._pending)) == 0
-    assert not hasattr(broker.state.room_board, "convert")
+    assert broker.on_loop(lambda: len(broker.state.room_board._converting)) == 0
+
+
+class Gate:
+    """Holds the first conversion on a worker thread until released: the loop must be free meanwhile."""
+
+    def __init__(self, monkeypatch):
+        from switchboard import board_flow
+
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.calls = 0
+        real = board_flow.convert
+
+        def convert(source):
+            self.calls += 1
+            if self.calls == 1:
+                self.started.set()
+                assert self.release.wait(10)
+            return real(source)
+
+        monkeypatch.setattr(board_flow, "convert", convert)
+
+
+async def test_the_broker_answers_other_requests_while_a_diagram_is_being_converted(
+    broker: InProcBroker,  # noqa: F811
+    monkeypatch,  # noqa: F811
+):
+    """Conversion runs off the event loop: a say and a read from other members are answered while one
+    conversion is held, and a second drawing from the same agent is refused as busy. Fails if the work
+    ran on the loop (the say would never return), or if one agent could queue many."""
+    gate = Gate(monkeypatch)
+    async with FakeAgent(broker.home, "drawer") as drawer, FakeAgent(broker.home, "other") as other:
+        await drawer.join("#build", "claude-1")
+        await other.join("#build", "codex-1")
+        pending = asyncio.create_task(drawer.call("board", room="#build", action="draw_mermaid", text=FLOW))
+        assert await asyncio.to_thread(gate.started.wait, 10)
+        said = await asyncio.wait_for(other.say("#build", "still here"), 5)
+        assert said["ok"]
+        seen = await asyncio.wait_for(other.call("board", room="#build", action="read"), 5)
+        assert seen["ok"] and seen["seq"] == 0
+        again = await asyncio.wait_for(
+            drawer.call("board", room="#build", action="draw_mermaid", text=FLOW), 5
+        )
+        assert again["ok"] is False and again["code"] == "busy"
+        gate.release.set()
+        made = await asyncio.wait_for(pending, 10)
+        assert made["changed"] is True
+    assert broker.on_loop(lambda: len(broker.state.room_board._converting)) == 0
+
+
+async def test_membership_and_the_rate_limit_are_checked_again_after_the_conversion(
+    broker: InProcBroker,  # noqa: F811
+    monkeypatch,  # noqa: F811
+):
+    """An agent that leaves, or posts, while its diagram is being made stores nothing."""
+    for intervene in ("leave", "say"):
+        gate = Gate(monkeypatch)
+        async with FakeAgent(broker.home, f"drawer-{intervene}") as drawer:
+            await drawer.join("#build", f"claude-{intervene}")
+            pending = asyncio.create_task(
+                drawer.call("board", room="#build", action="draw_mermaid", text=FLOW)
+            )
+            assert await asyncio.to_thread(gate.started.wait, 10)
+            if intervene == "leave":
+                await drawer.leave("#build")
+            else:
+                await drawer.say("#build", "a post while converting")
+            gate.release.set()
+            got = await asyncio.wait_for(pending, 10)
+            assert not got.get("changed"), got
+    assert q(broker, "SELECT count(*) AS n FROM room_boards")[0]["n"] == 0
+
+
+async def test_placement_uses_the_board_as_it_is_after_the_conversion(
+    broker: InProcBroker,  # noqa: F811
+    monkeypatch,  # noqa: F811
+):
+    """A drawing that landed while another was being converted is respected: the second is placed to
+    the right of it inside the transaction, not on top of the board as it was when the work began."""
+    gate = Gate(monkeypatch)
+    async with FakeAgent(broker.home, "slow") as slow, FakeAgent(broker.home, "fast") as fast:
+        await slow.join("#build", "claude-1")
+        await fast.join("#build", "codex-1")
+        pending = asyncio.create_task(slow.call("board", room="#build", action="draw_mermaid", text=FLOW))
+        assert await asyncio.to_thread(gate.started.wait, 10)
+        first = await fast.call("board", room="#build", action="draw_mermaid", text=FLOW)
+        assert first["changed"] is True
+        gate.release.set()
+        second = await asyncio.wait_for(pending, 10)
+        assert second["changed"] is True
+    rows = {e["id"]: e for e in stored(broker)}
+    mine = [rows[i] for i in first["ids"]]
+    theirs = [rows[i] for i in second["ids"]]
+    assert min(e["x"] for e in theirs) >= max(e["x"] + e["width"] for e in mine if e["type"] != "arrow")
+    assert q(broker, "SELECT seq FROM room_boards")[0]["seq"] == 2

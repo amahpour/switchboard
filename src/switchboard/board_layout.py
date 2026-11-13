@@ -28,6 +28,8 @@ LANE = 14.0  # spacing of the parallel lines arrows can use inside a corridor
 TURN = 30.0  # what a bend costs in the route search, in pixels
 SHARED = 14.0  # what an already used unit of line costs
 SWEEPS = 8
+EDGE_BUDGET = 20000  # route-search steps one arrow may take before it is drawn as a plain Z
+TOTAL_BUDGET = 100000  # and all the arrows of one call together, so the work is bounded
 
 
 @dataclass(frozen=True)
@@ -452,7 +454,10 @@ def _search(
     first: int,
     last: int,
     used: set[tuple[str, int, int]],
+    budget: list[int],
 ) -> list[Point] | None:
+    """The cheapest orthogonal path between two grid points, or None when there is none or the step
+    budget (``budget[0]``, shared by the caller) runs out first."""
     xs, ys = grid.xs, grid.ys
     if start[0] not in xs or goal[0] not in xs:
         return None
@@ -466,6 +471,9 @@ def _search(
     tick = 0
     while heap:
         _f, cost, ix, iy, d, _t = heapq.heappop(heap)
+        budget[0] -= 1
+        if budget[0] < 0:
+            return None
         if best.get((ix, iy, d), 1e18) < cost:
             continue
         if (ix, iy) == (gix, giy):
@@ -587,6 +595,7 @@ def route(
     grid = _Grid(rects, [*port.values(), *stubs.values()])
     used: set[tuple[str, int, int]] = set()
     paths: dict[int, tuple[list[Point], Point, Point]] = {}
+    total = [TOTAL_BUDGET]
     for i in drawn:
         link = links[i]
         if link.src == link.dst:
@@ -597,7 +606,9 @@ def route(
         first = {(0, -1): 0, (1, 0): 1, (0, 1): 2, (-1, 0): 3}[s_out]
         last = {(0, -1): 2, (1, 0): 3, (0, 1): 0, (-1, 0): 1}[d_out]  # moving into the box
         s, t = stubs[(i, "src")], stubs[(i, "dst")]
-        mid = _search(grid, s, t, first, last, used)
+        left = [min(EDGE_BUDGET, total[0])]
+        mid = _search(grid, s, t, first, last, used, left) if left[0] > 0 else None
+        total[0] -= min(EDGE_BUDGET, total[0]) - max(left[0], 0)
         if mid is None:  # boxed in: a plain Z, which may cross a box
             if s_side in "tb":
                 my = (s[1] + t[1]) / 2

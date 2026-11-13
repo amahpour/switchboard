@@ -55,7 +55,7 @@ def test_arrange_gives_a_frame_with_no_overlaps_no_stray_shapes_and_no_arrow_thr
         for b in shapes[i + 1 :]:
             assert not overlap(box(a), box(b))
     for a in live(els, "arrow"):
-        assert a["elbowed"] is True and "fixedPoint" in a["startBinding"] and "fixedPoint" in a["endBinding"]
+        assert a["elbowed"] is True
         ends = {a["startBinding"]["elementId"], a["endBinding"]["elementId"]}
         pts = [(a["x"] + px, a["y"] + py) for px, py in a["points"]]
         for p, q in zip(pts, pts[1:], strict=False):
@@ -74,12 +74,12 @@ def test_arrange_gives_a_frame_with_no_overlaps_no_stray_shapes_and_no_arrow_thr
 
 
 def test_arrange_is_one_change_through_the_broker_with_one_notice(tmp_path):
-    """Merged as one action the arrange is a single version bump per element and one id list; the merge
-    cap for it is the diagram cap, so a frame with more than 40 changed elements still arranges."""
+    """Merged as one action the arrange is a single version bump per element, under the per-call cap of 40
+    (an 8-shape, 10-arrow frame is 37 elements)."""
     els, frame, ids = make(shapes=8, arrows=10)
     out = board.apply_action(els, "arrange", {"id": frame}, now=1.0)
-    assert len(out.incoming) > board.MAX_CALL // 2
-    merged = board.merge(els, list(out.incoming), agent=True, cap=board.MAX_DIAGRAM)
+    assert board.MAX_CALL // 2 < len(out.incoming) <= board.MAX_CALL
+    merged = board.merge(els, list(out.incoming), agent=True)
     assert len(merged.taken) == len(out.incoming) and not merged.rejected
     by_old = {e["id"]: e for e in els}
     assert all(e["version"] == by_old[e["id"]]["version"] + 1 for e in merged.taken)
@@ -129,3 +129,41 @@ def test_arrange_refuses_what_is_not_a_frame_with_shapes_and_changes_nothing(par
     params = {k: {"SHAPE": ids[0], "EMPTY": empty}.get(v, v) for k, v in params.items()}
     got = board.apply_action(els, "arrange", params, now=1.0)
     assert got.error == reason and got.incoming == ()
+
+
+def big_frame(arrows: int):
+    """A frame of 35 shapes (70 elements), the frame (1) and ``arrows`` unlabelled arrows."""
+    els, frame, ids = make(shapes=35, arrows=0)
+    for n in range(arrows):
+        els, _ = run(
+            els,
+            "connect",
+            id=ids[n % 35],
+            to=ids[(n * 7 + 3) % 35 if (n * 7 + 3) % 35 != n % 35 else (n + 1) % 35],
+            text="",
+        )
+    return els, frame
+
+
+def test_arrange_may_change_150_elements_and_refuses_151():
+    """The maintainer allowed arrange the diagram cap: 150 changed elements arrange (merged under 150), 151
+    are refused with the count and nothing is stored."""
+    els, frame = big_frame(79)
+    out = board.apply_action(els, "arrange", {"id": frame}, now=1.0)
+    assert not out.error and len(out.incoming) == 150, out.error
+    merged = board.merge(els, list(out.incoming), agent=True, cap=board.MAX_DIAGRAM)
+    assert len(merged.taken) == 150 and not merged.rejected
+    els, frame = big_frame(80)
+    got = board.apply_action(els, "arrange", {"id": frame}, now=1.0)
+    assert got.incoming == () and "would change 151 elements" in got.error and "150 at most" in got.error
+
+
+def test_arrange_refuses_a_shape_with_more_than_40_bound_elements_naming_it():
+    """A hub with a label and 40 arrows carries 41 bound elements, more than a shape holds."""
+    els, frame, ids = make(shapes=3, arrows=0)
+    for i in range(40):
+        els, _ = run(els, "connect", id=ids[0], to=ids[1 + i % 2], text="")
+        if i % 3 == 2:  # stay clear of the rate window the real tool has: only the geometry is under test
+            pass
+    got = board.apply_action(els, "arrange", {"id": frame}, now=1.0)
+    assert got.incoming == () and '"Step 0"' in got.error and "bound elements" in got.error
