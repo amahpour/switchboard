@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from switchboard import board_checks, board_layout, board_style
+from switchboard.board_style import DEFAULT_STROKE, nearest_name
 from switchboard.envelope import clean
 
 # The spike's caps (#622, question 7). Text is cut for everyone, so what an agent reads back
@@ -42,7 +44,20 @@ AGENT_TYPES = frozenset({"rectangle", "ellipse", "diamond", "arrow", "text", "fr
 # A person's page can also send a line or a pen stroke. Anything else, including an image, fails closed.
 PERSON_TYPES = AGENT_TYPES | frozenset({"line", "freedraw"})
 NEVER_TYPES = frozenset({"image", "embeddable", "iframe", "magicframe"})
-ACTIONS = ("note", "box", "connect", "frame", "move", "edit", "delete", "read", "draw_mermaid", "arrange")
+ACTIONS = (
+    "note",
+    "box",
+    "connect",
+    "frame",
+    "move",
+    "edit",
+    "delete",
+    "read",
+    "draw_mermaid",
+    "arrange",
+    "resize",
+    "text",
+)
 BOX_SHAPES = frozenset({"rectangle", "ellipse", "diamond"})
 _FILL = frozenset({"hachure", "cross-hatch", "solid", "zigzag"})
 _STROKE = frozenset({"solid", "dashed", "dotted"})
@@ -80,6 +95,7 @@ class ActionResult:
     error: str = ""
     summary: str = ""
     added: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 def mint(prefix: str) -> str:
@@ -132,6 +148,18 @@ def _color(v: Any) -> str | None:
     if isinstance(v, str) and _COLOR.fullmatch(v):
         return v
     return None
+
+
+def _paint(el: dict[str, Any]) -> str:
+    """`` fill=<name> stroke=<name>`` for the colours that are not the defaults, else empty."""
+    out = ""
+    bg = el.get("backgroundColor")
+    if bg not in (None, "transparent", "#ffffff"):
+        out += f" fill={nearest_name(bg, 'fill')}"
+    stroke = el.get("strokeColor")
+    if stroke not in (None, DEFAULT_STROKE):
+        out += f" stroke={nearest_name(stroke, 'stroke')}"
+    return out
 
 
 def _choice(v: Any, allowed: frozenset[str]) -> str | None:
@@ -429,14 +457,20 @@ def summary(elements: list[dict[str, Any]], seq: int) -> str:
         where = f" in {s['frameId']}" if s.get("frameId") else ""
         lines.append(
             f'{s["type"]} id={s["id"]} "{_label(elements, s)}" at ({round(s["x"])},{round(s["y"])}) '
-            f"{round(s['width'])}x{round(s['height'])}{where}"
+            f"{round(s['width'])}x{round(s['height'])}{where}{_paint(s)}"
         )
     for t in loose:
         lines.append(f'text id={t["id"]} "{t.get("text") or ""}" at ({round(t["x"])},{round(t["y"])})')
     for a in arrows:
         start = (a.get("startBinding") or {}).get("elementId")
         end = (a.get("endBinding") or {}).get("elementId")
-        lines.append(f'arrow id={a["id"]} {start or "(free)"} -> {end or "(free)"} "{_label(elements, a)}"')
+        lines.append(
+            f'arrow id={a["id"]} {start or "(free)"} -> {end or "(free)"} "{_label(elements, a)}"{_paint(a)}'
+        )
+    problems = board_checks.warnings(live)
+    if problems:
+        lines.append("layout warnings:")
+        lines.extend(f"- {w}" for w in problems)
     return "\n".join(lines)
 
 
@@ -535,9 +569,9 @@ def _free_slot(
         and (frame is None or e["id"] != frame["id"])
     ]
     if frame is not None:
-        x0, y0, cols, dx, dy = frame["x"] + 20, frame["y"] + 40, 2, 200, 120
+        x0, y0, cols, dx, dy = frame["x"] + 20, frame["y"] + 40, 2, 300, max(140, h + 60)
     else:
-        x0, y0, cols, dx, dy = 0, 0, 4, 260, 140
+        x0, y0, cols, dx, dy = 0, 0, 4, 300, max(140, h + 60)
     for i in range(200):
         x, y = x0 + (i % cols) * dx, y0 + (i // cols) * dy
         hit = any(
@@ -574,6 +608,14 @@ def _coord(params: dict[str, Any], key: str) -> float | None:
     return n
 
 
+def _name_of(elements: list[dict[str, Any]], el: dict[str, Any]) -> str:
+    """A shape's words (or its id) for an error that names it."""
+    for c in elements:
+        if c.get("containerId") == el["id"] and c["type"] == "text" and not c.get("isDeleted"):
+            return str(c.get("originalText") or c.get("text") or el["id"])[:60]
+    return str(el.get("name") or el["id"])[:60]
+
+
 def apply_action(
     elements: list[dict[str, Any]],
     action: str,
@@ -592,7 +634,36 @@ def apply_action(
         incoming, added = _act(elements, action, params, now=now, new_id=new_id, new_nonce=new_nonce)
     except Reject as e:
         return ActionResult(error=e.reason)
-    return ActionResult(incoming=tuple(incoming), added=tuple(added))
+    for el in incoming:  # the cleaner drops a list past the cap, which would unbind a shape: refuse instead
+        if len(el.get("boundElements") or []) > MAX_CALL:
+            return ActionResult(
+                error=f'"{_name_of(elements, el)}" would carry {len(el["boundElements"])} bound elements '
+                f"(its label and its arrows) and a shape holds {MAX_CALL}: split its links across two shapes"
+            )
+    touched = {e["id"] for e in incoming}
+    merged = {**_by_id(elements), **{e["id"]: e for e in incoming}}
+    problems = board_checks.warnings(list(merged.values()), only=touched)
+    return ActionResult(incoming=tuple(incoming), added=tuple(added), warnings=tuple(problems))
+
+
+def _style(params: dict[str, Any], target: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The element fields and label fields of a call's ``style``, or nothing when it has none."""
+    if "style" not in params or params["style"] == "":
+        return {}, {}
+    try:
+        return board_style.fields(board_style.parse_style(params["style"]), target)
+    except board_style.StyleError as e:
+        raise Reject(e.reason) from e
+
+
+def _size(params: dict[str, Any], key: str) -> float | None:
+    """A requested width or height, or None when left out. A bad value raises."""
+    if key not in params or params[key] in (0, 0.0, None, ""):
+        return None
+    n = _finite(params[key])
+    if n is None or not 20 <= n <= 3000:
+        raise Reject(f"{key} must be a number from 20 to 3000")
+    return n
 
 
 def _act(
@@ -623,9 +694,59 @@ def _act(
         return _move(elements, params, now, new_nonce)
     if action == "edit":
         return _edit(elements, params, now, new_nonce)
+    if action == "resize":
+        return _resize(elements, params, now, new_nonce)
+    if action == "text":
+        return _add_text(elements, params, now, new_id, new_nonce)
     if action == "delete":
         return _delete(elements, params, now, new_nonce)
     raise Reject("unknown action")
+
+
+def _frame_for(elements: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, Any] | None:
+    frame_id = params.get("to") or ""
+    if not isinstance(frame_id, str):
+        raise Reject("unknown frame")
+    frame = _find(elements, frame_id) if frame_id else None
+    if frame_id and (frame is None or frame["type"] != "frame"):
+        raise Reject("unknown frame")
+    return frame
+
+
+def _grow_frame(
+    frame: dict[str, Any] | None, x: float, y: float, w: float, h: float, now: float, vn: int
+) -> list[dict[str, Any]]:
+    """The frame, bumped and enlarged (in any direction) so a shape at (x, y, w, h) sits inside it."""
+    if frame is None:
+        return []
+    left, top = min(frame["x"], x - 20), min(frame["y"], y - 20)
+    right = max(frame["x"] + frame["width"], x + w + 20)
+    bottom = max(frame["y"] + frame["height"], y + h + 20)
+    if (left, top, right - left, bottom - top) == (frame["x"], frame["y"], frame["width"], frame["height"]):
+        return []
+    return [
+        _bump(
+            frame,
+            now,
+            vn,
+            x=max(left, -COORD),
+            y=max(top, -COORD),
+            width=min(right - left, DIM_MAX),
+            height=min(bottom - top, DIM_MAX),
+        )
+    ]
+
+
+def _place_label(shape: dict[str, Any], label: dict[str, Any], text: str, fs: float) -> dict[str, Any]:
+    """The label's box: as wide as the shape's inside, as tall as its wrapped text, centred."""
+    width, th = board_checks.label_box(shape, text, fs)
+    return {
+        **label,
+        "x": shape["x"] + (shape["width"] - width) / 2,
+        "y": shape["y"] + (shape["height"] - th) / 2,
+        "width": width,
+        "height": th,
+    }
 
 
 def _add_box(
@@ -643,15 +764,17 @@ def _add_box(
         raise Reject("bad text")
     if require_text and not text:
         raise Reject("text is required")
-    frame_id = params.get("to") or ""
-    if not isinstance(frame_id, str):
-        raise Reject("unknown frame")
-    frame = _find(elements, frame_id) if frame_id else None
-    if frame_id and (frame is None or frame["type"] != "frame"):
-        raise Reject("unknown frame")
+    frame = _frame_for(elements, params)
+    style, label_style = _style(params, "shape")
+    asked_w, asked_h = _size(params, "w"), _size(params, "h")
+    if label_style and not text:
+        raise Reject("that shape has no text")
+    fs = float(label_style.get("fontSize", 16))
+    shape_kind = board_checks.KINDS[kind]
+    fitted = board_checks.fit(text, shape_kind, fs) if text else None
+    w = asked_w or (fitted.w if fitted else 160.0)
+    h = asked_h or (board_checks.height_for(shape_kind, w, text, fs) if text else 80.0)
     x, y = _coord(params, "x"), _coord(params, "y")
-    w = max(140, min(260, 9 * len(text) // 2 + 40)) if text else 160
-    h = 80
     if x is None or y is None:
         x, y = _free_slot(elements, w, h, frame)
     sid, tid = new_id("n" if require_text else "b"), new_id("t")
@@ -659,6 +782,9 @@ def _add_box(
     shape = _base(kind, sid, x, y, w, h, now, vn)
     shape["backgroundColor"] = fill
     shape["roundness"] = {"type": 3}
+    shape.update(style)
+    if shape.get("roundness") is None:
+        del shape["roundness"]
     if frame is not None:
         shape["frameId"] = frame["id"]
     out: list[dict[str, Any]] = [shape]
@@ -667,10 +793,45 @@ def _add_box(
         label = _text_el(
             tid, sid, text, x + 10, y + 28, w - 20, now, new_nonce(), frame["id"] if frame else ""
         )
+        label.update(label_style)
+        label = _place_label(shape, label, text, fs)
         shape["boundElements"] = [{"id": tid, "type": "text"}]
         out.append(label)
         added.append(tid)
+    out.extend(_grow_frame(frame, x, y, w, h, now, new_nonce()))
     return out, added
+
+
+def _loose_size(text: str, fs: float) -> tuple[float, float]:
+    """The box of a text with no shape around it: one line up to 520 wide, then wrapped."""
+    return board_checks.loose_size(text, fs)
+
+
+def _add_text(
+    elements: list[dict[str, Any]],
+    params: dict[str, Any],
+    now: float,
+    new_id: Callable[[str], str],
+    new_nonce: Callable[[], int],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """A heading or caption with no box."""
+    text = _need_text(params)
+    if not text:
+        raise Reject("text is required")
+    frame = _frame_for(elements, params)
+    _, own = _style(params, "text")  # for a loose text, every key lands on the text itself
+    fs = float(own.get("fontSize", 20))
+    own.setdefault("fontSize", 20)
+    w, h = _loose_size(text, fs)
+    x, y = _coord(params, "x"), _coord(params, "y")
+    if x is None or y is None:
+        x, y = _free_slot(elements, w, h, frame)
+    tid = new_id("t")
+    el = _text_el(tid, "", text, x, y, w, now, new_nonce(), frame["id"] if frame else "")
+    el.update(own)
+    el.update(height=h, containerId=None, textAlign=own.get("textAlign", "left"), verticalAlign="top")
+    out = [el, *_grow_frame(frame, x, y, w, h, now, new_nonce())]
+    return out, [tid]
 
 
 def _add_frame(
@@ -683,14 +844,33 @@ def _add_frame(
     title = _need_text(params)
     if title is None:
         raise Reject("bad text")
+    _style(params, "frame")
     x, y = _coord(params, "x"), _coord(params, "y")
-    w, h = 600, 360
+    w, h = _size(params, "w") or 600, _size(params, "h") or 360
     if x is None or y is None:
         x, y = _free_frame(elements, w, h)
     eid = new_id("f")
     el = _base("frame", eid, x, y, w, h, now, new_nonce())
     el["name"] = title
     return [el], [eid]
+
+
+def _elbow(elements: list[dict[str, Any]], src: dict[str, Any], dst: dict[str, Any]) -> Any:
+    """The router's elbow between two shapes, kept clear of every other shape on the board, or None."""
+    if src["id"] == dst["id"]:
+        return None
+
+    def rect(e: dict[str, Any]) -> board_layout.Rect:
+        return e["x"], e["y"], e["width"], e["height"]
+
+    boxes = {src["id"]: rect(src), dst["id"]: rect(dst)}
+    obstacles = {e["id"]: rect(e) for e in _live(elements) if e["type"] in BOX_SHAPES}
+    obstacles.update(boxes)
+    horizontal = abs(dst["x"] - src["x"]) >= abs(dst["y"] - src["y"])
+    got = board_layout.route(
+        boxes, obstacles, [board_layout.Link(src["id"], dst["id"])], horizontal=horizontal
+    )
+    return got.get(0)
 
 
 def _connect(
@@ -709,22 +889,72 @@ def _connect(
     label = _need_text(params)
     if label is None:
         raise Reject("bad text")
+    style, label_style = _style(params, "arrow")
+    if label_style and not label:
+        raise Reject("that arrow has no text")
     x = src["x"] + src["width"]
     y = src["y"] + src["height"] / 2
     dx = (dst["x"] + dst["width"] / 2) - x
     dy = (dst["y"] + dst["height"] / 2) - y
+    if style.get("elbowed"):
+        for end_shape in {src["id"]: src, dst["id"]: dst}.values():
+            if len(end_shape.get("boundElements") or []) + 1 > MAX_CALL:
+                raise Reject(
+                    f'"{_name_of(elements, end_shape)}" already carries {MAX_CALL} bound elements (its label '
+                    f"and its arrows) and a shape holds {MAX_CALL}: split its links across two shapes"
+                )
+    routed = _elbow(elements, src, dst) if style.get("elbowed") else None
     eid = new_id("a")
     vn = new_nonce()
-    arrow = _base("arrow", eid, x, y, abs(dx), abs(dy), now, vn)
-    arrow["points"] = [[0.0, 0.0], [dx, dy]]
-    arrow["startBinding"] = {"elementId": src["id"], "focus": 0.0, "gap": 8.0}
-    arrow["endBinding"] = {"elementId": dst["id"], "focus": 0.0, "gap": 8.0}
+    if routed is not None:
+        # The same router ``arrange`` and Mermaid conversion use: right-angled points round every other
+        # shape, and a ``fixedPoint`` on each end, which is how Excalidraw keeps an elbow attached.
+        x, y = routed.points[0]
+        rel = [[px - x, py - y] for px, py in routed.points]
+        arrow = _base(
+            "arrow",
+            eid,
+            x,
+            y,
+            max(p[0] for p in rel) - min(p[0] for p in rel),
+            max(p[1] for p in rel) - min(p[1] for p in rel),
+            now,
+            vn,
+        )
+        arrow["points"] = rel
+        arrow["startBinding"] = {
+            "elementId": src["id"],
+            "focus": 0.0,
+            "gap": 0.0,
+            "fixedPoint": list(routed.src_at),
+        }
+        arrow["endBinding"] = {
+            "elementId": dst["id"],
+            "focus": 0.0,
+            "gap": 0.0,
+            "fixedPoint": list(routed.dst_at),
+        }
+    else:
+        arrow = _base("arrow", eid, x, y, abs(dx), abs(dy), now, vn)
+        arrow["points"] = [[0.0, 0.0], [dx, dy]]
+        arrow["startBinding"] = {"elementId": src["id"], "focus": 0.0, "gap": 8.0}
+        arrow["endBinding"] = {"elementId": dst["id"], "focus": 0.0, "gap": 8.0}
     arrow["endArrowhead"] = "arrow"
+    arrow.update(style)
+    if arrow.get("roundness") is None:
+        arrow.pop("roundness", None)
     out = [arrow]
+    if routed is not None:
+        # Excalidraw moves an elbow with a shape only when the shape lists the arrow (a Mermaid
+        # diagram's shapes do), so the two ends are re-sent with it.
+        for end_shape in {src["id"]: src, dst["id"]: dst}.values():
+            listed = [*(end_shape.get("boundElements") or []), {"id": eid, "type": "arrow"}]
+            out.append(_bump(end_shape, now, new_nonce(), boundElements=listed))
     added = [eid]
     if label:
         tid = new_id("t")
         text = _text_el(tid, eid, label, x, y, 80, now, new_nonce(), "")
+        text.update(label_style)
         arrow["boundElements"] = [{"id": tid, "type": "text"}]
         out.append(text)
         added.append(tid)
@@ -753,9 +983,21 @@ def _move(
     return out, [el["id"]]
 
 
+def _label_el(elements: list[dict[str, Any]], el: dict[str, Any]) -> dict[str, Any] | None:
+    for c in _companions(elements, el, arrows=False):
+        if c["type"] == "text" and c.get("containerId") == el["id"]:
+            return c
+    return None
+
+
+def _arrows_of(elements: list[dict[str, Any]], el: dict[str, Any]) -> list[dict[str, Any]]:
+    return [c for c in _companions(elements, el, arrows=True) if c["type"] == "arrow"]
+
+
 def _edit(
     elements: list[dict[str, Any]], params: dict[str, Any], now: float, new_nonce: Callable[[], int]
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    """New words, a new style, or both. A shape grows in height when its new words need it."""
     eid = params.get("id")
     if not isinstance(eid, str):
         raise Reject("unknown id")
@@ -763,16 +1005,73 @@ def _edit(
     if el is None:
         raise Reject("unknown id")
     text = _need_text(params)
-    if text is None or not text:
-        raise Reject("text is required")
+    has_style = bool(params.get("style"))
+    if text is None or (not text and not has_style):
+        raise Reject("text or style is required")
+    target = {"frame": "frame", "text": "text", "arrow": "arrow"}.get(el["type"], "shape")
+    style, label_style = _style(params, target)
     if el["type"] == "frame":
-        return [_bump(el, now, new_nonce(), name=text)], [el["id"]]
+        return [_bump(el, now, new_nonce(), **({"name": text} if text else {}))], [el["id"]]
     if el["type"] == "text":
-        return [_bump(el, now, new_nonce(), text=text, originalText=text)], [el["id"]]
-    for c in _companions(elements, el, arrows=False):
-        if c["type"] == "text" and c.get("containerId") == el["id"]:
-            return [_bump(c, now, new_nonce(), text=text, originalText=text)], [el["id"]]
-    raise Reject("that shape has no text")
+        change = {**style, **label_style, **({"text": text, "originalText": text} if text else {})}
+        words = text or _text_of(el)
+        fs = float(change.get("fontSize") or el.get("fontSize") or 20)
+        if text or "fontSize" in change:  # the box must match the words, as when it was drawn
+            change["width"], change["height"] = _loose_size(words, fs)
+        return [_bump(el, now, new_nonce(), **change)], [el["id"]]
+    label = _label_el(elements, el)
+    if (text or label_style) and label is None:
+        raise Reject("that shape has no text")
+    out: list[dict[str, Any]] = []
+    shape = el
+    if style:
+        shape = _bump(el, now, new_nonce(), **style)
+        if "roundness" in style and style["roundness"] is None:
+            shape.pop("roundness", None)
+    if label is not None and (text or label_style):
+        words = text or _text_of(label)
+        new = _bump(label, now, new_nonce(), **label_style, text=words, originalText=words)
+        if el["type"] != "arrow":
+            fs = float(new.get("fontSize") or 16)
+            need = board_checks.height_for(board_checks.KINDS[el["type"]], shape["width"], words, fs)
+            if need > shape["height"]:
+                shape = _bump(shape, now, new_nonce(), height=need)
+            new = _place_label(shape, new, words, fs)
+        out.append(new)
+    if shape is not el:
+        out.insert(0, shape)
+        if shape["height"] != el["height"]:
+            out.extend(_bump(a, now, new_nonce()) for a in _arrows_of(elements, el))
+    return out, [el["id"]]
+
+
+def _text_of(label: dict[str, Any]) -> str:
+    return str(label.get("originalText") or label.get("text") or "")
+
+
+def _resize(
+    elements: list[dict[str, Any]], params: dict[str, Any], now: float, new_nonce: Callable[[], int]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """New ``w`` and ``h``. The label stays centred and bound arrows are re-sent so they re-attach."""
+    eid = params.get("id")
+    if not isinstance(eid, str):
+        raise Reject("unknown id")
+    el = _find(elements, eid)
+    if el is None or el["type"] not in (*BOX_SHAPES, "frame"):
+        raise Reject("unknown id")
+    w, h = _size(params, "w"), _size(params, "h")
+    if w is None and h is None:
+        raise Reject("w or h is required")
+    shape = _bump(el, now, new_nonce(), width=w or el["width"], height=h or el["height"])
+    out = [shape]
+    label = _label_el(elements, el)
+    if label is not None:
+        words = _text_of(label)
+        out.append(
+            _bump(_place_label(shape, label, words, float(label.get("fontSize") or 16)), now, new_nonce())
+        )
+    out.extend(_bump(a, now, new_nonce()) for a in _arrows_of(elements, el))
+    return out, [el["id"]]
 
 
 def _delete(
@@ -800,8 +1099,8 @@ def mermaid_source(value: Any) -> str:
     source = re.sub(r"(?im)^\s*click\b[^\n]*", "", source).strip()
     if re.search(r"\bclick\b", source, re.IGNORECASE):
         raise Reject("put click directives on separate lines; they are removed")
-    if re.search(r"(?im)^\s*(?:style|classDef|linkStyle)\b|@\s*\{|!\[", source):
-        raise Reject("use plain flow shapes and labels without styles or images")
+    if re.search(r"(?im)^\s*linkStyle\b|@\s*\{|!\[", source):
+        raise Reject("use plain flow shapes and labels; linkStyle and images are not drawn")
     return source.replace("\r\n", "\n").replace("\r", "\n")
 
 

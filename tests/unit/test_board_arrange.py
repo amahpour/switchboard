@@ -167,3 +167,91 @@ def test_arrange_refuses_a_shape_with_more_than_40_bound_elements_naming_it():
             pass
     got = board.apply_action(els, "arrange", {"id": frame}, now=1.0)
     assert got.incoming == () and '"Step 0"' in got.error and "bound elements" in got.error
+
+
+def frame_rect(els, fid):
+    f = next(e for e in els if e["id"] == fid)
+    return f["x"], f["y"], f["width"], f["height"]
+
+
+def build_frames(counts=(8, 3, 3)):
+    """Frames at the default places (640 apart, so a grown first frame runs into the next), each with
+    its shapes in a chain and, in the second, a labelled arrow and a note outside every frame."""
+    els: list[dict[str, Any]] = []
+    frames, shapes = [], []
+    for n, count in enumerate(counts):
+        els, out = run(els, "frame", text=f"Part {n}")
+        frames.append(out.added[0])
+        ids = []
+        for i in range(count):
+            els, o = run(els, "box", text=f"S{n}{i}", to=frames[-1])
+            ids.append(o.added[0])
+        for a, b in zip(ids, ids[1:], strict=False):
+            els, _ = run(els, "connect", id=a, to=b, text="next")
+        shapes.append(ids)
+    return els, frames, shapes
+
+
+def test_arranging_a_frame_moves_the_frames_it_would_overlap_and_cascades() -> None:
+    """Growing the first frame past the second pushes the second to 80 clear of it, and the third when
+    the second then lands on it, each with its shapes, labels and arrows, all in one change."""
+    els, frames, shapes = build_frames()
+    before_b = frame_rect(els, frames[1])
+    before_arrow = next(
+        e for e in els if e["type"] == "arrow" and e["startBinding"]["elementId"] == shapes[1][0]
+    )
+    after, out = run(els, "arrange", id=frames[0])
+    a, b, c = (frame_rect(after, f) for f in frames)
+    assert a[0] + a[2] + 80 <= b[0] + 0.01, (a, b)  # an 80 gap, right of the arranged frame
+    assert b[0] + b[2] + 80 <= c[0] + 0.01, (b, c)  # the cascade
+    dx = b[0] - before_b[0]
+    assert dx > 0
+    for sid in shapes[1]:  # the second frame's shapes went with it, by the same distance
+        was = next(e for e in els if e["id"] == sid)
+        now = next(e for e in after if e["id"] == sid)
+        assert now["x"] - was["x"] == pytest.approx(dx) and now["y"] == was["y"]
+        label = next(e for e in after if e.get("containerId") == sid)
+        assert abs(label["x"] + label["width"] / 2 - now["x"] - now["width"] / 2) < 1
+    moved_arrow = next(e for e in after if e["id"] == before_arrow["id"])
+    assert moved_arrow["x"] - before_arrow["x"] == pytest.approx(dx)  # an arrow inside it goes along
+    from switchboard import board_checks
+
+    assert board_checks.warnings(after) == []
+    assert len({e["id"] for e in out.incoming}) == len(out.incoming) <= board.MAX_DIAGRAM
+
+
+def test_a_loose_shape_the_grown_frame_covers_is_moved_clear_too() -> None:
+    els, frames, _shapes = build_frames((8, 1, 1))
+    els, out = run(els, "note", text="loose", x=700, y=450)
+    note = out.added[0]
+    after, _ = run(els, "arrange", id=frames[0])
+    a = frame_rect(after, frames[0])
+    n = next(e for e in after if e["id"] == note)
+    assert n["x"] >= a[0] + a[2] + 80 - 0.01
+    label = next(e for e in after if e.get("containerId") == note)
+    assert label["x"] > a[0] + a[2]
+
+
+def test_an_arrow_between_a_moved_frame_and_one_that_stays_is_routed_again() -> None:
+    els, frames, shapes = build_frames((8, 2, 2))
+    els, _ = run(els, "connect", id=shapes[1][0], to=shapes[2][0], text="x", style="arrow-type=elbow")
+    after, out = run(els, "arrange", id=frames[0])
+    arrow = next(
+        e
+        for e in after
+        if e["type"] == "arrow"
+        and e["startBinding"]["elementId"] == shapes[1][0]
+        and e["endBinding"]["elementId"] == shapes[2][0]
+    )
+    for p, q in zip(arrow["points"], arrow["points"][1:], strict=False):
+        assert p[0] == q[0] or p[1] == q[1], arrow["points"]  # still right-angled after both ends moved
+    s1 = next(e for e in after if e["id"] == shapes[1][0])
+    assert s1["x"] > next(e for e in els if e["id"] == shapes[1][0])["x"]  # the frame really moved
+    assert abs(arrow["x"] - (s1["x"] + s1["width"] * arrow["startBinding"]["fixedPoint"][0])) < 2
+
+
+def test_arrange_refuses_when_moving_its_neighbours_would_pass_the_cap_and_names_the_frame() -> None:
+    els, frames, _shapes = build_frames((8, 70, 1))
+    out = board.apply_action(els, "arrange", {"id": frames[0]}, now=1.0)
+    assert "growing this frame would also move" in out.error and '"Part 1"' in out.error
+    assert not out.incoming

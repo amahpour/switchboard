@@ -15,22 +15,22 @@ from __future__ import annotations
 
 import html
 import re
-import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from switchboard import board, board_layout
+from switchboard import board, board_checks, board_layout, board_style
 from switchboard.board import MAX_DIAGRAM, MAX_TEXT, Reject
 from switchboard.board_layout import Group, Item, Link
 
 DIRECTIONS = {"TD": "TD", "TB": "TD", "BT": "BT", "LR": "LR", "RL": "RL"}
-GLYPH = 8.6  # pixels one character of the board's 16 px font takes
-LINE = 20.0  # one line of that font
+GLYPH = board_checks.GLYPH  # the one text measure, shared with the shape actions and read's warnings
+LINE = board_checks.LINE
 NOTHING = "write A[label] --> B[label]"
 _HEADER = re.compile(r"(?:flowchart|graph)\s+(TD|TB|BT|RL|LR)\b")
 _ID = re.compile(r"\w+(?:-\w+)*")
-_CLASS = re.compile(r"class\s+[\w,\s-]+\s+[\w-]+")
+_CLASS = re.compile(r"class\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s+([\w-]+)")
+_STYLE = re.compile(r"(style|classDef)\s+([\w-]+(?:\s*,\s*[\w-]+)*)\s+(\S.*)", re.DOTALL)
 _HEADS = {"<": "arrow", ">": "arrow", "x": "bar", "o": "dot"}
 # opener, the closers that can end it, the shape it makes, whether a missing closer may fall back
 _OPENERS: tuple[tuple[str, tuple[str, ...], str, bool], ...] = (
@@ -67,6 +67,8 @@ class _Node:
     group: str | None
     order: int
     named: bool = False  # a label or shape was written for it
+    classes: list[str] = field(default_factory=list)  # ``A:::name`` and ``class A name``
+    style: dict[str, str] = field(default_factory=dict)  # ``style A fill:...``: the palette's hex
 
 
 @dataclass
@@ -94,6 +96,7 @@ class _Ref:
     id: str
     kind: str | None = None
     label: str | None = None
+    klass: str | None = None
 
 
 @dataclass
@@ -106,6 +109,10 @@ class _Flow:
     labeled: int = 0
     hidden: int = 0
     counter: int = 0
+    classdefs: dict[str, dict[str, str]] = field(default_factory=dict)
+    pending: list[tuple[int, str, str, dict[str, str]]] = field(
+        default_factory=list
+    )  # line, ids, kind, props
 
     def order(self) -> int:
         self.counter += 1
@@ -168,7 +175,13 @@ def _statements(text: str) -> list[tuple[int, str]]:
         elif ch == "\n":
             flush()
             line += 1
-        elif ch == ";" and not re.search(r"#\w+$", "".join(buf[-12:])):  # `#quot;` is a character
+        elif (
+            ch == ";"
+            and not re.match(r"\s*(?:style|classDef)\b", "".join(buf))
+            and re.search(r"#\w+$", "".join(buf[-12:]))
+        ):  # `#quot;` is a character, but a colour's `#f9f;` in a style line ends it
+            buf.append(ch)
+        elif ch == ";":
             flush()
         elif ch == "%" and text.startswith("%%", i):
             while i < len(text) and text[i] != "\n":
@@ -216,9 +229,10 @@ class _Reader:
             text, self.i = got
             ref.kind, ref.label = kind, text
             break
-        m2 = re.compile(r":::[\w-]+").match(self.s, self.i)  # a class name: styles are not drawn (yet)
+        m2 = re.compile(r":::([\w-]+)").match(self.s, self.i)  # a class name, for ``classDef`` to colour
         if m2:
             self.i = m2.end()
+            ref.klass = m2.group(1)
         return ref
 
     def _label(self, j: int, closers: tuple[str, ...]) -> tuple[str, int] | None:
@@ -344,10 +358,24 @@ def _statement(flow: _Flow, stack: list[str], line: int, stmt: str) -> None:
         sub_ = flow.subs[stack[-1]]
         sub_.direction = DIRECTIONS[d.group(1)]
         return
-    if _CLASS.fullmatch(stmt):
-        return  # a class is a name for a style, and styles are not drawn yet
+    cls = _CLASS.fullmatch(stmt)
+    if cls:
+        flow.pending.append((line, cls.group(1), "class", {"class": cls.group(2)}))
+        return
+    st = _STYLE.fullmatch(stmt)
+    if st:
+        props = _paint(st.group(3))
+        if st.group(1) == "classDef":
+            for name in re.split(r"\s*,\s*", st.group(2)):
+                flow.classdefs.setdefault(name, {}).update(props)
+        else:
+            flow.pending.append((line, st.group(2), "style", props))
+        return
     if re.match(r"(?:style|classDef|linkStyle|click)\b", stmt):
-        raise _Bad("styles and clicks are not drawn; remove this line")
+        raise _Bad(
+            "write style A fill:blue,stroke:red (a palette name or a hex colour; only fill and stroke); "
+            "linkStyle and clicks are not drawn"
+        )
     r = _Reader(stmt)
     groups = [r.group()]
     links: list[tuple[str, str | None, str | None, str]] = []
@@ -376,6 +404,28 @@ def _statement(flow: _Flow, stack: list[str], line: int, stmt: str) -> None:
                 flow.edges.append(_Edge(u.id, v.id, style, a, b, text))
 
 
+def _paint(text: str) -> dict[str, str]:
+    """``fill:red,stroke:#c0392b`` as the palette's hex for each. Only fill and stroke; each value is a
+    palette name or a ``#rgb``/``#rrggbb`` hex (mapped to the nearest palette colour). Everything else,
+    fonts, widths, dashes, ``url(``, is refused rather than dropped."""
+    out: dict[str, str] = {}
+    for part in text.split(","):
+        key, colon, value = part.partition(":")
+        key, value = key.strip(), value.strip()
+        if not colon or not key or not value:
+            raise _Bad(f"can't read {board.clean(part)[:40]!r}; write fill:blue,stroke:red")
+        if key not in ("fill", "stroke"):
+            raise _Bad(f"only fill and stroke are drawn; remove {board.clean(key)[:30]!r}")
+        try:
+            out[key] = board_style.mermaid_color(value, key)
+        except board_style.StyleError:
+            raise _Bad(
+                f"{key}:{board.clean(value)[:30]!r} is not a colour the board draws; use a palette name "
+                f"({', '.join(board_style.COLOR_NAMES)}) or a #rrggbb hex"
+            ) from None
+    return out
+
+
 def _register(flow: _Flow, stack: list[str], ref: _Ref) -> None:
     if ref.id in flow.subs:
         if ref.kind or ref.label is not None:
@@ -393,6 +443,8 @@ def _register(flow: _Flow, stack: list[str], ref: _Ref) -> None:
     if ref.label is not None:
         node.label = _label(ref.label) or node.id
         node.named = True
+    if ref.klass:
+        node.classes.append(ref.klass)
 
 
 def _parse(text: str) -> _Flow:
@@ -411,39 +463,26 @@ def _parse(text: str) -> _Flow:
     if stack:
         s = flow.subs[stack[-1]]
         raise Reject(f"line {s.line}: subgraph {s.id} is never closed; add end after its nodes")
+    for line, ids, kind, props in flow.pending:  # a style may come before or after the node it names
+        for key in re.split(r"\s*,\s*", ids):
+            if key in flow.subs:
+                raise Reject(f"line {line}: {key} is a subgraph; the board draws every frame the same")
+            node = flow.nodes.get(key)
+            if node is None:
+                raise Reject(f"line {line}: {key} is not a node of this diagram; name a node you drew")
+            if kind == "class":
+                node.classes.append(props["class"])
+            else:
+                node.style.update(props)
     return flow
 
 
 # -------------------------------------------------------------------------------- the drawing
 
 
-def _wrap(text: str, width: int) -> list[str]:
-    lines: list[str] = []
-    for part in text.split("\n"):
-        lines.extend(textwrap.wrap(part, width, break_long_words=True, break_on_hyphens=False) or [""])
-    return lines
-
-
-@dataclass(frozen=True)
-class Fit:
-    lines: list[str]
-    text_w: float
-    text_h: float
-    w: float
-    h: float
-
-
-def fit(label: str, kind: str) -> Fit:
-    """A box for the label: wrapped, and tall enough for every line."""
-    width = {"rect": 25, "round": 25, "stadium": 25, "circle": 20, "diamond": 16}.get(kind, 25)
-    lines = _wrap(label, width)
-    longest = max(len(line) for line in lines)
-    tw, th = GLYPH * longest, LINE * len(lines)
-    if kind == "diamond":
-        return Fit(lines, tw, th, max(140.0, 2 * tw + 30), max(90.0, 2 * th + 40))
-    if kind == "circle":
-        return Fit(lines, tw, th, max(140.0, 1.45 * tw + 40), max(80.0, 1.45 * th + 40))
-    return Fit(lines, tw, th, max(140.0, tw + 40), max(80.0, th + 40))
+_wrap = board_checks.wrap
+Fit = board_checks.Fit
+fit = board_checks.fit
 
 
 def _count(flow: _Flow) -> int:
@@ -546,6 +585,14 @@ def _elements(
             vn(),
         )
         shape["backgroundColor"] = "#ffffff"
+        look: dict[str, str] = dict(flow.classdefs.get("default", {}))
+        for name in n.classes:
+            look.update(flow.classdefs.get(name, {}))
+        look.update(n.style)  # a node's own style wins over its classes
+        if "fill" in look:
+            shape["backgroundColor"] = look["fill"]
+        if "stroke" in look:
+            shape["strokeColor"] = look["stroke"]
         if n.kind in ("round", "stadium"):
             shape["roundness"] = {"type": 3}
         top = _top(flow, n.id)
@@ -634,6 +681,135 @@ def _arrow(eid: str, route: board_layout.Route, now: float, vn: int) -> dict[str
 
 # ----------------------------------------------------------------------------------- arrange
 
+GAP = 80.0  # clear space left between an arranged frame and what it pushed aside
+
+
+def _hits(a: board_layout.Rect, b: board_layout.Rect) -> bool:
+    return a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
+
+
+def _rect(e: dict[str, Any]) -> board_layout.Rect:
+    return e["x"], e["y"], e["width"], e["height"]
+
+
+def _clear_of(
+    live: list[dict[str, Any]], fid: str, inside: set[str], box: board_layout.Rect
+) -> tuple[dict[str, float], list[dict[str, Any]]]:
+    """What an arranged frame's new box runs into, and how far right to move each: other frames and
+    loose shapes, in reading order, each to ``GAP`` past whatever it overlapped, cascading when a moved
+    one lands on the next. Returns ``({top-level id: dx}, those elements in the order moved)``."""
+    others = [
+        e
+        for e in live
+        if e["id"] != fid
+        and e["id"] not in inside
+        and not e.get("frameId")
+        and (e["type"] in ("frame", *board.BOX_SHAPES) or (e["type"] == "text" and not e.get("containerId")))
+    ]
+    orig = {e["id"]: _rect(e) for e in others}
+    cur = dict(orig)
+    solid: list[board_layout.Rect] = [box]  # the new frame, then each item as it is placed
+    moved: dict[str, float] = {}
+    order: list[dict[str, Any]] = []
+    for e in sorted(others, key=lambda e: (e["y"] // 100, e["x"])):
+        r = cur[e["id"]]
+        if not any(_hits(r, b) for b in solid):
+            continue
+        while True:
+            blockers = list(solid) + [
+                cur[o["id"]]
+                for o in others
+                if o is not e and o["id"] not in moved and not _hits(orig[o["id"]], orig[e["id"]])
+            ]
+            hit = [b for b in blockers if _hits(r, b)]
+            if not hit:
+                break
+            r = (max(b[0] + b[2] for b in hit) + GAP, r[1], r[2], r[3])
+        cur[e["id"]] = r
+        moved[e["id"]] = r[0] - orig[e["id"]][0]
+        order.append(e)
+        solid.append(r)
+    return moved, order
+
+
+def _carried(
+    live: list[dict[str, Any]], by_id: dict[str, dict[str, Any]], shift: dict[str, float]
+) -> dict[str, float]:
+    """Every element that goes along when the top-level items in ``shift`` move: a frame's children
+    and its bound labels, a loose shape's label. Arrows are handled apart (``_push``)."""
+    out: dict[str, float] = dict(shift)
+    for e in live:
+        if e["type"] == "arrow":
+            continue
+        if e.get("frameId") in shift:
+            out[e["id"]] = shift[e["frameId"]]
+    for e in live:
+        if e["type"] == "text" and e.get("containerId") in out and e["id"] not in out:
+            out[e["id"]] = out[e["containerId"]]
+    del by_id
+    return out
+
+
+def _push(
+    live: list[dict[str, Any]],
+    by_id: dict[str, dict[str, Any]],
+    moved: dict[str, float],
+    skip: set[str],
+    now: float,
+    new_nonce: Callable[[], int],
+) -> list[dict[str, Any]]:
+    """The moved elements as changes, and their arrows: one that has both ends in what moved by the same
+    distance goes along; one that has a single end moved is routed again (an elbow or a bent arrow) or
+    simply sent again (a straight one, which the pane draws from its bindings)."""
+    out: list[dict[str, Any]] = []
+    if not moved:
+        return out
+    for e in live:
+        if e["id"] in moved and e["id"] not in skip and e["type"] != "arrow":
+            out.append(board._bump(e, now, new_nonce(), x=e["x"] + moved[e["id"]]))
+    shifted = {
+        e["id"]: ({**e, "x": e["x"] + moved[e["id"]]} if e["id"] in moved else e)
+        for e in live
+        if e["type"] != "arrow"
+    }
+    obstacles = {k: _rect(v) for k, v in shifted.items() if v["type"] in board.BOX_SHAPES}
+    labels = {e["containerId"]: e for e in live if e["type"] == "text" and e.get("containerId")}
+    for a in live:
+        if a["type"] != "arrow" or a["id"] in skip:
+            continue
+        s = (a.get("startBinding") or {}).get("elementId")
+        d = (a.get("endBinding") or {}).get("elementId")
+        if not isinstance(s, str) or not isinstance(d, str) or (s not in moved and d not in moved):
+            continue
+        if s in moved and d in moved and moved[s] == moved[d]:
+            out.append(board._bump(a, now, new_nonce(), x=a["x"] + moved[s]))
+            if a["id"] in labels:
+                lb = labels[a["id"]]
+                out.append(board._bump(lb, now, new_nonce(), x=lb["x"] + moved[s]))
+            continue
+        bent = a.get("elbowed") or len(a.get("points") or []) > 2
+        if not bent or s not in shifted or d not in shifted or s == d:
+            out.append(board._bump(a, now, new_nonce()))
+            continue
+        boxes = {s: _rect(shifted[s]), d: _rect(shifted[d])}
+        obstacles.update(boxes)
+        horizontal = abs(boxes[d][0] - boxes[s][0]) >= abs(boxes[d][1] - boxes[s][1])
+        label = labels.get(a["id"])
+        size = (max(20.0, label["width"]), max(10.0, label["height"])) if label else None
+        route = board_layout.route(boxes, obstacles, [Link(s, d, size)], horizontal=horizontal).get(0)
+        if route is None:
+            out.append(board._bump(a, now, new_nonce()))
+            continue
+        arrow = _arrow(a["id"], route, now, 0)
+        change: dict[str, Any] = {k: arrow[k] for k in ("x", "y", "width", "height", "points", "elbowed")}
+        change["roundness"] = None
+        for end, at in (("startBinding", route.src_at), ("endBinding", route.dst_at)):
+            change[end] = {**(a.get(end) or {}), "fixedPoint": list(at)}
+        out.append(board._bump(a, now, new_nonce(), **change))
+        if label is not None and route.label is not None:
+            out.append(board._bump(label, now, new_nonce(), x=route.label[0], y=route.label[1]))
+    return out
+
 
 def arrange(
     elements: list[dict[str, Any]], params: dict[str, Any], *, now: float, new_nonce: Callable[[], int]
@@ -705,6 +881,8 @@ def arrange(
     right = max(x + w for x, _y, w, _h in placed.values())
     bottom = max(y + h for _x, y, _w, h in placed.values())
     new_w, new_h = max(200.0, right + 2 * pad), max(120.0, bottom + 2 * pad)
+    shift, pushed = _clear_of(live, fid, inside, (frame["x"], frame["y"], new_w, new_h))
+    carried_by = _carried(live, by_id, shift)  # every element that moves, and by how much
     ox, oy = frame["x"] + pad, frame["y"] + pad
     boxes: dict[str, board_layout.Rect] = {k: (ox + x, oy + y, w, h) for k, (x, y, w, h) in placed.items()}
     obstacles = dict(boxes)
@@ -712,10 +890,10 @@ def arrange(
         for k in (s, d):
             if k not in boxes:
                 e = by_id[k]
-                boxes[k] = (e["x"], e["y"], e["width"], e["height"])
+                boxes[k] = _rect({**e, "x": e["x"] + carried_by.get(k, 0.0)})
     for e in live:
         if e["type"] in board.BOX_SHAPES and e["id"] not in boxes and e["id"] != fid:
-            obstacles[e["id"]] = (e["x"], e["y"], e["width"], e["height"])
+            obstacles[e["id"]] = _rect({**e, "x": e["x"] + carried_by.get(e["id"], 0.0)})
     for k in boxes:
         obstacles.setdefault(k, boxes[k])
     routes = board_layout.route(boxes, obstacles, links, horizontal=True)
@@ -740,9 +918,22 @@ def arrange(
         label = texts.get(a["id"])
         if label is not None and route.label is not None:
             out.append(board._bump(label, now, new_nonce(), x=route.label[0], y=route.label[1]))
-    if len(out) > MAX_DIAGRAM:
+    done = {o["id"] for o in out}
+    pushed_out = _push(live, by_id, carried_by, {a["id"] for a, _s, _d in arrows} | done, now, new_nonce)
+    if len(out) + len(pushed_out) > MAX_DIAGRAM:
+        if pushed:
+            first = pushed[0]
+            name = first.get("name") or next(
+                (t["text"] for t in live if t.get("containerId") == first["id"]), first["id"]
+            )
+            raise Reject(
+                f"growing this frame would also move {len(pushed_out)} elements of other frames and shapes, "
+                f'and arrange changes {MAX_DIAGRAM} at most: move "{str(name)[:40]}" clear of it first, '
+                "or split the frame in two"
+            )
         raise Reject(
             f"this frame would change {len(out)} elements and arrange changes {MAX_DIAGRAM} at most: "
             "split the frame in two"
         )
+    out.extend(pushed_out)
     return out, [fid]

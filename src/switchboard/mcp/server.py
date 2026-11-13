@@ -345,7 +345,8 @@ def build_server(st: ToolBackend) -> FastMCP:
         annotations=RW,
         description=(
             "The room's shared whiteboard: draw diagrams here, a whole one with draw_mermaid. "
-            "Actions: note, box, connect, frame, move, edit, delete, read, draw_mermaid, arrange."
+            "Actions: note, box, connect, frame, move, edit, resize, text, delete, read, draw_mermaid, "
+            "arrange."
         ),
     )
     async def board(
@@ -358,6 +359,9 @@ def build_server(st: ToolBackend) -> FastMCP:
         shape: str = "",
         x: float = 1_000_000_000.0,
         y: float = 1_000_000_000.0,
+        style: str = "",
+        w: int = 0,
+        h: int = 0,
     ) -> Any:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
@@ -366,6 +370,12 @@ def build_server(st: ToolBackend) -> FastMCP:
             return got
         _name, cred = got
         params: dict[str, Any] = {**st.base(cred, tid), "action": action}
+        if style:
+            params["style"] = style
+        if w:
+            params["w"] = w
+        if h:
+            params["h"] = h
         if text:
             params["text"] = text
         if id:

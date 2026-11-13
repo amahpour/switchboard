@@ -87,7 +87,7 @@ def test_the_guard_returns_the_text_as_written_and_normalizes_only_line_breaks()
         "flowchart LR\nA & B --> C #quot;x#quot;"
     )
     with pytest.raises(board.Reject):
-        board.mermaid_source("flowchart LR\nstyle A fill:red")
+        board.mermaid_source("flowchart LR\nlinkStyle 0 stroke:red")
 
 
 def test_a_bound_list_longer_than_a_shape_call_may_make_is_still_dropped():

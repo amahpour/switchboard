@@ -14,7 +14,7 @@ import secrets
 from collections.abc import Callable
 from typing import Any
 
-from switchboard import board, board_flow, db
+from switchboard import board, board_checks, board_flow, db
 from switchboard.broker.agent_icons import PNG_SIGNATURE, IconError, png_size
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean, sanitize
@@ -148,6 +148,7 @@ class RoomBoard:
         now = self.state.clock.now()
         published: dict[str, Any] | None = None
         added: tuple[str, ...] = ()
+        problems: tuple[str, ...] = ()
         with db.tx(self.state.store.con):
             seq, elements = self.state.store.board_load(room.id)
             if raw is None:
@@ -157,6 +158,7 @@ class RoomBoard:
                     raise ServiceError("bad_request", outcome.error)
                 incoming: list[Any] = list(outcome.incoming)
                 added = outcome.added
+                problems = outcome.warnings
                 agent = True
             else:
                 if callable(raw):
@@ -185,6 +187,10 @@ class RoomBoard:
                 if raw is not None:
                     return {"seq": seq, "changed": False, "ids": []}
                 raise ServiceError("bad_request", "board is full") from e
+            if agent_raw:  # a whole diagram: its result names what is wrong with it, like a shape action's
+                problems = tuple(
+                    board_checks.warnings(list(result.elements), only={e["id"] for e in result.taken})
+                )
             if participant_id is not None:
                 self.state.store.update_participant(participant_id, last_say_at=now)
             published = {
@@ -200,7 +206,10 @@ class RoomBoard:
         assert published is not None
         self.state.hub.room_board(room.name, published)
         ids = list(added) or published["ids"]
-        return {"seq": published["seq"], "changed": True, "ids": ids, "text": summary or _done(action, ids)}
+        text = summary or _done(action, ids)
+        if problems:
+            text += "\nlayout warnings, fix before announcing:\n" + "\n".join(f"- {w}" for w in problems)
+        return {"seq": published["seq"], "changed": True, "ids": ids, "text": text}
 
 
 def _done(action: str | None, ids: list[str]) -> str:
@@ -210,7 +219,7 @@ def _done(action: str | None, ids: list[str]) -> str:
         return f"deleted {ids[0]}"
     if action == "arrange":
         return f"arranged {ids[0]}"
-    if action in ("move", "edit"):
+    if action in ("move", "edit", "resize"):
         return f"updated {ids[0]}"
     if action is None:
         return "ok"

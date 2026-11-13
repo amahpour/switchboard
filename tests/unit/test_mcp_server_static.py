@@ -103,7 +103,10 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # diagram goes) and names `arrange`. The list measured 4,165 before and 4,247 after: +82, the
     # whole cost of those words. The maintainer's yes, 2026-11-13: "Raise the cap on the agents'
     # tool-list size? The new inputs need room, and I'd raise it by only what they cost. ... Yes?" -> "Yes".
-    assert size == 4247, size
+    # #727 adds the board tool's `style`, `w` and `h` inputs (no per-input description) and the
+    # `resize` and `text` action names: +123, measured the same way (4,165 before, 4,288 alone). The
+    # same yes covers it: "I'd raise it by only what they cost". Both together: 4,165 + 82 + 123 = 4,370.
+    assert size == 4370, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
@@ -164,7 +167,19 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     assert "\n" not in desc
     for action in ACTIONS:
         assert action in desc, action
-    assert set(board.input_schema["properties"]) == {"room", "action", "text", "id", "to", "shape", "x", "y"}
+    assert set(board.input_schema["properties"]) == {
+        "room",
+        "action",
+        "text",
+        "id",
+        "to",
+        "shape",
+        "x",
+        "y",
+        "style",
+        "w",
+        "h",
+    }
     root = Path(__file__).resolve().parents[2]
     paths = [
         root / "plugins" / name / "skills" / "board" / "SKILL.md" for name in ("claude", "codex", "cursor")
@@ -175,8 +190,12 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     assert "name: board" in text and "switchboard_board" in text
     for action in ACTIONS:
         assert action in text, action
-    for field in ("text", "id", "to", "shape", "x", "y"):
+    for field in ("text", "id", "to", "shape", "x", "y", "style", "w", "h"):
         assert field in text, field
+    # the recipes ride next to the skill in each plugin, byte for byte
+    refs = [p.with_name("reference.md").read_bytes() for p in paths]
+    assert refs[0] == refs[1] == refs[2] and b"draw_mermaid" in refs[0]
+    assert "reference.md" in text
 
 
 def test_instructions_are_tiny() -> None:

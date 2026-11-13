@@ -292,3 +292,47 @@ async def test_image_read_with_no_open_page_times_out_and_cleans_up(broker: InPr
         assert not result["ok"] and result["code"] == "no_board_page"
         assert "open" in result["error"]
         assert broker.on_loop(lambda: len(broker.state.room_board._pending)) == 0
+
+
+async def test_a_styled_shape_reaches_the_page_and_the_result_names_layout_problems(
+    broker: InProcBroker, clock: FakeClock
+) -> None:
+    """``style``, ``w`` and ``h`` go through ``/mcp`` to the same elements a page is sent, with the
+    palette's hex values; a bad style is refused and stores nothing; and a write that causes an
+    overlap says so in its result, not only in a later ``read``."""
+    web = broker.web_client()
+    ws = ws_connect(broker, cookie_of(web))
+    try:
+        ws.send(json.dumps({"t": "hello", "rooms": ["#build"], "after": {}}))
+        recv_until(ws, lambda f: f.get("t") == "board" and f.get("seq") == 0)
+        async with FakeAgent(broker.home, "drawer") as drawer:
+            await drawer.join("#build", "claude-1")
+            bad = await drawer.call("board", room="#build", action="box", text="x", style="stroke=#ff0000")
+            assert bad["ok"] is False and "red" in bad["error"]
+            clock.advance(10)
+            first = await drawer.call(
+                "board",
+                room="#build",
+                action="box",
+                text="gate",
+                x=0,
+                y=0,
+                w=200,
+                h=100,
+                style="stroke=red background=yellow",
+            )
+            assert first["changed"] is True and "layout warnings" not in first["text"]
+            frame = recv_until(ws, lambda f: f.get("t") == "board" and f.get("seq") == 1)
+            box = next(e for e in frame["elements"] if e["type"] == "rectangle")
+            assert (box["strokeColor"], box["backgroundColor"]) == ("#e03131", "#ffec99")
+            assert (box["width"], box["height"]) == (200, 100)
+            clock.advance(10)
+            second = await drawer.call("board", room="#build", action="box", text="b", x=50, y=20)
+            assert "layout warnings, fix before announcing" in second["text"]
+            low, high = sorted((first["ids"][0], second["ids"][0]))  # a pair is named in id order
+            assert f"overlap: {low} and {high}" in second["text"]
+            seen = await drawer.call("board", room="#build", action="read")
+            assert "fill=yellow stroke=red" in seen["text"] and "layout warnings:" in seen["text"]
+    finally:
+        ws.close()
+        web.close()

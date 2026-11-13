@@ -158,7 +158,7 @@ def test_bound_agent_text_wraps_to_its_container_without_changing_the_stored_sce
     """Restore must measure and wrap bound labels; trusting the broker's rough text box clips words."""
     world.create_room("board-label")
     b = world.broker
-    phrase = "Ready for review"
+    phrase = "Ready for review by the whole team before release"
     b.on_loop(
         lambda: b.state.room_board.agent(
             b.state.store.get_room("#board-label"), "drawer", {"action": "note", "text": phrase}, None
@@ -235,3 +235,70 @@ def test_the_board_frame_stays_hidden_until_it_has_drawn_in_the_apps_theme(
     r, g, b = frame_pixel(ui, host)
     luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
     assert (luminance < 60) if scheme == "dark" else (luminance > 230), ("drawn", scheme, (r, g, b))
+
+
+def test_an_agent_elbow_arrow_follows_a_shape_a_person_drags(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """``connect`` with ``arrow-type=elbow`` routes with #730's router and binds with ``fixedPoint``
+    ends, so Excalidraw keeps the arrow attached: dragging the target with the mouse must carry the
+    arrow's end with it, and the arrow stays an elbow with right angles. Without the ``fixedPoint`` the
+    pane drops the binding and the arrow stays behind."""
+    room = "board-elbow"
+    world.create_room(room)
+    page = ui.open(room)
+    frame = open_board(page)
+    b = world.broker
+
+    def draw(action: str, **params: Any) -> dict[str, Any]:
+        return b.on_loop(
+            lambda: b.state.room_board.agent(
+                b.state.store.get_room("#" + room), "drawer", {"action": action, **params}, None
+            )
+        )
+
+    first = draw("box", text="Start", x=0, y=300)["ids"][0]  # below the toolbar, which covers the top
+    second = draw("box", text="Done", x=500, y=300)["ids"][0]
+    arrow = draw("connect", id=first, to=second, style="arrow-type=elbow")["ids"][0]
+    expect(frame.locator("#board-count")).to_have_text("5 shapes")
+    read = """(_n, id) => { const api = window.sbBoard.api, a = api.getSceneElements().find(e => e.id === id);
+        return {elbowed: a.elbowed, bound: !!(a.startBinding && a.endBinding),
+                end: [a.x + a.points[a.points.length - 1][0], a.y + a.points[a.points.length - 1][1]],
+                points: a.points}; }"""
+    before = frame.locator("body").evaluate(read, arrow)
+    assert before["elbowed"] is True and before["bound"] is True, before
+    centre = frame.locator("body").evaluate(
+        """(_n, id) => { const api = window.sbBoard.api, s = api.getAppState(),
+        e = api.getSceneElements().find(x => x.id === id), z = s.zoom.value;
+        return [(e.x + e.width / 2 + s.scrollX) * z + s.offsetLeft,
+                (e.y + e.height / 2 + s.scrollY) * z + s.offsetTop, z]; }""",
+        second,
+    )
+    node = page.locator("#whiteboard-host iframe").bounding_box()
+    assert node is not None
+    x, y = node["x"] + centre[0], node["y"] + centre[1]
+    page.mouse.move(x, y)
+    page.screenshot(path="/tmp/x/dbg.png")
+    page.mouse.down()
+    page.mouse.move(x, y + 150 * centre[2], steps=10)
+    page.mouse.up()
+    # The click selects the target; the arrow keys then move it the way a person nudging it would.
+    page.keyboard.press("Shift+ArrowDown", delay=20)
+    for _ in range(14):
+        page.keyboard.press("Shift+ArrowDown", delay=20)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements().some(e => e.type === 'rectangle' && e.y > 340)",
+    )
+    after = frame.locator("body").evaluate(read, arrow)
+    assert after["bound"] is True and after["elbowed"] is True, after
+    moved_by = (
+        board_frame.evaluate("(id) => window.sbBoard.api.getSceneElements().find(e => e.id === id).y", second)
+        - 300
+    )
+    assert moved_by > 40, "the drag moved the target"
+    assert abs(after["end"][1] - before["end"][1] - moved_by) < 8, (before["end"], after["end"])
+    for p, q in zip(after["points"], after["points"][1:], strict=False):
+        assert abs(p[0] - q[0]) < 1 or abs(p[1] - q[1]) < 1, after["points"]
