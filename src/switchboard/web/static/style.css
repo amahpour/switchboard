@@ -61,6 +61,7 @@
   --accent-fg: #ffffff;
   --accent-tint: rgba(10, 100, 216, .07);
   --mark-bg: #fff0a0;
+  --target-bg: rgba(245, 190, 0, .22);
   --focus: #dbe7fb;
   --link: #0a5fcf;
   --link-hover: #084a9f;
@@ -141,7 +142,8 @@
     --accent: #2f6fd6;
     --accent-fg: #ffffff;
     --accent-tint: rgba(47, 111, 214, .16);
-    --mark-bg: #6b5a12;
+    --mark-bg: rgba(245, 190, 60, .32);
+    --target-bg: rgba(245, 190, 60, .14);
     --focus: rgba(47, 111, 214, .45);
     --link: #82b4ff;
     --link-hover: #a9ccff;
@@ -211,7 +213,8 @@
   --accent: #2f6fd6;
   --accent-fg: #ffffff;
   --accent-tint: rgba(47, 111, 214, .16);
-  --mark-bg: #6b5a12;
+  --mark-bg: rgba(245, 190, 60, .32);
+  --target-bg: rgba(245, 190, 60, .14);
   --focus: rgba(47, 111, 214, .45);
   --link: #82b4ff;
   --link-hover: #a9ccff;
@@ -3618,7 +3621,8 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .band-around > span { flex: 1 1 12em; min-width: 0; }
 .around-btn { height: 28px; }
 /* the message a search result opened the room at */
-.line.search-target { background: var(--mark-bg); box-shadow: inset 3px 0 0 var(--accent); border-radius: 4px; }
+.line.search-target { background: var(--target-bg); box-shadow: inset 3px 0 0 var(--accent); border-radius: 4px; }
+.line.search-target > .msg-pin:not([aria-pressed="true"]) { background: transparent; }
 @media (max-width: 760px) {
   .app.search-open .head-title { column-gap: 6px; }
   .search-page-box { display: flex; }

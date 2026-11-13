@@ -3746,7 +3746,7 @@ What a person types is never passed to FTS5 as query syntax. `search.match_query
 
 `GET /api/search?q=&room=&from=&since=&until=&calls=&before=` for a signed-in person (a session that must still choose its own password gets 401, as the other routes do).
 
-- **The rooms searched** are `RoomService.visible` applied to the open rooms (`broker/search.py`, `visible_rooms`): the one rule of §44, not a second one. A private room the person is not in, a room they left and a closed room are never passed to the store, so their lines are not hits and are not in the total.
+- **The rooms searched** are `RoomService.visible` applied to the open rooms (`broker/search.py`, `visible_rooms`): the one rule of §44, not a second one. A private room the person is not in, a room they left and a closed room are never passed to the store, so their lines are not hits and are not in the total. **Closed rooms are left out for now**: search covers the rooms a person can open, and a closed room's lines are findable again once it is reopened (the index keeps them). Whether a follow-up should include closed rooms is the maintainer's to decide.
 - `room` names a room; one the person cannot see is "no such room" (404), in the words of a room that does not exist, as every room route says it.
 - `from` is a screen name (any case), `since` and `until` are times (epoch seconds, `since` inclusive, `until` exclusive), `calls=0` leaves out call lines, `before` is the last message id of the page before.
 - **Answer:** newest first, **50** a page, `next` is the cursor for more (`null` on the last page). The first page also carries `total`, counted only up to 1,000 (`capped` says it stopped there), so a common word does not make the broker walk the index. Each hit has `id`, `room`, `slug`, `from`, `kind` (`person`, `agent` or `call`), `harness`, `host`, `call`, `ts` and `snippet`.
@@ -3764,7 +3764,7 @@ A box at the top of the sidebar (`/` focuses it, unless a field has the focus, t
 
 ### 58.6 Not in Phase A
 
-The whiteboard is not searched, nor are attachments' contents, notices or system lines. No saved searches and no history of what a person searched. Stemming (`migrate` does not find `migration`; `migrat` does, as a prefix) and ranking: results are newest first, as the issue asked.
+Closed rooms are not searched (§58.4). The whiteboard is not searched, nor are attachments' contents, notices or system lines. No saved searches and no history of what a person searched. Stemming (`migrate` does not find `migration`; `migrat` does, as a prefix) and ranking: results are newest first, as the issue asked.
 
 ### 58.7 Phase B: Postgres
 

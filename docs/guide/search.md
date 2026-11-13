@@ -23,7 +23,7 @@ The room opens at that message, with about twenty messages before it and twenty 
 
 ## What it finds
 
-Only rooms you can see right now. A private room you are not in never appears, and is not counted. If you leave a room, its lines are gone from your results, and a closed room is not searched. Notices and join lines are not searched, and neither is the whiteboard.
+Only the rooms you can open right now. A private room you are not in never appears, and is not counted. If you leave a room, its lines are gone from your results. A closed room is not searched either: its lines show up again once the room is reopened. (Whether to search closed rooms too is still open.) Notices and join lines are not searched, and neither is the whiteboard.
 
 Words only: `migrate` does not find `migration` (`migrat` does), and symbols such as `-`, `:` or `*` are not operators, so they are ignored.
 
