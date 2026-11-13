@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from switchboard import board_layout, board_style
+from switchboard import board_checks, board_layout, board_style
 from switchboard.board_style import DEFAULT_STROKE, nearest_name
 from switchboard.envelope import clean
 
@@ -25,6 +25,12 @@ from switchboard.envelope import clean
 # stays bounded; a person drawing by hand meets the same cut.
 MAX_TEXT = 200
 MAX_CALL = 40  # shapes one agent call may add or change
+# Elements one Mermaid diagram, or one arranged frame, may make or change in a single change. The
+# maintainer's yes, 2026-11-13: "Raise how many shapes one Mermaid diagram can make, from 40 to 150? ... Yes?"
+# "Yes". The per-call cap of the shape actions stays MAX_CALL. `arrange` may change as many: the maintainer's
+# "I'll go with your recommendations", 2026-11-13, to "`arrange` moving up to 150 shapes at once ... I
+# recommend yes."
+MAX_DIAGRAM = 150
 MAX_ELEMENTS = 1500  # live and deleted, together
 MAX_BYTES = 1_000_000
 MAX_CHANGES = 200  # change records kept per room (who, when, which ids)
@@ -48,6 +54,7 @@ ACTIONS = (
     "delete",
     "read",
     "draw_mermaid",
+    "arrange",
     "resize",
     "text",
 )
@@ -185,7 +192,17 @@ def _binding(raw: Any) -> dict[str, Any] | None:
     gap = _clamp(raw.get("gap", 0), 0, 100)
     if focus is None or gap is None:
         return None
-    return {"elementId": eid, "focus": focus, "gap": gap}
+    out: dict[str, Any] = {"elementId": eid, "focus": focus, "gap": gap}
+    # An elbow arrow's end sits at a fraction of the box it is bound to (Excalidraw's `fixedPoint`): exactly
+    # two finite numbers from 0 to 1, or nothing. The maintainer's yes, 2026-11-13, "I'll go with your
+    # recommendations", to "Elbow arrows following shapes you drag ... means letting the board store one
+    # more arrow field and rebuilding the board page. I recommend yes." `board-rules.js` has the same rule.
+    fixed = raw.get("fixedPoint")
+    if isinstance(fixed, (list, tuple)) and len(fixed) == 2:
+        fx, fy = _finite(fixed[0]), _finite(fixed[1])
+        if fx is not None and fy is not None and 0 <= fx <= 1 and 0 <= fy <= 1:
+            out["fixedPoint"] = [fx, fy]
+    return out
 
 
 def _bound_list(raw: Any) -> list[dict[str, str]] | None:
@@ -354,15 +371,18 @@ def _nbytes(elements: list[dict[str, Any]]) -> int:
     return len(json.dumps(elements, separators=(",", ":"), ensure_ascii=False).encode())
 
 
-def merge(current: list[dict[str, Any]], incoming: list[Any], *, agent: bool) -> MergeResult:
-    """Merge ``incoming`` into ``current``. ``agent`` selects the type allowlist and the per-call cap."""
+def merge(
+    current: list[dict[str, Any]], incoming: list[Any], *, agent: bool, cap: int | None = None
+) -> MergeResult:
+    """Merge ``incoming`` into ``current``. ``agent`` selects the type allowlist and the per-call cap
+    (``cap`` is the larger one a whole diagram or an arranged frame gets)."""
     by_id: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for e in current:
         if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"] not in by_id:
             by_id[e["id"]] = e
             order.append(e["id"])
-    cap = MAX_CALL if agent else MAX_ELEMENTS
+    cap = (cap or MAX_CALL) if agent else MAX_ELEMENTS
     taken: list[dict[str, Any]] = []
     rejected: list[str] = []
     for i, raw in enumerate(incoming):
@@ -447,7 +467,7 @@ def summary(elements: list[dict[str, Any]], seq: int) -> str:
         lines.append(
             f'arrow id={a["id"]} {start or "(free)"} -> {end or "(free)"} "{_label(elements, a)}"{_paint(a)}'
         )
-    problems = board_layout.warnings(live)
+    problems = board_checks.warnings(live)
     if problems:
         lines.append("layout warnings:")
         lines.extend(f"- {w}" for w in problems)
@@ -608,7 +628,7 @@ def apply_action(
         return ActionResult(error=e.reason)
     touched = {e["id"] for e in incoming}
     merged = {**_by_id(elements), **{e["id"]: e for e in incoming}}
-    problems = board_layout.warnings(list(merged.values()), only=touched)
+    problems = board_checks.warnings(list(merged.values()), only=touched)
     return ActionResult(incoming=tuple(incoming), added=tuple(added), warnings=tuple(problems))
 
 
@@ -652,6 +672,10 @@ def _act(
         return _add_frame(elements, params, now, new_id, new_nonce)
     if action == "connect":
         return _connect(elements, params, now, new_id, new_nonce)
+    if action == "arrange":
+        from switchboard import board_flow
+
+        return board_flow.arrange(elements, params, now=now, new_nonce=new_nonce)
     if action == "move":
         return _move(elements, params, now, new_nonce)
     if action == "edit":
@@ -701,8 +725,7 @@ def _grow_frame(
 
 def _place_label(shape: dict[str, Any], label: dict[str, Any], text: str, fs: float) -> dict[str, Any]:
     """The label's box: as wide as the shape's inside, as tall as its wrapped text, centred."""
-    width = max(20.0, board_layout.inner_width(shape["type"], shape["width"]))
-    th = max(25.0, board_layout.text_height(text, fs, width))
+    width, th = board_checks.label_box(shape, text, fs)
     return {
         **label,
         "x": shape["x"] + (shape["width"] - width) / 2,
@@ -733,8 +756,10 @@ def _add_box(
     if label_style and not text:
         raise Reject("that shape has no text")
     fs = float(label_style.get("fontSize", 16))
-    w = asked_w or (max(140, min(260, 9 * len(text) // 2 + 40)) if text else 160)
-    h = asked_h or board_layout.fit_height(kind, w, text, fs)
+    shape_kind = board_checks.KINDS[kind]
+    fitted = board_checks.fit(text, shape_kind, fs) if text else None
+    w = asked_w or (fitted.w if fitted else 160.0)
+    h = asked_h or (board_checks.height_for(shape_kind, w, text, fs) if text else 80.0)
     x, y = _coord(params, "x"), _coord(params, "y")
     if x is None or y is None:
         x, y = _free_slot(elements, w, h, frame)
@@ -765,8 +790,7 @@ def _add_box(
 
 def _loose_size(text: str, fs: float) -> tuple[float, float]:
     """The box of a text with no shape around it: one line up to 520 wide, then wrapped."""
-    w = max(40.0, min(520.0, len(text) * board_layout.CHAR * fs + 10))
-    return w, max(25.0, board_layout.text_height(text, fs, w))
+    return board_checks.loose_size(text, fs)
 
 
 def _add_text(
@@ -817,20 +841,22 @@ def _add_frame(
     return [el], [eid]
 
 
-def _edge_points(src: dict[str, Any], dst: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, float]]:
-    """The middle of the edge of each shape that faces the other, the end a gap short of its shape."""
-    sx, sy = src["x"] + src["width"] / 2, src["y"] + src["height"] / 2
-    tx, ty = dst["x"] + dst["width"] / 2, dst["y"] + dst["height"] / 2
-    gap = 8.0
-    if abs(tx - sx) >= abs(ty - sy):
-        right = tx >= sx
-        a = (src["x"] + (src["width"] if right else 0), sy)
-        b = (dst["x"] + (0 if right else dst["width"]) + (-gap if right else gap), ty)
-    else:
-        down = ty >= sy
-        a = (sx, src["y"] + (src["height"] if down else 0))
-        b = (tx, dst["y"] + (0 if down else dst["height"]) + (-gap if down else gap))
-    return a, b
+def _elbow(elements: list[dict[str, Any]], src: dict[str, Any], dst: dict[str, Any]) -> Any:
+    """The router's elbow between two shapes, kept clear of every other shape on the board, or None."""
+    if src["id"] == dst["id"]:
+        return None
+
+    def rect(e: dict[str, Any]) -> board_layout.Rect:
+        return e["x"], e["y"], e["width"], e["height"]
+
+    boxes = {src["id"]: rect(src), dst["id"]: rect(dst)}
+    obstacles = {e["id"]: rect(e) for e in _live(elements) if e["type"] in BOX_SHAPES}
+    obstacles.update(boxes)
+    horizontal = abs(dst["x"] - src["x"]) >= abs(dst["y"] - src["y"])
+    got = board_layout.route(
+        boxes, obstacles, [board_layout.Link(src["id"], dst["id"])], horizontal=horizontal
+    )
+    return got.get(0)
 
 
 def _connect(
@@ -856,22 +882,53 @@ def _connect(
     y = src["y"] + src["height"] / 2
     dx = (dst["x"] + dst["width"] / 2) - x
     dy = (dst["y"] + dst["height"] / 2) - y
-    if style.get("elbowed"):
-        # The pane routes an elbow from its two end points as stored, so they must sit on the
-        # shapes' facing edges, not at the target's centre.
-        (x, y), (ex, ey) = _edge_points(src, dst)
-        dx, dy = ex - x, ey - y
+    routed = _elbow(elements, src, dst) if style.get("elbowed") else None
     eid = new_id("a")
     vn = new_nonce()
-    arrow = _base("arrow", eid, x, y, abs(dx), abs(dy), now, vn)
-    arrow["points"] = [[0.0, 0.0], [dx, dy]]
-    arrow["startBinding"] = {"elementId": src["id"], "focus": 0.0, "gap": 8.0}
-    arrow["endBinding"] = {"elementId": dst["id"], "focus": 0.0, "gap": 8.0}
+    if routed is not None:
+        # The same router ``arrange`` and Mermaid conversion use: right-angled points round every other
+        # shape, and a ``fixedPoint`` on each end, which is how Excalidraw keeps an elbow attached.
+        x, y = routed.points[0]
+        rel = [[px - x, py - y] for px, py in routed.points]
+        arrow = _base(
+            "arrow",
+            eid,
+            x,
+            y,
+            max(p[0] for p in rel) - min(p[0] for p in rel),
+            max(p[1] for p in rel) - min(p[1] for p in rel),
+            now,
+            vn,
+        )
+        arrow["points"] = rel
+        arrow["startBinding"] = {
+            "elementId": src["id"],
+            "focus": 0.0,
+            "gap": 0.0,
+            "fixedPoint": list(routed.src_at),
+        }
+        arrow["endBinding"] = {
+            "elementId": dst["id"],
+            "focus": 0.0,
+            "gap": 0.0,
+            "fixedPoint": list(routed.dst_at),
+        }
+    else:
+        arrow = _base("arrow", eid, x, y, abs(dx), abs(dy), now, vn)
+        arrow["points"] = [[0.0, 0.0], [dx, dy]]
+        arrow["startBinding"] = {"elementId": src["id"], "focus": 0.0, "gap": 8.0}
+        arrow["endBinding"] = {"elementId": dst["id"], "focus": 0.0, "gap": 8.0}
     arrow["endArrowhead"] = "arrow"
     arrow.update(style)
     if arrow.get("roundness") is None:
         arrow.pop("roundness", None)
     out = [arrow]
+    if routed is not None:
+        # Excalidraw moves an elbow with a shape only when the shape lists the arrow (a Mermaid
+        # diagram's shapes do), so the two ends are re-sent with it.
+        for end_shape in {src["id"]: src, dst["id"]: dst}.values():
+            listed = [*(end_shape.get("boundElements") or []), {"id": eid, "type": "arrow"}]
+            out.append(_bump(end_shape, now, new_nonce(), boundElements=listed))
     added = [eid]
     if label:
         tid = new_id("t")
@@ -955,7 +1012,7 @@ def _edit(
         new = _bump(label, now, new_nonce(), **label_style, text=words, originalText=words)
         if el["type"] != "arrow":
             fs = float(new.get("fontSize") or 16)
-            need = board_layout.fit_height(el["type"], shape["width"], words, fs, 0)
+            need = board_checks.height_for(board_checks.KINDS[el["type"]], shape["width"], words, fs)
             if need > shape["height"]:
                 shape = _bump(shape, now, new_nonce(), height=need)
             new = _place_label(shape, new, words, fs)
@@ -1010,7 +1067,9 @@ def _delete(
 
 
 def mermaid_source(value: Any) -> str:
-    """Only bounded fresh flows; diagram configuration cannot override the sandbox's renderer (§56.9)."""
+    """Only bounded fresh flows (§56.9): the source with its click lines removed, or a ``Reject`` for
+    anything the board does not draw. This is the guard in front of the converter, which reads the text
+    as written, so `A & B` and `#quot;` keep their meaning."""
     if not isinstance(value, str) or len(value) > 8000 or len(value.encode(errors="replace")) > 16000:
         raise Reject("Mermaid source exceeds 8000 characters or 16000 bytes")
     source = value.strip()
@@ -1021,11 +1080,7 @@ def mermaid_source(value: Any) -> str:
         raise Reject("put click directives on separate lines; they are removed")
     if re.search(r"(?im)^\s*(?:style|classDef|linkStyle)\b|@\s*\{|!\[", source):
         raise Reject("use plain flow shapes and labels without styles or images")
-    # Fullwidth punctuation is inert during Mermaid's temporary DOM layout. The element cleaner
-    # normalizes it back only after conversion, when labels are canvas text. Encoded tags stay inert too.
-    source = re.sub(r"&(?=[#a-z0-9])", "＆", source, flags=re.IGNORECASE)
-    source = re.sub(r"#(?=(?:[a-z]+|[0-9]+);)", "＃", source, flags=re.IGNORECASE)
-    return re.sub(r"<(?=[a-z/!])", "＜", source, flags=re.IGNORECASE)
+    return source.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _drawing_bounds(e: dict[str, Any]) -> tuple[float, float, float, float]:
@@ -1048,8 +1103,8 @@ def _drawing_bounds(e: dict[str, Any]) -> tuple[float, float, float, float]:
 
 def mermaid_elements(current: list[dict[str, Any]], raw: Any, *, now: float) -> list[dict[str, Any]]:
     """Validate a whole conversion, mint its ids, and place it clear of the latest live board."""
-    if not isinstance(raw, list) or not 0 < len(raw) <= MAX_CALL:
-        raise Reject("a diagram must have 1 to 40 elements")
+    if not isinstance(raw, list) or not 0 < len(raw) <= MAX_DIAGRAM:
+        raise Reject(f"a diagram must have 1 to {MAX_DIAGRAM} elements")
     elements = [clean_element(e, agent=True) for e in raw]
     ids = {e["id"]: mint("m") for e in elements}
     if len(ids) != len(elements) or any(e["isDeleted"] for e in elements):

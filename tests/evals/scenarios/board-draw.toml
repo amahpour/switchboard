@@ -1,0 +1,22 @@
+name = "board-draw"
+about = "The person says only to draw the dependency diagram on the whiteboard (#725): no tool name, and nobody has the board open. The one agent draws the whole diagram in one change, and neither pastes Mermaid in chat nor asks anyone to open the board."
+room = "#build"
+agents = ["alpha"]
+
+[[steps]]
+say = "Here is what imports what in the package. cli imports broker and store. broker imports store, board, delivery and envelope. delivery imports rules and engine. engine imports rules. board imports envelope. store imports db and models. Please draw the dependency diagram on the whiteboard."
+
+[[checks]]
+id = "drawn_in_one_change"
+grader = "board_drawn_in_one_change"
+min_elements = 8
+
+[[checks]]
+id = "no_mermaid_in_chat"
+grader = "no_post_matches"
+pattern = '```\s*mermaid|^\s*(flowchart|graph)\s+(TD|TB|BT|LR|RL)\b'
+
+[[checks]]
+id = "no_request_to_open_the_board"
+grader = "no_post_matches"
+pattern = 'open\b.{0,30}\b(whiteboard|board)\b|\b(whiteboard|board)\b.{0,30}\bopen'

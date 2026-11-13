@@ -2534,8 +2534,7 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
         if set(frame) != {"t", "room", "request", "result"}:
             return False
         # A late or malformed picture is dropped, like a rejected element, without disconnecting a page.
-        if not state.room_board.image_result(room, frame["request"], frame["result"]):
-            state.room_board.mermaid_result(room, frame["request"], frame["result"])
+        state.room_board.image_result(room, frame["request"], frame["result"])
         return True
     if not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
         return False

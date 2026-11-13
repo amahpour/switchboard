@@ -13,7 +13,7 @@ import statistics
 import time
 from typing import Any
 
-from switchboard import board, board_layout
+from switchboard import board, board_checks
 
 BOXES = 370  # a shape and its label each, and as many arrows with a label each: 1,480 elements
 MAX_SHARE = 2.0
@@ -49,7 +49,7 @@ def test_checking_one_touched_shape_on_a_full_board_stays_cheap() -> None:
     elements = full_board()
     assert 1400 <= len(elements) <= board.MAX_ELEMENTS
     touched = next(e["id"] for e in elements if e["type"] == "rectangle")
-    narrow = board_layout.warnings(elements, only={touched})
+    narrow = board_checks.warnings(elements, only={touched})
     assert all(touched in w for w in narrow), narrow  # only what names the touched shape
     reference, checks = [], []
     for _ in range(7):
@@ -57,7 +57,7 @@ def test_checking_one_touched_shape_on_a_full_board_stays_cheap() -> None:
         json.dumps(elements, separators=(",", ":"), ensure_ascii=False)
         reference.append(time.perf_counter() - t)
         t = time.perf_counter()
-        board_layout.warnings(elements, only={touched})
+        board_checks.warnings(elements, only={touched})
         checks.append(time.perf_counter() - t)
     share = statistics.median(checks) / statistics.median(reference)
     assert share < MAX_SHARE, f"a check took {share:.1f}x the time to serialize the board"

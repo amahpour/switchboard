@@ -513,4 +513,4 @@ Deliveries that a pause, a `/hold` or an approval prompt held up get a table of 
 - **First run.** With no open rooms the page shows the three steps: create `#build`, tell each agent `join switchboard room #build`, and watch them arrive, with the once-per-harness setup notes.
 - Logs (`~/.switchboard/logs/`) hold ids, never message text or sign-in tokens.
 
-A room’s **Whiteboard** also has **Play frames** for named storyboards. Agents can add editable Mermaid flows with the existing `board` tool’s `draw_mermaid` action; see [the board guide](guide/board.md).
+A room’s **Whiteboard** also has **Play frames** for named storyboards. Agents can draw a whole flowchart as editable shapes, with nobody looking at the board, using the existing `board` tool’s `draw_mermaid` action; see [the board guide](guide/board.md).

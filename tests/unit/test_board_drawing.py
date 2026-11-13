@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from switchboard import board, board_layout, board_style
+from switchboard import board, board_checks, board_style
 
 
 def ids() -> Any:
@@ -161,7 +161,7 @@ def test_a_box_grows_in_height_to_fit_its_wrapped_label() -> None:
     label = w.label("b2")
     assert label["height"] <= tall["height"] - 20
     assert abs(label["y"] + label["height"] / 2 - tall["y"] - tall["height"] / 2) < 1
-    assert board_layout.warnings(w.elements) == []
+    assert board_checks.warnings(w.elements) == []
 
 
 def test_w_and_h_size_a_shape_and_bad_sizes_are_refused() -> None:
@@ -180,7 +180,7 @@ def test_a_frame_grows_to_hold_a_shape_added_with_to() -> None:
         w.do("box", text=f"step {i}", to="f1")
     frame = w.get("f1")
     assert frame["height"] > 360 and frame["version"] > 1
-    assert [x for x in board_layout.warnings(w.elements) if "frame" in x] == []
+    assert [x for x in board_checks.warnings(w.elements) if "frame" in x] == []
     for i in range(1, 7):
         s = w.get(f"b{i}")
         assert s["frameId"] == "f1" and s["y"] + s["height"] <= frame["y"] + frame["height"]
@@ -223,7 +223,7 @@ def test_edit_restyles_with_and_without_new_words_and_regrows_the_shape() -> Non
     w.do("edit", id="b1", text="renamed", style="font-size=l")
     assert w.label("b1")["text"] == "renamed" and w.label("b1")["fontSize"] == 28
     w.do("edit", id="b1", text="renamed " * 12)
-    assert w.get("b1")["height"] > 80 and board_layout.warnings(w.elements) == []
+    assert w.get("b1")["height"] > 80 and board_checks.warnings(w.elements) == []
     assert w.do("edit", id="b1").error  # neither text nor style
     assert w.do("edit", id="b1", style="stroke=#fff").error
     w.do("frame", text="F", x=0, y=500)
@@ -237,7 +237,7 @@ def test_each_layout_warning_is_found_from_geometry() -> None:
     w.do("box", text="a", x=20, y=60, to="f1")
     w.do("box", text="b", x=60, y=80, to="f1")  # overlaps a
     w.do("box", text="c", x=900, y=60, to="f1", w=100, h=80)
-    text = " ".join(board_layout.warnings(w.elements))
+    text = " ".join(board_checks.warnings(w.elements))
     assert "overlap: b1 and b2" in text
     w2 = World()
     w2.do("box", text="left", x=0, y=0)
@@ -245,19 +245,19 @@ def test_each_layout_warning_is_found_from_geometry() -> None:
     w2.do("box", text="right", x=600, y=0)
     w2.do("connect", id="b1", to="b3", text="long label here")
     w2.do("connect", id="b3", to="b1", text="long label here")
-    found = board_layout.warnings(w2.elements)
+    found = board_checks.warnings(w2.elements)
     assert "arrow a1 passes through b2" in found
     assert any(x.startswith("arrow labels overlap") for x in found)
     w3 = World()
     w3.do("box", text="Supercalifragilisticexpialidocious", w=40, h=30, x=0, y=0)
-    assert any("label may overflow: b1" in x for x in board_layout.warnings(w3.elements))
+    assert any("label may overflow: b1" in x for x in board_checks.warnings(w3.elements))
     w4 = World()
     w4.do("frame", text="F", x=0, y=0)
     w4.do("box", text="in", x=20, y=60, to="f1")
     w4.do("move", id="b1", x=500, y=300)
-    assert any("straddles its frame f1" in x for x in board_layout.warnings(w4.elements))
+    assert any("straddles its frame f1" in x for x in board_checks.warnings(w4.elements))
     w4.do("move", id="b1", x=2000, y=2000)
-    assert any("is outside its frame" in x for x in board_layout.warnings(w4.elements))
+    assert any("is outside its frame" in x for x in board_checks.warnings(w4.elements))
 
 
 def test_a_write_returns_only_the_warnings_of_what_it_touched_and_read_returns_all() -> None:
@@ -293,25 +293,33 @@ def test_warnings_are_bounded() -> None:
         {"id": f"s{i}", "type": "rectangle", "x": 0, "y": 0, "width": 50, "height": 50, "isDeleted": False}
         for i in range(12)
     ]
-    found = board_layout.warnings(elements)
-    assert len(found) == board_layout.MAX_WARNINGS + 1 and found[-1].startswith("... and")
+    found = board_checks.warnings(elements)
+    assert len(found) == board_checks.MAX_WARNINGS + 1 and found[-1].startswith("... and")
 
 
-def test_an_elbow_arrow_starts_and_ends_on_the_facing_edges_not_at_the_target_centre() -> None:
-    """The pane routes an elbow from its two stored end points, so an end at the target's centre
-    would run the arrow into the shape. The end stops a gap short of the target's edge."""
-    w = World()
-    w.do("box", text="a", x=0, y=0)
-    w.do("box", text="b", x=0, y=300)
-    w.do("connect", id="b1", to="b2", style="arrow-type=elbow")
+def test_an_elbow_connect_uses_the_router_and_binds_with_fixed_points() -> None:
+    """``arrow-type=elbow`` stores right-angled points that go round other shapes, with a
+    ``fixedPoint`` on each end: without it Excalidraw drops the binding and the arrow does not follow
+    a dragged shape. A plain connect is unchanged."""
+    w = three_with_a_blocker()
+    w.do("connect", id="b1", to="b3", style="arrow-type=elbow")
     a = w.get("a1")
-    assert (a["x"], a["y"]) == (70, 80)  # bottom edge, middle of the first box
-    assert a["points"][1] == [0, 212]  # the second box's top (300) less the 8 gap
-    straight = World()
-    straight.do("box", text="a", x=0, y=0)
-    straight.do("box", text="b", x=0, y=300)
-    straight.do("connect", id="b1", to="b2")
-    assert straight.get("a1")["points"][1] == [-70, 300]  # unchanged: aimed at the centre
+    assert a["elbowed"] is True and len(a["points"]) >= 3
+    for p, q in zip(a["points"], a["points"][1:], strict=False):
+        assert p[0] == q[0] or p[1] == q[1], a["points"]  # right angles only
+    for end in ("startBinding", "endBinding"):
+        fixed = a[end]["fixedPoint"]
+        assert len(fixed) == 2 and all(0 <= v <= 1 for v in fixed)
+    assert board_checks.warnings(w.elements) == []
+    for end in ("b1", "b3"):  # Excalidraw moves an elbow with a shape only when the shape lists it
+        assert {"id": "a1", "type": "arrow"} in w.get(end)["boundElements"]
+    plain = three_with_a_blocker()
+    plain.do("connect", id="b1", to="b3")
+    assert "fixedPoint" not in plain.get("a1")["startBinding"] and len(plain.get("a1")["points"]) == 2
+    same = World()
+    same.do("box", text="a", x=0, y=0)
+    assert not same.do("connect", id="b1", to="b1", style="arrow-type=elbow").error  # falls back, no crash
+
 
 
 def three_with_a_blocker() -> World:
@@ -331,15 +339,15 @@ def test_a_straight_arrow_through_a_blocker_warns_and_an_elbow_or_bent_one_aroun
     assert straight.warnings == ("arrow a1 passes through b2",)
     w = three_with_a_blocker()
     assert w.do("connect", id="b1", to="b3", style="arrow-type=elbow").warnings == ()
-    assert board_layout.warnings(w.elements) == []
+    assert board_checks.warnings(w.elements) == []
     bent = three_with_a_blocker()
     bent.do("connect", id="b1", to="b3")
     a = bent.get("a1")
     around = {**a, "points": [[0, 0], [226, 0], [226, 300], [452, 300]]}
     others = [e for e in bent.elements if e["id"] != "a1"]
-    assert board_layout.warnings([*others, around]) == []
+    assert board_checks.warnings([*others, around]) == []
     through = {**a, "points": [[0, 0], [200, 120], [452, 300]]}
-    assert any("passes through b2" in x for x in board_layout.warnings([*others, through]))
+    assert any("passes through b2" in x for x in board_checks.warnings([*others, through]))
 
 
 def test_an_arrow_label_sits_at_the_middle_of_the_route() -> None:
@@ -350,8 +358,8 @@ def test_an_arrow_label_sits_at_the_middle_of_the_route() -> None:
         straight.do("box", text=f"s{i}", x=x, y=y)
     straight.do("connect", id="b1", to="b2", text="one")
     straight.do("connect", id="b3", to="b4", text="two")
-    assert any(x.startswith("arrow labels overlap") for x in board_layout.warnings(straight.elements))
-    mid = board_layout._midpoint([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])
+    assert any(x.startswith("arrow labels overlap") for x in board_checks.warnings(straight.elements))
+    mid = board_checks._midpoint([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])
     assert mid == (10.0, 0.0)
 
 
@@ -385,7 +393,7 @@ def test_a_frame_grows_in_every_direction_for_a_shape_placed_outside_it() -> Non
     s = w.get("b1")
     assert f["x"] <= s["x"] - 20 and f["y"] <= s["y"] - 20
     assert f["x"] + f["width"] >= 700 and f["y"] + f["height"] >= 460  # the old right and bottom kept
-    assert [x for x in board_layout.warnings(w.elements) if "frame" in x] == []
+    assert [x for x in board_checks.warnings(w.elements) if "frame" in x] == []
     w.do("box", text="right and down", to="f1", x=900, y=700)
     f = w.get("f1")
     s = w.get("b2")

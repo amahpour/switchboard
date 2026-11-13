@@ -344,8 +344,9 @@ def build_server(st: ToolBackend) -> FastMCP:
     @mcp.tool(
         annotations=RW,
         description=(
-            "Board's actions: note, box, connect, frame, move, edit, resize, text, "
-            "delete, read, draw_mermaid."
+            "The room's shared whiteboard: draw diagrams here, a whole one with draw_mermaid. "
+            "Actions: note, box, connect, frame, move, edit, resize, text, delete, read, draw_mermaid, "
+            "arrange."
         ),
     )
     async def board(

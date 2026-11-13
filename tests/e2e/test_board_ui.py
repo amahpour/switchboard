@@ -158,7 +158,7 @@ def test_bound_agent_text_wraps_to_its_container_without_changing_the_stored_sce
     """Restore must measure and wrap bound labels; trusting the broker's rough text box clips words."""
     world.create_room("board-label")
     b = world.broker
-    phrase = "Ready for review"
+    phrase = "Ready for review by the whole team before release"
     b.on_loop(
         lambda: b.state.room_board.agent(
             b.state.store.get_room("#board-label"), "drawer", {"action": "note", "text": phrase}, None
@@ -237,16 +237,14 @@ def test_the_board_frame_stays_hidden_until_it_has_drawn_in_the_apps_theme(
     assert (luminance < 60) if scheme == "dark" else (luminance > 230), ("drawn", scheme, (r, g, b))
 
 
-def test_an_agent_elbow_arrow_is_routed_by_the_pane_and_kept_bound_in_the_broker(
+def test_an_agent_elbow_arrow_follows_a_shape_a_person_drags(
     ui: UI,  # noqa: F811
     world: UIWorld,  # noqa: F811
 ) -> None:
-    """``connect`` with ``arrow-type=elbow`` stores a two-point arrow and its bindings. The pane must
-    route it into right-angled segments (a diagonal would mean the style did nothing), and the
-    broker must keep the bindings, since ``read`` and the layout checks use them. What the pane does
-    NOT keep is the binding in its own scene: Excalidraw binds an elbow arrow by ``fixedPoint``,
-    which the pinned page's cleaner does not pass, so a shape dragged in the pane leaves an elbow
-    arrow behind. This pins that known limit, so a rebuilt pane that fixes it shows up here."""
+    """``connect`` with ``arrow-type=elbow`` routes with #730's router and binds with ``fixedPoint``
+    ends, so Excalidraw keeps the arrow attached: dragging the target with the mouse must carry the
+    arrow's end with it, and the arrow stays an elbow with right angles. Without the ``fixedPoint`` the
+    pane drops the binding and the arrow stays behind."""
     room = "board-elbow"
     world.create_room(room)
     page = ui.open(room)
@@ -260,64 +258,45 @@ def test_an_agent_elbow_arrow_is_routed_by_the_pane_and_kept_bound_in_the_broker
             )
         )
 
-    first = draw("box", text="Start", x=0, y=0)["ids"][0]
-    second = draw("box", text="Done", x=400, y=200)["ids"][0]
+    first = draw("box", text="Start", x=0, y=300)["ids"][0]  # below the toolbar, which covers the top
+    second = draw("box", text="Done", x=500, y=300)["ids"][0]
     arrow = draw("connect", id=first, to=second, style="arrow-type=elbow")["ids"][0]
     expect(frame.locator("#board-count")).to_have_text("5 shapes")
-    got = frame.locator("body").evaluate(
-        """(_n, id) => { const a = window.sbBoard.api.getSceneElements().find(e => e.id === id);
-        return {elbowed: a.elbowed, points: a.points}; }""",
-        arrow,
+    read = """(_n, id) => { const api = window.sbBoard.api, a = api.getSceneElements().find(e => e.id === id);
+        return {elbowed: a.elbowed, bound: !!(a.startBinding && a.endBinding),
+                end: [a.x + a.points[a.points.length - 1][0], a.y + a.points[a.points.length - 1][1]],
+                points: a.points}; }"""
+    before = frame.locator("body").evaluate(read, arrow)
+    assert before["elbowed"] is True and before["bound"] is True, before
+    centre = frame.locator("body").evaluate(
+        """(_n, id) => { const api = window.sbBoard.api, s = api.getAppState(),
+        e = api.getSceneElements().find(x => x.id === id), z = s.zoom.value;
+        return [(e.x + e.width / 2 + s.scrollX) * z + s.offsetLeft, (e.y + e.height / 2 + s.scrollY) * z + s.offsetTop, z]; }""",
+        second,
     )
-    assert got["elbowed"] is True
-    pts = got["points"]
-    assert len(pts) >= 3, f"the pane did not route the elbow: {pts}"
-    for p, q in zip(pts, pts[1:], strict=False):
-        assert abs(p[0] - q[0]) < 1 or abs(p[1] - q[1]) < 1, f"a diagonal segment in an elbow arrow: {pts}"
-    stored = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))[1]
-    kept = next(e for e in stored if e["id"] == arrow)
-    assert kept["elbowed"] is True
-    assert (kept["startBinding"]["elementId"], kept["endBinding"]["elementId"]) == (first, second)
-
-
-@pytest.mark.parametrize("target", [(400, 200), (60, 400), (-300, 150)], ids=["right", "below", "left"])
-def test_the_layout_checks_model_the_route_the_pane_draws_for_an_elbow(
-    ui: UI,  # noqa: F811
-    world: UIWorld,  # noqa: F811
-    target: tuple[int, int],
-) -> None:
-    """``board_layout.elbow_route`` is how ``read`` decides whether an elbow passes through a shape. It
-    must be the route the pane really draws from the arrow's stored end points, for an arrow that
-    leaves sideways and for one that leaves downward, or a clean elbow would be flagged and a blocked
-    one missed."""
-    from switchboard import board_layout
-
-    room = f"board-route-{target[0]}".replace("-", "n") if target[0] < 0 else f"board-route-{target[0]}"
-    world.create_room(room)
-    page = ui.open(room)
-    frame = open_board(page)
-    b = world.broker
-
-    def draw(action: str, **params: Any) -> dict[str, Any]:
-        return b.on_loop(
-            lambda: b.state.room_board.agent(
-                b.state.store.get_room("#" + room), "drawer", {"action": action, **params}, None
-            )
-        )
-
-    first = draw("box", text="Start", x=0, y=0)["ids"][0]
-    second = draw("box", text="Done", x=target[0], y=target[1])["ids"][0]
-    arrow = draw("connect", id=first, to=second, style="arrow-type=elbow")["ids"][0]
-    expect(frame.locator("#board-count")).to_have_text("5 shapes")
-    stored = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))[1]
-    a = next(e for e in stored if e["id"] == arrow)
-    ends = [(a["x"] + px, a["y"] + py) for px, py in a["points"]]
-    pane = frame.locator("body").evaluate(
-        """(_n, id) => { const a = window.sbBoard.api.getSceneElements().find(e => e.id === id);
-        return a.points.map(p => [a.x + p[0], a.y + p[1]]); }""",
-        arrow,
+    node = page.locator("#whiteboard-host iframe").bounding_box()
+    assert node is not None
+    x, y = node["x"] + centre[0], node["y"] + centre[1]
+    page.mouse.move(x, y)
+    page.screenshot(path="/tmp/x/dbg.png")
+    page.mouse.down()
+    page.mouse.move(x, y + 150 * centre[2], steps=10)
+    page.mouse.up()
+    # The click selects the target; the arrow keys then move it the way a person nudging it would.
+    page.keyboard.press("Shift+ArrowDown", delay=20)
+    for _ in range(14):
+        page.keyboard.press("Shift+ArrowDown", delay=20)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements().some(e => e.type === 'rectangle' && e.y > 340)",
     )
-    want = board_layout.elbow_route(ends[0], ends[1])
-    assert len(pane) == len(want), (pane, want)
-    for got, expected in zip(pane, want, strict=True):
-        assert abs(got[0] - expected[0]) < 1.5 and abs(got[1] - expected[1]) < 1.5, (pane, want)
+    after = frame.locator("body").evaluate(read, arrow)
+    assert after["bound"] is True and after["elbowed"] is True, after
+    moved_by = board_frame.evaluate(
+        "(id) => window.sbBoard.api.getSceneElements().find(e => e.id === id).y", second
+    ) - 300
+    assert moved_by > 40, "the drag moved the target"
+    assert abs(after["end"][1] - before["end"][1] - moved_by) < 8, (before["end"], after["end"])
+    for p, q in zip(after["points"], after["points"][1:], strict=False):
+        assert abs(p[0] - q[0]) < 1 or abs(p[1] - q[1]) < 1, after["points"]

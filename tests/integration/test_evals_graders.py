@@ -91,6 +91,33 @@ def talks_like_a_raise(name: str, items: list[Item]) -> Move:
     return Move(passes=True)
 
 
+DIAGRAM = (
+    "flowchart LR\ncli --> broker\ncli --> store\nbroker --> store\nbroker --> board\nboard --> envelope"
+)
+
+
+def draws_in_one_call(name: str, items: list[Item]) -> Move:
+    """Asked to draw the diagram, draw it whole with one ``draw_mermaid`` call."""
+    person = _person(items)
+    if person is not None and person.to_you:
+        return Move(board={"action": "draw_mermaid", "text": DIAGRAM})
+    return Move(passes=True)
+
+
+def pastes_the_diagram(name: str, items: list[Item]) -> Move:
+    person = _person(items)
+    if person is not None and person.to_you:
+        return Move(say=f"Here you go:\n```mermaid\n{DIAGRAM}\n```", reply_to=person.id)
+    return Move(passes=True)
+
+
+def asks_to_open_the_board(name: str, items: list[Item]) -> Move:
+    person = _person(items)
+    if person is not None and person.to_you:
+        return Move(say="Please open the whiteboard first, then I can draw it.", reply_to=person.id)
+    return Move(passes=True)
+
+
 def bravo_trades(name: str, items: list[Item]) -> Move:
     asks = [i for i in items if i.sender == "alpha" and i.to_you]
     if asks:
@@ -170,6 +197,21 @@ ROOMS = {
         "review-board",
         {"alpha": raises_the_finding},
         {"a_finding_was_raised": True},
+    ),
+    "board draw, one draw_mermaid call": (
+        "board-draw",
+        {"alpha": draws_in_one_call},
+        {"drawn_in_one_change": True, "no_mermaid_in_chat": True, "no_request_to_open_the_board": True},
+    ),
+    "board draw, the diagram is pasted in chat": (
+        "board-draw",
+        {"alpha": pastes_the_diagram},
+        {"drawn_in_one_change": False, "no_mermaid_in_chat": False, "no_request_to_open_the_board": True},
+    ),
+    "board draw, asks someone to open the board": (
+        "board-draw",
+        {"alpha": asks_to_open_the_board},
+        {"drawn_in_one_change": False, "no_mermaid_in_chat": True, "no_request_to_open_the_board": False},
     ),
     "review board, they only talk": (
         "review-board",

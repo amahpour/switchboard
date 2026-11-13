@@ -130,6 +130,8 @@ class RunRecord:
     report: dict[str, Any]
     tokens: dict[str, Tokens] = field(default_factory=dict)
     asked: tuple[int, ...] = ()  # the id of each message the person posted, in the order of the steps
+    board_changes: int = 0  # how many changes the room's whiteboard has had (its revision)
+    board_elements: int = 0  # live elements on it now
 
     def ts_of(self, message_id: int) -> float:
         return next(m.ts for m in self.messages if m.id == message_id)
@@ -218,10 +220,28 @@ def read_record(
                 (rid,),
             )
         )
+        board_row = con.execute("SELECT seq, elements FROM room_boards WHERE room_id = ?", (rid,)).fetchone()
+        board_changes = int(board_row["seq"]) if board_row else 0
+        board_elements = (
+            sum(1 for e in json.loads(board_row["elements"]) if not e.get("isDeleted")) if board_row else 0
+        )
         rep = report.build(con, room)
     finally:
         con.close()
-    return RunRecord(room, agents, human, messages, deliveries, events, review_items, rep, tokens, asked)
+    return RunRecord(
+        room,
+        agents,
+        human,
+        messages,
+        deliveries,
+        events,
+        review_items,
+        rep,
+        tokens,
+        asked,
+        board_changes,
+        board_elements,
+    )
 
 
 def latest_human_message(db_path: str | Path, room: str) -> int:
