@@ -51,7 +51,8 @@ def test_searching_100k_lines_stays_fast(tmp_home: Path) -> None:
     Fails if the search scans the messages instead of using the index."""
     b = InProcBroker(tmp_home).start()
     try:
-        b.on_loop(seed, b)
+        # planting 100,000 lines through the index's triggers took more than the default 10 s on a slow runner
+        b.on_loop(seed, b, timeout=300)
         store = b.state.store
         viewer = 7  # a person with no private rooms: three quarters of the lines are theirs
 

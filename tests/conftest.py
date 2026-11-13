@@ -412,14 +412,15 @@ class InProcBroker:
 
         return call_sync(self.paths.sock, method, params or {}, timeout)
 
-    def on_loop(self, fn: Any, *args: Any) -> Any:
-        """Run a plain callable on the broker's event loop thread and return its result."""
+    def on_loop(self, fn: Any, *args: Any, timeout: float = 10) -> Any:
+        """Run a plain callable on the broker's event loop thread and return its result. ``timeout`` is how
+        long to wait for it: a test that plants a great deal of data on the loop gives itself more."""
         assert self.loop is not None
 
         async def wrapper() -> Any:
             return fn(*args)
 
-        return asyncio.run_coroutine_threadsafe(wrapper(), self.loop).result(10)
+        return asyncio.run_coroutine_threadsafe(wrapper(), self.loop).result(timeout)
 
     def login_url(self) -> str:
         return self.call("human.login_link")["url"]
