@@ -164,15 +164,13 @@ def route(a: dict[str, Any], src: dict[str, Any], dst: dict[str, Any]) -> list[t
 
 
 def _midpoint(poly: list[tuple[float, float]]) -> tuple[float, float]:
-    """The point half-way along the polyline's length."""
-    lengths = [math.dist(a, b) for a, b in zip(poly, poly[1:], strict=False)]
-    half = sum(lengths) / 2
-    for (a, b), n in zip(zip(poly, poly[1:], strict=False), lengths, strict=True):
-        if n and half <= n:
-            t = half / n
-            return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
-        half -= n
-    return poly[0]
+    """Where Excalidraw draws an arrow's label: the middle point of a polyline with an odd number of
+    points, the middle of the middle segment with an even number."""
+    n = len(poly)
+    if n % 2:
+        return poly[n // 2]
+    a, b = poly[n // 2 - 1], poly[n // 2]
+    return (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
 
 
 def warnings(elements: list[dict[str, Any]], only: set[str] | None = None) -> list[str]:

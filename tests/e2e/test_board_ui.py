@@ -271,7 +271,8 @@ def test_an_agent_elbow_arrow_follows_a_shape_a_person_drags(
     centre = frame.locator("body").evaluate(
         """(_n, id) => { const api = window.sbBoard.api, s = api.getAppState(),
         e = api.getSceneElements().find(x => x.id === id), z = s.zoom.value;
-        return [(e.x + e.width / 2 + s.scrollX) * z + s.offsetLeft, (e.y + e.height / 2 + s.scrollY) * z + s.offsetTop, z]; }""",
+        return [(e.x + e.width / 2 + s.scrollX) * z + s.offsetLeft,
+                (e.y + e.height / 2 + s.scrollY) * z + s.offsetTop, z]; }""",
         second,
     )
     node = page.locator("#whiteboard-host iframe").bounding_box()
@@ -293,9 +294,10 @@ def test_an_agent_elbow_arrow_follows_a_shape_a_person_drags(
     )
     after = frame.locator("body").evaluate(read, arrow)
     assert after["bound"] is True and after["elbowed"] is True, after
-    moved_by = board_frame.evaluate(
-        "(id) => window.sbBoard.api.getSceneElements().find(e => e.id === id).y", second
-    ) - 300
+    moved_by = (
+        board_frame.evaluate("(id) => window.sbBoard.api.getSceneElements().find(e => e.id === id).y", second)
+        - 300
+    )
     assert moved_by > 40, "the drag moved the target"
     assert abs(after["end"][1] - before["end"][1] - moved_by) < 8, (before["end"], after["end"])
     for p, q in zip(after["points"], after["points"][1:], strict=False):

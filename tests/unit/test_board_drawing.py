@@ -321,7 +321,6 @@ def test_an_elbow_connect_uses_the_router_and_binds_with_fixed_points() -> None:
     assert not same.do("connect", id="b1", to="b1", style="arrow-type=elbow").error  # falls back, no crash
 
 
-
 def three_with_a_blocker() -> World:
     """b1 top left, b3 far lower right, and b2 on the straight line between them but off an elbow's."""
     w = World()
@@ -351,8 +350,8 @@ def test_a_straight_arrow_through_a_blocker_warns_and_an_elbow_or_bent_one_aroun
 
 
 def test_an_arrow_label_sits_at_the_middle_of_the_route() -> None:
-    """Two labelled straight arrows crossing at their middles collide; the middle of a bent route
-    is half-way along its length, not half-way between its ends."""
+    """Two labelled straight arrows crossing at their middles collide; a bent route's label
+    sits where Excalidraw draws it (its middle point or middle segment), not half-way between its ends."""
     straight = World()
     for i, (x, y) in enumerate([(0, 0), (600, 400), (0, 400), (600, 0)]):
         straight.do("box", text=f"s{i}", x=x, y=y)
@@ -360,7 +359,8 @@ def test_an_arrow_label_sits_at_the_middle_of_the_route() -> None:
     straight.do("connect", id="b3", to="b4", text="two")
     assert any(x.startswith("arrow labels overlap") for x in board_checks.warnings(straight.elements))
     mid = board_checks._midpoint([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)])
-    assert mid == (10.0, 0.0)
+    assert mid == (10.0, 0.0)  # an odd number of points: the middle one
+    assert board_checks._midpoint([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (30.0, 10.0)]) == (10.0, 5.0)
 
 
 def test_edit_font_size_on_a_loose_text_resizes_its_box_to_the_words() -> None:
@@ -400,3 +400,38 @@ def test_a_frame_grows_in_every_direction_for_a_shape_placed_outside_it() -> Non
     assert (
         f["x"] + f["width"] >= s["x"] + s["width"] + 20 and f["y"] + f["height"] >= s["y"] + s["height"] + 20
     )
+
+
+@pytest.mark.parametrize("kind", ["rect", "round", "stadium", "circle", "diamond"])
+@pytest.mark.parametrize(
+    "label",
+    [
+        "x",
+        "Release",
+        "Change under review",
+        "a label that goes on for a while and wraps over three lines",
+        "Supercalifragilisticexpialidocious_and_more_without_spaces",
+        "two\nlines",
+    ],
+)
+def test_a_box_the_diagram_converter_sizes_never_draws_an_overflow_warning(kind: str, label: str) -> None:
+    """One text measure: ``board_flow`` takes ``fit`` from ``board_checks``, so a shape sized to fit its
+    label by Mermaid conversion is never called overflowing by the checks that read it back."""
+    from switchboard import board_flow
+
+    assert board_flow.fit is board_checks.fit and board_flow.GLYPH == board_checks.GLYPH
+    f = board_checks.fit(label, kind)
+    assert not board_checks.overflows(kind, f.w, f.h, label)
+    assert board_checks.height_for(kind, f.w, label, minimum=True) <= f.h + 10
+
+
+def test_shapes_the_actions_size_match_the_converters_measure() -> None:
+    w = World()
+    w.do("box", text="Change under review", x=0, y=0)
+    w.do("box", shape="ellipse", text="Tests pass for the whole suite", x=400, y=0)
+    w.do("box", shape="diamond", text="Ship it to everyone today?", x=800, y=0)
+    for eid, kind in (("b1", "rect"), ("b2", "circle"), ("b3", "diamond")):
+        s = w.get(eid)
+        want = board_checks.fit(w.label(eid)["text"], kind)
+        assert (s["width"], s["height"]) == (want.w, max(want.h, s["height"]))
+    assert board_checks.warnings(w.elements) == []
