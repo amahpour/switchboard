@@ -71,6 +71,32 @@ def a_post_matches(rec: RunRecord, asked: int, *, pattern: str) -> Result:
     )
 
 
+def board_drawn_in_one_change(rec: RunRecord, asked: int, *, min_elements: int) -> Result:
+    """The room's whiteboard has had exactly one change, and it holds at least ``min_elements`` live
+    elements: a whole diagram in one ``draw_mermaid`` (a shape action makes at most three elements).
+    Fails for an agent that pasted the diagram in chat (no change), drew shape by shape (many changes)
+    or drew a stub."""
+    ok = rec.board_changes == 1 and rec.board_elements >= min_elements
+    return Result(ok, f"{rec.board_changes} board changes, {rec.board_elements} live elements")
+
+
+def no_post_matches(rec: RunRecord, asked: int, *, pattern: str) -> Result:
+    """No agent post after the message matches the regular expression (case-insensitive): a Mermaid block
+    pasted in chat, or a request to open the board, fails it."""
+    rx = re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+    hit = next((m for m in rec.posts_after(asked) if rx.search(m.text)), None)
+    return Result(hit is None, f"{hit.sender} matched /{pattern}/" if hit else f"no post matched /{pattern}/")
+
+
 GRADERS: dict[str, Callable[..., Result]] = {
-    fn.__name__: fn for fn in (poster_count, agents_post, agents_do_not_post, finding_raised, a_post_matches)
+    fn.__name__: fn
+    for fn in (
+        poster_count,
+        agents_post,
+        agents_do_not_post,
+        finding_raised,
+        a_post_matches,
+        board_drawn_in_one_change,
+        no_post_matches,
+    )
 }

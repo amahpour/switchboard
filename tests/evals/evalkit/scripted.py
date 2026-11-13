@@ -56,6 +56,9 @@ class Move:
     # a ``review`` call, the board's own tool. A chat line is not one: the review checks read the
     # board, so a policy that only talks cannot pass them.
     review: dict[str, Any] | None = None
+    # a ``board`` call (an action and its fields): the check reads the board, so a policy that only
+    # pastes a diagram in chat cannot pass it.
+    board: dict[str, Any] | None = None
 
 
 Policy = Callable[[str, list[Item]], Move]
@@ -150,6 +153,10 @@ class ScriptedWorld:
                     move = self.policies[name](name, parse(r["text"]))
                     if move.review is not None:
                         res = await agent.call("review", room=self._room, **move.review)
+                        if not res.get("ok"):
+                            raise RuntimeError(res.get("error") or res)
+                    elif move.board is not None:
+                        res = await agent.call("board", room=self._room, **move.board)
                         if not res.get("ok"):
                             raise RuntimeError(res.get("error") or res)
                     elif move.say is not None:

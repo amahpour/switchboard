@@ -51,7 +51,7 @@ The sandbox is meant to be the boundary for all of these, but it is untested wit
 
 Only `.github/workflows/release.yml` publishes a release, when a release pull request merges into `main`: the tag and the GitHub Release, the image `ghcr.io/amahpour/switchboard` (with a provenance attestation and an SBOM), and, from 0.21.1, the package on PyPI. On PyPI switchboard is **`switchboard-chat`**. Plain `switchboard` there is an unrelated project, and so are `switchboard-agents` and `agent-switchboard`. It's uploaded with PyPI's trusted publishing, so no PyPI token exists to leak, and each file carries PyPI's attestation of the workflow that built it.
 
-The board’s Mermaid conversion uses this same opaque document and policy. Only bounded plain flowcharts are accepted; directives, styles and image syntax are rejected, click directives are removed, and markup stays inert during temporary layout. Converted elements are checked again by the parent and the broker, which remints ids and rechecks membership and rate limits before a single atomic import (DESIGN §56.9). Playback changes only the local view.
+The board’s Mermaid conversion runs in the broker, in plain Python, with no browser and no page (DESIGN §56.9). Only bounded plain flowcharts are accepted; directives, styles and image syntax are rejected, click directives are removed, and a line the parser cannot read is refused. Every label is canvas text, cut and cleaned like any agent text. The converted elements go through the same cleaner as every agent shape, which remints ids; membership and the rate limit are checked before a single atomic import. Playback changes only the local view.
 
 ## Reporting a vulnerability
 

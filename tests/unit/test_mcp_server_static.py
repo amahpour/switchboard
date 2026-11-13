@@ -99,7 +99,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # #656 adds one board tool, 512 on its own. The list measured 3,653 before and 4,165 after.
     # The maintainer's answer "1. Yes" to "Can I raise it and start #656 tonight" raises the cap
     # for that one tool and nothing else. The cap is the measured size, with no room to grow.
-    assert size == 4165, size
+    # #725 leads the board tool's description with what the tool is (the room's whiteboard, where a
+    # diagram goes) and names `arrange`. The list measured 4,165 before and 4,247 after: +82, the
+    # whole cost of those words. The maintainer's yes, 2026-11-13: "Raise the cap on the agents'
+    # tool-list size? The new inputs need room, and I'd raise it by only what they cost. ... Yes?" -> "Yes".
+    assert size == 4247, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
