@@ -24,7 +24,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:1.0.0
+  ghcr.io/amahpour/switchboard:1.1.0
 docker logs switchboard
 ```
 
@@ -151,7 +151,7 @@ own storage and CPU before relying on either limit.
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:1.0.0`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:1.1.0`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -323,8 +323,8 @@ Remove `prerollFix` once a joinly release has the fix too. It is independent of 
 **A voice for each line.** The voice patch (two files, [described above](#a-meeting-bot)) is one ConfigMap with two keys. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.1.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.1.0/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 ```
 
@@ -699,8 +699,8 @@ switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` arg
 **A voice for each line (#713).** joinly 0.5.4 takes one voice when a bot session starts, and its `speak_text` tool has no voice argument, so every agent that speaks on a call has the same voice. The patch is two files of joinly (`server.py` and the Kokoro voice, `kokoro.py`): `speak_text` takes an optional `voice` for that line, and Kokoro uses it, falling back to the session's voice when it is not given or Kokoro has no voice of that name. Without a `voice` joinly behaves as 0.5.4, so the patch changes nothing on its own: it is the base for a voice per agent. The files are in this repository ([deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly), with joinly's MIT licence and a NOTICE saying what changed); until a joinly release has the argument, mount them over the image's copies, read-only, in the same `docker run` as the other files (use any or all):
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/server.py
-curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/kokoro.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.1.0/deploy/joinly/server.py
+curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.1.0/deploy/joinly/kokoro.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro" \
@@ -875,8 +875,8 @@ Drop this patch once a joinly release has the fix too, and move the image to tha
 **A voice for each line.** The voice patch (#713, [described above](#a-meeting-bot)) is a fourth patch, [joinly-voice-patch.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-voice-patch.yaml): one ConfigMap with the two files of this repository as its keys, each mounted over joinly's copy with `subPath`, so a pod can't start without the ConfigMap. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.0.0/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.1.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.1.0/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
 ```
@@ -968,7 +968,7 @@ The key and the link are files in `calls/<fingerprint>/` of the plugin's data fo
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.0.0 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.1.0 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](https://github.com/amahpour/switchboard/blob/main/deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.
