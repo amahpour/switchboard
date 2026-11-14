@@ -40,6 +40,7 @@ from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolic
 from switchboard.broker.reviews import Boards
 from switchboard.broker.room_board import RoomBoard
 from switchboard.broker.rpc import RpcServer
+from switchboard.broker.search import SearchLimiter
 from switchboard.broker.service import BrokerInfo, RoomService
 from switchboard.clock import Clock, SystemClock
 from switchboard.config import Config
@@ -100,6 +101,8 @@ class BrokerState:
     claim_grace: dict[str, float] = field(default_factory=dict)
     # failed password sign-ins (§32.4)
     signin: SignInLimiter = None  # type: ignore[assignment]
+    # searches per person (§58)
+    search_limiter: SearchLimiter = None  # type: ignore[assignment]
     # the MCP app behind /mcp, for agents over HTTPS (§49.2): its lifespan runs inside ours
     agent_http: Any = None
     # AgentAuth, the door the agent routes share: a token or a listener key. The host route uses it (§54)
@@ -206,6 +209,7 @@ def create_app(
         sealer=Sealer(clock),
         used_challenges=UsedChallenges(clock),
         signin=SignInLimiter(clock),
+        search_limiter=SearchLimiter(clock),
         oauth=oauth.OAuthState(clock),
     )
 

@@ -48,6 +48,16 @@
       </button>
     </div>
 
+    <!-- Search (#724): the box is the one place a query is typed on a desktop; on a phone the Search page has
+         its own, and this one hands over to it. Drawn and wired by app.js; results never leave textContent. -->
+    <form class="side-search" id="search-form" role="search" autocomplete="off">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg>
+      <input type="text" id="search-input" name="q" placeholder="Search" aria-label="Search messages in your rooms"
+             aria-keyshortcuts="/" maxlength="200" enterkeyhint="search" autocomplete="off" autocapitalize="off"
+             spellcheck="false" inputmode="search">
+      <kbd class="search-kbd" aria-hidden="true">/</kbd>
+    </form>
+
     <div class="side-section side-home">
       <button type="button" class="room room-home" id="home-nav" aria-label="Home">
         <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.7V13h8V6.7M6.7 13V9.5h2.6V13"/></svg>
@@ -225,6 +235,13 @@
       <span>Disconnected: reconnecting… What you see may be out of date.</span>
     </div>
 
+    <div class="band band-around hidden" id="banner-around" role="status">
+      <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 7.2v4M8 4.9h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/></svg>
+      <span id="banner-around-text">Viewing around a search result</span>
+      <button type="button" class="btn around-btn" id="around-back">&larr; Back to results</button>
+      <button type="button" class="btn around-btn" id="around-latest">Jump to latest</button>
+    </div>
+
     <div class="log-wrap">
       <section id="whiteboard-panel" class="hidden" aria-label="Room whiteboard">
       <div class="whiteboard-bar"><span id="whiteboard-status" role="status"></span>
@@ -239,6 +256,19 @@
       <div class="log" id="log" role="log" aria-live="polite" aria-relevant="additions" aria-label="Messages"></div>
       <!-- The review board (#80): drawn by app.js when the room has one and it's shown. -->
       <section class="board hidden" id="board" aria-label="Review board"></section>
+
+      <!-- Search (#724, DESIGN.md §58): the results, in place of the log, as Home is. Drawn by app.js. -->
+      <section class="search hidden" id="search" aria-label="Search results">
+        <form class="search-page-box" id="search-page-form" role="search" autocomplete="off">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3.5 3.5"/></svg>
+          <input type="text" id="search-page-input" name="q" placeholder="Search" aria-label="Search messages in your rooms"
+                 maxlength="200" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false"
+                 inputmode="search">
+        </form>
+        <div class="search-chips" id="search-chips" role="group" aria-label="Filters"></div>
+        <p class="sr-only" id="search-live" role="status" aria-live="polite"></p>
+        <div class="search-results" id="search-results"></div>
+      </section>
 
       <!-- Home (#626): what waits on you, what got done, what is live, your rooms. Drawn by app.js. -->
       <section class="home hidden" id="home" tabindex="-1" aria-label="Home"></section>

@@ -557,6 +557,16 @@ class RoomService:
         room = self.room(name)
         return self.message_frames(self.store.history(room.id, after, limit))
 
+    def history_around(
+        self, room: Room, message_id: int, before: int = 20, after: int = 20
+    ) -> list[dict[str, Any]]:
+        """The window of ``room`` around one message (§58.5). A message that is not this room's is
+        "no such message", whatever room it is in."""
+        msgs = self.store.history_around(room.id, message_id, before, after)
+        if not msgs:
+            raise ServiceError("not_found", f"no message {message_id} in {room.name}")
+        return self.message_frames(msgs)
+
     def members(self, name: str) -> list[dict[str, Any]]:
         room = self.room(name)
         return [member_dict(m) for m in self.member_rows(room.id)]

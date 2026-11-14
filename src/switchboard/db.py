@@ -47,7 +47,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 49
+SCHEMA_VERSION = 50
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -1040,6 +1040,41 @@ V48_TO_V49 = (
 )
 
 
+# Search (#724, DESIGN.md §58): an external-content FTS5 index over the chat lines people, agents and calls
+# wrote (never a notice, a join or a system line). The content is a view, so the index holds only what is
+# searched; the triggers keep it in step on insert, delete (a room's deletion) and update, which the store
+# never does to a message but a hand edit might. The index is derived: a "rebuild" makes it again from the
+# messages, and it is not in ``TABLES`` (its rows are not data, and a backup copies the file whole).
+def _searched(row: str) -> str:
+    return f"{row}.kind='chat' AND {row}.sender_kind IN ('human','agent','meeting')"
+
+
+SEARCH_DDL = (
+    "CREATE VIEW search_source AS SELECT id, text FROM messages"
+    " WHERE kind='chat' AND sender_kind IN ('human','agent','meeting')",
+    "CREATE VIRTUAL TABLE messages_fts USING fts5(text, content='search_source', content_rowid='id',"
+    " tokenize='unicode61 remove_diacritics 2')",
+    "CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages BEGIN"
+    " INSERT INTO messages_fts(rowid, text) SELECT new.id, new.text"
+    f" WHERE {_searched('new')}; END",
+    "CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN"
+    " INSERT INTO messages_fts(messages_fts, rowid, text) SELECT 'delete', old.id, old.text"
+    f" WHERE {_searched('old')}; END",
+    "CREATE TRIGGER messages_fts_au AFTER UPDATE ON messages BEGIN"
+    " INSERT INTO messages_fts(messages_fts, rowid, text) SELECT 'delete', old.id, old.text"
+    f" WHERE {_searched('old')};"
+    " INSERT INTO messages_fts(rowid, text) SELECT new.id, new.text"
+    f" WHERE {_searched('new')}; END",
+)
+
+# v49 -> v50: the index above, filled from the messages already there.
+V49_TO_V50 = (
+    *SEARCH_DDL,
+    "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
+    "UPDATE meta SET value='50' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1107,6 +1142,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         46: MigrationStep(47, V46_TO_V47, ()),
         47: MigrationStep(48, V47_TO_V48, ()),
         48: MigrationStep(49, V48_TO_V49, ()),
+        49: MigrationStep(50, V49_TO_V50, ()),
     }
     out = []
     v = frm
@@ -1188,7 +1224,7 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = _statements(SCHEMA)
+SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:

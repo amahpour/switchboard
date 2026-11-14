@@ -51,6 +51,7 @@ from switchboard.models import (
     valid_host,
 )
 from switchboard.models import session_key as make_session_key
+from switchboard.search import SNIPPET_TOKENS, markers
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
@@ -738,6 +739,119 @@ class Store:
             "SELECT COALESCE(MAX(id), 0) FROM messages WHERE room_id=?", (room_id,)
         ).fetchone()
         return int(r[0])
+
+    def history_around(
+        self, room_id: int, message_id: int, before: int = 20, after: int = 20
+    ) -> list[Message]:
+        """The messages of one room around ``message_id`` (any kind, as the log shows them): up to
+        ``before`` older ones, the message itself and up to ``after`` newer ones, oldest first. Empty when
+        the room has no such message: an id from another room is not found here (DESIGN.md §58.5)."""
+        before, after = max(0, min(int(before), 100)), max(0, min(int(after), 100))
+        if (
+            self.con.execute(
+                "SELECT 1 FROM messages WHERE id=? AND room_id=?", (int(message_id), room_id)
+            ).fetchone()
+            is None
+        ):
+            return []
+        rows = self.con.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND id<=? ORDER BY id DESC LIMIT ?)"
+            " UNION ALL SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND id>? ORDER BY id LIMIT ?)"
+            " ORDER BY id",
+            (room_id, int(message_id), before + 1, room_id, int(message_id), after),
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
+    # ------------------------------------------------------------ search (#724, §58)
+    SEARCH_COUNT_CAP = 1000
+
+    def search(
+        self,
+        room_ids: list[int],
+        match: str,
+        *,
+        nonce: str,
+        sender: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+        calls: bool = True,
+        before: int | None = None,
+        limit: int = 50,
+        count: bool = False,
+    ) -> dict[str, Any]:
+        """Chat lines in ``room_ids`` that match ``match`` (the index's own query, which
+        ``search.match_query``
+        made: never a person's text), newest first, at most ``limit`` (50 at most) with ``id < before``.
+
+        This is the one place that knows the index (FTS5, §58); a Postgres store answers the same call. The
+        rooms are the caller's to choose: only rooms the person can see are ever passed (§44), and a message
+        of another room is never read. ``sender`` is a screen name (any case); ``since`` and ``until`` bound
+        the time; ``calls=False`` leaves out lines from a call. With ``count`` the answer also carries
+        ``total`` (a count capped at ``SEARCH_COUNT_CAP``) and ``capped``.
+
+        Returns ``{"hits": [{id, room_id, ts, sender_name, sender_kind, sender_harness, host,
+        snippet}], "more": bool, ...}``; each snippet is the index's text with hits wrapped in the markers
+        of ``nonce`` (``search.parse_snippet`` reads it)."""
+        limit = max(1, min(int(limit), 50))
+        if not room_ids or not match:
+            return {"hits": [], "more": False, **({"total": 0, "capped": False} if count else {})}
+        where = ["m.room_id IN (SELECT value FROM json_each(?))"]
+        args: list[Any] = [json.dumps([int(r) for r in room_ids])]
+        if sender is not None:
+            where.append("m.sender_name = ? COLLATE NOCASE")
+            args.append(sender)
+        if since is not None:
+            where.append("m.ts >= ?")
+            args.append(float(since))
+        if until is not None:
+            where.append("m.ts < ?")
+            args.append(float(until))
+        if not calls:
+            where.append("m.sender_kind != 'meeting'")
+        base = (
+            # CROSS JOIN fixes the order of the loops: the index walks its matches newest first and the
+            # message is looked up by id, so a page of 50 does not sort every match of a common word
+            "FROM messages_fts f CROSS JOIN messages m ON m.id = f.rowid"
+            f" WHERE messages_fts MATCH ? AND {' AND '.join(where)}"
+        )
+        out: dict[str, Any] = {}
+        if count:
+            n = int(
+                self.con.execute(
+                    f"SELECT COUNT(*) FROM (SELECT 1 {base} LIMIT ?)",
+                    (match, *args, self.SEARCH_COUNT_CAP + 1),
+                ).fetchone()[0]
+            )
+            out["total"], out["capped"] = min(n, self.SEARCH_COUNT_CAP), n > self.SEARCH_COUNT_CAP
+        page_args = [match, *args]
+        page_where = ""
+        if before is not None:
+            page_where = " AND m.id < ?"
+            page_args.append(int(before))
+        # the snippet is made in this query, for the rows it emits: asked for afterwards by id, the index
+        # writes one for every match of a common word first (74 ms for 100,000 lines, against 5 for this)
+        opening, closing = markers(nonce)
+        rows = self.con.execute(
+            "SELECT m.id, m.room_id, m.ts, m.sender_name, m.sender_kind, m.sender_harness, m.sender_host,"
+            " snippet(messages_fts, 0, ?, ?, '\u2026', ?) "
+            f"{base}{page_where} ORDER BY f.rowid DESC LIMIT ?",
+            (opening, closing, SNIPPET_TOKENS, *page_args, limit + 1),
+        ).fetchall()
+        out["more"] = len(rows) > limit
+        out["hits"] = [
+            {
+                "id": int(r[0]),
+                "room_id": int(r[1]),
+                "ts": float(r[2]),
+                "sender_name": r[3],
+                "sender_kind": r[4],
+                "sender_harness": r[5],
+                "host": r[6],
+                "snippet": r[7] or "",
+            }
+            for r in rows[:limit]
+        ]
+        return out
 
     # ------------------------------------------------------------ the home page (#626, §55)
     def home_lines(
