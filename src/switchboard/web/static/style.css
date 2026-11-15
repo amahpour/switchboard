@@ -711,8 +711,8 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
    and a half, and the row scrolled: with hands-free on, Running and Budget were out of sight, and whether a
    room is paused is worth seeing at a glance. The header's own width decides (a container, so a panel that
    opens or a text size that grows counts), not the window's; .conv-head-box is only there to be that
-   container, since containment on <main> would trap the fixed-position whiteboard player. A phone has its
-   own layout (below). */
+   container, since containment on <main> would trap the fixed-position whiteboard player. A phone wraps
+   the chips in its own row (#716), below. */
 .conv-head-box { container: conv-head / inline-size; flex-shrink: 0; }
 @media (min-width: 761px) {
   @container conv-head (max-width: 1100px) {
@@ -2586,7 +2586,20 @@ body.login {
   .room-sub { display: block; flex-basis: 100%; margin: 0; font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); text-align: center; }
   .members-pill { grid-area: members; justify-self: end; }
   .conv-head .head-spacer, .head-divider, #pane-toggle, #pause-toggle { display: none; }
-  .chips { grid-area: chips; height: 38px; margin: 0 -8px; padding: 0 12px; white-space: nowrap; }
+  /* The chips wrap (#716). This row used to stay one line and scroll sideways, so with hands-free on
+     and every chip showing (Hands-free, Running, Budget, Hops, the approvals count) the row was about
+     470 px inside a 390 px screen and Hops sat past the edge. Each chip stays whole, and one line is
+     still 38 px: 6 px of padding around a 26 px chip. A count for the ones that don't fit is unnecessary;
+     the widest chip, "loop guard off", is far narrower than the row. */
+  .chips {
+    grid-area: chips;
+    height: auto;
+    min-height: 38px;
+    margin: 0 -8px;
+    padding: 6px 12px;
+    overflow: visible;
+    flex-wrap: wrap;
+  }
   .head-tools { grid-area: tools; display: flex; align-items: center; gap: 4px; padding: 0 4px 6px; }
   .chip .meter { display: none; }
   #st-approvals::after { content: attr(data-count); }

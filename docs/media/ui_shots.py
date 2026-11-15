@@ -3819,6 +3819,54 @@ def shoot_backups(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
+    """#716, every header chip on a 390 px phone, hands-free on (``phonechips-phone-{light,dark}``),
+    and the same room on a desktop (``phonechips-{light,dark}``). The header's strip is
+    ``phonechips-strip-…``. Before: the phone's row scrolls and Hops is past the edge. After: the
+    chips wrap, and each one is on screen. The desktop already wraps under 1,100 px (#704)."""
+    from playwright.sync_api import expect
+
+    room = "#sprint-grooming"
+    world.create_room(room)
+    world.add_agents(room, ("ag-1",))
+    world.set_approval_modes(room, {"ag-1": "bypass"})
+    world.command(room.lstrip("#"), "/room voice on")
+    world.command(room.lstrip("#"), "/hops 0")
+    variants = {
+        "light": {**DESKTOP, "color_scheme": "light"},
+        "dark": {**DESKTOP, "color_scheme": "dark"},
+        "phone-light": {**PHONE, "color_scheme": "light"},
+        "phone-dark": {**PHONE, "color_scheme": "dark"},
+    }
+    for name, options in variants.items():
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        try:
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            expect(page.locator("#st-handsfree")).to_be_visible()
+            expect(page.locator("#st-hops")).to_contain_text("loop guard off")
+            expect(page.locator("#st-approvals")).to_be_visible()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            page.mouse.move(0, 0)
+            shot(page, out, f"phonechips-{name}.png")
+            head = page.locator(".conv-head").bounding_box()
+            if head:
+                shot(
+                    page,
+                    out,
+                    f"phonechips-strip-{name}.png",
+                    clip={**head, "height": head["height"] + 2},
+                )
+        finally:
+            ctx.close()
+
+
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names``, ``admins`` and ``backups`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
@@ -3838,6 +3886,7 @@ ONLY: dict[str, Any] = {
     "room_calls": shoot_room_calls,
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,
+    "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
 }

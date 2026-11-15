@@ -258,6 +258,36 @@ def no_horizontal_scroll(page: Page) -> None:
     assert widths[0] <= widths[1] and widths[2] <= widths[3], f"horizontal scroll: {widths}"
 
 
+def chips_outside_row(page: Page) -> list[str]:
+    """Header status chips that are shown but not wholly inside the row that holds them."""
+    return page.evaluate(
+        """() => {
+          const row = document.getElementById('status-chips').getBoundingClientRect();
+          return [...document.querySelectorAll('#status-chips .chip')]
+            .filter(c => c.getBoundingClientRect().width > 0)
+            .filter(c => { const b = c.getBoundingClientRect();
+                           return b.left < row.left - 1 || b.right > row.right + 1
+                               || b.top < row.top - 1 || b.bottom > row.bottom + 1; })
+            .map(c => c.id);
+        }"""
+    )
+
+
+def chip_row_report(page: Page) -> dict[str, Any]:
+    """Widths of the header's shown chips, for a layout assertion that fails with the numbers."""
+    return page.evaluate(
+        """() => {
+          const row = document.getElementById('status-chips');
+          const chips = [...row.querySelectorAll('.chip')]
+            .filter(c => c.getBoundingClientRect().width > 0)
+            .map(c => ({id: c.id, w: Math.round(c.getBoundingClientRect().width),
+                        t: (c.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40)}));
+          return {clientW: row.clientWidth, scrollW: row.scrollWidth,
+                  clientH: row.clientHeight, scrollH: row.scrollHeight, chips};
+        }"""
+    )
+
+
 # Issue #110: where a caret placed after `caretPos` characters of #input's value would sit, found
 # the way caret-position libraries do it (and distinct from app.js's own #input-mirror, which is
 # what this is checking): a hidden duplicate of #input's box -- same font, padding, border,
@@ -571,6 +601,45 @@ def test_the_room_buttons_sit_in_one_row_on_a_phone(ui: UI) -> None:
     assert 0 <= f["x"] - (r["x"] + r["width"]) <= 8, (r, f)  # side by side
     assert r["y"] >= chips["y"] + chips["height"], (r, chips)  # below the chips
     no_horizontal_scroll(page)
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_a_phones_header_shows_every_chip_without_scrolling(ui: UI, scheme: str) -> None:
+    """#716: on a 390 px phone the header's chip row scrolled sideways. With hands-free on and every
+    chip showing (Hands-free, Running, Budget, the loop-guard warning, the approvals count) Hops sat
+    past the edge. Whether a room is paused or out of budget is worth seeing without a swipe, so the
+    row wraps and each chip is wholly inside it. Fails if any shown chip is cut by the row, or the
+    row scrolls, at 390x844, including at the larger text size."""
+    room = f"phone-chips-{scheme}"
+    world = ui.world
+    world.create_room("#" + room)
+    world.command(room, "/room voice on")
+    world.command(room, "/hops 0")  # "loop guard off", the long form of the Hops chip
+    world.add_agents("#" + room, ("ag-1",))
+    world.set_approval_modes("#" + room, {"ag-1": "bypass"})
+    page = ui.open(room=room, color_scheme=scheme, **PHONE)
+    expect(page.locator("#st-handsfree")).to_have_text("Hands-free")
+    expect(page.locator("#st-state")).to_have_text("Running")
+    expect(page.locator("#st-budget")).to_contain_text("60/60")
+    expect(page.locator("#st-hops")).to_contain_text("loop guard off")
+    expect(page.locator("#st-approvals")).to_be_visible()
+    assert page.locator("#st-approvals").evaluate("el => getComputedStyle(el, '::after').content") == '"1"'
+    report = chip_row_report(page)
+    assert len(report["chips"]) == 5, report
+    assert report["scrollW"] <= report["clientW"] + 1, report
+    assert report["scrollH"] <= report["clientH"] + 1, report
+    assert chips_outside_row(page) == [], report
+    for chip in ("#st-handsfree", "#st-state", "#st-budget", "#st-hops", "#st-approvals"):
+        expect(page.locator(chip)).to_be_in_viewport()
+    rules, chips = page.locator("#room-rules").bounding_box(), page.locator("#status-chips").bounding_box()
+    assert rules and chips and rules["y"] >= chips["y"] + chips["height"] - 1
+    no_horizontal_scroll(page)
+    # the larger text size widens every chip; they still wrap inside the row instead of scrolling
+    page.evaluate("document.documentElement.dataset.textSize = 'larger'")
+    report = chip_row_report(page)
+    assert report["scrollW"] <= report["clientW"] + 1, report
+    assert report["scrollH"] <= report["clientH"] + 1, report
+    assert chips_outside_row(page) == [], report
 
 
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
