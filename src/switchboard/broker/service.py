@@ -370,7 +370,12 @@ class RoomService:
 
     def rooms(self, viewer: int | None = None) -> list[dict[str, Any]]:
         """The open rooms ``viewer`` sees (§44): every public one, and the private ones they're in."""
-        return [self.room_dict(r) for r in self.store.list_rooms() if self.visible(r, viewer)]
+        return [self.room_dict(r) for r in self.visible_rooms(viewer)]
+
+    def visible_rooms(self, viewer: int | None) -> list[Room]:
+        """The open rooms ``viewer`` sees, by name: ``visible`` applied to each, the one rule (§44). The
+        web's list and an agent's ``rooms()`` (§59) both come from here."""
+        return [r for r in self.store.list_rooms() if self.visible(r, viewer)]
 
     # ------------------------------------------------------------ private rooms (§44)
     def visible(self, room: Room, viewer: int | None) -> bool:

@@ -186,6 +186,7 @@ METHODS = {
     "agent.join": "join",
     "agent.leave": "leave",
     "agent.who": "who",
+    "agent.rooms": "rooms",
     "agent.say": "say",
     "agent.review": "review",
     "agent.board": "board",

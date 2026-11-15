@@ -163,6 +163,30 @@ def _word(s: Any) -> str:
     return _SAFE_WORD.sub("", str(s or "").lower().replace(" ", "-"))[:40] or "?"
 
 
+ROOMS_MAX = 100  # rooms() lists at most this many; the rest are counted (§59)
+ROOM_NAME_MAX = 40  # a name in rooms() is cut: it is text from outside, whatever checked it on the way in
+
+
+def render_rooms(rows: list[dict[str, Any]], more: int = 0) -> str:
+    """What an agent's ``rooms()`` answers (§59): one line per room, already in the order to show,
+    each ``{"name", "people", "agents", "private", "joined"}``, then a line counting the ``more`` that
+    were left out. Names are cleaned and cut like every other text from outside; there are no messages
+    and no member names in it."""
+    if not rows:
+        return "[switchboard] no rooms you may join yet: ask your user to create one."
+    lines = [f"[switchboard] {_n(len(rows) + more, 'room', 'rooms')} you may join, only when your user asks:"]
+    for r in rows:
+        name = " ".join(clean(r["name"]).split())[:ROOM_NAME_MAX] or "?"
+        bits = [f"- {name}", f"people={r['people']}", f"agents={r['agents']}"]
+        if r["private"]:
+            bits.append("private=yes")
+        bits.append(f"joined={'yes' if r['joined'] else 'no'}")
+        lines.append(" ".join(bits))
+    if more:
+        lines.append(f"... and {more} more not listed.")
+    return "\n".join(lines)
+
+
 def hhmmss(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
 
