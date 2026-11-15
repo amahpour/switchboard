@@ -529,6 +529,11 @@ class RoomService:
                 out.append({"name": r.name, "people": self.room_people_names(r), "created_by": r.created_by})
         return out
 
+    def can_reopen(self, room: Room, viewer: int | None) -> bool:
+        """The existing Reopen conditions (§28.4, §44): closed, visible, and its name is free.
+        The write still checks these at the route and store, since the name can be taken meanwhile."""
+        return room.closed and self.visible(room, viewer) and self.store.get_room(room.display_name) is None
+
     def closed_room_dicts(self, viewer: int | None = None) -> list[dict[str, Any]]:
         """The closed rooms ``viewer`` sees, newest first (the web's Closed rooms panel,
         ``switchboard rooms --closed``; DESIGN.md §28.4, §44)."""
@@ -546,7 +551,7 @@ class RoomService:
                     "closed_at": ev.ts if ev is not None else None,
                     "closed_by": ev.data.get("by") if ev is not None else None,
                     "messages": self.store.count_messages(r.id),
-                    "reopenable": self.store.get_room(r.display_name) is None,
+                    "reopenable": self.can_reopen(r, viewer),
                 }
             )
         return out

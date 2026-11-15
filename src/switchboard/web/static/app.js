@@ -7881,7 +7881,7 @@
   // is). The broker searches only the rooms this person can see and answers each hit with a snippet and
   // highlight offsets; this draws the snippet with textContent and <mark> elements it makes itself. Opening a
   // hit loads the messages around it (GET /api/rooms/{slug}/messages?around=) and shows them in the room, with
-  // a banner to go back to the results or jump to the latest. Nothing here writes anything.
+  // a banner to go back to the results or jump to the latest. A closed hit first asks to Reopen (#736).
   const SEARCH_WAIT_MS = 250;        // after the last key, before asking
   const SEARCH_GROUP_SHOW = 2;       // hits a room's group shows before "N more in #room"
   const SEARCH_PATH = 'M7 2.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9ZM10.5 10.5 14 14';
@@ -7890,7 +7890,7 @@
   function freshSearch() {
     return {
       q: '', room: '', from: '', time: 'any', calls: true,
-      hits: [], total: null, capped: false, next: null,   // the last answer
+      hits: [], total: null, capped: false, next: null, rooms: null,   // the last answer
       ran: null,         // the query string that answer was for
       loading: false, error: '', seq: 0, timer: null, retry: null,
       sel: 0,            // the hit Enter opens, in the page's order
@@ -8022,6 +8022,7 @@
       s.sel = 0;
       s.expanded = new Set();
     }
+    s.rooms = data.rooms;
     s.next = data.next || null;
     s.ran = q;
     renderSearch();
@@ -8092,8 +8093,10 @@
     const s = state.search;
     const c = s.chips;
     if (!c) return;
-    const rooms = Array.from(state.rooms.values()).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
-    fillSelect(c.room, [['', 'Any room']].concat(rooms.map(function (r) { return [r.slug, r.name.replace(/^#/, '')]; })), s.room);
+    const rooms = s.rooms || Array.from(state.rooms.values()).sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+    fillSelect(c.room, [['', 'Any room']].concat(rooms.map(function (r) {
+      return [r.slug, r.name.replace(/^#/, '') + (r.closed ? ' (closed)' : '')];
+    })), s.room);
     fillSelect(c.from, [['', 'Anyone']].concat(searchNames().map(function (n) { return [n, n]; })), s.from);
     fillSelect(c.time, SEARCH_TIMES, s.time);
     c.calls.textContent = s.calls ? 'Calls too ✓' : 'Calls off';
@@ -8140,9 +8143,10 @@
       h.call ? 'on the call' : h.kind === 'agent' ? 'agent' + (h.harness ? ' · ' + h.harness : '') : 'person'));
     const t = el('span', 'search-hit-time', hitTime(h.ts));
     t.title = new Date(h.ts * 1000).toLocaleString();
+    if (h.closed) head.append(el('span', 'search-closed', 'closed'));
     head.append(t);
     b.append(head, snippetNode(h.snippet));
-    b.setAttribute('aria-label', h.from + ' in ' + h.room + (h.call ? ' (call)' : '') + ', ' + hitTime(h.ts));
+    b.setAttribute('aria-label', h.from + ' in ' + h.room + (h.closed ? ' (closed)' : '') + (h.call ? ' (call)' : '') + ', ' + hitTime(h.ts));
     b.addEventListener('click', function () { openHit(index); });
     return b;
   }
@@ -8238,8 +8242,32 @@
     const s = state.search;
     const h = s.hits[index];
     if (!h) return;
+    if (h.closed) {
+      if (!await confirmDialog('Reopen ' + h.room + '?',
+        'This room is closed. Reopen it to read the conversation around this message. Agents join it again themselves.',
+        'Reopen', false)) return;
+      if (state.search !== s || !state.searchOn) return;
+      try {
+        const res = await api('POST', '/api/closed-rooms/' + encodeURIComponent(String(h.room_id)) + '/reopen', {});
+        await loadRooms();
+        // Back to results keeps this page, so update every hit and the selected filter for this room.
+        const oldSlug = h.slug;
+        for (const hit of s.hits) {
+          if (hit.room_id === h.room_id) { hit.closed = false; hit.slug = res.room.slug; hit.room = res.room.name; }
+        }
+        for (const room of s.rooms || []) {
+          if (room.id === h.room_id) { room.closed = false; room.slug = res.room.slug; room.name = res.room.name; }
+        }
+        if (s.rooms) s.rooms.sort(function (a, b) { return Number(a.closed) - Number(b.closed) || a.name.localeCompare(b.name); });
+        if (s.room === oldSlug) s.room = res.room.slug;
+      } catch (e) {
+        s.error = 'Could not reopen that room: ' + String(e.message || e);
+        renderSearch();
+        return;
+      }
+    }
     const r = state.rooms.get(h.room);
-    if (!r) {
+    if (!r || (h.room_id && r.id !== h.room_id)) {
       s.error = h.room + ' is not open any more';
       renderSearch();
       return;

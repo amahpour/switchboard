@@ -285,3 +285,51 @@ def test_the_phone_has_one_column_big_targets_and_the_highlight_in_both_themes(u
     for sel in ("#around-back", "#around-latest"):
         assert page.locator(sel).bounding_box()["height"] >= 43.5  # type: ignore[index]
     no_horizontal_scroll(page)
+
+
+@pytest.mark.parametrize("scheme,phone", [("light", False), ("dark", False), ("light", True)])
+def test_closed_search_requires_reopen_and_then_opens_the_message(ui: UI, scheme: str, phone: bool) -> None:
+    """A closed result is marked; closed filters follow open ones. Cancel preserves the closed room and
+    focus; only Reopen writes, then shows the target in context. Covers both themes and the phone."""
+    name = f"search-archive-{scheme}-{'phone' if phone else 'desktop'}"
+    ui.world.create_room("#" + name)
+    ui.world.say(name, "context before the archived decision")
+    mid = ui.world.say(name, "archivalquartz decision to keep the backup")
+    ui.world.say(name, "context after the archived decision")
+    ui.world.command(name, "/close")
+    page = ui.open(None, color_scheme=scheme, **(PHONE if phone else {}))
+    if phone:
+        page.click("#rooms-toggle")
+        page.locator("#search-input").focus()
+    search_for(page, "archivalquartz")
+    # The message id identifies this test's archive even when other parameter cases have run.
+    hit = page.locator(f'#search-results .search-hit[data-id="{mid}"]')
+    expect(hit).to_be_visible()
+    expect(hit).to_contain_text("closed")
+    options = page.locator('#search-chips select[data-focus="search-room"] option').all_text_contents()
+    first_closed = next(i for i, text in enumerate(options) if text.endswith(" (closed)"))
+    assert all(text.endswith(" (closed)") for text in options[first_closed:])
+    page.select_option('#search-chips select[data-focus="search-room"]', label=name + " (closed)")
+    expect(results(page)).to_have_count(1)
+    requests = []
+    page.on("request", lambda r: requests.append((r.method, r.url)))
+    hit.click()
+    expect(page.locator("#app-dialog-title")).to_have_text(f"Reopen #{name}?")
+    expect(page.locator("#banner-around")).to_be_hidden()
+    assert not any("/messages?around=" in url or method == "POST" for method, url in requests)
+    page.click("#app-dialog-cancel")
+    expect(hit).to_be_focused()
+    assert ui.world.broker.on_loop(lambda: ui.world.broker.state.store.get_room("#" + name)) is None
+    hit.press("Enter")
+    expect(page.locator("#app-dialog-action")).to_have_text("Reopen")
+    page.click("#app-dialog-action")
+    expect(page.locator("#banner-around")).to_be_visible()
+    expect(page.locator("#room-title")).to_have_text(name)
+    expect(page.locator(f'#log .line[data-id="{mid}"]')).to_have_class(re.compile("search-target"))
+    expect(page.locator("#log")).to_contain_text("context before the archived decision")
+    expect(page.locator("#log")).to_contain_text("context after the archived decision")
+    assert sum(method == "POST" and url.endswith("/reopen") for method, url in requests) == 1
+    page.click("#around-back")
+    expect(results(page)).to_have_count(1)
+    expect(results(page)).not_to_contain_text("closed")
+    no_horizontal_scroll(page)
