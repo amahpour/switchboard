@@ -235,6 +235,14 @@ def clamp_before(value: Any) -> int:
     return max(0, min(value, MAX_MESSAGE_ID))
 
 
+def clamp_around(value: Any) -> int:
+    """``read(around=...)`` (#741) names one message, like ``before``: anything but a plain positive ``int``
+    is refused (a bool too), and one past a message id's range is clamped, so it finds nothing."""
+    if type(value) is not int or value < 1:
+        raise ServiceError("bad_request", "around must be a message id")
+    return min(value, MAX_MESSAGE_ID)
+
+
 class AgentService:
     def __init__(self, state: "BrokerState"):
         self.state = state
@@ -951,10 +959,23 @@ class AgentService:
 
     def read(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
-        limit = params.get("limit", 20)
+        around = params.get("around")
+        limit = params.get("limit", 10 if around is not None else 20)
         if isinstance(limit, bool) or not isinstance(limit, int):
-            limit = 20
+            limit = 10 if around is not None else 20
         limit = max(1, min(limit, 50))
+        if around is not None:
+            if params.get("query") is not None or params.get("before") is not None:
+                raise ServiceError("bad_request", "around cannot be used with query or before")
+            # a view like before= (§58.8): no batch, nothing marked or confirmed, no cursor moved, and
+            # no help for pass()'s read-first rule. ``limit`` counts each side here, 25 at most.
+            around = clamp_around(around)
+            msgs = self.store.chat_around(room.id, around, limit)
+            text = envelope.render_around(
+                room=room.name, recipient=m.screen_name, messages=msgs, around=around
+            )
+            text = self._with_downloads(text, msgs, m.id)
+            return {"text": text, "batch_id": None, "count": len(msgs), "more": False}
         query = params.get("query")
         if query is not None:
             if not isinstance(query, str):

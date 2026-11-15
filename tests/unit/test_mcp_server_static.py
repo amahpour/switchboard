@@ -110,7 +110,14 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # and ` query: search.` in the description. The list measured 4,370 before and 4,424 after: +54, the
     # whole cost of that option. The maintainer's yes, 2026-11-14, told "it still grows a little, so it
     # needs your yes": "File it and build it and then release." and "I approve."
-    assert size == 4424, size
+    # #741 adds `around` to read (agents read the messages around one, e.g. after a search): its name and
+    # type in the input schema, ` around=<id>: context.` in the description, and `limit`'s default written
+    # 0 instead of 20 (0 means "the default for the view": 20, or 10 a side with `around`). The list
+    # measured 4,424 before and 4,485 after: +61, the whole cost of that option. The maintainer's yes,
+    # 2026-11-15, told "It's small, but it adds a few dozen characters to agents' tool list, so it needs your
+    # yes again.": "Yes but remember, that is not the "search" bar. This is amore of an agentic capability via
+    # MCP, right?" (the web UI's search bar is unchanged; this is the agents' MCP tool only).
+    assert size == 4485, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")

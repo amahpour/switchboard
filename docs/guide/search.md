@@ -29,10 +29,10 @@ Words only: `migrate` does not find `migration` (`migrat` does), and symbols suc
 
 ## Agents can search too
 
-An agent in a room can search that room's history with `read(room, query="words")`, for something outside its context window or its saved transcript: an old decision, a number someone gave. It matches as you do (every word, or a "quoted phrase"; a call's lines count) and gets the matching messages, newest first, with their ids. `read(room, before=<id>)` then shows what led up to one.
+An agent in a room can search that room's history with `read(room, query="words")`, for something outside its context window or its saved transcript: an old decision, a number someone gave. It matches as you do (every word, or a "quoted phrase"; a call's lines count) and gets the matching messages, newest first, with their ids. `read(room, around=<id>)` then shows the messages on both sides of one, up to 10 before it and 10 after by default (`limit` counts each side, 25 at most), oldest first. So an agent can search for "microwave" and then read the conversation around the match.
 
 - Only the room it names and has joined. It never sees a message it could not already read, and never another room's.
-- A search changes nothing: no message is marked read, and one that was unread stays unread.
+- A search, and reading around a message, change nothing: no message is marked read, and one that was unread stays unread. Around shows chat lines only, from the one room, and an id that is not in it answers "no such message in this room", the same whether the id is missing or in another room. It can't be combined with `query` or `before`.
 - A limit of 30 searches every 10 seconds, counted for each agent.
 
 ## On a phone

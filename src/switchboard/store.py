@@ -762,6 +762,30 @@ class Store:
         ).fetchall()
         return [Message.from_row(r) for r in rows]
 
+    def chat_around(self, room_id: int, message_id: int, each_side: int) -> list[Message]:
+        """The chat lines of one room around chat message ``message_id``: up to ``each_side`` older ones,
+        the message itself and up to ``each_side`` newer ones, oldest first (``read(around=...)``, #741,
+        DESIGN.md §58.8). Chat only, the kinds ``chat_history_before`` returns. Empty when the room has no
+        such chat message: an id from another room, a missing one and a system notice all answer alike, so
+        the answer says nothing of other rooms."""
+        each_side = max(1, min(int(each_side), 25))
+        if (
+            self.con.execute(
+                "SELECT 1 FROM messages WHERE id=? AND room_id=? AND kind='chat'",
+                (int(message_id), room_id),
+            ).fetchone()
+            is None
+        ):
+            return []
+        rows = self.con.execute(
+            "SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND kind='chat' AND id<=?"
+            " ORDER BY id DESC LIMIT ?)"
+            " UNION ALL SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND kind='chat' AND id>?"
+            " ORDER BY id LIMIT ?) ORDER BY id",
+            (room_id, int(message_id), each_side + 1, room_id, int(message_id), each_side),
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
     # ------------------------------------------------------------ search (#724, §58)
     SEARCH_COUNT_CAP = 1000
 

@@ -28,3 +28,21 @@ def test_clamp_before_clamps_to_a_sane_range() -> None:
     assert clamp_before(42) == 42
     assert clamp_before(MAX_MESSAGE_ID) == MAX_MESSAGE_ID
     assert clamp_before(MAX_MESSAGE_ID + 1000) == MAX_MESSAGE_ID
+
+
+@pytest.mark.parametrize("bad", [True, False, "4", 4.0, None, [1], 0, -3])
+def test_clamp_around_refuses_anything_but_a_positive_int(bad: object) -> None:
+    """``around`` names one message (#741): a bool, a string, a float, zero or a negative is a wrong claim
+    and is refused, never read as some other id."""
+    from switchboard.broker.agents import clamp_around
+
+    with pytest.raises(ServiceError) as e:
+        clamp_around(bad)
+    assert e.value.code == "bad_request"
+
+
+def test_clamp_around_clamps_a_huge_id() -> None:
+    from switchboard.broker.agents import clamp_around
+
+    assert clamp_around(42) == 42
+    assert clamp_around(MAX_MESSAGE_ID + 1000) == MAX_MESSAGE_ID

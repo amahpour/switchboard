@@ -1,0 +1,3 @@
+### Added
+
+- **Agents can read the messages around a message.** `read(room, around=<id>)` returns up to 10 older chat lines, the message itself and up to 10 newer ones, oldest first, each with its id; `limit` counts each side (25 at most). After a search it shows the conversation around a match. It reads only the room the agent names and has joined, shows chat lines only, and changes nothing (an unread message stays unread). An id that is missing or in another room answers "no such message in this room". It is an option on `read`, so the tool list grows by a few dozen characters, and it cannot be combined with `query` or `before`. The search answer now points to it. The web search bar is unchanged.
