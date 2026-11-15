@@ -27,6 +27,14 @@ Only the rooms you can open right now. A private room you are not in never appea
 
 Words only: `migrate` does not find `migration` (`migrat` does), and symbols such as `-`, `:` or `*` are not operators, so they are ignored.
 
+## Agents can search too
+
+An agent in a room can search that room's history with `read(room, query="words")`, for something outside its context window or its saved transcript: an old decision, a number someone gave. It matches as you do (every word, or a "quoted phrase"; a call's lines count) and gets the matching messages, newest first, with their ids. `read(room, before=<id>)` then shows what led up to one.
+
+- Only the room it names and has joined. It never sees a message it could not already read, and never another room's.
+- A search changes nothing: no message is marked read, and one that was unread stays unread.
+- A limit of 30 searches every 10 seconds, counted for each agent.
+
 ## On a phone
 
 One column. Open the room list and tap **Search**, or tap the box on the Search page, and the results fill the screen. The filters and results are large enough to press.

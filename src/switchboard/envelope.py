@@ -536,6 +536,24 @@ def render_history(*, room: str, recipient: str, messages: Sequence[Any], earlie
     return "\n".join(lines)
 
 
+def render_search(
+    *, room: str, recipient: str, messages: Sequence[Any], more: bool, searchable: bool = True
+) -> str:
+    """``read(query=...)``'s answer (§58.8): the room's chat lines that match, newest first, in the list
+    format of ``render_history``. A plain view, not a delivery: no batch, nothing confirmed."""
+    r = _word(room)
+    if not searchable:
+        return f'[switchboard] {r}: nothing to search for: use words, or a "quoted phrase".'
+    if not messages:
+        return f"[switchboard] {r}: no messages match."
+    lines = [f"[switchboard] {r}: {_n(len(messages), 'match', 'matches')}, newest first. {PEER_WARNING}"]
+    lines.extend(render_catchup_line(m, recipient) for m in messages)
+    if more:
+        lines.append("more matches exist: use fewer or more specific words to narrow them.")
+    lines.append(f'read("{r}", before=<id>) shows what led up to a match.')
+    return "\n".join(lines)
+
+
 def users_phrase(people: Sequence[str]) -> str:
     """``alice``, ``alice and bob``, ``alice, bob and carol``: the people here (§32)."""
     names = [_word(p) for p in people]
