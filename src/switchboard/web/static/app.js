@@ -8244,7 +8244,7 @@
     if (!h) return;
     if (h.closed) {
       if (!await confirmDialog('Reopen ' + h.room + '?',
-        'This room is closed. Reopen it to read the conversation around this message. Its agents aren't brought back; each joins again only when its person asks.',
+        'This room is closed. Reopen it to read the conversation around this message. Its agents are not brought back: each joins again only when its person asks.',
         'Reopen', false)) return;
       if (state.search !== s || !state.searchOn) return;
       try {
