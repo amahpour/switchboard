@@ -1,4 +1,4 @@
-"""How long a search takes on a large database (#724, DESIGN.md §58.8).
+"""How long a search takes on a large database (#724, DESIGN.md §58.9).
 
 The route runs on the broker's event loop, so a slow search stalls every page and agent. This plants 100,000
 chat lines in 100 rooms (a quarter of them in private rooms the person is not in), then runs real searches

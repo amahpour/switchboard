@@ -106,7 +106,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # #727 adds the board tool's `style`, `w` and `h` inputs (no per-input description) and the
     # `resize` and `text` action names: +123, measured the same way (4,165 before, 4,288 alone). The
     # same yes covers it: "I'd raise it by only what they cost". Both together: 4,165 + 82 + 123 = 4,370.
-    assert size == 4370, size
+    # #738 adds `query` to read (agents search their room's history): its name and type in the input schema
+    # and ` query: search.` in the description. The list measured 4,370 before and 4,424 after: +54, the
+    # whole cost of that option. The maintainer's yes, 2026-11-14, told "it still grows a little, so it
+    # needs your yes": "File it and build it and then release." and "I approve."
+    assert size == 4424, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")

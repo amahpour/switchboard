@@ -103,6 +103,8 @@ class BrokerState:
     signin: SignInLimiter = None  # type: ignore[assignment]
     # searches per person (§58)
     search_limiter: SearchLimiter = None  # type: ignore[assignment]
+    # searches per agent (§58.8): its own bucket, keyed by participant id, so agents and people share none
+    agent_search_limiter: SearchLimiter = None  # type: ignore[assignment]
     # the MCP app behind /mcp, for agents over HTTPS (§49.2): its lifespan runs inside ours
     agent_http: Any = None
     # AgentAuth, the door the agent routes share: a token or a listener key. The host route uses it (§54)
@@ -210,6 +212,7 @@ def create_app(
         used_challenges=UsedChallenges(clock),
         signin=SignInLimiter(clock),
         search_limiter=SearchLimiter(clock),
+        agent_search_limiter=SearchLimiter(clock),
         oauth=oauth.OAuthState(clock),
     )
 

@@ -393,9 +393,14 @@ def build_server(st: ToolBackend) -> FastMCP:
             return ImageContent(type="image", data=res["image"], mime_type="image/png")
         return dumps(res)
 
-    @mcp.tool(annotations=RO)
-    async def read(room: str, ctx: Context, limit: int = 20, before: int = 0) -> str:
-        """Unread messages in full, oldest first, "not shown here" ones too. before=<id>: older chat."""
+    @mcp.tool(
+        annotations=RO,
+        description=(
+            'Unread messages in full, oldest first, "not shown here" ones too. before=<id>: older chat. '
+            "query: search."
+        ),
+    )
+    async def read(room: str, ctx: Context, limit: int = 20, before: int = 0, query: str = "") -> str:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
@@ -405,6 +410,8 @@ def build_server(st: ToolBackend) -> FastMCP:
         params = {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))}
         if before:
             params["before"] = before
+        if query:
+            params["query"] = query
         res = await st.call("agent.read", params)
         return dumps(res)
 

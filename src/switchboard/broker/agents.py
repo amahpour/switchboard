@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import claims, envelope
+from switchboard import claims, envelope, search
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
@@ -955,6 +955,13 @@ class AgentService:
         if isinstance(limit, bool) or not isinstance(limit, int):
             limit = 20
         limit = max(1, min(limit, 50))
+        query = params.get("query")
+        if query is not None:
+            if not isinstance(query, str):
+                raise ServiceError("bad_request", "query must be text")
+            if params.get("before") is not None:
+                raise ServiceError("bad_request", "query and before cannot be used together")
+            return self._search(p, m, room, query, limit)
         before = params.get("before")
         if before is not None:
             # a history view (issue #300 review), not a delivery: no batch, nothing marked or
@@ -970,6 +977,42 @@ class AgentService:
         text, bid, count, more, acts = self.engine.pull(p, m, "read", limit)
         self.run(acts)
         return {"text": text, "batch_id": bid, "count": count, "more": more}
+
+    def _search(self, p: Any, m: Any, room: Any, query: str, limit: int) -> dict[str, Any]:
+        """``read(query=...)`` (§58.8, #738): this room's chat lines that match, newest first, in full.
+
+        A plain view like ``before=``: no batch, nothing marked or confirmed, no cursor moved, and it never
+        satisfies pass()'s read-first rule (§24). Only the room the agent named and is a member of
+        (``_member``), through ``Store.search``, the one interface to the index. Counted per agent against
+        the people's limit."""
+        wait = self.state.agent_search_limiter.wait_s(p.id)
+        if wait > 0:
+            retry = int(wait) + 1
+            return {
+                "text": f"[switchboard] too many searches: try again in about {retry} s.",
+                "batch_id": None,
+                "count": 0,
+                "more": False,
+                "reason": "rate_limited",
+                "retry_after_s": retry,
+            }
+        match = search.match_query(query[: search.MAX_QUERY_CHARS])
+        msgs: list[Any] = []
+        more = False
+        if match is not None:
+            got = self.store.search(
+                [room.id], match, nonce=secrets.token_hex(6), limit=limit, before=None, count=False
+            )
+            more = bool(got["more"])
+            for h in got["hits"]:
+                msg = self.store.get_message(h["id"])
+                if msg is not None and msg.room_id == room.id:  # never trust an id to stay in the room
+                    msgs.append(msg)
+        text = envelope.render_search(
+            room=room.name, recipient=m.screen_name, messages=msgs, more=more, searchable=match is not None
+        )
+        text = self._with_downloads(text, msgs, m.id)
+        return {"text": text, "batch_id": None, "count": len(msgs), "more": more}
 
     def _with_downloads(self, text: str, messages: list[Any], membership_id: int) -> str:
         """A short-lived download link for each stored file these messages name (§53)."""
