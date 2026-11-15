@@ -536,6 +536,19 @@ def render_history(*, room: str, recipient: str, messages: Sequence[Any], earlie
     return "\n".join(lines)
 
 
+def render_around(*, room: str, recipient: str, messages: Sequence[Any], around: int) -> str:
+    """``read(around=<id>)``'s answer (§58.8, #741): the room's chat lines around one message, oldest first,
+    in the list format of ``render_history``. A plain view, not a delivery. ``messages`` is empty when the
+    room has no such message; a missing id and another room's id get this same line."""
+    r = _word(room)
+    if not messages:
+        return f"[switchboard] {r}: no such message in this room."
+    head = f"{_n(len(messages), 'message', 'messages')} around {int(around)}, oldest first."
+    lines = [f"[switchboard] {r}: {head} {PEER_WARNING}"]
+    lines.extend(render_catchup_line(m, recipient) for m in messages)
+    return "\n".join(lines)
+
+
 def render_search(
     *, room: str, recipient: str, messages: Sequence[Any], more: bool, searchable: bool = True
 ) -> str:
@@ -550,7 +563,7 @@ def render_search(
     lines.extend(render_catchup_line(m, recipient) for m in messages)
     if more:
         lines.append("more matches exist: use fewer or more specific words to narrow them.")
-    lines.append(f'read("{r}", before=<id>) shows what led up to a match.')
+    lines.append(f'read("{r}", around=<id>) shows the messages around a match.')
     return "\n".join(lines)
 
 

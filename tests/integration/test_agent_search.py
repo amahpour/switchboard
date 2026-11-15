@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from conftest import FakeClock, InProcBroker
 from fakes.fake_agent import FakeAgent, ids_in
-from test_mcp_agent import FAST, q, states
+from test_mcp_agent import FAST, q, states, stub_by_hook
 
 from switchboard import search
 from switchboard.broker.search import MAX_PER_WINDOW
@@ -179,3 +179,163 @@ async def test_a_room_the_agent_has_not_joined_is_refused(broker: InProcBroker) 
         r = await a.read("#side", query="zephyr")
         assert r["ok"] is False and r["code"] == "not_member"
         assert "hidden zephyr" not in str(r)
+
+
+# ---- read(around=<id>): the messages around one (#741, DESIGN.md §58.8) ----------------------------------
+
+
+def fill(b: InProcBroker, room: str, n: int, tag: str = "line") -> list[int]:
+    return [post(b, room, f"{tag} {i}") for i in range(n)]
+
+
+async def test_around_returns_both_sides_in_order_with_ids(broker: InProcBroker) -> None:
+    """The point: after a search, the agent reads what came before and after a match, oldest first, the
+    match in the middle, `limit` counting each side. Without `around`, forward context is out of reach."""
+    ids = fill(broker, "build", 30)
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        r = await a.read("#build", around=ids[15], limit=3)
+        assert r["ok"] and r["batch_id"] is None and r["count"] == 7 and not r["more"]
+        assert ids_in(r["text"]) == ids[12:19]
+        assert r["text"].startswith(f"[switchboard] #build: 7 messages around {ids[15]}, oldest first.")
+        assert "untrusted" in r["text"].lower()
+        d = await a.read("#build", around=ids[15])  # the default is 10 a side
+        assert ids_in(d["text"]) == ids[5:26]
+
+
+async def test_around_has_fewer_lines_at_the_start_and_end_of_a_room(broker: InProcBroker) -> None:
+    """A window that runs off either end of the room is short, not an error or padded with other rooms."""
+    ids = fill(broker, "build", 6)
+    post(broker, "side", "other room line")
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        first = await a.read("#build", around=ids[0], limit=3)
+        assert ids_in(first["text"]) == ids[0:4]
+        last = await a.read("#build", around=ids[-1], limit=3)
+        assert ids_in(last["text"]) == ids[2:6]
+
+
+async def test_around_skips_system_notices_like_before_does(broker: InProcBroker) -> None:
+    """Chat lines only: the join notice another agent's arrival writes into the room is not in the window,
+    and an id that names such a notice is refused as no such message."""
+    a_id = post(broker, "build", "before the join")
+    async with FakeAgent(broker.home, "ka") as a, FakeAgent(broker.home, "kb") as b:
+        await a.join("#build", "alpha")
+        await b.join("#build", "beta")  # a system notice lands between the two chat lines
+        b_id = post(broker, "build", "after the join")
+        notices = q(
+            broker,
+            "SELECT id FROM messages WHERE kind<>'chat'"
+            " AND room_id=(SELECT id FROM rooms WHERE name='#build')",
+        )
+        assert notices, "the join must have written a notice for this test to mean anything"
+        r = await a.read("#build", around=b_id)
+        assert ids_in(r["text"]) == [a_id, b_id]
+        gone = await a.read("#build", around=notices[0][0])
+        assert gone["count"] == 0 and "no such message in this room" in gone["text"]
+
+
+async def test_around_gives_the_same_answer_for_another_rooms_id_and_a_missing_id(
+    broker: InProcBroker,
+) -> None:
+    """The refusal leaks nothing: an id that exists in a room the agent is also in, and one that exists
+    nowhere, get byte-identical answers, so an agent can't probe which ids are real elsewhere."""
+    post(broker, "build", "mine")
+    other = post(broker, "side", "secret in side")
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        await a.join("#side", "tester")
+        elsewhere = await a.read("#build", around=other)
+        missing = await a.read("#build", around=other + 100_000)
+        assert elsewhere == missing
+        assert elsewhere["ok"] and elsewhere["count"] == 0
+        assert "no such message in this room" in elsewhere["text"]
+        assert "secret in side" not in str(elsewhere)
+
+
+async def test_around_leaves_unread_messages_unread(broker: InProcBroker) -> None:
+    """A view, as before= and query= are: an unread message in the window stays pending, no cursor moves,
+    and the real read() still delivers it. Were it a delivery, the agent would lose the message."""
+    async with FakeAgent(broker.home, "ka") as a, FakeAgent(broker.home, "kb") as b:
+        await a.join("#build", "alpha")
+        await b.join("#build", "beta")
+        mid = (await b.say("#build", "@alpha the parser drops port 0"))["posted_id"]
+        assert states(broker, "alpha")[mid] == "pending"
+        before = q(broker, "SELECT * FROM memberships WHERE screen_name='alpha'")
+        r = await a.read("#build", around=mid)
+        assert r["ok"] and ids_in(r["text"]) == [mid] and r["batch_id"] is None
+        assert states(broker, "alpha")[mid] == "pending"
+        assert q(broker, "SELECT * FROM memberships WHERE screen_name='alpha'") == before
+        rd = await a.read("#build")
+        assert ids_in(rd["text"]) == [mid] and rd["batch_id"] is not None
+
+
+async def test_around_does_not_satisfy_the_read_first_rule(broker: InProcBroker) -> None:
+    """A message shown only as a stub (a hook's pointer) is still owed a read(): an around window that
+    includes its full text must not lift pass()'s refusal (§24), as a before= page does not. Only the
+    normal read() does."""
+    async with FakeAgent(broker.home, "ka") as a, FakeAgent(broker.home, "kb") as b:
+        await a.join("#build", "alpha")
+        await b.join("#build", "beta")
+        mid = (await b.say("#build", "@alpha the parser drops port 0"))["posted_id"]
+        await stub_by_hook(a, mid)
+        win = await a.read("#build", around=mid)
+        assert ids_in(win["text"]) == [mid] and "drops port 0" in win["text"]
+        assert states(broker, "alpha")[mid] == "pending"
+        r = await a.pass_("#build")
+        assert r["ok"] is False and r["code"] == "read_first"
+
+
+async def test_around_with_query_or_before_is_refused(broker: InProcBroker) -> None:
+    """The views are different; combining them has no clear meaning, so it is refused, not guessed."""
+    i = post(broker, "build", "needle")
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        for extra in ({"query": "needle"}, {"before": i + 1}):
+            r = await a.read("#build", around=i, **extra)
+            assert r["ok"] is False and r["code"] == "bad_request" and "around" in r["error"]
+
+
+async def test_around_limit_counts_each_side_and_is_clamped(broker: InProcBroker) -> None:
+    """`limit` is per side and at most 25: a huge limit does not dump the room, and a zero or negative one
+    still shows the message with at least one line either side."""
+    ids = fill(broker, "build", 80)
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        big = await a.read("#build", around=ids[40], limit=500)
+        assert ids_in(big["text"]) == ids[15:66]
+        small = await a.read("#build", around=ids[40], limit=-4)
+        assert ids_in(small["text"]) == ids[39:42]
+
+
+async def test_around_with_a_bad_id_is_refused(broker: InProcBroker) -> None:
+    """The id is a claim: a negative one is refused as bad_request, as a wrong `before` is; a huge one is
+    clamped and finds nothing rather than overflowing the query."""
+    post(broker, "build", "x")
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        r = await a.read("#build", around=-5)
+        assert r["ok"] is False and r["code"] == "bad_request"
+        huge = await a.read("#build", around=2**80)
+        assert huge["ok"] and huge["count"] == 0 and "no such message" in huge["text"]
+
+
+async def test_around_needs_a_joined_room(broker: InProcBroker) -> None:
+    """Same membership check as every read: no join, no window, and no hint of what the room holds."""
+    i = post(broker, "side", "hidden zephyr")
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        r = await a.read("#side", around=i)
+        assert r["ok"] is False and r["code"] == "not_member" and "zephyr" not in str(r)
+
+
+async def test_a_search_points_to_around_for_context(broker: InProcBroker) -> None:
+    """The search answer's last line names the call that shows a match's neighbours, and that call works."""
+    ids = fill(broker, "build", 5)
+    hit = post(broker, "build", "the needle line")
+    async with FakeAgent(broker.home, "k1") as a:
+        await a.join("#build", "tester")
+        r = await a.read("#build", query="needle")
+        assert r["text"].splitlines()[-1] == 'read("#build", around=<id>) shows the messages around a match.'
+        ctx = await a.read("#build", around=hit, limit=2)
+        assert ids_in(ctx["text"]) == ids[-2:] + [hit]

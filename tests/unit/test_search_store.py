@@ -172,3 +172,26 @@ def test_around_a_message_is_a_window_of_its_own_room(st: Store) -> None:
     assert [m.id for m in st.history_around(r, ids[0])] == ids[:21]
     assert st.history_around(other, ids[30]) == []
     assert st.history_around(r, 999999) == []
+
+
+def test_chat_around_is_chat_only_and_only_the_named_room(st: Store) -> None:
+    """The agents' window (#741): each_side older chat lines, the message, each_side newer, notices left
+    out as ``chat_history_before`` leaves them; another room's id, a missing id and a notice's id all give
+    []; the web route's ``history_around`` keeps the notice. Fails if the window crosses rooms, includes
+    system lines, or is not capped at 25 a side."""
+    r = st.create_room("#build", "alice", 60, 0).id
+    other = st.create_room("#other", "alice", 60, 0).id
+    ids = []
+    for i in range(70):
+        ids.append(say(st, r, f"line {i}", msg_kind="notice" if i == 29 else "chat"))
+        say(st, other, f"elsewhere {i}")
+    chat = [i for n, i in enumerate(ids) if n != 29]
+    mid = ids[35]
+    assert [m.id for m in st.chat_around(r, mid, 2)] == [ids[33], ids[34], mid, ids[36], ids[37]]
+    assert [m.id for m in st.chat_around(r, ids[30], 2)] == [ids[27], ids[28], ids[30], ids[31], ids[32]]
+    assert [m.id for m in st.chat_around(r, mid, 1000)] == chat[chat.index(mid) - 25 : chat.index(mid) + 26]
+    assert [m.id for m in st.chat_around(r, ids[0], 2)] == [ids[0], ids[1], ids[2]]
+    assert [m.id for m in st.chat_around(r, mid, 0)] == [ids[34], mid, ids[36]]  # at least one a side
+    assert st.chat_around(other, mid, 3) == [] and st.chat_around(r, 999999, 3) == []
+    assert st.chat_around(r, ids[29], 3) == []  # a notice is not a chat message
+    assert ids[29] in [m.id for m in st.history_around(r, ids[35])]  # the web route is unchanged

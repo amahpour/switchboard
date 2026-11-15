@@ -397,17 +397,21 @@ def build_server(st: ToolBackend) -> FastMCP:
         annotations=RO,
         description=(
             'Unread messages in full, oldest first, "not shown here" ones too. before=<id>: older chat. '
-            "query: search."
+            "query: search. around=<id>: context."
         ),
     )
-    async def read(room: str, ctx: Context, limit: int = 20, before: int = 0, query: str = "") -> str:
+    async def read(
+        room: str, ctx: Context, limit: int = 0, before: int = 0, query: str = "", around: int = 0
+    ) -> str:
         await st.prime(ctx)
         tid = st.thread_id(ctx)
         got = await st.find_cred(room, tid)
         if isinstance(got, str):
             return got
         name, cred = got
-        params = {**st.base(cred, tid), "limit": max(1, min(int(limit), 50))}
+        params = {**st.base(cred, tid), "limit": max(1, min(int(limit) or (10 if around else 20), 50))}
+        if around:
+            params["around"] = around
         if before:
             params["before"] = before
         if query:
