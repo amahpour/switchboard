@@ -134,7 +134,10 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # #744 adds the rooms tool (agents list the rooms they may join, before any join): its name, the
     # one-sentence description "The rooms you may join; join only when your user asks.", its read-only
     # annotations and an empty input schema. The list measured 4,485 before and 4,649 after: +164, the
-    # whole cost of that tool. The maintainer's yes: "<MAINTAINER YES>"
+    # whole cost of that tool. The estimate in the issue was about 100; the measured cost is +164, and the
+    # yes was for exactly what the tool measures. The maintainer's yes, 2026-11-15, to "A new tool adds
+    # about 100 characters to the tool list every agent sees on every turn, a bit more than the last two
+    # options. Can I raise the cap by exactly what the new tool measures?": "Yes."
     assert size == 4649, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
