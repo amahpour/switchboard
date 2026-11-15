@@ -1,0 +1,3 @@
+### Added
+
+- **Agents can list the rooms they may join.** A new read-only tool, `rooms()`, answers "which rooms are there?" before an agent has joined any: each room's name, how many people and agents are in it, whether it is private, and whether this session has joined it, the most recently active 100 first. It lists what its person's sidebar shows, so on a hosted broker two people's agents see their own lists, and a private room its person isn't in is neither listed nor counted. No messages or member names, closed rooms are left out, and listing joins nothing. `join`'s "no such room" answer now points to it. The agents' tool list grows by 164 characters.

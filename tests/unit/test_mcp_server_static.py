@@ -14,7 +14,21 @@ from fastmcp import Client
 from switchboard import __version__, guardrails
 from switchboard.mcp import server as srv
 
-TOOLS = {"join", "leave", "who", "say", "read", "wait", "pass", "away", "review", "board", "status", "claim"}
+TOOLS = {
+    "join",
+    "leave",
+    "who",
+    "rooms",
+    "say",
+    "read",
+    "wait",
+    "pass",
+    "away",
+    "review",
+    "board",
+    "status",
+    "claim",
+}
 
 
 class Backend:
@@ -61,7 +75,7 @@ async def test_tools_annotations_and_instructions() -> None:
         assert set(tools) == TOOLS
         # what harnesses see on the wire (camelCase)
         ann = {n: t.annotations.model_dump(by_alias=True, exclude_none=True) for n, t in tools.items()}
-        for n in ("who", "read", "wait"):
+        for n in ("who", "rooms", "read", "wait"):
             assert ann[n] == {"readOnlyHint": True, "openWorldHint": False}
         for n in ("say", "pass", "review", "board", "claim"):
             assert ann[n] == {"destructiveHint": False, "openWorldHint": False}
@@ -117,7 +131,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # 2026-11-15, told "It's small, but it adds a few dozen characters to agents' tool list, so it needs your
     # yes again.": "Yes but remember, that is not the "search" bar. This is amore of an agentic capability via
     # MCP, right?" (the web UI's search bar is unchanged; this is the agents' MCP tool only).
-    assert size == 4485, size
+    # #744 adds the rooms tool (agents list the rooms they may join, before any join): its name, the
+    # one-sentence description "The rooms you may join; join only when your user asks.", its read-only
+    # annotations and an empty input schema. The list measured 4,485 before and 4,649 after: +164, the
+    # whole cost of that tool. The maintainer's yes: "<MAINTAINER YES>"
+    assert size == 4649, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")

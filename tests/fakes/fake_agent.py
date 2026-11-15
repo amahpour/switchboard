@@ -156,6 +156,9 @@ class FakeAgent:
     async def who(self, room: str) -> dict[str, Any]:
         return await self.call("who", room=room)
 
+    async def rooms(self) -> dict[str, Any]:
+        return await self.call("rooms")
+
     async def say(
         self, room: str, text: str, reply_to: int | None = None, since: int | None = None
     ) -> dict[str, Any]:

@@ -15,6 +15,7 @@ from fakes.fake_agent import FakeAgent
 from test_passkeys import Browser, hosted_broker, stop
 from test_people import join_as_bob, set_up
 
+from switchboard.broker.agents import NO_ROOM_HINT
 from switchboard.broker.hub import WsSubscriber
 from switchboard.broker.web import _ws_hello
 
@@ -117,7 +118,8 @@ async def test_an_agent_joins_only_where_its_person_is(hosted: InProcBroker) -> 
     hosted.state.test_mode = True
     async with FakeAgent(hosted.home, "k1") as agent:
         r = await agent.call("join", room="#secret", screen_name="claude-1")
-        assert not r["ok"] and r["error"] == "no such room #secret: ask your user to create it"
+        assert not r["ok"]
+        assert r["error"] == f"no such room #secret: {NO_ROOM_HINT}"
         assert bob.post("/api/rooms/secret/people", {"action": "add", "name": "alice"}).status_code == 200
         assert "#secret" in room_names(admin)
         joined = await agent.join("#secret", "claude-1")

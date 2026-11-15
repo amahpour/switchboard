@@ -75,6 +75,9 @@ WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 # the code at the end of a join's answer ("join yk:j<16 hex>"), given back to reclaim a name (#304)
 JOIN_CODE_RE = re.compile(r"^(?:yk:j)?([0-9a-f]{16})$")
 # the refusal for a screen name SCREEN_NAME_RE doesn't match: an example name, not a harness rule
+# join()'s refusal for a room that isn't there or isn't this person's to see: one text for both (§44.3), and a
+# pointer to the tool that lists what they may join (§59)
+NO_ROOM_HINT = "ask your user to create it, or call rooms() to see the ones you may join"
 BAD_SCREEN_NAME = "screen names look like claude-1: a-z first, then a-z, 0-9, '_' or '-', at most 24"
 # a hook's reported model name (the hook relays only this shape too), for the report:
 # an "@" may carry a version (claude-...@20250514), never a domain (nothing email-shaped)
@@ -444,14 +447,10 @@ class AgentService:
                     raise ServiceError(
                         "not_found", f"{n} was closed by {self.cfg.human_name}: ask your user to reopen it"
                     ) from None
-                raise ServiceError(
-                    "not_found", f"no such room {clean(n)[:40]}: ask your user to create it"
-                ) from None
+                raise ServiceError("not_found", f"no such room {clean(n)[:40]}: {NO_ROOM_HINT}") from None
             raise
         if not self.svc.visible(room, person):
-            raise ServiceError(
-                "not_found", f"no such room {clean(room.name)[:40]}: ask your user to create it"
-            )
+            raise ServiceError("not_found", f"no such room {clean(room.name)[:40]}: {NO_ROOM_HINT}")
         name = params.get("screen_name")
         name = name.strip().lower().lstrip("@") if isinstance(name, str) else ""
         if not SCREEN_NAME_RE.match(name):
@@ -653,6 +652,35 @@ class AgentService:
                 line += f" ({WAITING_APPROVAL_WHO})"
             lines.append(line)
         return {"room": room.name, "text": "\n".join(lines), "count": len(rows)}
+
+    def rooms(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        """The rooms this caller may join (§59): the open rooms its person sees (``Service.visible``, the one
+        rule of §44, keyed as ``join`` keys it, by the token's device), the most recently active first, at
+        most ``ROOMS_MAX``. No membership is needed, so it answers before any join. Only counts and the
+        names of rooms the person sees: no message, no member name, and a private room they aren't in is
+        neither listed nor counted. Listing joins nothing."""
+        person = self.svc.host_person(conn.agent.host)
+        tid = params.get("thread_id")
+        tid = tid if isinstance(tid, str) and 0 < len(tid) <= 128 else None
+        try:
+            joined = {room.id for room, _m in self.http_rooms(conn, tid)}
+        except ServiceError:  # a session the harness can't name (a Codex call without a thread id)
+            joined = set()
+        seen = sorted(
+            self.svc.visible_rooms(person), key=lambda r: (-(r.last_msg_at or r.created_at), r.name)
+        )
+        rows = [
+            {
+                "name": r.name,
+                "people": len(self.svc.room_humans(r)),
+                "agents": len(self.store.active_names(r.id)),
+                "private": r.private,
+                "joined": r.id in joined,
+            }
+            for r in seen[: envelope.ROOMS_MAX]
+        ]
+        more = len(seen) - len(rows)
+        return {"text": envelope.render_rooms(rows, more), "count": len(seen)}
 
     def review(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         """One move on the room's review board (DESIGN.md §37). A move that's another agent's to
