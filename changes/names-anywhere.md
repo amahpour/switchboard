@@ -1,3 +1,0 @@
-### Changed
-
-- **A spoken name wakes an agent from the middle of a request, and spacing no longer matters (#761).** "I want the Widgetboard Claude to tell me about the plan" and "can Claude one check the tests" now wake that agent, where only a name at the start of the line did. A name counts when it is asked for something: after "ask", "tell", "please", "can", "could", "would", "will" or "should", after "have", "want" or "need" when "to" or a request follows, or before "can you" or "please". "I asked Claude yesterday" and "Claude said that earlier" still wake no one. A name the transcript split in two ("widget board" for `widgetboard-claude`) matches, and so does a bare "widgetboard" when only one agent starts that way.

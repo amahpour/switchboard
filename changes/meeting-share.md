@@ -1,3 +1,0 @@
-### Added
-
-- **Show a room picture in a Zoom call with `/meeting share <file>`.** The bot shares a PNG or JPEG of the room as a screen share, and `/meeting share stop` (or the new **Stop sharing** button on the call bar, leaving, or the call ending) stops it. Only you can start it in the web UI; the bot is sent the picture itself, never a link. Zoom's host must allow participants to share: if not, the room is told to turn on Share Screen in Security. It needs the joinly patch (`deploy/joinly/server.py` changed, so its sha256 pin changed in DEPLOY.md and the plugins' `fixes.pins`: re-mount it) and works on the server's own bot on Zoom; a call hosted on your own machine says it is not available yet.

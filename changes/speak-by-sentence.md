@@ -1,3 +1,0 @@
-### Changed
-
-- **An agent on a call now starts speaking after its first sentence.** An `@call` answer used to be handed to the call's speech engine whole, which made all of it into speech before playing any, so a three-sentence answer was silent until the last sentence was ready. It is now spoken one sentence at a time, in order, so the first plays while the next is made. It is still one answer for the turn rules (one speaking, one waiting, the 30 seconds between an agent's own lines, 4 lines in a row). Turning voice off, or leaving the call, now drops the sentences not yet spoken; before, voice off let the whole line finish. This holds for the server's bot and for a call hosted on your own machine.
