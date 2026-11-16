@@ -848,6 +848,8 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
 
 switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` argument has the fix as its default (0 turns it off), and a setting that stock joinly doesn't know would break every call for anyone who hasn't mounted the file. So a joinly without the file works as before, and with it the fix is on. As with the Zoom fix, drop the mount once a joinly release has it, and move to that release. The file's sha256 is `6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97`.
 
+**Showing a room picture (#763).** The same `server.py` also adds two tools, `share_image` and `stop_share_image`, which `/meeting share` uses. Without this patch `/meeting share` tells the room the server cannot share a picture, and nothing else changes. `share_image` takes the picture as base64 text (a PNG or JPEG, at most 8 MB), never a URL, and only on Zoom.
+
 **A voice for each line (#713).** joinly 0.5.4 takes one voice when a bot session starts, and its `speak_text` tool has no voice argument, so every agent that speaks on a call has the same voice. The patch is two files of joinly (`server.py` and the Kokoro voice, `kokoro.py`): `speak_text` takes an optional `voice` for that line, and Kokoro uses it, falling back to the session's voice when it is not given or Kokoro has no voice of that name. Without a `voice` joinly behaves as 0.5.4, so the patch changes nothing on its own: it is the base for a voice per agent. The files are in this repository ([deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly), with joinly's MIT licence and a NOTICE saying what changed); until a joinly release has the argument, mount them over the image's copies, read-only, in the same `docker run` as the other files (use any or all):
 
 ```bash
@@ -859,7 +861,7 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
 ```
 
-The URL names a release tag, which does not move; the link works from the release that has the files on. Their sha256 sums are `b168efc06793f6ee1873f1f9d28bd8e01692a4577408a1637968ad2b2d6a38c0` (`server.py`) and `d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3` (`kokoro.py`); check them after you download (`sha256sum server.py kokoro.py`), because a mount makes them run inside the bot. A hosted call's plugin ships the same two files and checks them against the same sums, so there is nothing to download there. Drop the mounts once a joinly release has a voice on `speak_text`, and move to that release.
+The URL names a release tag, which does not move; the link works from the release that has the files on. Their sha256 sums are `109183c96e5eab82893d5e230e1daf55c062b092f27c7ed53babd415405e4fa3` (`server.py`) and `d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3` (`kokoro.py`); check them after you download (`sha256sum server.py kokoro.py`), because a mount makes them run inside the bot. A hosted call's plugin ships the same two files and checks them against the same sums, so there is nothing to download there. Drop the mounts once a joinly release has a voice on `speak_text`, and move to that release.
 
 ### The speech model, and a GPU
 

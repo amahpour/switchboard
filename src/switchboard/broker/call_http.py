@@ -16,7 +16,8 @@ relay with a key made for that one call. Four routes:
 - ``POST /mcp/meeting/speech``: a long poll, answered with what is to be spoken (while voice is on), the
   room's names as the transcriber's hints, the voice switch and whether the call has ended.
 
-- ``POST /mcp/meeting/leave``: the bot left or could not join; end only this key's call.
+- ``POST /mcp/meeting/leave``: the bot left or could not join, or the host script is stopping a call
+  whose relay never reached the server; end only this key's call. An agent token cannot open it.
 
 The call key (``sbc_``) is a bearer for the last three and nothing else: every other route answers an agent
 token or a person's session and refuses it. Those three refuse an agent token, a session and a browser (any

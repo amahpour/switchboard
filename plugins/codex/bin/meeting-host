@@ -4,7 +4,9 @@
 #
 #   meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--ca-file FILE] [--no-join|--from-room] ROOM
 #                                                                                                       (link on stdin)
-#   meeting-host stop [FINGERPRINT]       stop this machine's hosted call(s): both containers, then the files
+#   meeting-host stop [FINGERPRINT]       stop this machine's hosted call(s): tell the server with the call's
+#                                         own key (so a relay that never connected does not leave it open),
+#                                         then both containers, then the files
 #   meeting-host status                   what is running, and what the relay last said
 #   meeting-host plan [--cpu|--gpu] [--model NAME]   which device and model it would use; starts nothing
 #
@@ -341,6 +343,28 @@ cmd_status() {
   [ -n "$any" ] || printf 'no hosted call on this machine\n'
 }
 
+server_ok() { # $1 the server this call registered with: the same addresses start accepts, so the key is not sent elsewhere
+  case $1 in
+    https://*) ;;
+    http://localhost | http://localhost:* | http://*.localhost | http://*.localhost:* | http://127.0.0.1 | http://127.0.0.1:*) ;;
+    http://*) [ "${SWITCHBOARD_RELAY_ALLOW_HTTP:-}" = 1 ] || return 1 ;;
+    *) return 1 ;;
+  esac
+  case $1 in *[!A-Za-z0-9._~:/@%+=-]*) return 1 ;; esac
+}
+report_leave() { # $1 server. $key is this call's key, already checked. Prints the HTTP status, or 000.
+  # The key is a mode-0600 curl config, named to -K, never an argument or an environment variable.
+  # This runs in a subshell, so the trap does not outlive the report, and a failed curl still deletes the key.
+  cfg=$(mktemp) || { printf '000'; return; }
+  resp=''
+  trap 'rm -f "$cfg" "$resp"' EXIT
+  printf 'header = "Authorization: Bearer %s"\n' "$key" >"$cfg"
+  chmod 600 "$cfg"
+  resp=$(mktemp) || { printf '000'; return; }
+  code=$(curl -sS --max-time 15 --max-redirs 0 -K "$cfg" -X POST -H 'Content-Type: application/json' \
+    --data-binary '{"reason":"stopped"}' -o "$resp" -w '%{http_code}' "$1/mcp/meeting/leave" 2>/dev/null) || code=000
+  printf '%s' "${code:-000}"
+}
 cmd_stop() {
   data_arg='' want=''
   while [ $# -gt 0 ]; do
@@ -358,19 +382,45 @@ cmd_stop() {
     esac
   done
   set_data_dir
-  any='' live=''
+  any='' told='' already='' missed=''
   for d in "$data"/calls/*/; do
     [ -d "$d" ] || continue
     id=$(basename "$d")
     [ -z "$want" ] || [ "$id" = "$want" ] || continue
     any=1
-    ! running "$PROJECT_PREFIX$id" || live=1
+    # Read the key before the containers stop: the relay burns its copy when it exits (--burn-files), and a
+    # relay that never reached the server cannot report the end itself. Only this call's key is sent.
+    key='' server='' up=''
+    running "$PROJECT_PREFIX$id" && up=1
+    if [ -f "$d/key" ]; then
+      IFS= read -r key <"$d/key" || key=''
+      case $key in
+        sbc_*) hex=${key#sbc_}; is_hex "$hex" 64 || key='' ;;
+        *) key='' ;;
+      esac
+    fi
+    server=$(sed -n 's/^server=//p' "$d/info" 2>/dev/null | head -n 1)
+    server=${server%"$(printf '\r')"}
     remove_project "$PROJECT_PREFIX$id"
     printf 'stopped the call with key %s%s\n' "$(printf '%s' "$id" | cut -c1-4)" "$(printf '\302\267%s' "$(printf '%s' "$id" | cut -c5-8)")"
+    if [ -n "$key" ] && server_ok "$server"; then
+      code=$(report_leave "$server") || code=000
+      case $code in
+        200) told=1 ;;
+        410) already=1 ;;
+        *) missed=1 ;;
+      esac
+    elif [ -n "$key" ] || [ -n "$up" ]; then
+      missed=1 # a key we will not send, or containers up whose key the relay already burned
+    fi
+    key=''
   done
   [ -n "$any" ] || { printf 'no hosted call to stop\n'; return 0; }
-  # a running relay reports departure on stop; only an unreachable broker needs the silence fallback
-  [ -z "$live" ] || printf 'The relay reports departure so the call bar ends at once; an unreachable server uses the silence timeout.\n'
+  [ -z "$told" ] || printf 'Told the server this call ended, so the room'"'"'s call ends at once.\n'
+  [ -z "$missed" ] || printf 'Could not tell the server this call ended. End it in the room (End call); otherwise it stays until it times out.\n'
+  if [ -z "$told" ] && [ -z "$missed" ] && [ -n "$already" ]; then
+    printf 'The room'"'"'s call had already ended.\n'
+  fi
 }
 
 cmd_start() {

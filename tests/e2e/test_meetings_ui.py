@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import shutil
+import time
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
 from conftest import InProcBroker, make_tmp_home, sanitize_env
-from fakes.fake_joinly import FakeJoinly
+from fakes.fake_joinly import FakeJoinly, tiny_png
 from playwright.sync_api import Browser, Page, expect
 from test_web_ui import PHASE_REPORTS, PHONE, UI
 
@@ -267,6 +268,69 @@ def test_the_call_bar_has_a_voice_switch_and_a_snapshot_button(
     expect(page.locator("#log .md-artifact a.md-file")).to_be_visible()
     expect(page.locator("#log .md-artifact .md-artifact-name")).to_contain_text("screen-")
     assert joinly.snapshots == 1
+
+
+def wait_for_calls_to_end(broker: InProcBroker) -> None:
+    """Until the broker has no open call (a leave ends it a moment after the command)."""
+    deadline = time.monotonic() + 8
+    while broker.on_loop(lambda: broker.state.store.count_open_meetings()) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert broker.on_loop(lambda: broker.state.store.count_open_meetings()) == 0
+
+
+def test_the_call_bar_says_a_picture_is_shared_and_stops_it(
+    ui: UI, voice_call: tuple[InProcBroker, FakeJoinly]
+) -> None:
+    """A person types ``/meeting share plan.png`` in a Zoom call: the bar says a picture is shared and shows
+    Stop sharing, which sends the same command a person types and takes the words away again. The button
+    fits a phone beside the others, and a call with no share has no button. Fails if the bar never learns
+    of the share, the button stays after the stop, or it is cut off at phone width (#763)."""
+    broker, joinly = voice_call
+    headers = broker.write_headers()
+    client = broker.web_client()
+    try:
+        # this broker follows one call at once: end the voice test's call, if it is still open
+        client.post("/api/rooms/voice/command", json={"text": "/meeting leave"}, headers=headers)
+        wait_for_calls_to_end(broker)
+        assert client.post("/api/rooms", json={"name": "#picshare"}, headers=headers).status_code == 200
+        started = client.post(
+            "/api/rooms/picshare/command",
+            json={"text": "/meeting https://us02web.zoom.us/j/123456789"},
+            headers=headers,
+        )
+        assert started.status_code == 200, started.text
+        up = client.post(
+            "/api/rooms/picshare/files",
+            content=tiny_png(),
+            headers={**headers, "x-switchboard-filename": "plan.png", "content-type": "image/png"},
+        )
+        assert up.status_code == 200, up.text
+    finally:
+        client.close()
+    page = _open(ui, broker, room="picshare")
+    bar = page.locator("#banner-meeting")
+    stop = page.locator("#meeting-share-stop")
+    expect(bar).to_contain_text("Transcribing a call (Zoom)")
+    expect(stop).to_be_hidden()
+    box = page.locator("#input")
+    box.fill("/meeting share plan.png")
+    box.press("Enter")
+    expect(bar).to_contain_text("sharing a picture")
+    expect(stop).to_be_visible()
+    assert joinly.shared and joinly.shared[-1] == tiny_png()
+    phone = _open(ui, broker, room="picshare", **PHONE)
+    inside = phone.evaluate(
+        """() => ['meeting-voice', 'meeting-share-stop', 'meeting-leave'].every(id => {
+          const r = document.getElementById(id).getBoundingClientRect();
+          return r.left >= 0 && r.right <= document.documentElement.clientWidth;
+        }) && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"""
+    )
+    assert inside
+    stops = joinly.share_stops
+    stop.click()
+    expect(bar).not_to_contain_text("sharing a picture")
+    expect(stop).to_be_hidden()
+    assert joinly.share_stops == stops + 1
 
 
 def _seed_hosted(broker: InProcBroker) -> None:
