@@ -3187,6 +3187,25 @@ class Store:
                 (self.clock.now(), *fields.values(), item_id),
             )
 
+    def take_review_item(self, item_id: int, raised_by: str) -> None:
+        """Transfer checking to a validated room member (§37.2), keeping fix age and pick attribution.
+
+        The broker applies the take policy. This narrow write leaves the generic move allowlist alone.
+        An explicit pick overrides the original recommendation, so it wins on a conflict here too.
+        """
+        with db.tx(self.con):
+            self.con.execute(
+                "INSERT INTO review_picks(item_id, agent, choice, picked_at)"
+                " SELECT id, raised_by, recommend, created_at FROM review_items"
+                " WHERE id=? AND kind='finding' AND recommend IS NOT NULL"
+                " ON CONFLICT(item_id, agent) DO NOTHING",
+                (item_id,),
+            )
+            self.con.execute(
+                "UPDATE review_items SET raised_by=?, recommend=NULL WHERE id=? AND kind='finding'",
+                (raised_by, item_id),
+            )
+
     def move_review_item(self, item_id: int, state: str, **fields: Any) -> None:
         allowed = {
             "owner",

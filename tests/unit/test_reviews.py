@@ -1266,3 +1266,60 @@ def test_reopening_is_named_in_the_history_and_wakes_the_owner() -> None:
     assert handoff is not None
     who, line = handoff
     assert who == ("claude-1",) and "reopened" in line and item.reason in line
+
+
+@pytest.mark.parametrize("state", ["raised", "contested", "conceded", "fixed"])
+def test_a_departed_raiser_can_be_replaced_only_by_an_independent_reviewer(state: str) -> None:
+    """Take keeps the finding's state and cannot transfer checking to the fix owner."""
+    item = replace(finding(state, owner="claude-1"), confirmed_by="")
+    assert reviews.AGENT_MOVES["take"] == (frozenset({"raised", "contested", "conceded", "fixed"}), None)
+    assert reviews.agent_move(item, "take", "devin-1", raiser_here=False) == state
+    with pytest.raises(ReviewError, match="still in the room"):
+        reviews.agent_move(item, "take", "devin-1")
+    with pytest.raises(ReviewError, match="owner"):
+        reviews.agent_move(item, "take", "claude-1", raiser_here=False)
+    for settled in (finding("dropped"), finding("fixed", owner="claude-1")):
+        with pytest.raises(ReviewError):
+            reviews.agent_move(settled, "take", "devin-1", raiser_here=False)
+    with pytest.raises(ReviewError, match="only a person"):
+        reviews.agent_move(question(), "take", "devin-1", raiser_here=False)
+
+
+def test_takeover_history_keeps_the_original_raiser_through_multiple_transfers() -> None:
+    """Changing who reviews must not rewrite who originally raised the evidence."""
+    item = finding("fixed", raised_by="cursor-1", owner="claude-1")
+    events = [
+        {"ts": 1.0, "data": {"item": "F1", "to": "taken", "by": "devin-1", "previous_raiser": "codex-1"}},
+        {"ts": 2.0, "data": {"item": "F1", "to": "taken", "by": "cursor-1", "previous_raiser": "devin-1"}},
+    ]
+    assert [(e["by"], e["did"]) for e in reviews.history(item, events)] == [
+        ("codex-1", "raised it"),
+        ("devin-1", "took over from codex-1"),
+        ("cursor-1", "took over from devin-1"),
+    ]
+
+
+def test_stored_takeover_keeps_the_fix_age_and_each_agents_own_pick(tmp_path: Path) -> None:
+    """Taking review responsibility does not claim the old recommendation or postpone fallback."""
+    clock = FakeClock()
+    store = Store(db.open_db(tmp_path / "board.db"), clock)
+    room = store.create_room("#build", "alice", 60, 30)
+    board = store.open_review(room.id, "https://example.com/shop/pull/7", "abc1234", "codex-1")
+    item = store.add_review_item(
+        board["id"],
+        "finding",
+        "raised",
+        title="rounding",
+        raised_by="codex-1",
+        options=("Lock", "Queue"),
+        recommend=0,
+    )
+    store.set_review_pick(item.id, "codex-1", 1)
+    store.set_review_pick(item.id, "devin-1", 0)
+    clock.advance(60)
+    store.take_review_item(item.id, "devin-1")
+    moved = store.review_item(board["id"], "finding", 1)
+    assert moved is not None
+    assert moved.raised_by == "devin-1" and moved.updated_at == item.updated_at
+    assert moved.recommend is None and reviews.effective_picks(moved) == {"codex-1": 1, "devin-1": 0}
+    assert reviews.consensus(moved, ["devin-1"]).by == ("devin-1",)

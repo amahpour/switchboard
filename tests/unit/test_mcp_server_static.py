@@ -138,11 +138,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # yes was for exactly what the tool measures. The maintainer's yes, 2026-11-15, to "A new tool adds
     # about 100 characters to the tool list every agent sees on every turn, a bit more than the last two
     # options. Can I raise the cap by exactly what the new tool measures?": "Yes."
-    # #785 names `abstain` and #783 names `reopen`. Together, with the lead-in "A room's PR boards.",
-    # the list measures 4,647, and the cap moved down to that. #786 names `edit` ("edit, ", 6) and
-    # shortens the lead-in by the same 6 ("A room's PR boards." to "Review board."), so the list
-    # stays 4,647. The cap does not move. No new field: edit uses title, detail and where.
-    assert size == 4647, size
+    # #784 names `take` ("take, ", 6). The lead-in becomes "PR boards." (9 shorter than "A room's PR
+    # boards."), so the list measures 4,644 and the cap moves down to it. #786 names `edit`
+    # ("edit, ", 6) and shortens the lead-in by the same 6 ("PR boards." to "PRs."), so the list
+    # stays 4,644. The cap does not move. No new field: edit uses title, detail and where.
+    assert size == 4644, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")

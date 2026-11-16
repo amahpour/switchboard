@@ -57,7 +57,7 @@ OPEN_FINDING = frozenset({"raised", "contested", "conceded"})
 # (to conceded, with an owner, or to dropped) and drop anything; only a person answers. A contest
 # goes back to its raiser, who drops the finding or insists on it (#424): ``insist`` leaves the
 # finding contested, with the raiser's reason, and that is what puts it in front of a person.
-AGENT_MOVES = {
+AGENT_MOVES: dict[str, tuple[frozenset[str], str | None]] = {
     # from conceded: a handover by its owner, or a takeover once the owner has left (#371)
     "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
@@ -66,6 +66,8 @@ AGENT_MOVES = {
     "reopen": (frozenset({"fixed"}), "conceded"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
+    # None keeps the state: only review responsibility changes (#784).
+    "take": (frozenset({"raised", "contested", "conceded", "fixed"}), None),
     # to a follow-up ticket: settled for this pull request, stored as dropped with the ticket (#371)
     "defer": (frozenset({"raised", "contested", "conceded"}), "dropped"),
 }
@@ -99,7 +101,7 @@ class Item:
     detail: str
     file: str
     lines: str
-    raised_by: str  # screen name
+    raised_by: str  # screen name; the responsible reviewer after a takeover (#784)
     owner: str  # screen name, "" when none
     commit: str
     reason: str
@@ -585,6 +587,7 @@ HISTORY_VERBS = {
     "dropped": "dropped it",
     "deferred": "deferred it to a ticket",
     "answered": "answered it",
+    "taken": "took over review",
 }
 MAX_HISTORY = 12
 
@@ -593,9 +596,20 @@ def history(item: Item, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Who did what to ``item``, in order: who raised or asked it, then each move the board's
     events record for its label (``{ts, data: {item, to, by}}``). Only the moves a board makes
     are named; anything else in an event is left out. Capped at ``MAX_HISTORY`` lines."""
+    original = item.raised_by
+    for event in events:
+        data = event.get("data") or {}
+        if (
+            data.get("item") == item.label
+            and data.get("to") == "taken"
+            and isinstance(data.get("previous_raiser"), str)
+            and data["previous_raiser"]
+        ):
+            original = data["previous_raiser"]
+            break
     out: list[dict[str, Any]] = [
         {
-            "by": item.raised_by,
+            "by": original,
             "did": "raised it" if item.kind == "finding" else "asked it",
             "at": item.created_at,
         }
@@ -616,6 +630,8 @@ def history(item: Item, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             else:
                 did = None
         if d.get("item") == item.label and did and isinstance(d.get("by"), str):
+            if d.get("to") == "taken" and isinstance(d.get("previous_raiser"), str):
+                did = f"took over from {d['previous_raiser']}"
             out.append({"by": d["by"], "did": did, "at": e.get("ts")})
     return out[:1] + out[1:][-(MAX_HISTORY - 1) :]
 
@@ -628,7 +644,9 @@ def parse_label(value: Any) -> tuple[str, int]:
     return ("finding" if m.group(1) in "Ff" else "question"), int(m.group(2))
 
 
-def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> str:
+def agent_move(
+    item: Item, move: str, actor: str, owner_here: bool = True, *, raiser_here: bool = True
+) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
     or contest it (that's the other side's call). Dropping, deferring and insisting belong to
@@ -636,12 +654,26 @@ def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> st
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
-    name, and the finding would otherwise be no one's to fix)."""
+    name, and the finding would otherwise be no one's to fix). A departed raiser's unsettled
+    finding may be taken by an agent other than its owner (#784); raiser_here defaults to True
+    so unknown membership cannot authorize a takeover."""
     if move not in AGENT_MOVES:
         raise ReviewError(f"unknown move {move!r}")
     if item.kind == "question":
         raise ReviewError(f"{item.label} is a question: only a person answers or drops it")
-    frm, to = AGENT_MOVES[move]
+    frm, target = AGENT_MOVES[move]
+    to = item.state if target is None else target
+    if move == "take":
+        if item.state not in frm or item.confirmed_by:
+            raise ReviewError(f"{item.label} is settled: only an unsettled finding can be taken")
+        if raiser_here:
+            raise ReviewError(
+                f"{item.raised_by} is still in the room: only a departed raiser's finding can be taken"
+            )
+        if actor == item.owner:
+            raise ReviewError(
+                f"{item.label}'s owner cannot take its review: the fixer never confirms its own fix"
+            )
     if item.state not in frm:
         if move == "insist":
             raise ReviewError(f"{item.label} is {item.state}: only a contested finding can be insisted on")

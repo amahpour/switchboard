@@ -1569,3 +1569,75 @@ async def test_the_raiser_can_edit_a_card_and_a_person_can_edit_any(broker: InPr
             assert fixed["history"][-1]["by"] == "alice"
     finally:
         web.close()
+
+
+async def test_an_independent_reviewer_takes_a_departed_raisers_findings(broker: InProcBroker) -> None:
+    """Take is a notice; the replacement can check fixes, while the owner still cannot."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "take-author") as author,
+            FakeAgent(broker.home, "take-raiser") as raiser,
+            FakeAgent(broker.home, "take-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await raiser.join("#build", "codex-1")
+            await reviewer.join("#build", "devin-1")
+            await raiser.call("review", room="#build", action="open", url=PR)
+            await raiser.call("review", room="#build", action="raise", title="wrong total")
+            await raiser.call(
+                "review",
+                room="#build",
+                action="raise",
+                title="rounding",
+                options=["Lock", "Queue"],
+                recommend=0,
+            )
+            await author.call("review", room="#build", action="concede", item="F1")
+            await author.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total"
+            )
+            refused = await reviewer.call("review", room="#build", action="take", item="F1")
+            assert not refused["ok"] and "still in the room" in refused["error"]
+
+            def set_offline() -> None:
+                store = broker.state.store
+                room = store.get_room("#build")
+                member = store.find_member(room.id, "codex-1")
+                store.update_participant(member.participant_id, status="offline")
+
+            broker.on_loop(set_offline)
+            refused = await reviewer.call("review", room="#build", action="take", item="F1")
+            assert not refused["ok"] and "still in the room" in refused["error"]
+            await raiser.leave("#build")
+            assert finding_of(web, "F1")["needs_person"]
+            refused = await author.call("review", room="#build", action="take", item="F1")
+            assert not refused["ok"] and "owner" in refused["error"]
+            agent_lines = q(broker, "SELECT count(*) FROM messages WHERE sender_kind='agent'")[0][0]
+            taken = await reviewer.call("review", room="#build", action="take", item="F1")
+            assert taken["ok"]
+            card = finding_of(web, "F1")
+            assert card["raised_by"] == "devin-1" and not card["needs_person"]
+            assert card["history"][0]["by"] == "codex-1"
+            assert card["history"][-1]["did"] == "took over from codex-1"
+            assert q(broker, "SELECT count(*) FROM messages WHERE sender_kind='agent'")[0][0] == agent_lines
+            assert any(
+                "devin-1 took F1" in r["text"]
+                for r in q(broker, "SELECT text FROM messages WHERE kind='notice'")
+            )
+            refused = await author.call("review", room="#build", action="confirm", item="F1")
+            assert not refused["ok"]
+            checked = await reviewer.call("review", room="#build", action="confirm", item="F1")
+            assert checked["ok"]
+            refused = await reviewer.call("review", room="#build", action="take", item="F1")
+            assert not refused["ok"]
+            agent_lines = q(broker, "SELECT count(*) FROM messages WHERE sender_kind='agent'")[0][0]
+            await reviewer.call("review", room="#build", action="take", item="F2")
+            assert q(broker, "SELECT count(*) FROM messages WHERE sender_kind='agent'")[0][0] == agent_lines
+            card = finding_of(web, "F2")
+            assert card["recommend"] is None
+            assert {p["agent"]: p["option"] for p in card["picks"]} == {"codex-1": 0}
+            done = await reviewer.call("review", room="#build", action="drop", item="F2", reason="not a bug")
+            assert done["ok"] and done["settled"]
+    finally:
+        web.close()
