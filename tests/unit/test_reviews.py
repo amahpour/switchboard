@@ -642,7 +642,8 @@ def test_a_report_takes_only_what_it_knows_and_says_whose_it_is() -> None:
 
 def test_report_line_says_mr_for_a_gitlab_merge_request() -> None:
     """GitLab calls it a merge request, so a board on one reads "on the MR"; a GitHub board, or a
-    URL the board can't place, keeps "on the PR". Fails while the line always said PR."""
+    URL the board can't place, keeps "on the PR"; `show` names it a merge request. Fails while both
+    always said pull request."""
     rv = {"reported_by": "claude-1", "reported_at": 1000.0, "pr_threads": 2, "pr_ci": "failing"}
     mr = {**rv, "url": "https://gitlab.example.com/group/shop/-/merge_requests/42"}
     assert reviews.report_line(mr, 1180.0) == "2 open on the MR, CI failing (per claude-1, 3 min ago)"
@@ -650,6 +651,8 @@ def test_report_line_says_mr_for_a_gitlab_merge_request() -> None:
     gh = {**rv, "url": "https://github.com/example/shop/pull/7"}
     assert reviews.report_line(gh, 1180.0).startswith("2 open on the PR,")
     assert reviews.report_line({**rv, "url": "https://example.com/x"}, 1180.0).startswith("2 open on the PR,")
+    assert "\nThe merge request: 2 open on the MR," in reviews.render(mr, [], 1180.0)
+    assert "\nThe pull request: 2 open on the PR," in reviews.render(gh, [], 1180.0)
 
 
 # --------------------------------------------- agreement on an item's options (#423, DESIGN.md §37.12)
