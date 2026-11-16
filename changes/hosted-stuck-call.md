@@ -1,0 +1,3 @@
+### Fixed
+
+- **Stopping a hosted call ends it in the room even when its relay never reached the server.** `meeting-host stop` tells the server the call ended, with the key that call was registered with. Before, the room's call stayed open until it timed out (ten minutes if the relay never connected), and the next start was refused. If the server cannot be reached, the script says to press End call in the room. A start that finds a call already open says the same: End call, or `meeting-host stop` on the machine that hosts it. The Claude Code and Codex plugins carry the script and update with the release. The stop works with the server you already run.

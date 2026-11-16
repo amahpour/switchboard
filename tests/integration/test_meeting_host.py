@@ -165,6 +165,10 @@ class Stub:
                 outer.requests.append(
                     {"path": self.path, "auth": self.headers.get("authorization"), "body": body, "raw": raw}
                 )
+                if self.path == "/mcp/meeting/leave":
+                    # stop reports the end with the call key. 200, as a broker whose call is still open.
+                    self._send(200, b'{"ended": true}')
+                    return
                 if outer.answer is not None:
                     status, payload = outer.answer
                     return self._send(status, json.dumps(payload).encode())
@@ -985,10 +989,10 @@ def test_extra_hosts_for_a_server_the_containers_cannot_resolve_go_in_a_second_c
 
 
 def test_stop_removes_the_project_and_its_files_and_status_says_what_runs(machine: Machine) -> None:
-    """``stop`` brings both containers and their network down and forgets the call's files (the key, the link
-    if it is still there); with a fingerprint it stops that call only; with none it stops every call on the
-    machine.
-    ``status`` lists what is there, what the relay last said, and whether it runs."""
+    """``stop`` brings both containers and their network down, tells the server the call ended with that
+    call's own key (a relay that never connected cannot), and forgets the call's files; with a fingerprint
+    it stops that call only; with none it stops every call on the machine. The key is not an argument, a
+    variable or output. ``status`` lists what is there, what the relay last said, and whether it runs."""
     m = machine
     assert m.start().returncode == 0
     first = m.call_dirs()[0].name
@@ -1002,7 +1006,12 @@ def test_stop_removes_the_project_and_its_files_and_status_says_what_runs(machin
     fp = f"{first[:4]}\u00b7{first[4:]}"
     r = m.run(["stop", "--data", str(m.data), fp], stdin="", env=m.env(FAKE_DOCKER_RUNNING=both))
     assert r.returncode == 0 and f"stopped the call with key {fp}" in r.stdout
-    assert "relay reports departure" in r.stdout  # only an unreachable broker needs the silence fallback
+    assert "Told the server this call ended" in r.stdout  # the relay never reached it: stop reports the end
+    [leave] = [req for req in m.stub.requests if req["path"] == "/mcp/meeting/leave"]
+    assert leave["body"] == {"reason": "stopped"}
+    bearer = leave["auth"].removeprefix("Bearer ")
+    assert bearer.startswith("sbc_") and hashlib.sha256(bearer.encode()).hexdigest()[:8] == first
+    assert bearer not in r.stdout + r.stderr + m.everything_a_process_was_given()
     assert [p.name for p in m.call_dirs()] == [second]  # only that one
     downs = [c for c in m.compose("down") if c["project"] == running]
     assert downs and "--timeout" in downs[-1]["args"]
@@ -1150,10 +1159,123 @@ async def test_the_script_registers_a_call_at_the_real_broker_with_the_key_a_cla
         }  # the first call is still up
         again = m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=running)
         assert again.returncode == 1 and "already has a call" in again.stderr, again.stderr
+        assert "End call" in again.stderr and "meeting-host stop" in again.stderr
         assert [p.name for p in m.call_dirs()] == [call.name]  # and the refused try left no folder behind
     finally:
         await claude.close()
         w.stop()
+
+
+async def test_stop_ends_a_call_the_relay_never_reached_so_the_next_start_works(
+    machine: Machine,
+) -> None:
+    """A hosted call whose relay never connected stays joining, and another start is a 409 that says to
+    press End call or run ``meeting-host stop``. Stop reports the end with the key it registered — the
+    only credential ``/mcp/meeting/leave`` accepts — so the room's call ends at once and the next start
+    succeeds. Fails if stop only removes the containers, or the agent token is what ended the call."""
+    w = World(make_tmp_home(), FakeClock())
+    claude = Host(w.b, listener_key=LISTENER)
+    m = machine
+    try:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        (m.data / f"listener-key-{CLAUDE_PID}").write_text(LISTENER + "\n")
+        env = {k: v for k, v in m.env().items() if k != "SWITCHBOARD_AGENT_TOKEN"}
+        started = m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=env)
+        assert started.returncode == 0, started.stderr
+        assert w.settings()["meeting"]["state"] == "joining"  # the relay never pushed
+        [call] = m.call_dirs()
+        key = (call / "key").read_text().strip()
+        running = {**env, "FAKE_DOCKER_RUNNING": f"switchboard-call-{call.name}"}
+        refused = m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=running)
+        assert refused.returncode == 1 and "already has a call" in refused.stderr, refused.stderr
+        assert "End call" in refused.stderr and "meeting-host stop" in refused.stderr
+        assert [p.name for p in m.call_dirs()] == [call.name]
+        stopped = m.run(["stop", "--data", str(m.data)], stdin="", env=running)
+        assert stopped.returncode == 0, stopped.stderr
+        assert "Told the server this call ended, so the room's call ends at once." in stopped.stdout
+        assert w.settings()["meeting"] is None
+        assert w.notices()[-1] == "The call ended: its bot stopped."
+        row = w.hosted_row()
+        assert row["state"] == "ended" and row["error"] == "its bot stopped"
+        seen = stopped.stdout + stopped.stderr + m.everything_a_process_was_given()
+        assert key not in seen and LISTENER not in seen
+        if CURRENT_IMPL[0] == "sh":
+            assert "/mcp/meeting/leave" in m.clog.read_text()
+        again = m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=env)
+        assert again.returncode == 0, again.stderr
+        assert w.settings()["meeting"]["state"] == "joining"
+    finally:
+        await claude.close()
+        w.stop()
+
+
+async def test_stop_leaves_a_call_the_relay_already_ended_told_once(machine: Machine) -> None:
+    """When the relay already reported that it stopped, stop's own report is a 410 and the room hears
+    the end once. Fails if stop posts the end again, or says it could not reach the server."""
+    w = World(make_tmp_home(), FakeClock())
+    claude = Host(w.b, listener_key=LISTENER)
+    m = machine
+    relay = None
+    try:
+        assert (await claude.join("#build", "claude-1"))["ok"]
+        (m.data / f"listener-key-{CLAUDE_PID}").write_text(LISTENER + "\n")
+        env = {k: v for k, v in m.env().items() if k != "SWITCHBOARD_AGENT_TOKEN"}
+        assert m.run(["start", "--server", w.b.base, "--data", str(m.data), "build"], env=env).returncode == 0
+        [call] = m.call_dirs()
+        relay = Relay(w.b, (call / "key").read_text().strip())
+        assert relay.post("/mcp/meeting/leave", {"reason": "stopped"}).status_code == 200
+        assert w.notices().count("The call ended: its bot stopped.") == 1
+        running = {**env, "FAKE_DOCKER_RUNNING": f"switchboard-call-{call.name}"}
+        stopped = m.run(["stop", "--data", str(m.data)], stdin="", env=running)
+        assert stopped.returncode == 0, stopped.stderr
+        assert "The room's call had already ended." in stopped.stdout
+        assert "Told the server" not in stopped.stdout and "Could not tell" not in stopped.stdout
+        assert w.notices().count("The call ended: its bot stopped.") == 1
+        assert w.settings()["meeting"] is None
+    finally:
+        if relay is not None:
+            relay.close()
+        await claude.close()
+        w.stop()
+
+
+def test_stop_does_not_send_the_key_to_a_server_it_will_not_trust_and_says_what_to_do(
+    machine: Machine,
+) -> None:
+    """When the server does not answer, or the call's info names an address start would refuse, stop still
+    removes the containers and tells the person to press End call. The key is not sent to that address,
+    and it is not an argument, a variable or output. Fails if stop claims the call ended, or the key is
+    posted to a server the info file was changed to."""
+    m = machine
+    started = m.start()
+    assert started.returncode == 0, started.stderr
+    [call] = m.call_dirs()
+    key = (call / "key").read_text().strip()
+    info = (call / "info").read_text()
+    (call / "info").write_text(info.replace(m.stub.url, "http://127.0.0.1:1"))
+    running = m.env(FAKE_DOCKER_RUNNING=f"switchboard-call-{call.name}")
+    missed = m.run(["stop", "--data", str(m.data)], stdin="", env=running)
+    assert missed.returncode == 0, missed.stderr
+    assert "Could not tell the server this call ended" in missed.stdout
+    assert "End call" in missed.stdout and "Told the server" not in missed.stdout
+    assert m.call_dirs() == []
+    assert key not in missed.stdout + missed.stderr + m.everything_a_process_was_given()
+
+    assert m.start().returncode == 0
+    [call] = m.call_dirs()
+    key = (call / "key").read_text().strip()
+    info = (call / "info").read_text()
+    (call / "info").write_text(info.replace(m.stub.url, "http://evil.example"))
+    before = m.clog.read_text()
+    refused = m.run(
+        ["stop", "--data", str(m.data)],
+        stdin="",
+        env=m.env(FAKE_DOCKER_RUNNING=f"switchboard-call-{call.name}"),
+    )
+    assert refused.returncode == 0 and "Could not tell the server" in refused.stdout
+    assert "evil.example" not in m.clog.read_text()[len(before) :]
+    assert key not in refused.stdout + refused.stderr + m.everything_a_process_was_given()
+    assert m.call_dirs() == []
 
 
 def test_the_script_is_executable_and_has_its_windows_twin() -> None:

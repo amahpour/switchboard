@@ -339,22 +339,81 @@ function Cmd-Status([string[]]$rest) {
     if (-not $any) { Say 'no hosted call on this machine' }
 }
 
+function Server-Ok([string]$server) { # the same addresses start accepts, so the call key is not sent elsewhere
+    if (-not $server -or $server -cnotmatch '^[A-Za-z0-9._~:/@%+=-]+\z') { return $false }
+    if ($server -cmatch '^https://') { return $true }
+    if ($server -cmatch '^http://(localhost|[^/:]+\.localhost|127\.0\.0\.1)(:[0-9]+)?(/|\z)') { return $true }
+    if ($server -cmatch '^http://' -and $env:SWITCHBOARD_RELAY_ALLOW_HTTP -ceq '1') { return $true }
+    $false
+}
+function Report-Leave([string]$server, [string]$callKey) { # the call's own key; prints nothing. Returns the HTTP status, or 0.
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object Net.Http.HttpClientHandler
+    $handler.AllowAutoRedirect = $false # a redirect would carry the key to wherever it points
+    $client = New-Object Net.Http.HttpClient $handler
+    $client.Timeout = [TimeSpan]::FromSeconds(15)
+    $status = 0
+    try {
+        $req = New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Post), "$server/mcp/meeting/leave"
+        [void]$req.Headers.TryAddWithoutValidation('Authorization', "Bearer $callKey")
+        [void]$req.Headers.TryAddWithoutValidation('User-Agent', 'switchboard-meeting-host')
+        $req.Headers.ExpectContinue = $false
+        $req.Content = New-Object Net.Http.StringContent '{"reason":"stopped"}', (New-Object Text.UTF8Encoding $false), 'application/json'
+        $res = $client.SendAsync($req).Result
+        $status = [int]$res.StatusCode
+    } catch { $status = 0 }
+    finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
+    $status
+}
 function Cmd-Stop([string[]]$rest) {
     $o = Parse $rest @('--data') @()
     $data = Data-Dir $o['--data']
     $want = ''
     if ($o['_'].Count -gt 0) { $want = ((($o['_'][0] -replace '\\u00b7', '') -replace '[^0-9a-f]', '') + '        ').Substring(0, 8).Trim() }
     $any = $false
-    $live = $false
+    $told = $false
+    $already = $false
+    $missed = $false
     foreach ($id in Call-Dirs $data) {
         if ($want -and $id -cne $want) { continue }
         $any = $true
-        if (Running "$ProjectPrefix$id") { $live = $true }
+        $dir = Join-Path (Join-Path $data 'calls') $id
+        $up = Running "$ProjectPrefix$id"
+        # Read the key before the containers stop: the relay burns its copy when it exits, and a relay that
+        # never reached the server cannot report the end itself. Only this call's key is sent.
+        $callKey = ''
+        $keyFile = Join-Path $dir 'key'
+        if (Test-Path -LiteralPath $keyFile) {
+            $raw = (Get-Content -LiteralPath $keyFile -TotalCount 1)
+            if ($raw -cmatch '^sbc_[0-9a-f]{64}\z') { $callKey = $raw.Trim() }
+        }
+        $server = ''
+        $info = Join-Path $dir 'info'
+        if (Test-Path -LiteralPath $info) {
+            foreach ($line in @(Get-Content -LiteralPath $info)) {
+                if ($line.StartsWith('server=')) { $server = $line.Substring(7).Trim() }
+            }
+        }
         Remove-Project $data $id
         Say ('stopped the call with key ' + $id.Substring(0, 4) + [char]0x00B7 + $id.Substring(4, 4))
+        if ($callKey -and (Server-Ok $server)) {
+            $code = Report-Leave $server $callKey
+            $callKey = ''
+            if ($code -eq 200) { $told = $true }
+            elseif ($code -eq 410) { $already = $true }
+            else { $missed = $true }
+        } elseif ($callKey -or $up) {
+            $callKey = ''
+            $missed = $true
+        }
     }
     if (-not $any) { Say 'no hosted call to stop'; return }
-    if ($live) { Say 'The relay reports departure so the call bar ends at once; an unreachable server uses the silence timeout.' }
+    if ($told) { Say "Told the server this call ended, so the room's call ends at once." }
+    if ($missed) { Say 'Could not tell the server this call ended. End it in the room (End call); otherwise it stays until it times out.' }
+    if (-not $told -and -not $missed -and $already) { Say "The room's call had already ended." }
 }
 
 function Cmd-Start([string[]]$rest) {

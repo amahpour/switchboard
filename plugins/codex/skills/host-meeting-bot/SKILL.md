@@ -47,4 +47,4 @@ In PowerShell: `'' | & '<plugin>/bin/meeting-host.cmd' start --from-room '#room'
 
 When the user asks to leave, run `sh '<plugin>/bin/meeting-host' stop` (PowerShell: `& '<plugin>/bin/meeting-host.cmd' stop`). `status` shows what is running; `plan` shows the GPU or CPU choice without starting anything. The scripts keep state under `~/.cache/switchboard` by default (`--data DIR` selects another folder; use the same one for stop and status).
 
-Stopping removes both containers. The relay reports departure, so the call bar ends at once; if the broker cannot be reached, its silence timeout is the fallback. End call in the room also stops both containers on its own.
+Stopping removes both containers and tells the server the call ended, with that call's own key, so the call bar ends even when the relay never reached the server. If the server cannot be reached, tell your user to press End call in the room; otherwise the call stays until it times out. End call in the room also stops both containers on their own.
