@@ -1,7 +1,7 @@
 """The routes of a hosted call (DESIGN.md §54, #623).
 
 A call hosted on a person's machine (``meeting/hosted.py``) is registered by the host script and run by a
-relay with a key made for that one call. Four routes:
+relay with a key made for that one call. Five routes:
 
 - ``POST /mcp/meeting/host``: the host script registers a call: the room, the sha256 of the key it made, the
   platform and the model. It is opened by what the plugin's other scripts already present at ``/mcp/listen``
@@ -14,13 +14,16 @@ relay with a key made for that one call. Four routes:
   into lines and posts as it posts its own bot's (§52). The first push, an empty one too, marks the call
   live.
 - ``POST /mcp/meeting/speech``: a long poll, answered with what is to be spoken (while voice is on), the
-  room's names as the transcriber's hints, the voice switch and whether the call has ended.
-
+  room's names as the transcriber's hints, the voice switch, whether the call has ended, and, when this
+  call has asked for one, the id of a snapshot to take.
+- ``POST /mcp/meeting/snapshot``: the picture the relay was just asked for, raw bytes. Only while this call
+  is waiting for one, and only this call's key. The broker checks the bytes and stores the picture the way
+  the server's bot does (§52).
 - ``POST /mcp/meeting/leave``: the bot left or could not join, or the host script is stopping a call
   whose relay never reached the server; end only this key's call. An agent token cannot open it.
 
-The call key (``sbc_``) is a bearer for the last three and nothing else: every other route answers an agent
-token or a person's session and refuses it. Those three refuse an agent token, a session and a browser (any
+The call key (``sbc_``) is a bearer for the last four and nothing else: every other route answers an agent
+token or a person's session and refuses it. Those four refuse an agent token, a session and a browser (any
 request with an ``Origin``): a call key does one thing. A key that was never registered is ``unknown_key``
 (401), one whose machine's sign-in was revoked is ``revoked`` (401), and one whose call is over is ``ended``
 (410): a relay that is told so stops and leaves.
@@ -56,6 +59,7 @@ if TYPE_CHECKING:  # pragma: no cover
 HOST_PATH = "/mcp/meeting/host"
 PUSH_PATH = "/mcp/meeting/push"
 SPEECH_PATH = "/mcp/meeting/speech"
+SNAPSHOT_PATH = "/mcp/meeting/snapshot"
 LEAVE_PATH = "/mcp/meeting/leave"
 HOST_BODY_MAX = 4096  # the registration is a room, a hash, a platform, a model and a session id
 REFUSED_STATUS = {"ended": 410}  # every other refusal of a key is a 401
@@ -75,14 +79,37 @@ async def _read_body(receive: Receive, send: Send, limit: int) -> bytes | None:
             return raw
 
 
+async def _read_picture(receive: Receive, send: Send, limit: int) -> bytes | None:
+    """A snapshot's body, or None after answering 413 when it passes ``limit``.
+
+    The rest of an oversized body is still read, and discarded. Stopping at the limit would leave the
+    relay's write blocked on a body the broker had already refused."""
+    raw = b""
+    over = False
+    while True:
+        msg = await receive()
+        if not over:
+            raw += msg.get("body", b"")
+            if len(raw) > limit:
+                over = True
+                raw = b""
+        if not msg.get("more_body"):
+            break
+    if over:
+        await _reply(send, 413, {"error": "too_large", "message": "too large"})
+        return None
+    return raw
+
+
 class _CallRoute:
     """The call-key routes: POST only, no browser, a key that opens a call, a bounded JSON body."""
 
     def __init__(self, state: "BrokerState") -> None:
         self.state = state
 
-    async def enter(self, scope: Scope, receive: Receive, send: Send) -> tuple[Meeting, Any] | None:
-        """The call this request's key opens and its JSON body, or None after the refusal was answered."""
+    async def admit(self, scope: Scope, send: Send) -> Meeting | None:
+        """The call this request's key opens, or None after the refusal was answered. The body is the
+        route's to read: a snapshot is bytes, not JSON."""
         if scope["type"] != "http" or scope.get("method") != "POST":
             await _reply(send, 405, {"error": "method", "message": "POST only"})
             return None
@@ -107,6 +134,13 @@ class _CallRoute:
                 },
             )
             return None
+        return got.call
+
+    async def enter(self, scope: Scope, receive: Receive, send: Send) -> tuple[Meeting, Any] | None:
+        """The call this request's key opens and its JSON body, or None after the refusal was answered."""
+        call = await self.admit(scope, send)
+        if call is None:
+            return None
         raw = await _read_body(receive, send, BODY_MAX)
         if raw is None:
             return None
@@ -114,7 +148,7 @@ class _CallRoute:
             body = json.loads(raw or b"{}")
         except ValueError:
             body = None
-        return got.call, body
+        return call, body
 
 
 async def _hung_up(receive: Receive) -> None:
@@ -183,6 +217,58 @@ class MeetingSpeech(_CallRoute):
             await _refused(send, e)
             return
         await _reply(send, 200, res)
+
+
+class MeetingSnapshot(_CallRoute):
+    """``/mcp/meeting/snapshot``: the picture this call asked its relay for (§54, #766).
+
+    Raw bytes, checked by what they are, or a small JSON ``{"failed": true}`` when joinly gave none.
+    The key cannot name a room or a person: the picture is this call's, for the ask the broker recorded."""
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        call = await self.admit(scope, send)
+        if call is None:
+            return
+        hosted = self.state.hosted_calls
+        kind = (_header(scope, b"content-type") or "").split(";", 1)[0].strip().lower()
+        if kind == "application/json":
+            raw = await _read_body(receive, send, 1024)
+            if raw is None:
+                return
+            try:
+                body = json.loads(raw or b"{}")
+            except ValueError:
+                body = None
+            if body != {"failed": True}:
+                await _reply(send, 400, {"error": "bad_request", "message": "a JSON object is needed"})
+                return
+            try:
+                hosted.picture_failed(call, "Couldn't get a snapshot of the call.")
+            except Refused as e:
+                await _refused(send, e)
+                return
+            await _reply(send, 200, {"ok": False})
+            return
+        if kind != "application/octet-stream":
+            await _reply(send, 415, {"error": "bad_request", "message": "a picture, or a failure, is needed"})
+            return
+        att = self.state.attachments
+        limit = att.max_bytes if att is not None else 1
+        raw = await _read_picture(receive, send, limit)
+        if raw is None:
+            # the body is past the room's file limit: the line that asked must not stay held
+            notice = f"The snapshot is larger than the room's file limit ({limit / 2**20:g} MB)."
+            try:
+                hosted.picture_failed(call, notice)
+            except Refused:
+                pass
+            return
+        try:
+            hosted.take_picture(call, raw)
+        except Refused as e:
+            await _refused(send, e)
+            return
+        await _reply(send, 200, {"ok": True})
 
 
 class MeetingLeave(_CallRoute):
@@ -268,4 +354,5 @@ def install(app: "FastAPI", state: "BrokerState") -> None:
     app.router.routes.append(Route(HOST_PATH, endpoint=MeetingHost(state)))
     app.router.routes.append(Route(PUSH_PATH, endpoint=MeetingPush(state)))
     app.router.routes.append(Route(SPEECH_PATH, endpoint=MeetingSpeech(state)))
+    app.router.routes.append(Route(SNAPSHOT_PATH, endpoint=MeetingSnapshot(state)))
     app.router.routes.append(Route(LEAVE_PATH, endpoint=MeetingLeave(state)))

@@ -2055,11 +2055,11 @@
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
     $('meeting-voice').setAttribute('aria-checked', String(voice));
     renderListenSwitches(r);
-    // a picture needs the bot to be in the call, and a hosted bot sends none yet
+    // a picture needs the bot to be in the call, the server's or the one on the person's machine
     const snap = $('meeting-snapshot');
     if (snap.dataset.title === undefined) snap.dataset.title = snap.title;
-    snap.disabled = hosted || call.state !== 'live';
-    snap.title = hosted ? 'A snapshot is not available yet for a call hosted on a person\'s machine' : snap.dataset.title;
+    snap.disabled = call.state !== 'live';
+    snap.title = snap.dataset.title;
     // ending a hosted call ends its key: the next push from its machine is refused
     const end = $('meeting-leave');
     end.textContent = hosted ? 'End call' : 'Leave call';

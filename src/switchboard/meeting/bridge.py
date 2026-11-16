@@ -37,7 +37,15 @@ from switchboard.meeting.joinly import (
 from switchboard.meeting.lines import Assembler, Line
 from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
-from switchboard.meeting.screen import SNAPSHOT_GAP_S, Asker, NoFrame, frame_from, says_screen
+from switchboard.meeting.screen import (
+    SNAPSHOT_GAP_S,
+    SNAPSHOT_TIMEOUT_S,
+    Asker,
+    NoFrame,
+    frame_from,
+    post_snapshot,
+    says_screen,
+)
 from switchboard.meeting.speech import call_text, speakable
 from switchboard.meeting.turns import STALE_NOTICE, STALE_S, Turns
 from switchboard.meeting.voices import voice_of
@@ -45,7 +53,6 @@ from switchboard.meeting.voices import voice_of
 log = logging.getLogger("switchboard.meeting")
 
 JOIN_TIMEOUT_S = 45.0
-SNAPSHOT_TIMEOUT_S = 8.0  # a call-out's line waits no longer than this for its picture
 SHARE_TIMEOUT_S = 40.0  # joinly waits about eight seconds for Zoom to answer, after it has drawn the picture
 
 
@@ -415,29 +422,8 @@ class MeetingBridge:
                 live.client.call_tool("get_video_snapshot", {}, timeout=SNAPSHOT_TIMEOUT_S),
                 SNAPSHOT_TIMEOUT_S + 2,
             )
-            data, kind = frame_from(result, att.max_bytes)
-            room = self.state.store.room_by_id(room_id)
-            if room is None:
-                return
-            clock = time.strftime("%H%M%S", time.localtime(self.state.clock.now()))
-            name = f"screen-{clock}.{kind}"
-            try:
-                row = att.store_snapshot(
-                    room_id,
-                    asker.name if asker else "call",
-                    "human" if asker else "meeting",
-                    name,
-                    data,
-                )
-            except ValueError as e:
-                raise NoFrame(f"The snapshot was not kept: {e}.") from None
-            artifact = f"artifact: {row.name} | {row.size} | sha256:{row.sha256} | switchboard:file/{row.id}"
-            if asker is not None:
-                self.state.service.human_say(
-                    room.name, artifact, asker.via, person=(asker.name, asker.person_id)
-                )
-            else:
-                self.state.service.post_meeting_line(room_id, sender_name="call", text=artifact, mentions=[])
+            data, _kind = frame_from(result, att.max_bytes)
+            post_snapshot(self.state, room_id, asker, data)
         except NoFrame as e:
             self.state.service.notice_in(room_id, str(e))
         except Exception:

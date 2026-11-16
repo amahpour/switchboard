@@ -71,6 +71,7 @@ def test_browser_signed_in_codex_key_hosts_only_for_its_first_thread_and_dies_wi
                 "/mcp/meeting/push",
                 "/mcp/meeting/speech",
                 "/mcp/meeting/leave",
+                "/mcp/meeting/snapshot",
             ):
                 assert client.post(path, json={}).status_code == 401, path
             r = client.post("/mcp/session", json={"event": "SessionEnd", "session_id": THREAD_A})
