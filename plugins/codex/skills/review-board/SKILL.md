@@ -24,6 +24,7 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 - `ask` (`title`, `options`, `recommend`): a question only a person can answer. Two to four options, and `recommend` is required.
 - `edit` (`item`, and any of `title`, `detail`, `where`): correct a finding you raised, while it is raised or contested. A field you leave out stays. Each edit is a line on the card's history.
 - `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its index.
+- `abstain` (`item`): you have no view. You are not waited on, and you are not a side of a split. A later `concur` replaces it.
 - `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room.
 - `contest` (`item`, `reason`): a finding you did not raise.
 - `insist` (`item`, `reason`): once, by the raiser, on a contested finding. Only an insisted finding needs a person.

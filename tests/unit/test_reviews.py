@@ -642,9 +642,12 @@ def test_a_report_takes_only_what_it_knows_and_says_whose_it_is() -> None:
 
 # --------------------------------------------- agreement on an item's options (#423, DESIGN.md §37.12)
 def asked(
-    recommend: int | None = 0, picks: tuple[tuple[str, int], ...] = (), raised_by: str = "codex-1"
+    recommend: int | None = 0,
+    picks: tuple[tuple[str, int], ...] = (),
+    raised_by: str = "codex-1",
+    abstentions: tuple[str, ...] = (),
 ) -> Item:
-    return replace(question(), raised_by=raised_by, recommend=recommend, picks=picks)
+    return replace(question(), raised_by=raised_by, recommend=recommend, picks=picks, abstentions=abstentions)
 
 
 def test_an_option_is_recommended_only_when_every_agent_in_the_room_picked_it() -> None:
@@ -750,6 +753,103 @@ def test_concur_checks_who_what_and_which_option() -> None:
             reviews.concur(replace(fix, state=state), "claude-1", 0, AGENTS)
 
 
+def test_an_abstention_is_neither_a_pick_nor_a_wait() -> None:
+    """#785: an agent with no view is not waited on, and is not a side of a split. One pick with
+    everyone else abstaining is that agent's recommendation, not a split and not "still waiting".
+    Fails if an abstention is dropped (they stay in waiting) or counted as a pick."""
+    room = ("claude-1", "codex-1", "devin-1")
+    one = reviews.consensus(
+        asked(recommend=0, raised_by="claude-1", abstentions=("codex-1", "devin-1")), room
+    )
+    assert (one.state, one.option, one.by, one.waiting, one.abstained) == (
+        "agreed",
+        0,
+        ("claude-1",),
+        (),
+        ("codex-1", "devin-1"),
+    )
+    assert one.notes[0] == "recommended by claude-1"
+    split = reviews.consensus(
+        asked(recommend=0, raised_by="claude-1", picks=(("codex-1", 1),), abstentions=("devin-1",)),
+        room,
+    )
+    assert (split.state, split.option, split.waiting, split.abstained) == (
+        "split",
+        None,
+        (),
+        ("devin-1",),
+    )
+    none = reviews.consensus(
+        asked(recommend=0, raised_by="claude-1", abstentions=("claude-1", "codex-1")), AGENTS
+    )
+    assert (none.state, none.option, none.waiting, none.abstained) == (
+        "none",
+        None,
+        (),
+        ("claude-1", "codex-1"),
+    )
+    # someone who left is neither waited on nor listed; a newcomer who hasn't spoken still is
+    left = reviews.consensus(asked(abstentions=("claude-1",)), ("codex-1",))
+    assert left.abstained == () and left.state == "agreed" and left.waiting == ()
+    newcomer = reviews.consensus(
+        asked(recommend=0, raised_by="codex-1", abstentions=("claude-1",)), (*AGENTS, "devin-1")
+    )
+    assert newcomer.state == "proposed"
+    assert newcomer.waiting == ("devin-1",) and newcomer.abstained == ("claude-1",)
+
+
+def test_an_agent_that_abstains_and_later_picks_is_counted_only_for_the_pick() -> None:
+    """#785: a later pick replaces the abstention. Fails if the abstention sticks and the pick is
+    ignored, or if both count (a wait, or a split against themselves)."""
+    before = reviews.consensus(asked(recommend=0, raised_by="claude-1", abstentions=("codex-1",)), AGENTS)
+    assert before.abstained == ("codex-1",) and "codex-1" not in before.waiting
+    assert before.by == ("claude-1",)
+    after = reviews.consensus(asked(recommend=0, raised_by="claude-1", picks=(("codex-1", 0),)), AGENTS)
+    assert (after.state, after.abstained, after.by, after.waiting) == (
+        "agreed",
+        (),
+        ("claude-1", "codex-1"),
+        (),
+    )
+    # while the abstention is still recorded, a pick row for the same agent does not also count
+    both = reviews.consensus(
+        asked(recommend=0, raised_by="claude-1", picks=(("codex-1", 1),), abstentions=("codex-1",)),
+        AGENTS,
+    )
+    assert both.abstained == ("codex-1",) and both.state == "agreed" and both.by == ("claude-1",)
+
+
+def test_abstain_is_refused_like_a_pick_and_needs_no_index() -> None:
+    """#785: the same gates as concur, without an option index. recommend=-1 stays a refusal on
+    concur: a forgotten index is not recorded as no view."""
+    q = asked()
+    reviews.abstain(q, "claude-1", AGENTS)
+    with pytest.raises(ReviewError, match="only an agent in the room can abstain: 'devin-9' isn't"):
+        reviews.abstain(q, "devin-9", AGENTS)
+    with pytest.raises(ReviewError, match="F1 has no options to abstain on"):
+        reviews.abstain(finding(), "claude-1", AGENTS)
+    for state in ("answered", "dropped"):
+        with pytest.raises(ReviewError, match=f"Q1 is {state}: its options are settled"):
+            reviews.abstain(replace(q, n=1, state=state), "claude-1", AGENTS)
+    with pytest.raises(ReviewError, match="concur needs recommend"):
+        reviews.concur(q, "claude-1", -1, AGENTS)
+
+
+def test_the_board_text_names_who_abstained() -> None:
+    """What an agent reads on show: who has no view, and that they are not still awaited.
+    Fails if the line only says who is waiting, which is how an abstention was invisible."""
+    review = {"url": "https://example.com/pr/7", "head": ""}
+    line = reviews.render(
+        review,
+        [asked(recommend=0, raised_by="claude-1", abstentions=("codex-1", "devin-1"))],
+        None,
+        ("claude-1", "codex-1", "devin-1"),
+    ).splitlines()[1]
+    assert "recommended by claude-1" in line
+    assert "abstained: codex-1 and devin-1" in line
+    assert "waiting on" not in line
+
+
 def test_a_question_must_carry_a_recommendation() -> None:
     """ask(options) without recommend is refused, saying what to give; with one it is the index."""
     with pytest.raises(
@@ -768,8 +868,8 @@ def test_a_question_just_asked_is_the_other_agents_to_agree_with() -> None:
     assert who == ("claude-1", "devin-1")
     assert text == (
         "Review board: Q1 asked: off by one. @claude-1 @devin-1: agree with codex-1's pick or pick"
-        ' another option, review(action="concur", item="Q1", recommend=<index>).'
-        ' review(action="show") shows the board.'
+        ' another option, review(action="concur", item="Q1", recommend=<index>), or abstain if you'
+        ' have no view, review(action="abstain", item="Q1"). review(action="show") shows the board.'
     )
 
 
@@ -778,7 +878,9 @@ def test_a_finding_with_fix_options_asks_the_others_to_agree_with_them_too() -> 
     who, text = reviews.handoff(fix, "codex-1", AGENTS) or ((), "")
     assert (
         who == ("claude-1",)
-        and "concede or contest it, and agree with its fix option or pick another (concur)" in text
+        and "concede or contest it, and agree with its fix option, pick another, or abstain"
+        " (concur or abstain)"
+        in text
     )
     assert "concur" not in (reviews.handoff(finding(), "codex-1", AGENTS) or ((), ""))[1]
 

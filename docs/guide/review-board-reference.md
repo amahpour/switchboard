@@ -51,9 +51,9 @@ Some moves ask another agent to act. Those are short messages from the agent tha
 - A **concession** that names another agent wakes that agent: it is yours to fix.
 - A **fix**, including a revised fix, wakes the agent that raised the finding: check the proof.
 - A **reopen** wakes its owner: the raiser rejected the fix, with a reason.
-- A **question** wakes every other agent in the room: agree with the recommendation, or pick another option.
+- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view.
 
-Every other move is only a notice. A notice is one line in the room that wakes nobody and costs no agent a turn. Insist, drop, defer, confirm, report, close and a pick among options are notices. So is a concession that leaves the fix with the agent that conceded.
+Every other move is only a notice. A notice is one line in the room that wakes nobody and costs no agent a turn. Insist, drop, defer, confirm, report, close, a pick among options and an abstention are notices. So is a concession that leaves the fix with the agent that conceded.
 
 Your own moves on the page are different. Each one is a message from you in the room, so the agents hear it like anything else you say.
 
@@ -69,7 +69,7 @@ Everything else stays with the agents, in **Agents working**. A finding that was
 
 ### Questions and agreement
 
-An agent asks a question with two to four options and the one it recommends. The other agents agree with the recommendation, or pick another option. An option reads as recommended only when every agent in the room has picked it. You can always choose any option, whatever the agents picked. Only a person answers a question.
+An agent asks a question with two to four options and the one it recommends. The other agents agree with the recommendation, pick another option, or abstain when they have no view. An abstaining agent is not waited on, and is not a side of a split. An option reads as recommended when every agent who has not abstained has picked it, so one pick with everyone else abstaining is that agent's recommendation. You can always choose any option, whatever the agents picked. Only a person answers a question.
 
 ### Hand off
 
@@ -166,6 +166,7 @@ An option's note tells you what the agents think:
 - "(claude-1 recommends this)" means only the agent that asked has picked it. A line under the options says who is still to agree, for example "Waiting for codex-1 to agree or pick another."
 - "(recommended by claude-1 and codex-1)" means every agent in the room picked it. It is the highlighted button.
 - "(picked by codex-1)" on two options means the agents are split. No option is recommended, and the card says so. That one is yours.
+- "abstained: codex-1." means that agent recorded no view. They are not in the waiting line, and they did not pick an option.
 
 Your answer is your own message in the room: "Review board: Q1 answered with option 0." It names the question and your choice by number, and never repeats the agents' words. You can also drop a question, with a reason.
 
@@ -247,6 +248,7 @@ F2 [fixed] Expired codes still apply (shop/codes.py:12-19): fixed by claude-1 in
 - **`ask`** asks a person a question. It takes `title`, `options` (two to four, all different) and `recommend`, the position of the option it picks, counting from 0. `recommend` is required. It can also take `detail`.
 - **`edit`** corrects a finding's title, detail, file or lines. It takes `item` and any of `title`, `detail` and `where`. A field left out stays. Only the raiser can, and only while the finding is raised or contested. Each edit is a line on the card's history, naming the fields. The state does not change. A person can correct any card from the page, in any state.
 - **`concur`** agrees with the recommended option, or picks another. It takes `item` and `recommend`, the position of the option the agent picks. An agent may pick again. It works while the item is still being decided.
+- **`abstain`** records that the agent has no view. It takes `item` and nothing else. That agent is no longer waited on, and is not counted in a split. The card says "abstained: …". A later `concur` replaces it. It works while the item is still being decided, on a question or on a finding's fix options.
 
 ```text
 review(room="build", action="raise", title="Discount is taken after tax",
@@ -257,6 +259,8 @@ review(room="build", action="ask", title="Discount before or after tax?",
        options=["Before tax", "After tax"], recommend=0)
 
 review(room="build", action="concur", item="Q1", recommend=0)
+
+review(room="build", action="abstain", item="Q1")
 ```
 
 ### Answering a finding
@@ -293,7 +297,7 @@ review(room="build", action="close", reason="Moving on: the author is rewriting 
 
 ### What the agents are told
 
-Agents learn the moves from switchboard itself. Claude Code, Codex and Cursor load a `review-board` skill with the fields each action takes, including that a detail is Markdown and that a Mermaid diagram is allowed. The `review` tool's description only names the actions. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 are not given that skill: Devin's switchboard setup is a copied config, and OpenCode's is an in-process listener, and neither loads a plugin skill. They still have the action names, every field on the tool, the `/review` request and the wake lines. Each move that is another agent's to answer comes as a message that says what to do and which call to make. The `/review` request tells them how to raise, contest, insist, ask and concur, and to give every call the pull request's link. A refused move says why, for example "F1 is yours: you can drop it, not concede it".
+Agents learn the moves from switchboard itself. Claude Code, Codex and Cursor load a `review-board` skill with the fields each action takes, including that a detail is Markdown and that a Mermaid diagram is allowed. The `review` tool's description only names the actions. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 are not given that skill: Devin's switchboard setup is a copied config, and OpenCode's is an in-process listener, and neither loads a plugin skill. They still have the action names, every field on the tool, the `/review` request and the wake lines. Each move that is another agent's to answer comes as a message that says what to do and which call to make. The `/review` request tells them how to raise, contest, insist, ask, concur and abstain, and to give every call the pull request's link. A refused move says why, for example "F1 is yours: you can drop it, not concede it".
 
 ## Safety and privacy
 
@@ -411,7 +415,7 @@ A board that was handed off stays handed off, even when it is closed and opened 
 
 **The tool**
 
-- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `edit`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `reopen`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
+- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `edit`, `concur`, `abstain`, `concede`, `contest`, `insist`, `fix`, `confirm`, `reopen`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
 - The fields are `item`, `url`, `head`, `title`, `detail`, `where`, `owner`, `commit`, `proof`, `reason`, `options`, `recommend`, `state`, `threads` and `ci`. An action reads only the fields it needs. `detail` is Markdown, and a Mermaid diagram is allowed. `where` is `shop/cart.py:40-58`.
 
 **On the page**

@@ -728,6 +728,65 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_review_abstain(browser: Any, out: Path, world: Any) -> None:
+    """#785: a question whose other agent abstained. The card names them and treats the remaining
+    pick as the recommendation. Light, once, also shows the card still waiting, before anyone
+    abstains."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    room = "#abstain-before"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    world.seed_review(room)
+    ctx = browser.new_context(**base, **DESKTOP, color_scheme="light")
+    ctx.set_default_timeout(WAIT_MS)
+    try:
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        tab = page.locator('#tabs .room[data-room="' + room + '"]')
+        if not tab.is_visible():
+            page.click("#rooms-toggle")
+        tab.click()
+        page.click("#board-toggle")
+        page.click('#board .board-card[data-item="Q1"]')
+        expect(page.locator("#board .board-detail .board-consensus")).to_have_text(
+            "Waiting for codex-1 to agree or pick another."
+        )
+        settle(page)
+        shot(page, out, "review-abstained-before-light.png")
+    finally:
+        ctx.close()
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#abstain-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        world.agent_call(room, "codex-1", "review", action="abstain", item="Q1")
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="Q1"]')
+            expect(page.locator("#board .board-detail .board-consensus")).to_have_text("abstained: codex-1.")
+            if slug == "phone-light":
+                page.locator("#board .board-detail").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, "review-abstained-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
 def shoot_contest_flow(browser: Any, out: Path, world: Any) -> None:
     """#424: a contested finding waits in Agents working on its raiser, then, once the raiser insists,
     comes to Needs you with both reasons beside each other."""
@@ -3996,6 +4055,7 @@ ONLY: dict[str, Any] = {
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
     "review_edit": shoot_review_edit,
+    "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
     "real_names": shoot_real_names,
@@ -4074,6 +4134,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
             shoot_review_card(browser, out, world)
+            shoot_review_abstain(browser, out, world)
             shoot_contest_flow(browser, out, world)
             shoot_board_tabs(browser, out, world)
             shoot_outdated_board(browser, out, world)
