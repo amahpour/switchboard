@@ -543,3 +543,41 @@ def test_an_escalated_mention_never_wakes_again_after_read_and_stop(tmp_path: Pa
     for _ in range(4):
         tick(w, W)
     assert s.open and w.store.count_events("watchdog_remind") == 1 and not notices(w)
+
+
+def test_a_busy_member_gets_one_notice_per_busy_stretch(w: World) -> None:
+    """Mentions that arrive minutes apart cross the limit on different ticks; the human is told once
+    for the stretch, and again only after the member was idle and busy anew (#787). Fails if each
+    overdue mention posts its own notice."""
+    p, m = w.agent("bot", hooks=True)
+    first = w.human("@bot first", mentions=("bot",))
+    out = w.hook(p, "PostToolUse", ok=True)
+    w.actions += w.engine.on_hook_ack(out.batch_id, out.ack)
+    for _ in range(2):  # t+60 and t+120: each is in its member's context and busy
+        w.clock.advance(60)
+        w.human("@bot more", mentions=("bot",))
+        out = w.hook(p, "PostToolUse", ok=True)
+        w.actions += w.engine.on_hook_ack(out.batch_id, out.ack)
+    w.take()
+    told: list[Notice] = []
+    for _ in range(10):  # a long turn: every mention crosses the limit on its own tick
+        tick(w, 60)
+        w.hook(p, "PostToolUse", ok=True)
+        told += notices(w)
+    assert len(told) == 1 and f"@mention #{first.id}" in told[0].text, told
+    assert w.store.count_events("watchdog_escalate") == 1
+    # idle for a moment, then busy again with a new overdue mention: a second notice
+    w.actions += w.engine.set_status(w.p(p), "idle", "test")
+    tick(w, 1)
+    w.take()
+    w.actions += w.engine.set_status(w.p(p), "busy", "test")
+    again = w.human("@bot again", mentions=("bot",))
+    out = w.hook(p, "PostToolUse", ok=True)
+    w.actions += w.engine.on_hook_ack(out.batch_id, out.ack)
+    w.take()
+    later = []
+    for _ in range(4):
+        tick(w, W)
+        w.hook(p, "PostToolUse", ok=True)
+        later += notices(w)
+    assert len(later) == 1 and f"#{again.id}" in later[0].text, later

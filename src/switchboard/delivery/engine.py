@@ -124,6 +124,8 @@ class Engine:
         # (membership_id, message_id): told the human this @mention is overdue while
         # its member isn't idle (busy, waiting on approval, offline; §20)
         self.stalled_told: set[tuple[int, int]] = set()
+        # membership id -> the non-idle status the human was told about: one notice per busy stretch (#787)
+        self.stalled_stretch: dict[int, str] = {}
         self.peer_marks: dict[int, int] = {}  # offered batch with chatter -> the boundary it was made at
         self.hook_acks: dict[int, tuple[str, float]] = {}  # batch_id -> (ack nonce, deadline)
         self.pull_deadlines: dict[int, float] = {}  # batch_id -> expiry (confirmation expected)
@@ -1896,7 +1898,7 @@ class Engine:
           prompt, offline) can't be reminded; once an @mention has gone
           unanswered for as long as reminding and escalating would have taken,
           ``(watchdog_max + 1) * watchdog_s``, the human is told (a notice only,
-          once per item; the reminders still follow once the member is idle).
+          once per busy stretch, #787; the reminders still follow once the member is idle).
         Paused rooms and held members are left alone."""
         d = self.d
         if d.watchdog_s <= 0:
@@ -1911,6 +1913,7 @@ class Engine:
         self.stalled_told &= {
             (it.membership_id, it.message_id) for items in by_member.values() for it in items
         }
+        self._end_idle_stretches()
         for mid, items in by_member.items():
             m = self.store.get_membership(mid)
             ctx = self._ctx(m) if m is not None and m.active else None
@@ -2004,10 +2007,25 @@ class Engine:
             )
         return out
 
+    def _end_idle_stretches(self) -> None:
+        """A member that is idle again (or gone) ends its busy stretch: its next one may be told (#787)."""
+        for mid in list(self.stalled_stretch):
+            m = self.store.get_membership(mid)
+            ctx = self._ctx(m) if m is not None and m.active else None
+            if ctx is None:
+                del self.stalled_stretch[mid]
+                continue
+            sink = self.sinks.open_for(ctx[0].id, mid)
+            if rules.is_idle(rules.effective_status(ctx[0].status, sink is not None)):
+                del self.stalled_stretch[mid]
+
     def _watchdog_stalled(
         self, m: Membership, room: Room, eff: str, items: list[Item], now: float, wmax: int
     ) -> list[Action]:
-        """@mentions overdue on a member that isn't idle: tell the human once per item."""
+        """@mentions overdue on a member that isn't idle: tell the human once per busy stretch (#787).
+
+        Later mentions in the same stretch are marked told and not announced again; the first
+        notice lists what was overdue when it went out (a posted line can't be edited)."""
         d = self.d
         due = [
             i
@@ -2027,6 +2045,9 @@ class Engine:
         )
         if not due:
             return []
+        if self.stalled_stretch.get(m.id) == eff:
+            return []  # told already for this stretch; the new mention is marked, not announced again
+        self.stalled_stretch[m.id] = eff
         ids = [i.message_id for i in due]
         self._event(
             "watchdog_escalate",
