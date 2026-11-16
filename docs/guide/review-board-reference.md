@@ -17,7 +17,7 @@ Here is the life of a finding. Say codex-1 reviews a shop's pull request and cla
 2. **Concede or contest.** Another agent answers. It is never the agent that raised the finding. To *concede* is to agree, and to name the agent that will fix it. To *contest* is to disagree, with a reason.
 3. **Drop or insist.** A contest goes back to the agent that raised the finding. It either *drops* the finding, because the contest convinced it, or *insists*, with its own reason. The other side can still concede at any point.
 4. **Fixed, with proof.** The owner fixes it. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
-5. **Confirmed.** The agent that raised the finding checks the proof and confirms the fix. Only now is the finding settled.
+5. **Confirmed or reopened.** The agent that raised the finding checks the proof and confirms the fix, settling the finding, or reopens it with a reason, returning it to its owner. An owner can replace an unconfirmed fix with a new commit and proof.
 
 There are two other ways out. The agent that raised a finding can *drop* it with a reason, any time before it is fixed. Or it can *defer* it to a follow-up ticket. A deferred finding is settled for this pull request, and its card reads "Deferred to" and the ticket. You can drop or defer any open finding too.
 
@@ -32,6 +32,9 @@ stateDiagram-v2
     Contested --> Contested: insist, then you decide
     BeingFixed --> Fixed: fix with proof
     Fixed --> Settled: confirm
+    Fixed --> BeingFixed: reopen with reason
+    Fixed --> Fixed: revise fix before confirmation
+    Settled --> BeingFixed: raiser reopens before handoff
     Raised --> Dropped: drop
     Contested --> Dropped: drop
     BeingFixed --> Dropped: drop
@@ -46,7 +49,8 @@ Some moves ask another agent to act. Those are short messages from the agent tha
 - A **raised** finding wakes every other agent in the room: concede or contest it.
 - A **contest** wakes the agent that raised the finding: drop it or insist.
 - A **concession** that names another agent wakes that agent: it is yours to fix.
-- A **fix** wakes the agent that raised the finding: check the proof.
+- A **fix**, including a revised fix, wakes the agent that raised the finding: check the proof.
+- A **reopen** wakes its owner: the raiser rejected the fix, with a reason.
 - A **question** wakes every other agent in the room: agree with the recommendation, or pick another option.
 
 Every other move is only a notice. A notice is one line in the room that wakes nobody and costs no agent a turn. Insist, drop, defer, confirm, report, close and a pick among options are notices. So is a concession that leaves the fix with the agent that conceded.
@@ -219,7 +223,7 @@ Items are named by their label, `F1` or `Q2`. Capital or small letters both work
 
 - **`open`** opens the room's board for a link, or brings a closed one back. With `head`, the pull request's head commit, it also moves an open board to that commit. A head is seven to 64 hexadecimal digits.
 - **`list`** names every board of the room, open ones first, with what is open and settled on each, its head, who opened it and who closed it.
-- **`show`** gives the whole board as text, open work first, one line per card. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
+- **`show`** gives the whole board as text, open work first, one line per card. Add `item="F1"` (or a question label) to read one card in full: detail, options, contest and insist reasons, proof and history. Without `item`, each contested line includes the first 200 characters of its reason. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
 
 ```text
 review(room="build", action="open",
@@ -264,7 +268,8 @@ review(room="build", action="concur", item="Q1", recommend=0)
 
 ### Fixing and checking
 
-- **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
+- **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix, and can replace the commit and proof of an unconfirmed fix with another `fix`. Both attempts remain in the event log. A confirmed fix cannot be revised until its raiser reopens it. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
+- **`reopen`** returns a fixed finding to its existing owner. It takes `item` and a required `reason` (at most 500 characters). Only the raiser can reopen, including after confirmation; confirmation clears. Closed and handed-off boards still refuse card moves.
 - **`confirm`** is the raiser's check of a fix. It takes `item`. The owner and everyone else are refused. Then the finding is settled.
 
 ```text
@@ -405,7 +410,7 @@ A board that was handed off stays handed off, even when it is closed and opened 
 
 **The tool**
 
-- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
+- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `reopen`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
 - The fields are `item`, `url`, `head`, `title`, `detail`, `where`, `owner`, `commit`, `proof`, `reason`, `options`, `recommend`, `state`, `threads` and `ci`. An action reads only the fields it needs. `detail` is Markdown, and a Mermaid diagram is allowed. `where` is `shop/cart.py:40-58`.
 
 **On the page**

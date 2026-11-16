@@ -886,10 +886,15 @@ def test_the_board_text_says_whose_move_a_contested_finding_is() -> None:
 
     assert line(contested()).endswith(
         "raised by codex-1, contested: codex-1 drops it or insists (review action insist)"
+        "; contest reason: half-up is what the receipt shows"
     )
-    assert line(contested("it stays")).endswith("raised by codex-1, contested, insisted on: a person decides")
+    assert line(contested("it stays")).endswith(
+        "raised by codex-1, contested, insisted on: a person decides"
+        "; contest reason: half-up is what the receipt shows"
+    )
     assert line(contested(), ("claude-1",)).endswith(
         "raised by codex-1, contested; codex-1 isn't here to answer: a person decides"
+        "; contest reason: half-up is what the receipt shows"
     )
     assert "isn't here to answer" in line(contested(), AGENTS, ("codex-1",))
 
@@ -1041,3 +1046,94 @@ def test_a_urls_board_is_its_newest_row_and_an_older_row_of_the_same_url_stays_u
     # open ones first, then closed; each group the newest first; the older row of url_a is not listed
     assert [r["id"] for r in store.room_reviews(room.id)] == [second["id"], new["id"]]
     assert store.review_for_url(room.id, "https://example.com/shop/pull/9") is None
+
+
+@pytest.mark.parametrize("present,insisted", [([], ""), (["codex-1"], ""), (["codex-1"], "Still unsafe")])
+def test_contested_summary_cuts_the_reason_at_200_characters(present: list[str], insisted: str) -> None:
+    """Every contest summary exposes the argument without growing into the full card."""
+    item = replace(finding("contested"), reason="x" * 200 + "hidden tail", insisted=insisted)
+    rendered = reviews.render({"url": "https://example.com/shop/pull/7"}, [item], present=present)
+    assert "x" * 200 in rendered
+    assert "hidden tail" not in rendered
+
+
+def test_one_card_text_keeps_all_evidence_options_and_history() -> None:
+    """The item view preserves full evidence, including settled fields and both arguments."""
+    item = replace(
+        finding("contested", owner="claude-1"),
+        detail="Evidence\nsecond line",
+        reason="contest " * 60,
+        insisted="The invariant still breaks",
+        options=("Lock", "Queue"),
+        recommend=1,
+        proof="test_bus_race",
+        commit="abc1234",
+        outdated_head="def5678",
+    )
+    events = [{"ts": 2.0, "data": {"item": "F1", "to": "contested", "by": "claude-1"}}]
+    rendered = reviews.render_item({"url": "https://example.com/shop/pull/7"}, item, events)
+    for value in (
+        item.detail,
+        item.reason,
+        item.insisted,
+        item.proof,
+        item.commit,
+        item.owner,
+        "0. Lock",
+        "1. Queue",
+        "codex-1 raised it",
+        "claude-1 contested it",
+    ):
+        assert value in rendered
+
+
+def test_one_question_view_keeps_its_answer_without_the_boards_handoff_plan() -> None:
+    """Reading one settled card does not repeat unrelated cards from the handoff summary."""
+    item = replace(question("answered"), answer="before tax", answered_by="alice", confirmed_by="alice")
+    board = {
+        "url": "https://example.com/shop/pull/7",
+        "posted_by": "codex-1",
+        "plan": {"summary": "Unrelated finding", "comments": []},
+    }
+    rendered = reviews.render_item(board, item, [])
+    assert "Answer: before tax" in rendered and "Answered by: alice" in rendered
+    assert "Confirmed by: alice" in rendered
+    assert "Unrelated finding" not in rendered
+
+
+@pytest.mark.parametrize("confirmed_by", ["", "codex-1"])
+def test_only_the_raiser_reopens_a_fixed_finding(confirmed_by: str) -> None:
+    """A rejected fix goes back to its existing owner, even after a previous confirmation."""
+    item = replace(finding("fixed", owner="claude-1"), confirmed_by=confirmed_by)
+    assert reviews.AGENT_MOVES["reopen"] == (frozenset({"fixed"}), "conceded")
+    assert reviews.agent_move(item, "reopen", "codex-1") == "conceded"
+    for actor in ("claude-1", "devin-1"):
+        with pytest.raises(ReviewError, match="who raised F1"):
+            reviews.agent_move(item, "reopen", actor)
+    for state in ("raised", "contested", "conceded", "dropped"):
+        with pytest.raises(ReviewError, match="can't be conceded from there"):
+            reviews.agent_move(finding(state), "reopen", "codex-1")
+    with pytest.raises(ReviewError, match="only a person"):
+        reviews.agent_move(question(), "reopen", "codex-1")
+
+
+def test_an_owner_can_replace_only_an_unconfirmed_fix() -> None:
+    """The move table permits revision; confirmation still protects an accepted fix."""
+    item = replace(finding("fixed", owner="claude-1"), confirmed_by="")
+    assert reviews.AGENT_MOVES["fix"] == (frozenset({"conceded", "fixed"}), "fixed")
+    assert reviews.agent_move(item, "fix", "claude-1") == "fixed"
+    with pytest.raises(ReviewError, match="claude-1's to fix"):
+        reviews.agent_move(item, "fix", "codex-1")
+    with pytest.raises(ReviewError, match="already confirmed"):
+        reviews.agent_move(replace(item, confirmed_by="codex-1"), "fix", "claude-1")
+
+
+def test_reopening_is_named_in_the_history_and_wakes_the_owner() -> None:
+    """A reopen is distinct from conceding and hands the rejected fix back to its owner."""
+    item = replace(finding("conceded", owner="claude-1"), reason="The shutdown race remains")
+    events = [{"ts": 1.0, "data": {"item": "F1", "to": "reopened", "by": "codex-1"}}]
+    assert reviews.history(item, events)[-1]["did"] == "reopened it"
+    handoff = reviews.handoff(item, "codex-1", ("codex-1", "claude-1"), action="reopen")
+    assert handoff is not None
+    who, line = handoff
+    assert who == ("claude-1",) and "reopened" in line and item.reason in line

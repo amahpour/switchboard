@@ -1323,3 +1323,106 @@ async def test_a_person_can_still_rule_on_a_contested_finding_its_raiser_has_not
             assert r.status_code == 200 and finding_of(web, "F2")["state"] == "dropped"
     finally:
         web.close()
+
+
+async def test_show_one_card_exposes_the_contest_evidence_and_history(broker: InProcBroker) -> None:
+    """The raiser reads the argument through its real tool, even after the board closes."""
+    async with (
+        FakeAgent(broker.home, "detail-author") as author,
+        FakeAgent(broker.home, "detail-reviewer") as reviewer,
+    ):
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call(
+            "review",
+            room="#build",
+            action="raise",
+            title="Race on bus",
+            detail="The writer races with shutdown.",
+            options=["Lock", "Queue"],
+            recommend=0,
+        )
+        await reviewer.call("review", room="#build", action="raise", title="Another card")
+        await author.call(
+            "review", room="#build", action="contest", item="F1", reason="Shutdown holds the lock."
+        )
+        shown = await reviewer.call("review", room="#build", action="show", item="f1")
+        assert shown["ok"] and shown["item"] == "F1"
+        for value in (
+            "The writer races with shutdown.",
+            "Shutdown holds the lock.",
+            "0. Lock",
+            "1. Queue",
+            "codex-1 raised it",
+            "claude-1 contested it",
+        ):
+            assert value in shown["board"]
+        assert "Another card" not in shown["board"]
+        summary = await reviewer.call("review", room="#build", action="show")
+        assert "Shutdown holds the lock." in summary["board"]
+        assert "The writer races" not in summary["board"]
+        assert "Another card" in summary["board"]
+        for label in ("nope", "F999", "Q1"):
+            refused = await reviewer.call("review", room="#build", action="show", item=label)
+            assert not refused["ok"]
+        await reviewer.call("review", room="#build", action="insist", item="F1", reason="Readers do not.")
+        await reviewer.call("review", room="#build", action="close", reason="Paused review")
+        closed = await reviewer.call("review", room="#build", action="show", item="F1", url=PR)
+        assert closed["ok"] and "closed" in closed["board"]
+        assert "Readers do not." in closed["board"] and "insisted on it" in closed["board"]
+
+
+async def test_fixes_can_be_revised_and_reopened_without_losing_their_evidence(broker: InProcBroker) -> None:
+    """Real tool calls retain both fix attempts and clear confirmation only on a valid reopen."""
+    async with (
+        FakeAgent(broker.home, "revision-author") as author,
+        FakeAgent(broker.home, "revision-reviewer") as reviewer,
+    ):
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call("review", room="#build", action="raise", title="Race on bus")
+        await author.call("review", room="#build", action="concede", item="F1")
+        for commit, proof in (("abc1234", "test_first"), ("def5678", "test_revised")):
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=commit, proof=proof
+            )
+            assert fixed["ok"] and not fixed["settled"]
+        row = q(broker, "SELECT commit_sha,proof,confirmed_by FROM review_items")[0]
+        assert tuple(row) == ("def5678", "test_revised", "")
+        events = [json.loads(r["data"]) for r in q(broker, "SELECT data FROM events WHERE kind='review'")]
+        fixes = [e for e in events if e.get("to") == "fixed"]
+        assert [(e["commit"], e["proof"]) for e in fixes] == [
+            ("abc1234", "test_first"),
+            ("def5678", "test_revised"),
+        ]
+        assert (fixes[-1]["previous_commit"], fixes[-1]["previous_proof"]) == ("abc1234", "test_first")
+        confirmed = await reviewer.call("review", room="#build", action="confirm", item="F1")
+        assert confirmed["ok"] and confirmed["settled"]
+        refused = await author.call(
+            "review", room="#build", action="fix", item="F1", commit="abc9876", proof="test_third"
+        )
+        assert not refused["ok"] and "confirmed" in refused["error"]
+        for reason in ("", "x" * 501):
+            refused = await reviewer.call("review", room="#build", action="reopen", item="F1", reason=reason)
+            assert not refused["ok"]
+            assert q(broker, "SELECT confirmed_by FROM review_items")[0][0] == "codex-1"
+        refused = await author.call(
+            "review", room="#build", action="reopen", item="F1", reason="Race remains"
+        )
+        assert not refused["ok"]
+        reopened = await reviewer.call(
+            "review", room="#build", action="reopen", item="F1", reason="Race remains"
+        )
+        assert reopened["ok"] and not reopened["settled"]
+        row = q(broker, "SELECT state,owner,confirmed_by,reason,commit_sha,proof FROM review_items")[0]
+        assert tuple(row) == ("conceded", "claude-1", "", "Race remains", "def5678", "test_revised")
+        notices = q(broker, "SELECT text FROM messages WHERE sender_kind='agent'")
+        assert any("reopened" in r["text"] and "@claude-1" in r["text"] for r in notices)
+        fixed = await author.call(
+            "review", room="#build", action="fix", item="F1", commit="abc9876", proof="test_third"
+        )
+        assert fixed["ok"]
+        checked = await reviewer.call("review", room="#build", action="confirm", item="F1")
+        assert checked["ok"] and checked["settled"]

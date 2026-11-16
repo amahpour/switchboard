@@ -498,6 +498,37 @@ def board_budget(full_at: float | None, now: float) -> tuple[float, float | None
     return debt + BOARD_REFILL_S, None
 
 
+# One "changed the board" notice per actor per burst, posted when the burst ends (§56.3). The log
+# can't edit a line, so the count is known only at the end: a quiet gap or another actor closes it.
+BOARD_NOTICE_GAP_S = 120.0
+
+
+def board_burst_step(
+    open_burst: tuple[str, int, float] | None, actor: str, now: float, gap_s: float = BOARD_NOTICE_GAP_S
+) -> tuple[tuple[str, int, float] | None, tuple[str, int, float]]:
+    """A saved board change by ``actor`` at ``now``. A burst is ``(actor, edits, last_write_at)``.
+
+    Returns ``(closed, open)``: the burst this write ended, if any (another actor wrote, or the
+    gap had passed), and the burst that is open now."""
+    if open_burst is not None:
+        who, count, last = open_burst
+        if who == actor and now - last < gap_s:
+            return None, (who, count + 1, now)
+        return open_burst, (actor, 1, now)
+    return None, (actor, 1, now)
+
+
+def board_burst_due(burst: tuple[str, int, float], now: float, gap_s: float = BOARD_NOTICE_GAP_S) -> bool:
+    """True once a burst has been quiet for the gap, so its notice may be posted."""
+    return now - burst[2] >= gap_s
+
+
+def board_burst_text(burst: tuple[str, int, float]) -> str:
+    """The notice for a closed burst; it never carries shape text."""
+    who, count, _ = burst
+    return f"{who} changed the board" + (f" ({count} edits)" if count > 1 else "")
+
+
 def rate_limit_exempt(
     *, reply_to_kind: str | None, reply_to_mentions: Iterable[str], sender_name: str, unhandled_priority: int
 ) -> bool:

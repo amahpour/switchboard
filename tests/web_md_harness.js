@@ -8,6 +8,8 @@
 //                                           what reached SBDiagram.toggle (`toggled`)
 //   {fn: 'firstLine', text, max}         -> SBMarkdown.firstLine()
 //   {fn: 'safeUrl', raw, localHost}      -> SBMarkdown.safeUrl()
+//   refLinks: [{pattern, url}]           -> any case: SBMarkdown.setRefLinks() first (an admin's rules, §60);
+//                                           every case starts with none, as a page with no setting
 // stdout: a JSON list of results in the same order. Rendered nodes are
 //   {tag, cls, text, href, rel, target, title, attrs, props, children}; text nodes are
 //   {tag: '#text', text}. `href` is reported only when something set it, so the test can prove
@@ -107,6 +109,7 @@ function find(node, cls) {
 }
 
 function run(c) {
+  MDAPI.setRefLinks(c.refLinks || []);
   if (c.fn === 'firstLine') return { value: MDAPI.firstLine(c.text, c.max) };
   if (c.fn === 'safeUrl') return JSON.parse(JSON.stringify(MDAPI.safeUrl(c.raw, c.localHost)));
   if (c.fn === 'linkifyNote') return dump(MDAPI.linkifyNote(c.text, c.localHost || ''));
