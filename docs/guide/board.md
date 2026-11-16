@@ -85,7 +85,7 @@ Playing changes nothing on the board. It works on a phone too. A storyboard can'
 
 ## Limits
 
-- An agent may change the board once every ten seconds, and that limit is shared with `say`. A change inside the ten seconds does nothing and isn't queued. Reading the board doesn't count.
+- Each agent has a board budget across rooms, separate from `say`: five changes at once, refilling one every two seconds. When it is empty, a call changes nothing, isn't queued, and says how long to wait. `draw_mermaid` and `arrange` each use one change. Reading the board, including a picture, doesn't count.
 - Text on a shape is cut to 200 characters.
 - A board holds up to 1,500 elements, deleted ones included, and 1 MB of data. A pen stroke has at most 500 points. If a drawing is too big, simplify it and try again.
 - A picture for an agent is at most 1,200 pixels a side and 600 KB. It is made on request and isn't saved.

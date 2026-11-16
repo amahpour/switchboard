@@ -77,8 +77,8 @@ def recv_until(ws: Any, pred: Any, timeout: float = 5.0) -> dict[str, Any]:
 
 async def test_an_agent_draws_and_another_reads_data_not_instructions(broker: InProcBroker) -> None:
     """The note's text is other people's words. The reader sees it quoted, with ``<`` escaped, and
-    the room log names who changed the board without repeating the drawing. A second edit inside
-    the say window is refused, and a read is not. Someone who never joined cannot touch it."""
+    the room log names who changed the board without repeating the drawing. An edit past the five-change
+    burst is refused, and a read is not. Someone who never joined cannot touch it."""
     async with (
         FakeAgent(broker.home, "drawer") as drawer,
         FakeAgent(broker.home, "reader") as reader,
@@ -94,12 +94,13 @@ async def test_an_agent_draws_and_another_reads_data_not_instructions(broker: In
         assert unknown["ok"] is False and "unknown" in unknown["error"]
         drawn = await drawer.call("board", room="#build", action="note", text=PHRASE)
         assert drawn["ok"] and drawn["changed"] is True and drawn["ids"]
-        again = await drawer.call("board", room="#build", action="note", text="second")
+        for _ in range(4):
+            edited = await drawer.call("board", room="#build", action="edit", id=drawn["ids"][0], text=PHRASE)
+            assert edited["changed"] is True
+        again = await drawer.call("board", room="#build", action="note", text="sixth")
         assert again["changed"] is False and again["reason"] == "rate_limited"
-        queued = await drawer.say("#build", "starting")
-        assert queued["ok"] and queued.get("queued") is True
         seen = await reader.call("board", room="#build", action="read")
-        assert seen["ok"] and seen["seq"] == 1
+        assert seen["ok"] and seen["seq"] == 5
         assert "<" not in seen["text"] and ">" not in seen["text"]
         assert "\\u003cscript" in seen["text"] and "https://example.com/x" in seen["text"]
         pending = await reader.read("#build")
@@ -107,7 +108,7 @@ async def test_an_agent_draws_and_another_reads_data_not_instructions(broker: In
         assert "changed the board" not in pending["text"] and PHRASE not in pending["text"]
     rows = q(broker, "SELECT text FROM messages")
     notes = [r["text"] for r in rows if "changed the board" in r["text"]]
-    assert notes == ["claude-1 changed the board"]
+    assert notes == ["claude-1 changed the board"] * 5
     assert all(PHRASE not in r["text"] for r in rows)
     stored = json.loads(q(broker, "SELECT elements FROM room_boards")[0]["elements"])
     shape = next(e for e in stored if e["type"] == "rectangle")
@@ -204,7 +205,7 @@ def test_a_private_room_refuses_a_board_from_anyone_else() -> None:
 async def test_board_image_is_returned_only_for_its_pending_room_request(
     broker: InProcBroker, stale: bool
 ) -> None:
-    """A bounded PNG answers one read; unsolicited responses, wrong rooms and stale pictures fail."""
+    """Image reads bypass an empty editing budget; wrong rooms and stale pictures still fail."""
     import asyncio
     import base64
 
@@ -217,6 +218,11 @@ async def test_board_image_is_returned_only_for_its_pending_room_request(
         recv_until(ws, lambda f: f.get("t") == "board")
         async with FakeAgent(broker.home, "viewer") as viewer:
             await viewer.join("#build", "viewer")
+            for i in range(5):
+                made = await viewer.call("board", room="#build", action="note", text=f"step {i}")
+                assert made["changed"] is True
+            refused = await viewer.call("board", room="#build", action="note", text="sixth")
+            assert refused["reason"] == "rate_limited"
             pending = asyncio.create_task(
                 viewer.raw("board", {"room": "#build", "action": "read", "text": "image"})
             )
@@ -336,3 +342,57 @@ async def test_a_styled_shape_reaches_the_page_and_the_result_names_layout_probl
     finally:
         ws.close()
         web.close()
+
+
+@pytest.mark.parametrize("say_first", [True, False])
+async def test_say_and_board_never_spend_each_others_budget(broker: InProcBroker, say_first: bool) -> None:
+    """Talking and drawing both succeed at the same instant, whichever goes first."""
+    async with FakeAgent(broker.home, "drawer") as drawer:
+        await drawer.join("#build", "claude-1")
+        if say_first:
+            said = await drawer.say("#build", "starting")
+        made = await drawer.call("board", room="#build", action="note", text="plan")
+        assert made["changed"] is True
+        if not say_first:
+            said = await drawer.say("#build", "drawn")
+        assert said["ok"] and not said.get("queued"), said
+
+
+async def test_board_burst_is_per_agent_across_rooms_and_refills(
+    broker: InProcBroker, clock: FakeClock
+) -> None:
+    """The sixth edit waits exactly two seconds across rooms; reads and other agents remain free.
+    Failed edits do not spend capacity, and refusals do not write a revision or postpone refill."""
+    web = broker.web_client()
+    try:
+        assert (
+            web.post("/api/rooms", json={"name": "#other"}, headers=broker.write_headers()).status_code == 200
+        )
+    finally:
+        web.close()
+    async with FakeAgent(broker.home, "drawer") as drawer, FakeAgent(broker.home, "other") as other:
+        await drawer.join("#build", "claude-1")
+        await drawer.join("#other", "claude-1")
+        await other.join("#build", "codex-1")
+        bad = await drawer.call("board", room="#build", action="edit", id="missing", text="bad")
+        assert bad["ok"] is False
+        for i in range(5):
+            made = await drawer.call("board", room="#build", action="note", text=f"step {i}")
+            assert made["changed"] is True
+        for room in ("#build", "#other"):
+            refused = await drawer.call("board", room=room, action="note", text="overflow")
+            assert refused["changed"] is False and refused["reason"] == "rate_limited"
+            assert refused["retry_after_s"] == 2.0 and "2 s" in refused["error"]
+        seen = await drawer.call("board", room="#build", action="read")
+        assert seen["ok"] and seen["seq"] == 5
+        drawn = await other.call("board", room="#build", action="note", text="independent")
+        assert drawn["changed"] is True
+        clock.advance(1.5)
+        refused = await drawer.call("board", room="#build", action="note", text="early")
+        assert refused["retry_after_s"] == 0.5 and "1 s" in refused["error"]
+        clock.advance(0.5)
+        made = await drawer.call("board", room="#other", action="note", text="refilled")
+        assert made["changed"] is True
+        refused = await drawer.call("board", room="#build", action="note", text="empty again")
+        assert refused["retry_after_s"] == 2.0
+    assert sorted(r["seq"] for r in q(broker, "SELECT seq FROM room_boards")) == [1, 6]
