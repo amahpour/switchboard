@@ -40,7 +40,7 @@ from switchboard.clock import Clock
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.delivery.sinks import Sink, SinkRegistry
-from switchboard.meeting.speech import VOICE_HINT
+from switchboard.meeting.speech import VOICE_HINT, VOICE_STYLE
 from switchboard.models import (
     CONTINUE_PATHS,
     PULL_PATHS,
@@ -316,7 +316,7 @@ class Engine:
             and any(it.sender_kind == "meeting" for it in fit.items)
             and self.voice_on(room.id)
         ):
-            text += "\n" + VOICE_HINT
+            text += "\n" + VOICE_STYLE + "\n" + VOICE_HINT
         # each caller records ``chars=len(text)`` in the batch's ``offer`` event: what the agent
         # was handed, for ``switchboard report``'s characters by path (DESIGN.md §12.6, #275)
         return text

@@ -21,7 +21,14 @@ from switchboard.config import Config, ConfigError, FilesCfg, MeetingCfg, from_d
 from switchboard.files import Attachments, FolderStore
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import NoFrame, frame_from, image_kind, says_screen, wants_snapshot
-from switchboard.meeting.speech import SPEAK_MAX, call_text, speakable
+from switchboard.meeting.speech import (
+    SPEAK_MAX,
+    SPEAK_SENTENCES,
+    VOICE_STYLE,
+    call_text,
+    speakable,
+    split_sentences,
+)
 from switchboard.models import RESERVED_NAMES
 from switchboard.store import Store
 
@@ -70,7 +77,7 @@ def test_markdown_marks_go_and_the_words_stay() -> None:
     underscore keeps it. Fails if the voice would say "asterisk" or "backtick"."""
     text = "# Done\n**All** the _tests_ pass, `make check` too.\n> a quote\n- first\n- second\nsee some_name"
     spoken = "Done. All the tests pass, make check too. a quote. first. second. see some_name"
-    assert speakable(text) == spoken
+    assert speakable(text, sentences=99) == spoken
 
 
 def test_a_link_keeps_its_words_and_a_bare_url_is_left_out() -> None:
@@ -109,7 +116,7 @@ def test_control_characters_and_blank_text_are_dropped() -> None:
 
 
 def test_a_long_message_is_cut_at_a_word_and_ends_with_a_full_stop() -> None:
-    """About 600 characters. Fails if the cut falls inside a word, or runs past the limit."""
+    """About 300 characters. Fails if the cut falls inside a word, or runs past the limit."""
     words = " ".join(f"word{n}" for n in range(300))
     spoken = speakable(words)
     assert len(spoken) <= SPEAK_MAX + 1
@@ -118,6 +125,62 @@ def test_a_long_message_is_cut_at_a_word_and_ends_with_a_full_stop() -> None:
     assert speakable("short and sweet") == "short and sweet"
     exact = "a" * SPEAK_MAX
     assert speakable(exact) == exact
+
+
+def test_only_the_first_sentences_are_spoken() -> None:
+    """A reply of five sentences is read as its first three. Fails if the whole paragraph is
+    spoken, the way a screen answer was read aloud in the call of 2026-11-15 (#761)."""
+    text = "One is here. Two is here! Three is here? Four is here. Five is here."
+    assert SPEAK_SENTENCES == 3
+    assert speakable(text) == "One is here. Two is here! Three is here?"
+    assert speakable("Just one. Then two.") == "Just one. Then two."
+
+
+def test_a_cut_ends_on_a_sentence_and_never_inside_a_word() -> None:
+    """Sentences are kept whole up to the character limit: the second does not fit, so only the
+    first is spoken. Fails if the cut falls mid-sentence or the spoken text ends without a stop."""
+    first = "The build is green and the tests all pass."
+    second = "The deploy will go out after the review " + "and some more words " * 30 + "ends here."
+    spoken = speakable(f"{first} {second}")
+    assert spoken == first
+    assert len(speakable(f"{first} {second} {second}")) <= SPEAK_MAX
+
+
+def test_one_very_long_sentence_is_cut_at_a_word_with_a_stop() -> None:
+    """With no sentence end in reach, the cut falls on a word and still ends cleanly."""
+    spoken = speakable("alpha " * 200)
+    assert len(spoken) <= SPEAK_MAX + 1 and spoken.endswith("alpha.")
+
+
+def test_a_list_is_read_as_a_few_short_sentences() -> None:
+    """List lines become sentences, so a long list is cut to its first three items. Fails if
+    every item of a bulleted answer is read out."""
+    text = "Options:\n- red\n- green\n- blue\n- yellow\n- pink"
+    assert speakable(text) == "Options: red. green. blue."
+
+
+@pytest.mark.parametrize(
+    ("text", "parts"),
+    [
+        ("Pi is 3.14 today. Done.", ["Pi is 3.14 today.", "Done."]),
+        ("Use e.g. a fast model. Then go.", ["Use e.g. a fast model.", "Then go."]),
+        ("See example.com for it. Fine.", ["See example.com for it.", "Fine."]),
+        ("No end mark", ["No end mark"]),
+    ],
+)
+def test_a_full_stop_inside_a_number_a_name_or_an_abbreviation_is_not_a_sentence_end(
+    text: str, parts: list[str]
+) -> None:
+    """Fails if "3.14", "e.g." or a domain splits a sentence and the spoken part stops early."""
+    assert split_sentences(text) == parts
+
+
+def test_the_style_guidance_is_short_and_says_what_to_do() -> None:
+    """The agent is told to speak one or two short sentences, keep lists, code and links out,
+    put details in a normal say() and say "one moment" before a tool call."""
+    for part in ("one or two short sentences", "no lists", "normal say()", "one moment"):
+        assert part in VOICE_STYLE
+    assert len(VOICE_STYLE) < 260
 
 
 def test_a_cut_does_not_leave_a_dangling_comma() -> None:
