@@ -15,8 +15,10 @@ from pathlib import Path
 
 from conftest import InProcBroker
 
+from switchboard import db
 from switchboard.broker import home
 from switchboard.models import session_key
+from switchboard.store import Store
 
 ROOMS, MESSAGES = 50, 300
 # A build must take less than this share of the time it takes to read the same 15,000 messages into
@@ -30,6 +32,14 @@ def seed(b: InProcBroker) -> None:
     """50 rooms, three agents in each, 300 chat messages in each (one in ten names alice), and a review board
     with five open questions in every fifth room. Nobody reads, so every agent has its messages pending."""
     store = b.state.store
+    # One transaction for all of it. Every store write opens its own ``db.tx`` and nested ones join the outer,
+    # so without this the seed made about 16,000 commits, each a write to the WAL: 10 s was not enough for
+    # that on a loaded runner (the flake), and with it the seed takes a fraction of a second.
+    with db.tx(store.con):
+        _plant(store)
+
+
+def _plant(store: Store) -> None:
     for r in range(ROOMS):
         room = store.create_room(f"#room-{r:02d}", "alice", 60, 0)
         members = []
@@ -62,7 +72,7 @@ def test_building_home_for_50_rooms_of_300_messages_stays_fast(tmp_home: Path) -
     them, not an empty page that is quick because it is empty."""
     b = InProcBroker(tmp_home).start()
     try:
-        b.on_loop(seed, b)
+        b.on_loop(seed, b, timeout=300)  # a backstop for a very slow runner; the seed is one transaction
 
         def once() -> tuple[float, dict[str, object]]:
             t = time.perf_counter()
