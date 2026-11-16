@@ -434,13 +434,16 @@ def _label(elements: list[dict[str, Any]], el: dict[str, Any]) -> str:
 
 
 def summary(elements: list[dict[str, Any]], seq: int) -> str:
-    """The text an agent reads: frames in reading order, shapes with ids, arrows as ``a -> b``.
+    """The text an agent reads: each frame by its title and id, in the order frames were made,
+    shapes with ids, arrows as ``a -> b``.
 
-    The same shape the spike measured. Tombstones are left out. The broker runs the result
-    through the envelope before an agent sees it, so this string is data, not instructions.
+    Where a frame sits does not number it or reorder the list (#751): the stored order is the
+    order frames were added, and a title such as "5. …" is not also "frame 2". Tombstones are
+    left out. The broker runs the result through the envelope before an agent sees it, so this
+    string is data, not instructions.
     """
     live = _live(elements)
-    frames = sorted((e for e in live if e["type"] == "frame"), key=lambda e: (round(e["y"] / 100), e["x"]))
+    frames = [e for e in live if e["type"] == "frame"]
     shapes = [e for e in live if e["type"] in ("rectangle", "ellipse", "diamond")]
     loose = [e for e in live if e["type"] == "text" and not e.get("containerId")]
     arrows = [e for e in live if e["type"] == "arrow"]
@@ -448,9 +451,9 @@ def summary(elements: list[dict[str, Any]], seq: int) -> str:
         f"board rev {seq}: {len(frames)} frames, {len(shapes)} shapes, "
         f"{len(arrows)} arrows, {len(loose)} loose texts"
     ]
-    for i, f in enumerate(frames, 1):
+    for f in frames:
         lines.append(
-            f'frame {i} id={f["id"]} "{f.get("name") or ""}" at ({round(f["x"])},{round(f["y"])}) '
+            f'frame id={f["id"]} "{f.get("name") or ""}" at ({round(f["x"])},{round(f["y"])}) '
             f"{round(f['width'])}x{round(f['height'])}"
         )
     for s in shapes:

@@ -210,9 +210,43 @@ def test_the_summary_names_frames_shapes_and_arrows() -> None:
     text = board.summary([frame, box, label, other, arrow], 7)
     lines = text.splitlines()
     assert lines[0] == "board rev 7: 1 frames, 2 shapes, 1 arrows, 0 loose texts"
-    assert lines[1] == 'frame 1 id=f1 "Plan" at (0,0) 600x360'
+    assert lines[1] == 'frame id=f1 "Plan" at (0,0) 600x360'
     assert 'rectangle id=n1 "start" at (20,40) 80x40 in f1' in text
     assert 'arrow id=a1 n1 -> n2 ""' in text
+
+
+def _frame_ids(text: str) -> list[str]:
+    return [ln.split(" id=", 1)[1].split(" ", 1)[0] for ln in text.splitlines() if ln.startswith("frame ")]
+
+
+def test_read_lists_frames_by_title_and_id_not_by_where_they_sit() -> None:
+    """A frame titled "5. …" was listed as "frame 2" because `read` numbered frames by where
+    they sit (#751). Each frame is named by its title and its id, in the order the frames were
+    made. Two placements of the same frames list the same ids. Fails if a positional index
+    comes back, or if the frame at the origin is listed first because of its place. The ids
+    are chosen so title order and id order both list the second frame first."""
+    made_first = el(
+        "f2",
+        "frame",
+        name="5. How the image is built",
+        x=800,
+        y=400,
+        width=600,
+        height=360,
+    )
+    made_second = el("f1", "frame", name="1. A person posts", x=0, y=0, width=500, height=300)
+    text = board.summary([made_first, made_second], 4)
+    lines = [ln for ln in text.splitlines() if ln.startswith("frame ")]
+    assert lines == [
+        'frame id=f2 "5. How the image is built" at (800,400) 600x360',
+        'frame id=f1 "1. A person posts" at (0,0) 500x300',
+    ]
+    assert "frame 1" not in text and "frame 2" not in text
+    # One placement puts the earlier frame at the origin and the other puts it below the later
+    # one. A listing that follows position would swap; the order the frames were made does not.
+    at_origin = board.summary([{**made_first, "x": 0, "y": 0}, {**made_second, "x": 800, "y": 400}], 4)
+    still_below = board.summary([{**made_first, "x": 100, "y": 900}, {**made_second, "x": 0, "y": 0}], 4)
+    assert _frame_ids(at_origin) == _frame_ids(still_below) == ["f2", "f1"]
 
 
 def merge_of(current: list[dict[str, Any]], incoming: list[Any], *, agent: bool = True) -> board.MergeResult:

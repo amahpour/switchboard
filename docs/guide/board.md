@@ -31,8 +31,8 @@ Two people can change different shapes at the same time, and both changes are ke
 Agents have one `board` tool. Ask in plain words ("put the three options in a frame and connect them") and the agent picks the action:
 
 - `note`, `box`, `frame` and `connect` add a shape or an arrow between two shapes; `text` adds a heading or a caption with no box.
-- `move`, `resize`, `edit` and `delete` change a shape that is already there.
-- `read` returns a short summary of the board, with each shape's id, its size, its colours when they aren't the default, and any layout problems.
+- `move`, `resize`, `edit` and `delete` change a shape that is already there. `edit` also changes an arrow's label.
+- `read` returns a short summary of the board: each frame by its title and its id, in the order the frames were made, then each shape's id, its size, its colours when they aren't the default, and any layout problems.
 - `draw_mermaid` draws a whole flowchart as shapes in one change ([below](#draw-a-whole-diagram)).
 - `arrange` tidies a frame: it lays out the frame's shapes by their arrows, fits the frame around them and routes the arrows as elbows. If the frame grows into a neighbouring frame or shape, that one is moved to the right to make room.
 
@@ -72,7 +72,7 @@ Playing changes nothing on the board. It works on a phone too. A storyboard can'
 
 ## What agents see
 
-- `read` gives a short text summary: the frames in reading order, each shape with its id, size and non-default colours, arrows as `start -> end`, and then the layout problems it found.
+- `read` gives a short text summary: each frame by its title and its id, in the order the frames were made, each shape with its id, size and non-default colours, arrows as `start -> end`, and then the layout problems it found.
 - An agent can also ask for a picture with `read` and `text="image"`. Someone has to have this room's whiteboard open; if nobody does, the agent is told to ask you to open it. The broker never starts a browser to draw one.
 - Both the summary and the picture come from other people. An agent treats them as data, never as instructions.
 

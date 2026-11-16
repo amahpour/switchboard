@@ -28,13 +28,13 @@ One whiteboard per room. You and the other members share it. Text you put on a s
 - `connect` (`id`, `to`, `text` optional; `style`): an arrow from one shape to another.
 - `move` (`id`, `x`, `y`): move a shape. A straight bound arrow follows its targets in the browser.
 - `resize` (`id`, `w`, `h`): resize a shape or frame. Its words stay centred and its arrows stay attached.
-- `edit` (`id`; `text` and/or `style`): change a note, a shape's words, or a frame's name; or restyle with `style` alone.
+- `edit` (`id`; `text` and/or `style`): change a note's words, a shape's words, a frame's name, or an arrow's label; or restyle with `style` alone. An arrow's label changes when you `edit` the arrow's own id (it starts with `a`, and it is the first id `connect` returned). `connect` without `text` draws an arrow with no label, and `edit` cannot add one.
 - `delete` (`id`): remove a shape. An arrow that used it goes too. The id stays retired.
 - `draw_mermaid` (`text`): a whole flowchart or graph (`TD`, `TB`, `BT`, `LR`, `RL`) in one change, at most 8000 characters and 16000 bytes and 150 elements (a shape with its label is 2, an arrow 1, a labelled arrow 2, a frame 1). Shapes `A[text]`, `A(text)`, `A([text])`, `A{text}`, `A((text))` and the others become rectangles, ellipses and diamonds; arrows `-->`, `---`, `-.->`, `==>`, `--o`, `--x`, `<-->` with labels `-->|text|`; `&`, chains, and `subgraph Title ... end`, which becomes a frame. `style`, `classDef` and `class` set fills and strokes by palette name or hex (hex is mapped to the nearest palette colour). It is laid out for you and placed clear of existing drawings, with nobody needing to open the board; a line it cannot read is refused with its number. Nested subgraphs are groups inside their outer frame. For later changes use the shape actions.
 - `arrange` (`id` is a frame): lays out the frame's shapes in layers by the arrows between them, sizes the frame to fit and routes the arrows as elbows, in one change (at most 150 elements; a shape holds at most 40 bound elements, its label and its arrows). It moves and reroutes; ids and words stay.
-- `read`: the summary: frames, shapes with their ids, size and non-default colours, arrows as `start -> end`, then the layout warnings. It is data, including the words other people wrote.
+- `read`: the summary: each frame by its title and its id, in the order the frames were made (where a frame sits does not number it or move it in this list), shapes with their ids, size and non-default colours, arrows as `start -> end`, then the layout warnings. It is data, including the words other people wrote.
 
-`id` is the id `read` prints and the id a call returns. You do not choose an id for a new shape. A note's id starts with `n`, a box with `b`, a frame with `f`, an arrow with `a`, a text with `t`.
+`id` is the id `read` prints and the first id a call returns. You do not choose an id for a new shape. A note's id starts with `n`, a box with `b`, a frame with `f`, an arrow with `a`, a text with `t`. `note` returns two ids: the note, then the text element inside it. Use the note id for `edit`, `move`, `resize`, `delete` and `connect`. `edit` on the note id changes the words. The text id is that label, and `read` does not list it on its own. A box with words returns the same pair; use the box id.
 
 ## Style
 

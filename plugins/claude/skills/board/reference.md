@@ -41,7 +41,7 @@ One frame per layer or service group, at most 8 shapes in each.
 
 One frame per step, titled with the step ("1. A person posts"), left to right. Inside a frame,
 two or three boxes and one or two arrows, then `arrange` the frame. Add a `text` heading with the one thing to notice.
-People play the frames in order.
+People play the frames left to right, one row at a time. `read` lists each frame by its title and its id, in the order the frames were made, which is not that play order.
 
 ## A comparison
 
@@ -71,3 +71,11 @@ text text="week 1" x=0 y=100 style="font-size=s"
 wider. `outside its frame`: `resize` the frame, or `move` the shape in. `arrow passes through`:
 `move` the blocking shape, or draw the arrow as an elbow (`style="arrow-type=elbow"`), which is routed round every other shape. For a whole frame, call `arrange`.
 `arrow labels overlap`: drop one label.
+
+## Which id a note returns
+
+`note` returns two ids. The first starts with `n` and is the note. The second starts with `t` and is the text element inside the note. `edit`, `move`, `resize`, `delete` and `connect` take the note id, and `edit` on that id changes the words. `read` lists the note, not the text element. A box with words returns the same pair: the box id (`b`) and then its text element. Use the box id.
+
+## An arrow's label
+
+`connect` with `text` puts that text on the arrow as its label. `edit` the arrow's id (the first id `connect` returned, starting with `a`) to change the label, or pass `style` to restyle the arrow. The second id, when there is a label, is the text element; later actions take the arrow id. An arrow drawn with no `text` has no label, and `edit` cannot add one.

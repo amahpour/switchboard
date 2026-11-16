@@ -224,9 +224,15 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
         assert action in text, action
     for field in ("text", "id", "to", "shape", "x", "y", "style", "w", "h"):
         assert field in text, field
+    # #751: the how-to says edit changes an arrow's label, which of a note's two ids to use,
+    # and that read lists frames by title and id in the order they were made
+    assert "arrow's label" in text
+    assert "returns two ids" in text
+    assert "order the frames were made" in text
     # the recipes ride next to the skill in each plugin, byte for byte
     refs = [p.with_name("reference.md").read_bytes() for p in paths]
     assert refs[0] == refs[1] == refs[2] and b"draw_mermaid" in refs[0]
+    assert b"An arrow's label" in refs[0] and b"returns two ids" in refs[0]
     assert "reference.md" in text
 
 
