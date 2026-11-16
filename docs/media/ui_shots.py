@@ -3372,6 +3372,82 @@ def shoot_listen(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_call_card(browser: Any, out: Path, world: Any) -> None:
+    """#771, a call as its own transcript card: a live Zoom call in a room with claude-1 and codex-1, call lines
+    around a chat message and an agent's ``@call`` line, in ``callcard-{light,dark,phone}``. Run on ``main`` and on
+    the branch for the before and after. The call is seeded through the store and the service, as
+    tests/e2e/test_call_card_ui.py does."""
+    import time as _time
+
+    from playwright.sync_api import expect
+
+    room, b = "#standup", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    for name in ("claude-1", "codex-1"):
+        world.set_member_harness(room, name, name.split("-")[0])
+    world.set_approval_modes(room, {"claude-1": "prompting", "codex-1": "prompting"})
+
+    def plant() -> None:
+        store = b.state.store
+        r = store.get_room(room)
+        row = store.insert_meeting(r.id, started_by="alice", platform="zoom")
+        store.set_meeting_live(row.id)
+        now = _time.time()
+        lines = [
+            ("meeting", "bob", "The checkout page is slow on the first load.", None, 300),
+            ("meeting", "alice", "I think it is the image sizes. Claude one, can you check them?", None, 270),
+            ("agent", "claude-1", "@call The hero image is four megabytes. I will resize it.", "claude", 250),
+            ("human", "alice", "Thanks. I will keep notes in the room while we talk.", None, 200),
+            ("meeting", "bob", "Codex one, can you run the page speed test after?", None, 150),
+            ("meeting", "alice", "Yes, and post the numbers here.", None, 100),
+        ]
+        for kind, name, text, harness, ago in lines:
+            m = store.insert_message(
+                r.id,
+                sender_name=name,
+                sender_kind=kind,
+                via={"human": "web", "agent": "mcp"}.get(kind, "meeting"),
+                text=text,
+                sender_harness=harness,
+            )
+            store.con.execute("UPDATE messages SET ts=? WHERE id=?", (now - ago, m.id))
+        b.state.service.publish_settings(r.id)
+
+    b.on_loop(plant)
+    variants = {
+        "light": dict(viewport={"width": 1200, "height": 640}, device_scale_factor=1.5, color_scheme="light"),
+        "dark": dict(viewport={"width": 1200, "height": 640}, device_scale_factor=1.5, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    pages = {}
+    try:
+        for name, options in variants.items():
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+            ctx.set_default_timeout(WAIT_MS)
+            page = ctx.new_page()
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            expect(page.locator("#log")).to_contain_text("Codex one, can you run the page speed test")
+            pages[name] = page
+        for name, page in pages.items():
+            # the sign-in notices of the throwaway home are not what this shows
+            page.evaluate(
+                """() => document.querySelectorAll('#log .line').forEach(e => {
+                  if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+            )
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            page.mouse.move(0, 0)
+            shot(page, out, f"callcard-{name}.png")
+    finally:
+        for page in pages.values():
+            page.context.close()
+
+
 def shoot_voices(browser: Any, out: Path, world: Any) -> None:
     """#713, a voice for each agent: a live call in a room with claude-1 and codex-1, Members showing the voice each
     speaks in (``voices-default-{light,dark,phone}``, picked from their names) and after a person typed
@@ -3883,6 +3959,7 @@ ONLY: dict[str, Any] = {
     "meeting": shoot_meeting_guide,
     "listen": shoot_listen,
     "voices": shoot_voices,
+    "call_card": shoot_call_card,
     "room_calls": shoot_room_calls,
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,
