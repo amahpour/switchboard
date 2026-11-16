@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -23,6 +25,32 @@ MINIO = "switchboard:litestream-minio"
 MC = MINIO
 pytestmark = pytest.mark.image
 DB_PATH = "/data/switchboard/switchboard.db"
+
+# A hosted broker creates rooms through a signed-in web session, as the image's other tests do.
+# This client runs on the container's loopback, with the Host/Origin a TLS proxy forwards.
+WRITE_ROOMS = """
+import http.client, json, sys, urllib.parse
+link = urllib.parse.urlsplit(sys.stdin.read().strip())
+c = http.client.HTTPConnection('127.0.0.1', 7419, timeout=10)
+c.request('GET', link.path + '?' + link.query, headers={'Host': link.netloc})
+r = c.getresponse()
+assert r.status == 303, r.status
+cookie = r.getheader('set-cookie').split(';', 1)[0]
+r.read()
+headers = {'Host': link.netloc, 'Origin': 'https://' + link.netloc,
+           'Cookie': cookie, 'X-Switchboard': '1', 'Content-Type': 'application/json'}
+for name in ('#replicated-one', '#replicated-two'):
+    c.request('POST', '/api/rooms', json.dumps({'name': name}), headers)
+    r = c.getresponse()
+    body = r.read()
+    assert r.status == 200, (r.status, body)
+    c.request('POST', '/api/rooms/' + name[1:] + '/say',
+              json.dumps({'text': 'a committed message for the recovery drill'}), headers)
+    r = c.getresponse()
+    body = r.read()
+    assert r.status == 200, (r.status, body)
+c.close()
+"""
 
 
 def test_replication_survives_migration_checkpoints_and_volume_loss(image: str, tmp_path: Path) -> None:
@@ -72,7 +100,7 @@ def test_replication_survives_migration_checkpoints_and_volume_loss(image: str, 
         "AWS_SECRET_ACCESS_KEY=switchboard-test-secret",
     ]
 
-    def once(*args: str, check: bool = True, stdin: str | None = None):
+    def once(*args: str, check: bool = True, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         return docker(
             "run",
             "--rm",
@@ -155,6 +183,8 @@ def test_replication_survives_migration_checkpoints_and_volume_loss(image: str, 
             net,
             "--network-alias",
             "minio",
+            "--tmpfs",
+            "/data",
             "-e",
             "MINIO_ROOT_USER=switchboard-test",
             "-e",
@@ -253,9 +283,20 @@ def test_replication_survives_migration_checkpoints_and_volume_loss(image: str, 
         )
         wait_for("broker after migration", lambda: "broker up" in docker("logs", broker).stdout)
         assert "schema migration" in docker("logs", broker).stdout
-        for name in ("#replicated-one", "#replicated-two"):
-            cli("create", name)
-            cli("say", name, "a committed message for the recovery drill")
+        login = docker("exec", "-t", "--user", "10001:10001", broker, "switchboard", "login").stdout
+        link = re.search(r"https://sb\.example\.com/login\?t=[A-Za-z0-9_-]+", login)
+        assert link is not None, "the private broker must issue its owner a one-time sign-in link"
+        docker(
+            "exec",
+            "-i",
+            "--user",
+            "10001:10001",
+            broker,
+            "/opt/switchboard/bin/python",
+            "-c",
+            WRITE_ROOMS,
+            stdin=link.group(0),
+        )
         # Exercise PASSIVE checkpointing and shutdown TRUNCATE with replication active.
         docker(
             "exec",
@@ -363,9 +404,15 @@ def test_replication_survives_migration_checkpoints_and_volume_loss(image: str, 
         assert "#replicated-one" in cli("rooms") and "#replicated-two" in cli("rooms")
         assert "schema migration" not in docker("logs", broker).stdout
         print("LITESTREAM: empty replica, migration, checkpoints, volume loss, restore and row counts passed")
+    except BaseException:
+        # Keep replication errors before cleanup, without printing the broker's one-time claim link.
+        for name in (replica, minio):
+            logs = docker("logs", "--tail", "60", name, check=False)
+            print(logs.stdout + logs.stderr)
+        raise
     finally:
         for name in reversed(started):
-            docker("rm", "-f", name, check=False)
+            docker("rm", "-f", "-v", name, check=False)
         for vol in (volume, recovered):
             docker("volume", "rm", vol, check=False)
         docker("network", "rm", net, check=False)
