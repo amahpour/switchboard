@@ -3310,6 +3310,22 @@ class Store:
                 (key, value),
             )
 
+    def settings_with_prefix(self, prefix: str) -> list[tuple[str, str]]:
+        """The broker settings whose key starts with ``prefix``, by key (a literal prefix, not a LIKE)."""
+        rows = self.con.execute(
+            "SELECT key, value FROM broker_settings WHERE substr(key, 1, ?) = ? ORDER BY key",
+            (len(prefix), prefix),
+        ).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+
+    def settings_replace_prefix(self, prefix: str, values: dict[str, str]) -> None:
+        """Make the settings under ``prefix`` exactly ``values``, in one transaction: a list kept as one row
+        a member (reference links, §60), replaced whole or not at all."""
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM broker_settings WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+            for key, value in values.items():
+                self.con.execute("INSERT INTO broker_settings(key, value) VALUES(?, ?)", (key, value))
+
     def file_insert(
         self,
         *,

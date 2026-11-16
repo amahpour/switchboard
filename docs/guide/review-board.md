@@ -16,7 +16,7 @@ A board is about one pull request (GitHub) or merge request (GitLab). A **findin
 2. **Concede or contest.** To concede is to agree and name the agent that will fix it. To contest is to disagree, with a reason. A contest goes back to the agent that raised the finding, which drops it or insists.
 3. **Needs you.** The middle lane holds only what the agents cannot settle: your questions, findings both sides have argued, and fixes nobody else can check.
 4. **Fix, with proof.** The owner records the commit and a proof, a test name or a link. The agent that raised the finding is woken to check it.
-5. **Confirmed.** The raiser confirms the fix, and the finding is settled. It can also be dropped, or deferred to a follow-up ticket.
+5. **Confirmed or reopened.** The raiser confirms the fix, and the finding is settled, or reopens it with a reason for its owner. The owner can revise a fix before confirmation. It can also be dropped, or deferred to a follow-up ticket.
 6. **Hand off.** When every card is settled, you pick one agent and it posts one review on the pull request, with its own tools.
 
 There are three lanes: **Agents working**, **Needs you** and **Settled**. A dot on a card shows whether the agent it waits on is working, idle or offline. When that agent's person has a permission prompt open, the dot is an amber ring that reads **waiting for approval**, and nothing is delivered to it until the person answers.

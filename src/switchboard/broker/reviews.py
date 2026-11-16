@@ -37,6 +37,7 @@ ACTIONS = (
     "insist",
     "fix",
     "confirm",
+    "reopen",
     "drop",
     "defer",
     "report",
@@ -253,6 +254,9 @@ class Boards:
             fields["commit_sha"] = commit
             fields["proof"] = reviews.proof(params.get("proof"))
             fields["reason"] = ""  # a conceded contest's reason no longer describes the fix
+        elif action == "reopen":
+            fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
+            fields["confirmed_by"] = ""
         elif action == "confirm":
             fields["confirmed_by"] = actor
         elif action in ("contest", "drop"):
@@ -270,7 +274,9 @@ class Boards:
             fields["reason"] = ""
         self.store.move_review_item(item.id, to, **fields)
         shown = (
-            "confirmed"
+            "reopened"
+            if action == "reopen"
+            else "confirmed"
             if action == "confirm"
             else "reassigned"
             if reassigned
@@ -280,7 +286,15 @@ class Boards:
             if action == "insist"
             else to
         )
-        self._event(room, rv, item=item.label, to=shown, by=actor)
+        evidence: dict[str, Any] = {}
+        if action == "fix":
+            evidence = {"commit": fields["commit_sha"], "proof": fields["proof"]}
+            if item.state == "fixed":
+                # Older fix events did not carry evidence: retain that attempt before replacing it.
+                evidence.update(previous_commit=item.commit, previous_proof=item.proof)
+        elif action == "reopen":
+            evidence = {"reason": fields["reason"], "commit": item.commit, "proof": item.proof}
+        self._event(room, rv, item=item.label, to=shown, by=actor, **evidence)
         moved = self.store.review_item(rv["id"], kind, n)
         assert moved is not None
         if reassigned:  # a handover, or a takeover from an owner who left (#371)
@@ -293,6 +307,7 @@ class Boards:
                 f"{actor} moved {item.label} from {item.owner}{gone} to {fields['owner']}",
             )
         tail = {
+            "reopened": f", owner {item.owner}: {fields.get('reason')}",
             "deferred": f" to {fields.get('deferred_to')}",
             "conceded": f", owner {fields.get('owner')}",
             "fixed": f" in {fields.get('commit_sha', '')[:12]}",
@@ -302,7 +317,9 @@ class Boards:
             "insisted": ": a person decides",
             "confirmed": f" by {actor}",
         }.get(shown, "")
-        return self._told(room, rv, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}")
+        return self._told(
+            room, rv, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}", action=action
+        )
 
     def _concur(
         self,
@@ -472,6 +489,7 @@ class Boards:
         actor: str,
         notice: str,
         wake: bool = True,
+        action: str = "",
     ) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
         for whoever acts next (posted by the caller as the mover's message, so it wakes them),
@@ -481,7 +499,9 @@ class Boards:
         has it as the board their next call is about (§37.14)."""
         several = self._several(room)
         handoff = (
-            reviews.handoff(item, actor, self.store.active_names(room.id), rv["url"] if several else "")
+            reviews.handoff(
+                item, actor, self.store.active_names(room.id), rv["url"] if several else "", action=action
+            )
             if wake
             else None
         )
@@ -785,6 +805,7 @@ def action_past(action: str) -> str:
         "insist": "insisted",
         "fix": "fixed",
         "confirm": "confirmed",
+        "reopen": "reopened",
         "drop": "dropped",
         "defer": "deferred",
     }[action]

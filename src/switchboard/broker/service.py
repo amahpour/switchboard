@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from switchboard import __version__, build_info, db
+from switchboard import __version__, build_info, db, plugin_versions
 from switchboard.broker import catchup
 from switchboard.broker import commands as cmds
 from switchboard.broker.commands import Actor, CommandError
@@ -45,6 +45,7 @@ from switchboard.models import (
     Meeting,
     Member,
     Message,
+    Participant,
     Pin,
     Room,
     closed_room_name,
@@ -205,6 +206,10 @@ def member_dict(m: Member) -> dict[str, Any]:
         # whose agent it is, by display name (#496, §29.10), or None: the page then shows no owner
         "owner": m.owner,
         "claims": list(m.claims),
+        # the plugin's version and whether it is behind this release's (§49.13); "" when nothing is known
+        "plugin_state": m.plugin_state,
+        "plugin_version": m.plugin_version,
+        "plugin_note": m.plugin_note,
     }
 
 
@@ -289,6 +294,8 @@ class RoomService:
         self.meetings: Any = None  # the call bridge (meeting/bridge.py), for /meeting (§52)
         self.hosted_calls: Any = None  # the calls hosted on people's machines (meeting/hosted.py, §54)
         self.attachments: Any = None  # files a room holds (files.py, §53)
+        # participant id -> the plugin version its last MCP call reported (None: none that parses), §49.13
+        self.plugin_seen: dict[int, str | None] = {}
         hub.set_members_source(self._members_snapshot)
         hub.set_settings_source(self._settings_snapshot)
 
@@ -581,6 +588,40 @@ class RoomService:
         room = self.room(name)
         return [member_dict(m) for m in self.member_rows(room.id)]
 
+    # ---------------------------------------------------- the plugin's version (§49.13)
+    def note_plugin(self, p: Participant, raw: str | None) -> None:
+        """A call of session ``p`` over MCP carried ``raw`` in the plugin-version header ("" when it carried
+        none; None for a call the broker made itself, which says nothing). Kept in memory, last call wins:
+        a restart forgets it until the session's next call, and a session never heard from says nothing."""
+        if raw is None or p.harness not in plugin_versions.PINNED:
+            return
+        self.plugin_seen[p.id] = plugin_versions.parse(raw)
+
+    def plugin_check(self, participant_id: int, harness: str) -> plugin_versions.PluginCheck | None:
+        if participant_id not in self.plugin_seen:
+            return None
+        return plugin_versions.check(harness, self.plugin_seen[participant_id])
+
+    def plugin_fields(self, participant_id: int, harness: str) -> dict[str, Any]:
+        got = self.plugin_check(participant_id, harness)
+        if got is None:
+            return {}
+        return {"plugin_state": got.state, "plugin_version": got.version, "plugin_note": got.note}
+
+    def plugin_join_note(self, p: Participant) -> str:
+        """What a ``join`` answer adds when the caller's own plugin is behind (§49.13), else nothing."""
+        got = self.plugin_check(p.id, p.harness)
+        if got is None or not got.nags:
+            return ""
+        if got.state == "older":
+            head = f"your switchboard plugin is {got.version}, older than {got.pinned}"
+        else:
+            head = (
+                f"your switchboard plugin's version is unknown (older than {got.pinned}, or not the plugin)"
+            )
+        ask = f"Ask your user to update it: {got.update}."
+        return f"\n\n[switchboard] {head}, so newer tools may be missing. {ask}"
+
     def member_rows(self, room_id: int) -> list[Member]:
         """Buddy-list rows, with the engine's parked state, and whether each can use the review
         board, overlaid."""
@@ -602,7 +643,12 @@ class RoomService:
             if m.host not in owners:
                 owners[m.host] = self.agent_owner(m.host, room)
             rows.append(
-                dataclasses.replace(m, claims=tuple(by_member.get(m.membership_id, ())), owner=owners[m.host])
+                dataclasses.replace(
+                    m,
+                    claims=tuple(by_member.get(m.membership_id, ())),
+                    owner=owners[m.host],
+                    **self.plugin_fields(m.participant_id, m.harness),
+                )
             )
         if self.delivery is None:
             return rows
@@ -1498,6 +1544,8 @@ class RoomService:
                 flags.append(f"{m.inflight} in flight")
             if m.parked:
                 flags.append(f"parked — needs a poke ({m.parked_reason or 'no wake path'})")
+            if m.plugin_note:
+                flags.append(f"⚠ {m.plugin_note}")
             if m.name in sessions:
                 flags.append(f"session: {sessions[m.name]}")
             tier = tier_label(m.tier, m.tier_note)

@@ -614,6 +614,59 @@
     return s.slice(k, k + word.length).toLowerCase() === word;
   }
 
+  // ------------------------------------------------------------------ reference links (§60)
+  // An admin's rules turn `!42` or `ABC-123` into a link: a pattern, and an https:// URL template whose
+  // `$1` is the pattern's one group. They are set once by the page from /api/me (setRefLinks), never by a
+  // message. The server has already refused a pattern that isn't a small linear one (ref_links.py); this
+  // compiles each again, and refuses what doesn't compile, a template that isn't https:// or has no
+  // fixed host, and more than MAX_REF_RULES. A match is looked for only where a word starts, in a window
+  // of REF_WINDOW characters, at most REF_TRIES times in one scan, and becomes at most MAX_REF_LINKS
+  // links, so no message can make this slow. Only `$1` is replaced, by the matched text through
+  // encodeURIComponent, and the finished URL must still be on the template's own origin. The link is
+  // the ordinary one (mdLink: safeUrl, the real URL shown after it), built with createElement.
+  const MAX_REF_RULES = 8;
+  const MAX_REF_LINKS = 50;
+  const REF_WINDOW = 128;
+  const REF_TRIES = 4000;
+  let refRules = [];
+
+  function isWordChar(c) { return c === '_' || isAlnum(c); }
+
+  function setRefLinks(list) {
+    const out = [];
+    for (const r of Array.isArray(list) ? list.slice(0, MAX_REF_RULES) : []) {
+      try {
+        if (!r || typeof r.pattern !== 'string' || typeof r.url !== 'string') continue;
+        if (r.pattern.length > 200 || r.url.length > 200 || r.url.indexOf('https://') !== 0) continue;
+        const probe = new URL(r.url.split('$1').join('x'));
+        if (probe.protocol !== 'https:' || !probe.hostname || probe.username || probe.password) continue;
+        if (new URL(r.url.split('$1').join('x')).origin !== new URL(r.url.split('$1').join('yy')).origin) continue;
+        out.push({ re: new RegExp(r.pattern, 'y'), url: r.url, origin: probe.origin });
+      } catch (e) { /* a rule that doesn't compile is no rule */ }
+    }
+    refRules = out;
+  }
+
+  // The reference at s[i], or null: {text, url, end}. The caller has checked that no letter or digit
+  // comes right before it.
+  function refMatch(s, i, budget) {
+    const win = s.slice(i, i + REF_WINDOW);
+    for (const r of refRules) {
+      if (budget.tries++ >= REF_TRIES) return null;
+      r.re.lastIndex = 0;
+      const m = r.re.exec(win);
+      if (!m || m.index !== 0 || m[0].length === 0 || m[1] === undefined || m[1] === '') continue;
+      const end = i + m[0].length;
+      if (m[0].length >= REF_WINDOW || isWordChar(s[end])) continue;  // only the start of a longer word
+      const url = r.url.split('$1').join(encodeURIComponent(m[1]));
+      let origin;
+      try { origin = new URL(url).origin; } catch (e) { continue; }
+      if (origin !== r.origin) continue;
+      return { text: m[0], url: url, end: end };
+    }
+    return null;
+  }
+
   // A bare http(s):// URL starting at s[k], or null. The caller has checked that no letter or
   // digit comes right before it. It runs inside the inline scan, ahead of the emphasis, code
   // span, mention and bracket handlers, so none of them can cut a URL short: `__init__.py`,
@@ -677,6 +730,7 @@
     const brackets = []; // '[' and '![' openers: {node, image, pos, bottom}
     let floor = 0;       // '[' openers below this index are inactive (no link inside a link)
     const closer = spanMatcher(s);
+    const refBudget = { tries: 0, links: 0 };
 
     function add(n) { n.prev = tail; n.next = null; tail.next = n; tail = n; return n; }
     function flush() { if (buf) { add({ t: 'text', v: buf }); buf = ''; } }
@@ -750,6 +804,18 @@
           flush();
           add({ t: 'link', c: [{ t: 'text', v: u.url }], url: u.url, bad: false });
           i = u.end;
+          continue;
+        }
+      }
+
+      // A reference an admin's rule knows (!42, ABC-123), where a word starts (see refMatch).
+      if (refRules.length && refBudget.links < MAX_REF_LINKS && !isWordChar(s[i - 1])) {
+        const ref = refMatch(s, i, refBudget);
+        if (ref) {
+          flush();
+          add({ t: 'link', c: [{ t: 'text', v: ref.text }], url: ref.url, bad: false });
+          refBudget.links++;
+          i = ref.end;
           continue;
         }
       }
@@ -1311,5 +1377,5 @@
   }
 
   window.SBMarkdown = Object.freeze({ render: render, firstLine: firstLine, safeUrl: safeUrl,
-    externalLink: externalLink, linkifyNote: linkifyNote });
+    externalLink: externalLink, linkifyNote: linkifyNote, setRefLinks: setRefLinks });
 })();

@@ -312,6 +312,9 @@ def make_repo(tmp_path: Path) -> Path:
         (repo / "plugins" / folder / manifest / "plugin.json").write_text(
             f'{{\n  "name": "switchboard",\n  "version": "{version}",\n  "description": "x 1.0.0"\n}}\n'
         )
+    (repo / "src" / "switchboard" / "plugin_versions.py").write_text(
+        '"""x"""\n\nPINNED = {"claude": "1.2.9", "codex": "0.8.4"}\nUPDATE = {}\n'  # the broker's copy
+    )
     (repo / "deploy" / "helm" / "switchboard").mkdir(parents=True)
     (repo / "deploy" / "helm" / "switchboard" / "Chart.yaml").write_text(CHART)
     for rel_path, folder in (
@@ -648,6 +651,10 @@ def test_a_release_that_moves_a_plugins_relay_pin_bumps_that_plugins_version(tmp
     claude = (repo / "plugins/claude/.claude-plugin/plugin.json").read_text()
     codex = (repo / "plugins/codex/.codex-plugin/plugin.json").read_text()
     assert json.loads(claude)["version"] == "1.2.10" and json.loads(codex)["version"] == "0.8.5"
+    # the broker's table of the plugins' versions follows the manifests, and nothing else in its file moves
+    assert (repo / "src/switchboard/plugin_versions.py").read_text() == (
+        '"""x"""\n\nPINNED = {"claude": "1.2.10", "codex": "0.8.5"}\nUPDATE = {}\n'
+    )
     assert claude.replace("1.2.10", "1.2.9") == (
         '{\n  "name": "switchboard",\n  "version": "1.2.9",\n  "description": "x 1.0.0"\n}\n'
     )
@@ -661,6 +668,19 @@ def test_a_release_that_moves_a_plugins_relay_pin_bumps_that_plugins_version(tmp
         json.loads((other / "plugins/claude/.claude-plugin/plugin.json").read_text())["version"] == "1.2.10"
     )
     assert json.loads((other / "plugins/codex/.codex-plugin/plugin.json").read_text())["version"] == "0.8.4"
+
+
+def test_the_broker_table_of_plugin_versions_is_set_from_the_manifests() -> None:
+    """The broker tells an old plugin from a current one by comparing with ``PINNED`` (§49.13), so a release
+    that raises a manifest must raise it too, in the one line and no other, and a file without the line
+    stops the release. Fails if the table is left behind, or another line of the module changes."""
+    text = '"""x"""\nPINNED = {"claude": "1.0.0", "codex": "2.0.0"}\nUPDATE = {"claude": "PINNED = {}"}\n'
+    assert rel.sync_plugin_versions(text, {"claude": "1.0.1", "codex": "2.0.0"}) == (
+        '"""x"""\nPINNED = {"claude": "1.0.1", "codex": "2.0.0"}\nUPDATE = {"claude": "PINNED = {}"}\n'
+    )
+    with pytest.raises(SystemExit, match="PINNED"):
+        rel.sync_plugin_versions("x = 1\n", {"claude": "1.0.1"})
+    assert rel.is_release_file("src/switchboard/plugin_versions.py")
 
 
 def test_a_manifest_with_no_version_stops_the_release() -> None:

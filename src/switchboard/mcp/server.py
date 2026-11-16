@@ -294,7 +294,7 @@ def build_server(st: ToolBackend) -> FastMCP:
         description=(
             "A room's pull-request boards. "
             "action: open, list, show, raise, ask, concur, abstain, concede, contest, insist, "
-            "fix, confirm, drop, defer, report, close, reset."
+            "fix, confirm, reopen, drop, defer, report, close, reset."
         ),
     )
     async def review(

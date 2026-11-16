@@ -62,7 +62,8 @@ AGENT_MOVES = {
     "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
     "insist": (frozenset({"contested"}), "contested"),
-    "fix": (frozenset({"conceded"}), "fixed"),
+    "fix": (frozenset({"conceded", "fixed"}), "fixed"),
+    "reopen": (frozenset({"fixed"}), "conceded"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
     # to a follow-up ticket: settled for this pull request, stored as dropped with the ticket (#371)
@@ -526,6 +527,7 @@ def list_text(boards: Sequence[dict[str, Any]], default_url: str | None = None) 
 HISTORY_VERBS = {
     "conceded": "conceded it",
     "reassigned": "reassigned it",
+    "reopened": "reopened it",
     "contested": "contested it",
     "insisted": "insisted on it",
     "fixed": "fixed it",
@@ -567,8 +569,9 @@ def parse_label(value: Any) -> tuple[str, int]:
 def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
-    or contest it (that's the other side's call), only drop it, or insist on it once it is
-    contested (#424: only its raiser, and once); only its owner marks it fixed.
+    or contest it (that's the other side's call). Dropping, deferring and insisting belong to
+    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The owner may
+    revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
     name, and the finding would otherwise be no one's to fix)."""
@@ -601,6 +604,12 @@ def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> st
         raise ReviewError(f"{item.label} is {item.owner}'s to fix")
     if move in ("drop", "defer") and actor != item.raised_by:
         raise ReviewError(f"only {item.raised_by}, who raised {item.label}, or a person can {move} it")
+    if move == "reopen" and actor != item.raised_by:
+        raise ReviewError(f"only {item.raised_by}, who raised {item.label}, can reopen it")
+    if move == "fix" and item.confirmed_by:
+        raise ReviewError(
+            f"{item.label} is already confirmed by {item.confirmed_by}: its raiser can reopen it"
+        )
     if move == "confirm":
         if item.confirmed_by:
             raise ReviewError(f"{item.label} is already confirmed by {item.confirmed_by}")
@@ -610,7 +619,7 @@ def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> st
 
 
 def handoff(
-    item: Item, actor: str, agents: Sequence[str], board_url: str = ""
+    item: Item, actor: str, agents: Sequence[str], board_url: str = "", *, action: str = ""
 ) -> tuple[tuple[str, ...], str] | None:
     """After an agent's move on ``item`` (its state now), who has to act next and the line
     that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
@@ -654,7 +663,12 @@ def handoff(
         )
     elif item.state == "conceded":
         who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
-        verb, then = f"conceded, owner {item.owner}", "it's yours to fix"
+        verb = (
+            f"reopened, owner {item.owner}: {item.reason}"
+            if action == "reopen"
+            else f"conceded, owner {item.owner}"
+        )
+        then = "it's yours to fix"
     elif item.state == "fixed" and not item.confirmed_by:
         who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
         verb, then = f"fixed in {item.commit[:12]}", "check the fix"
