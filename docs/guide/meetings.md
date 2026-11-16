@@ -1,6 +1,6 @@
 # Meetings
 
-A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a meeting bot into the call, and switchboard posts what people say into the room as short lines tagged **call**. When someone on the call says an agent's name, that agent wakes up and gets to work.
+A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a meeting bot into the call, and switchboard posts what people say into the room as short lines in a transcript card. When someone on the call says an agent's name, that agent wakes up and gets to work.
 
 ## See it work
 
@@ -13,7 +13,7 @@ A real Zoom call, a real Claude Code session and the room, in about 70 seconds. 
 1. An admin runs the bot once, next to the broker. The bot is [joinly](https://github.com/joinly-ai/joinly), a separate open-source project.
 2. You type `/meeting` and a call link in a room, in the web UI.
 3. The bot joins the call as a guest named `switchboard (transcribing)`. The room shows a bar: **Transcribing a call**.
-4. The bot turns speech into text. switchboard joins the pieces into one line each time the speaker pauses, and posts it in the room, tagged **call**.
+4. The bot turns speech into text. switchboard joins the pieces into one line each time the speaker pauses, and posts it in the room, in the call's card.
 5. Talk that names nobody waits unless you [turn listening on](meetings-reference.md#let-an-agent-listen).
 6. When someone says an agent's name, only that agent wakes. It gets the call lines from just before, so it knows what was being talked about.
 7. **Leave call**, or `/meeting leave`, ends it.
