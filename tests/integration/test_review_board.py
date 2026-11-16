@@ -1373,6 +1373,61 @@ async def test_show_one_card_exposes_the_contest_evidence_and_history(broker: In
         assert "Readers do not." in closed["board"] and "insisted on it" in closed["board"]
 
 
+async def test_fixes_can_be_revised_and_reopened_without_losing_their_evidence(broker: InProcBroker) -> None:
+    """Real tool calls retain both fix attempts and clear confirmation only on a valid reopen."""
+    async with (
+        FakeAgent(broker.home, "revision-author") as author,
+        FakeAgent(broker.home, "revision-reviewer") as reviewer,
+    ):
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call("review", room="#build", action="raise", title="Race on bus")
+        await author.call("review", room="#build", action="concede", item="F1")
+        for commit, proof in (("abc1234", "test_first"), ("def5678", "test_revised")):
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=commit, proof=proof
+            )
+            assert fixed["ok"] and not fixed["settled"]
+        row = q(broker, "SELECT commit_sha,proof,confirmed_by FROM review_items")[0]
+        assert tuple(row) == ("def5678", "test_revised", "")
+        events = [json.loads(r["data"]) for r in q(broker, "SELECT data FROM events WHERE kind='review'")]
+        fixes = [e for e in events if e.get("to") == "fixed"]
+        assert [(e["commit"], e["proof"]) for e in fixes] == [
+            ("abc1234", "test_first"),
+            ("def5678", "test_revised"),
+        ]
+        assert (fixes[-1]["previous_commit"], fixes[-1]["previous_proof"]) == ("abc1234", "test_first")
+        confirmed = await reviewer.call("review", room="#build", action="confirm", item="F1")
+        assert confirmed["ok"] and confirmed["settled"]
+        refused = await author.call(
+            "review", room="#build", action="fix", item="F1", commit="abc9876", proof="test_third"
+        )
+        assert not refused["ok"] and "confirmed" in refused["error"]
+        for reason in ("", "x" * 501):
+            refused = await reviewer.call("review", room="#build", action="reopen", item="F1", reason=reason)
+            assert not refused["ok"]
+            assert q(broker, "SELECT confirmed_by FROM review_items")[0][0] == "codex-1"
+        refused = await author.call(
+            "review", room="#build", action="reopen", item="F1", reason="Race remains"
+        )
+        assert not refused["ok"]
+        reopened = await reviewer.call(
+            "review", room="#build", action="reopen", item="F1", reason="Race remains"
+        )
+        assert reopened["ok"] and not reopened["settled"]
+        row = q(broker, "SELECT state,owner,confirmed_by,reason,commit_sha,proof FROM review_items")[0]
+        assert tuple(row) == ("conceded", "claude-1", "", "Race remains", "def5678", "test_revised")
+        notices = q(broker, "SELECT text FROM messages WHERE sender_kind='agent'")
+        assert any("reopened" in r["text"] and "@claude-1" in r["text"] for r in notices)
+        fixed = await author.call(
+            "review", room="#build", action="fix", item="F1", commit="abc9876", proof="test_third"
+        )
+        assert fixed["ok"]
+        checked = await reviewer.call("review", room="#build", action="confirm", item="F1")
+        assert checked["ok"] and checked["settled"]
+
+
 async def test_an_independent_reviewer_takes_a_departed_raisers_findings(broker: InProcBroker) -> None:
     """Take is a notice; the replacement can check fixes, while the owner still cannot."""
     web = broker.web_client()

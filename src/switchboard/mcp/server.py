@@ -292,9 +292,9 @@ def build_server(st: ToolBackend) -> FastMCP:
     @mcp.tool(
         annotations=RW,
         description=(
-            "Room pull-request review boards. "
+            "Room code review boards. "
             "action: open, list, show, raise, ask, concur, concede, contest, insist, "
-            "fix, confirm, take, drop, defer, report, close, reset."
+            "fix, confirm, reopen, take, drop, defer, report, close, reset."
         ),
     )
     async def review(

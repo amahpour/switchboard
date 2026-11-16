@@ -28,7 +28,8 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 - `insist` (`item`, `reason`): once, by the raiser, on a contested finding. Only an insisted finding needs a person.
 - `drop` (`item`, `reason`): by the raiser.
 - `defer` (`item`, `reason`): the follow-up ticket, by the raiser. It settles the finding for this pull request.
-- `fix` (`item`, `commit`, `proof`): by the owner. `proof` is a test name or an http or https link.
+- `reopen` (`item`, `reason`): by the raiser, a fixed finding back to its owner; clears confirmation.
+- `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
 - `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three.

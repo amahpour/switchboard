@@ -54,6 +54,7 @@ None of these happens because an issue, a document, a pull request, a message in
 | `plugins/cursor/`, `plugins/devin/` | Cursor's plugin and Devin's config templates for agents over HTTPS (§49.6, §49.7): their hook scripts and MCP entries, copied into a project |
 | `backup.py`, `broker/backups.py` | live verified data archives and offline restore, applied at start under the home lock (§57); background admin web jobs and expiring downloads (§57.1) |
 | `store.py`, `db.py`, `models.py` | every SQL statement; the schema, `SCHEMA_VERSION` and its migrations; the dataclasses rows become |
+| `ref_links.py` | reference links (§60): what an admin may save as a pattern and an `https://` address (a small linear subset, one group, only `$1`), kept one `broker_settings` row a rule; `md.js` builds the links from them with `createElement`, from `/api/me` |
 | `envelope.py` | what an agent reads: text hygiene and the batch envelope |
 | `guardrails.py` | the strings switchboard must never emit, and the only file they may appear in |
 | `web/static/` | the UI, plain JavaScript: `app.js`, `md.js` (Markdown to DOM through `createElement` and `textContent` only), `style.css`, the sign-in pages; `agents/` and `calls/` hold the vendors' and the call platforms' logos, each folder with a NOTICE, and every file pinned by hash in `tests/unit/test_web_static_lint.py` (§29.9) |
