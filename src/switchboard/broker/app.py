@@ -320,6 +320,9 @@ def create_app(
             # first: its open streams end before the services they call
             with contextlib.suppress(Exception):
                 await mcp_http.aclose()
+            if state.room_board is not None:  # posts an open burst's notice, stops its timers
+                with contextlib.suppress(Exception):
+                    state.room_board.close()
             for t in state.tasks:
                 t.cancel()
             for t in state.tasks:

@@ -48,7 +48,7 @@ After each change an agent is told about layout problems it caused: shapes that 
 
 Claude Code, Codex and Cursor load a `board` skill with the details of each action. On Cursor the tool is called `switchboard_board`.
 
-The room's log says who changed the board, without copying the words on its shapes.
+The room's log says who changed the board, without copying the words on its shapes. A run of changes by one person or agent is one line, posted when the run ends: "claude-1 changed the board (23 edits)". It ends after two quiet minutes, or when someone else changes the board. The board itself shows every change as it happens.
 
 ## Draw a whole diagram
 

@@ -1397,3 +1397,51 @@ async def test_an_agent_can_abstain_and_a_later_pick_replaces_it(broker: InProcB
     assert "devin-1 abstained on Q1: recommended by claude-1" in notices
     chat = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='chat'")]
     assert not any("abstained" in t for t in chat)
+
+
+async def test_show_one_card_exposes_the_contest_evidence_and_history(broker: InProcBroker) -> None:
+    """The raiser reads the argument through its real tool, even after the board closes."""
+    async with (
+        FakeAgent(broker.home, "detail-author") as author,
+        FakeAgent(broker.home, "detail-reviewer") as reviewer,
+    ):
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call(
+            "review",
+            room="#build",
+            action="raise",
+            title="Race on bus",
+            detail="The writer races with shutdown.",
+            options=["Lock", "Queue"],
+            recommend=0,
+        )
+        await reviewer.call("review", room="#build", action="raise", title="Another card")
+        await author.call(
+            "review", room="#build", action="contest", item="F1", reason="Shutdown holds the lock."
+        )
+        shown = await reviewer.call("review", room="#build", action="show", item="f1")
+        assert shown["ok"] and shown["item"] == "F1"
+        for value in (
+            "The writer races with shutdown.",
+            "Shutdown holds the lock.",
+            "0. Lock",
+            "1. Queue",
+            "codex-1 raised it",
+            "claude-1 contested it",
+        ):
+            assert value in shown["board"]
+        assert "Another card" not in shown["board"]
+        summary = await reviewer.call("review", room="#build", action="show")
+        assert "Shutdown holds the lock." in summary["board"]
+        assert "The writer races" not in summary["board"]
+        assert "Another card" in summary["board"]
+        for label in ("nope", "F999", "Q1"):
+            refused = await reviewer.call("review", room="#build", action="show", item=label)
+            assert not refused["ok"]
+        await reviewer.call("review", room="#build", action="insist", item="F1", reason="Readers do not.")
+        await reviewer.call("review", room="#build", action="close", reason="Paused review")
+        closed = await reviewer.call("review", room="#build", action="show", item="F1", url=PR)
+        assert closed["ok"] and "closed" in closed["board"]
+        assert "Readers do not." in closed["board"] and "insisted on it" in closed["board"]

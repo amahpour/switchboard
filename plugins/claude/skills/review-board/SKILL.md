@@ -19,7 +19,7 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.
-- `show`: read one board, including a closed one.
+- `show`: read one board, including a closed one. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.
 - `raise` (`title`, `where`, `detail`): a finding. Two to four `options` are allowed, and then `recommend` (the index you pick) is required. Options without a recommendation are refused, and so is a recommendation without options.
 - `ask` (`title`, `options`, `recommend`): a question only a person can answer. Two to four options, and `recommend` is required.
 - `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its index.

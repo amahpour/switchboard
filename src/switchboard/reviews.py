@@ -764,10 +764,14 @@ def contested_line(item: Item, active: set[str], offline: Collection[str]) -> st
     """Whose move a contested finding is, as an agent reads it (#424)."""
     base = f"raised by {item.raised_by}, contested"
     if item.insisted:
-        return f"{base}, insisted on: a person decides"
-    if raiser_answers(item, active, offline):
-        return f"{base}: {item.raised_by} drops it or insists (review action insist)"
-    return f"{base}; {item.raised_by} isn't here to answer: a person decides"
+        who = f"{base}, insisted on: a person decides"
+    elif raiser_answers(item, active, offline):
+        who = f"{base}: {item.raised_by} drops it or insists (review action insist)"
+    else:
+        who = f"{base}; {item.raised_by} isn't here to answer: a person decides"
+    # Keep the board short; show(item=...) has the uncut argument.
+    reason = item.reason[:200].replace("\n", " ").replace("\r", " ")
+    return who + (f"; contest reason: {reason}" if reason else "")
 
 
 def options_text(item: Item, present: Sequence[str]) -> str:
@@ -844,6 +848,40 @@ def render(
         out.extend(f"- {c['file']}:{c['line']}: {c['body']}" for c in plan["comments"])
         if not plan["comments"]:
             out.append("- none")
+    return "\n".join(out)
+
+
+def render_item(
+    review: dict[str, Any],
+    item: Item,
+    events: list[dict[str, Any]],
+    now: float | None = None,
+    present: Sequence[str] = (),
+    offline: Collection[str] = (),
+) -> str:
+    """One card in full (#782), with the same bounded history the page reads."""
+    out = [render({**review, "plan": None}, [item], now, present, offline)]
+    for label, value in (
+        ("Detail", item.detail),
+        ("Owner", item.owner),
+        ("Reason", item.reason),
+        ("Insists", item.insisted),
+        ("Commit", item.commit),
+        ("Proof", item.proof),
+        ("Confirmed by", item.confirmed_by),
+        ("Outdated at", item.outdated_head),
+        ("Deferred to", item.deferred_to),
+        ("Answer", item.answer),
+        ("Answered by", item.answered_by),
+    ):
+        if value:
+            out.append(f"{label}: {value}")
+    if item.options:
+        out.append("Options: " + options_text(item, present))
+    out.append("History:")
+    for entry in history(item, events):
+        at = f" ({when(entry['at'])})" if entry["at"] is not None else ""
+        out.append(f"- {entry['by']} {entry['did']}{at}")
     return "\n".join(out)
 
 
