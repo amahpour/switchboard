@@ -539,8 +539,8 @@ def parse_label(value: Any) -> tuple[str, int]:
 def agent_move(item: Item, move: str, actor: str, owner_here: bool = True) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
-    or contest it (that's the other side's call), only drop it, or insist on it once it is
-    contested (#424: only its raiser, and once); only its owner marks it fixed. The owner may
+    or contest it (that's the other side's call). Dropping, deferring and insisting belong to
+    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The owner may
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
