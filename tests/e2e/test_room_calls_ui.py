@@ -123,5 +123,6 @@ def test_the_headers_chips_are_all_in_view_with_both_side_panels_open(
     head, chips = page.locator(".conv-head").bounding_box(), page.locator("#status-chips").bounding_box()
     assert head and chips and head["height"] < 60 and chips["y"] < head["y"] + 52
     phone = _open(ui, calls, room=room, color_scheme=scheme, **PHONE)
-    # the phone keeps its own swipeable row of chips, with Hands-free first in it
+    # the phone wraps this row (#716), so Hands-free stays in view. Every chip is checked in
+    # test_web_ui.test_a_phones_header_shows_every_chip_without_scrolling
     expect(phone.locator("#st-handsfree")).to_be_in_viewport()
