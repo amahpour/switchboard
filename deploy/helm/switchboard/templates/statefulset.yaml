@@ -215,6 +215,11 @@ spec:
               mountPath: /app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py
               subPath: kokoro.py
               readOnly: true
+            # the call's own captions (#764), a file joinly does not have: the default transcriber
+            - name: joinly-voice-patch
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/captions.py
+              subPath: captions.py
+              readOnly: true
             {{- end }}
           # joinly has GET /health ({"status":"healthy"}). It listens on 127.0.0.1 only, and a kubelet's
           # httpGet and tcpSocket probes go to the pod's IP, so the probe runs inside the container, with

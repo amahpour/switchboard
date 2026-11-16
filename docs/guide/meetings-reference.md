@@ -88,14 +88,7 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
 
     It counts calls in every room, from the moment a call is joining. One joinly can follow several calls, but each live call takes about 2.7 GiB of memory and one CPU in it (measured). Give joinly `2.7 GiB × max_calls + 0.5 GiB`, or a second call can get it killed, and every call with it. [DEPLOY.md](../DEPLOY.md#meetings-on-kubernetes) has the sizes for Kubernetes. Where there is no file to edit, set `SWITCHBOARD_MEETING_MAX_CALLS` to the number instead. When both are set, the variable wins. Skip this step if one call at a time is enough.
 5. **Pick a voice, if you want another one.** Agents speak with `bm_george` unless you set `tts_voice` under `[meeting]`: `tts_voice = "af_bella"`. [DEPLOY.md](../DEPLOY.md#a-meeting-bot) says which voices joinly has. It applies to both the server bot and a hosted bot, for the next call after a broker restart. Skip this if the default suits you.
-6. **Pick a speech model, if the default mishears names.** joinly turns speech into text with Whisper, and out of the box it runs `base` on the CPU. It is quick and sometimes mishears a name. `stt_model` under `[meeting]` names another: `base`, `small`, `distil-large-v3` or `large-v3-turbo`.
-
-    ```toml
-    [meeting]
-    stt_model = "large-v3-turbo"
-    ```
-
-    In a test with 24 spoken lines, `large-v3-turbo` got 2.4% of the words wrong, and `base` 4.3%. The big models are too slow on a CPU for a live call, so use `large-v3-turbo` with [a GPU](../DEPLOY.md#the-speech-model-and-a-gpu), which that section covers with the numbers. A model you name is downloaded on the first call (about 1.6 GB for `large-v3-turbo`), and the call waits for it, so [fetch it ahead](../DEPLOY.md#the-speech-model-and-a-gpu). Where there is no file to edit, set `SWITCHBOARD_MEETING_STT_MODEL` to the name instead. When both are set, the variable wins. Any other value stops the broker at start, and the message names the four. It takes effect for the next call after a broker restart. Skip this if the default hears your names well enough.
+6. **Allow captions on the host's Zoom account, first.** The server's bot reads the call's own captions, so no speech model runs and no GPU is needed. Zoom's automated captions must be allowed for the account the meeting belongs to. If they are off, a guest sees no Show Captions button and the call ends with a notice that says so. The bot turns captions on for the call, and **Zoom shows them to everyone in it**; the room is told when that happens. In the test that chose this ([#762](https://github.com/amahpour/switchboard/issues/762)), Zoom's captions got 1.4% of the words wrong against 19% for joinly's default Whisper, and knew most of the agents' names. Captions are the default, with nothing to set. Meet and Teams captions are not read yet, so a Meet or Teams link ends with a notice; [Whisper](#whisper-experimental) is the only way to follow those.
 7. **On Zoom, decide about speaker names.** joinly 0.5.4 gives no speaker names on Zoom, so every line there shows `call` where a name would be. Meet and Teams are fine. The fix is [joinly-ai/joinly#187](https://github.com/joinly-ai/joinly/pull/187), a change to joinly's Zoom file. Until a joinly release has it, mount the fixed file read-only over the image's copy: [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the two commands, and explains the cause. On Kubernetes, [a second patch](../DEPLOY.md#meetings-on-kubernetes) mounts it, or `meetings.zoomFix.configMap` in [the Helm chart](../DEPLOY.md#meetings-with-helm).
 8. **Mount the first-word fix, so a line keeps its first word.** joinly 0.5.4 starts each piece of speech partway into its first word, and the room's agent names, which are the speech model's hotwords, can turn the clipped word into "Claude". A line then wakes Claude for nothing, or the name that opens a call-out is lost. The fix is [joinly-ai/joinly#188](https://github.com/joinly-ai/joinly/pull/188), a change to joinly's transcription controller (the file is on [our fork](https://github.com/amahpour/joinly/commit/1fe384d9deba32f38fabd5bfc77fc5975adef6a7)), that keeps 0.3 s of audio from before each utterance and passes it on with it. It adds no waiting. On a recorded call it took the right agent from 14.8 of 17 call-outs to 16, the false wakes from 1 to 0, and the words wrong from 8.8% to 3.5%. Until a joinly release has it, mount the fixed file read-only over the image's copy, as for the Zoom fix: [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the commands and the cause. On Kubernetes, [a third patch](../DEPLOY.md#meetings-on-kubernetes) mounts it, or `meetings.prerollFix.configMap` in [the Helm chart](../DEPLOY.md#meetings-with-helm). Nothing needs setting in switchboard, and joinly without the file works as before.
 9. **Optionally, mount the voice patch (#713).** joinly 0.5.4 has one voice for a whole call. The patch is two files of joinly that let `speak_text` take a voice for one line; it changes nothing by itself (every line still has the one voice) and is the base for giving each agent its own. [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the commands and the sums to check, [Kubernetes and Helm](../DEPLOY.md) a ConfigMap, and a bot hosted on your machine already has the files in its plugin.
@@ -103,7 +96,34 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
 
 Who can start a call: any signed-in person who can see the room, in the web UI. Agents can't. If an agent says `/meeting …` in a room, it is only text. The command line can't either, because a call lets anyone on it reach your agents, and that is your decision. This holds even for the plain `/meeting` that asks whether a call is live. The exception is `/meeting listen <name> off`: the person's own CLI can stop listening, too.
 
+## Whisper (experimental)
+
+Before captions (#764) the bot always transcribed with Whisper, a speech model in joinly. It is still in the code, **off by default and experimental**, for the platforms and accounts where captions can't be used (Meet, Teams, a host account with automated captions off) and for anyone who wants it. Nothing falls back to it by itself: a call that can't use captions ends with a notice, and an admin chooses.
+
+To turn it on, in the broker's `config.toml` (or `SWITCHBOARD_MEETING_TRANSCRIBER=whisper`, which wins over the file):
+
+```toml
+[meeting]
+transcriber = "whisper"
+```
+
+An install that already set `stt_model` is taken to want Whisper, so it keeps it when `transcriber` is unset. `transcriber = "captions"` turns captions on for it. A broker restart is needed, and it takes effect for the next call. Any other value stops the broker at start.
+
+**The speech model.** joinly runs `base` on the CPU out of the box. It is quick and sometimes mishears a name. `stt_model` names another: `base`, `small`, `distil-large-v3` or `large-v3-turbo`.
+
+```toml
+[meeting]
+transcriber = "whisper"
+stt_model = "large-v3-turbo"
+```
+
+In a test with 24 spoken lines, `large-v3-turbo` got 2.4% of the words wrong, and `base` 4.3%. The big models are too slow on a CPU for a live call, so use `large-v3-turbo` with [a GPU](../DEPLOY.md#the-speech-model-and-a-gpu), which that section covers with the numbers. A model you name is downloaded on the first call (about 1.6 GB for `large-v3-turbo`), and the call waits for it, so [fetch it ahead](../DEPLOY.md#the-speech-model-and-a-gpu). Where there is no file to edit, set `SWITCHBOARD_MEETING_STT_MODEL` to the name instead. Any other value stops the broker at start, and the message names the four.
+
+Two joinly fixes only matter with Whisper: speaker names on Zoom (step 7 above) and the first-word fix (step 8). Captions need neither.
+
 ## Host the bot on your own machine
+
+**Advanced and experimental.** A call hosted on your own machine uses Whisper there, with your own GPU if you have one. It does not read captions. The server's bot, which does, is the way to start.
 
 The bot does not have to run next to the server. It can run on your laptop or workstation, for one call in one room, and push what it hears into the room. Your own GPU and your own speech model do the listening, the server needs no joinly and no memory for the call, and a link given directly to your agent can stay on your machine. With the room handoff below, the broker holds it briefly in memory. The call looks the same in the room: the same lines, the same wake by name, the same voice, and the same snapshot. The room says where it runs: `on alice-laptop`. **Snapshot**, `/meeting snapshot`, and a call line that addresses an agent and says "screen" take a picture, as they do for the bot next to the server ([Show an agent the shared screen](#show-an-agent-the-shared-screen)).
 
@@ -481,6 +501,10 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 
 ## Troubleshooting
 
+- **The room says "The call ended: Zoom did not offer Show Captions…":** automated captions are off for the host's Zoom account. An admin can allow them in the account's settings on zoom.us, or turn on [Whisper](#whisper-experimental).
+- **The room says "…captions are not supported on this platform yet":** the link is Meet or Teams. Only Zoom's captions are read. Use [Whisper](#whisper-experimental) for those.
+- **The room says "…the meeting bot does not have the captions patch":** joinly is stock 0.5.4. Mount `captions.py` and the patched `server.py` ([DEPLOY.md](../DEPLOY.md#a-meeting-bot)), or turn on Whisper.
+
 - **Codex reports no hosting credential:** use an agent token as in [USAGE.md](../USAGE.md#agents-over-https-a-preview), or configure the [browser-sign-in helper](#codex-with-browser-sign-in), restart Codex and join the room. Its shell needs `SWITCHBOARD_URL`; the helper and host must use the same data folder. A subagent cannot use its parent's key. Do not copy credentials from Codex's private store.
 
 - **`/meeting <link>` says "No meeting server is set":** the broker has no `[meeting] joinly_url` and no `SWITCHBOARD_JOINLY_URL`. Add one and restart the broker. See [Set it up](#set-it-up). (A good link is checked first, so a bad link gets the link message even when no server is set.) In the rare case that it says "No meeting server is running", the broker's meeting part did not start. Restart the broker, and look at its log.
@@ -579,7 +603,8 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 
 - `[meeting] joinly_url`: joinly's address, for example `http://127.0.0.1:8010/mcp/`. An `http` or `https` address, up to 300 characters, with no user name or password in it. Empty by default, which turns the feature off.
 - `[meeting] tts_voice`: the voice agents speak with, for example `af_bella`. A word of 1 to 32 characters from `a-z`, `0-9` and `_`. The default is `bm_george`. It is sent to joinly when either kind of call starts; a hosted relay reads it from its first speech poll.
-- `[meeting] stt_model`: the Whisper model joinly transcribes with: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Empty or unset by default, which leaves the choice to joinly (`base` on a CPU, `distil-large-v3` on a GPU). Anything else stops the broker at start. A model you name is downloaded on the first call. It is sent to joinly when a call starts.
+- `[meeting] transcriber`: `captions` or `whisper`. Unset means captions, unless `stt_model` is set (then Whisper, so an install that chose a model keeps it). `SWITCHBOARD_MEETING_TRANSCRIBER` wins over the file. Applies to the server's bot only. [Whisper (experimental)](#whisper-experimental) says what it changes.
+- `[meeting] stt_model` (Whisper only, experimental): the Whisper model joinly transcribes with: `base`, `small`, `distil-large-v3` or `large-v3-turbo`. Empty or unset by default, which leaves the choice to joinly (`base` on a CPU, `distil-large-v3` on a GPU). Anything else stops the broker at start. A model you name is downloaded on the first call. It is sent to joinly when a call starts.
 - `[meeting] max_calls`: how many calls the broker follows at once, in all rooms together. An integer from 1 to 50. The default is 1. A start past it is refused. Each live call takes about 2.7 GiB of memory and one CPU in joinly.
 - `[files] max_mb`: the size limit for one file also limits a snapshot ([attachments](attachments.md)).
 - `SWITCHBOARD_JOINLY_URL`: the same address, from the environment. Set to something, it wins over the file; empty or unset, the file's value stays. A bad value stops the broker at start. It is the way to set it in a Kubernetes manifest, which has no file on the volume to write ([DEPLOY.md](../DEPLOY.md#meetings-on-kubernetes)).
