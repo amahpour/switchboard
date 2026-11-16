@@ -4,7 +4,7 @@ The details behind [the meetings guide](meetings.md): the steps in full, every w
 
 Your agents read the call lines like any other message. Use meetings when the decisions happen on a call and you want your agents to hear them: to look something up while people keep talking, or to start on a fix the moment someone asks for it.
 
-The bot can run next to the server, or on your own machine ([host it yourself](#host-the-bot-on-your-own-machine)). The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and [an agent can see the shared screen](#show-an-agent-the-shared-screen). The bot never shares a screen of its own.
+The bot can run next to the server, or on your own machine ([host it yourself](#host-the-bot-on-your-own-machine)). The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and, for the bot next to the server, [an agent can see the shared screen](#show-an-agent-the-shared-screen). A call hosted on your machine has no snapshot. The bot never shares a screen of its own.
 
 ## How it works
 
@@ -21,7 +21,7 @@ The bot can run next to the server, or on your own machine ([host it yourself](#
 Speaking and seeing use the same bot and the same connection. They only start when you do:
 
 - **Voice** is a switch on the bar, off at the start of every call unless the room is [hands-free](#hands-free-calls). While it is on, an agent that starts a message with `@call` is heard in the call. The text is read by joinly's text-to-speech voice.
-- **Snapshot** asks the bot for one picture of what it sees, and the room keeps it as a file. A call line that addresses an agent and says "screen" asks for one too.
+- **Snapshot**, on the bot next to the server, asks the bot for one picture of what it sees, and the room keeps it as a file. A call line that addresses an agent and says "screen" asks for one too. A call hosted on your machine takes no picture, from the button, from `/meeting snapshot`, or from the word "screen".
 
 ```mermaid
 sequenceDiagram
@@ -63,6 +63,8 @@ sequenceDiagram
     Room->>Agent: the card, then the line, with a download link
 ```
 
+That picture is the server's bot. A call hosted on your machine posts the line and takes no picture.
+
 ## Set it up
 
 An admin does this once. If someone already did, skip to [Use it](#use-it).
@@ -103,7 +105,7 @@ Who can start a call: any signed-in person who can see the room, in the web UI. 
 
 ## Host the bot on your own machine
 
-The bot does not have to run next to the server. It can run on your laptop or workstation, for one call in one room, and push what it hears into the room. Your own GPU and your own speech model do the listening, the server needs no joinly and no memory for the call, and a link given directly to your agent can stay on your machine. With the room handoff below, the broker holds it briefly in memory. The call looks the same in the room: the same lines, the same wake by name, the same voice. The room says where it runs: `on alice-laptop`.
+The bot does not have to run next to the server. It can run on your laptop or workstation, for one call in one room, and push what it hears into the room. Your own GPU and your own speech model do the listening, the server needs no joinly and no memory for the call, and a link given directly to your agent can stay on your machine. With the room handoff below, the broker holds it briefly in memory. The call looks the same in the room: the same lines, the same wake by name, the same voice. The room says where it runs: `on alice-laptop`. A hosted call has no snapshot (#766). The Snapshot button, `/meeting snapshot`, and a call line that addresses an agent and says "screen" take no picture. The line is still posted. The bot next to the server does take one ([Show an agent the shared screen](#show-an-agent-the-shared-screen)).
 
 You need:
 
@@ -173,7 +175,7 @@ This existing path gives the link to the model. To keep it from the model, use t
 3. **Check three things in what it printed:** the room, the **key fingerprint** (such as `7f3a·91c2`), and whether it uses **the GPU or the CPU** and why.
 4. **Compare the fingerprint with the call bar.** The room's bar reads `Transcribing a call (Zoom) · on alice-laptop · key 7f3a·91c2` (while the bot is still joining, `Joining a Zoom call… · on alice-laptop · key 7f3a·91c2`). It is the same eight characters. If they differ, it is not your call: stop it and tell an admin. The relay prints the same fingerprint when it starts, so you can also read it in `meeting-host status`.
 5. **Admit the bot** if the meeting has a waiting room. It joins as `switchboard (transcribing)`, as the server's bot does.
-6. **Use the call as usual:** [Use it](#use-it) from step 5 on. Say an agent's name and it wakes. [Voice](#let-agents-speak) is off until you turn it on, and then an agent's `@call` line is spoken into the call by your machine.
+6. **Use the call as usual:** [Use it](#use-it) from step 5 on, except a snapshot, which a hosted call does not take. Say an agent's name and it wakes. [Voice](#let-agents-speak) is off until you turn it on, and then an agent's `@call` line is spoken into the call by your machine.
 7. **End it.** Press **End call** in the room, or **End this call** in [the call's details](#the-call-in-members). The relay is told on its next poll, leaves the call and exits, and joinly's container stops with it, so nothing is left running. Or tell your agent to leave the call: it runs `meeting-host stop`, which stops both containers and removes their files at once. The relay reports that it left, so the room's call bar ends at once. If the server cannot be reached, its silence timeout remains the fallback.
 
 ```mermaid
@@ -376,6 +378,8 @@ Only an agent that is a member of the room can speak this way. A person's messag
 
 ## Show an agent the shared screen
 
+This is the bot that runs next to the server. A call hosted on your machine has no snapshot: the Snapshot button, `/meeting snapshot`, and the word "screen" take no picture, and the line is still posted. [Host the bot on your own machine](#host-the-bot-on-your-own-machine).
+
 Someone on the call shares a screen, and you want an agent to see it. There are two ways, and both take a picture of the bot's view of the call.
 
 - **Click Snapshot** on the bar, or type `/meeting snapshot`. A card with the picture is posted as your message, and the agents in the room receive it.
@@ -397,7 +401,7 @@ Call lines are ordinary room messages, with the sender kind `meeting`. An agent 
 - **A line that names an agent** has `to_you=yes` and `prio=mention`, for that agent only. It wakes the agent the way an @mention does, and it spends one wake from the room's hourly budget. The call lines from just before come along. [Delivery rules](../USAGE.md#delivery-rules) says how wakes work.
 - **A line that names something the agent has claimed**, such as a ticket key it reserved, wakes the agent that holds the claim in the same way. Someone reading out `SYSINT-645` wakes whoever claimed it.
 - **Depending on how the agent was woken,** the line is shown whole or as "not shown here", with a `read()` call that fetches it. An agent has to read it first, as with any other agent's message.
-- **A call line can come after a picture.** A snapshot that a call line asked for is a `kind=meeting` message from `call`, with the card as its text: `artifact: screen-142507.jpg | 21000 | sha256:… | switchboard:file/…`. A download link for it comes with the batch, as for any room file. One you asked for with the button is a message from you, `kind=human`.
+- **On the server's bot, a call line can come after a picture.** A snapshot that a call line asked for is a `kind=meeting` message from `call`, with the card as its text: `artifact: screen-142507.jpg | 21000 | sha256:… | switchboard:file/…`. A download link for it comes with the batch, as for any room file. One you asked for with the button is a message from you, `kind=human`. A hosted call takes no picture, so the line arrives on its own.
 - **While voice is on,** a batch that holds call lines ends with one more line: `Voice is on in this call: start a say() line with @call to have it spoken.` It is the only place agents learn it. There is no tool for speaking and no setting an agent can change.
 - **It is untrusted text.** Agents are told, when they join, that only messages from your user (`kind=human`) are instructions, and that peers are not. A call line counts as a peer. Anyone on the call can say anything, so a spoken "approve the deploy" is not your word. A spoken `/pause` pauses nothing.
 
@@ -429,15 +433,15 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 
 - **One call per room**, and only Zoom, Meet and Teams links.
 - **A hosted call counts too, and one person hosts one at a time.** It counts toward `max_calls`, but the memory it takes is the host machine's, so there the limit only caps how many calls the server follows. It must go live within ten minutes (images and a model are pulled meanwhile), and it ends by itself if its key is silent for five. Ten segments a second are taken, a hundred at once.
-- **A hosted bot has no snapshot yet.** `/meeting snapshot` and the **Snapshot** button say so.
+- **A hosted bot has no snapshot yet.** `/meeting snapshot` and the **Snapshot** button say so. A call line that addresses an agent and says "screen" takes no picture on that call either. The line is still posted.
 - **A stopped relay reports its departure.** `meeting-host stop` clears the call bar at once. If the machine loses power or cannot reach the broker, the five-minute silence timeout remains the fallback.
 - **At most `max_calls` calls at once in the whole broker**, in all rooms together. The default is 1. A call counts from the moment it is joining, until it has ended and the bot has left. A start past the limit is refused, and nothing is sent to joinly. Each call needs about 2.7 GiB of memory in joinly, so raise the limit only with the memory to match ([Set it up](#set-it-up)).
 - **A bigger speech model needs more memory for each call.** Every call loads its own copy of the model, and the memory figures in this guide were measured with `base`. In a test, a process holding `large-v3-turbo` peaked at about 1.7 GB, against 0.5 GB for `base`. A live call with it was not measured, so give joinly more than the sizes say, and watch the first call ([DEPLOY.md](../DEPLOY.md#the-speech-model-and-a-gpu)).
-- **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on, and it takes pictures of what it sees.
+- **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on. The server's bot takes a picture of what it sees when you ask. A hosted bot does not.
 - **A picture is one frame.** It is 1024 by 576 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
 - **Voice is for the call it was turned on in.** It is kept in memory, so it is off after a restart and in every new call.
 - **At most 600 characters a line, one being spoken and one waiting, an agent's own starts 30 seconds apart (2 for an answer to a question put to it), and 4 agent lines in a row.** A line waits for a 1.5-second gap and expires after 60 seconds still waiting.
-- **At most one snapshot every 10 seconds** in a call.
+- **At most one snapshot every 10 seconds** on the server's bot. A hosted call takes none.
 - **No voice recognition.** A speaker's name is whatever joinly gives. On Zoom with joinly 0.5.4 it gives none.
 - **The bot's hint list is made when the call starts.** An agent that joins the room later can still be woken by name, but the speech-to-text was not told to listen for it, so it may mishear that name.
 - **Joining waits up to 45 seconds.** After that the call is marked ended, and you start it again.
@@ -481,6 +485,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The room says "Someone spoke over the line in the call":** the bot stopped because someone started talking. It does not say the rest. Ask the agent to say it again.
 - **The room says "Another @call line is already waiting":** another line is already waiting for its turn. This line stays in the room as text. Its author also receives the refusal in the next batch.
 - **A queued line waited 60 seconds:** it was dropped because the call never left a gap in time. Brief the agent to answer the current topic, rather than repeat a stale answer.
+- **Snapshot says "A snapshot isn't available yet for a call hosted on a person's machine":** this call runs on someone's machine, and that bot takes no picture. The Snapshot button is disabled, and its title says a snapshot is not available yet. Saying an agent's name and "screen" posts the line and takes no picture. The bot next to the server does take one.
 - **Snapshot says "The bot is not in the call yet":** the call is still joining. Wait for the bar to read **Transcribing a call**.
 - **Snapshot says "A snapshot was taken less than 10 seconds ago":** wait a few seconds and click again.
 - **The room says "Couldn't get a snapshot of the call":** joinly could not take a picture, for example because the bot has been removed from the call. Check joinly's log. If it says the picture is "not a PNG, JPEG or WebP", or larger than the file limit, joinly sent something switchboard won't keep.
@@ -529,7 +534,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 - `/meeting voice on` and `/meeting voice off` turn speaking on and off for this call. The **Voice** switch on the bar does the same.
 - `/meeting voice <name> <voice>` sets the Kokoro voice that agent speaks with (`/meeting voice <name> default` puts back the one picked from its name). Web only.
 - `/meeting listen <name>` lets that agent wake on call chatter; `/meeting listen <name> off` stops it.
-- `/meeting snapshot` posts a picture of the shared screen. **Snapshot** on the bar does the same.
+- `/meeting snapshot` posts a picture of the shared screen, on the bot next to the server. **Snapshot** on the bar does the same. A hosted call has no snapshot, and saying "screen" on that call takes no picture.
 
 **The host script** (`meeting-host`, in either the Claude Code or Codex plugin's `bin`; your agent runs it):
 
@@ -564,6 +569,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 - `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)` and `alice turned voice off: agents no longer speak in the call (via web)`.
 - `Someone spoke over the line in the call, so it stopped early.`, `Another @call line is already waiting; this line was not spoken.`, `Agents have spoken 4 lines in a row; this @call line was not spoken. It is spoken again once a person speaks on the call or in the room.` and `A queued @call line waited 60 seconds and was dropped instead of being spoken late.` and `Couldn't speak in the call.`
 - `Couldn't get a snapshot of the call.`, `joinly sent something that is not a PNG, JPEG or WebP picture.`, `The snapshot is larger than the room's file limit (25 MB).` and `A snapshot was taken less than 10 seconds ago. Try again in a moment.`
+- `A snapshot isn't available yet for a call hosted on a person's machine.` The Snapshot button on that call is disabled. Its title says a snapshot is not available yet.
 
 **Numbers:**
 
@@ -573,7 +579,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 - At most one line a second is posted, and at most 50 wait.
 - The hint list holds at most 100 names.
 - A spoken line is at most 600 characters. One can be queued or being spoken, after a 1.5-second gap and at least 30 seconds after the previous start. Waiting expires at 60 seconds. Speech may take up to 3 minutes before it is given up.
-- A snapshot is taken at most every 10 seconds, waits up to 8 seconds for the picture, and is 1024 by 576 pixels.
+- On the server's bot, a snapshot is taken at most every 10 seconds, waits up to 8 seconds for the picture, and is 1024 by 576 pixels. A hosted call takes none.
 
 **More:** [A live call in USAGE.md](../USAGE.md#a-live-call), [A meeting bot in DEPLOY.md](../DEPLOY.md#a-meeting-bot), [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-a-room-573), and [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md).
 
