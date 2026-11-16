@@ -105,7 +105,7 @@ CONTROLLER_PY = "/app/.venv/lib/python3.12/site-packages/joinly/controllers/tran
 # repository, mounted into every container on any platform, pinned by sha256 like the others. Step 6 uses it.
 VOICE_PATCH = {
     "server.py": (
-        "b168efc06793f6ee1873f1f9d28bd8e01692a4577408a1637968ad2b2d6a38c0",
+        "dbebfd72a65c83ef139df02a3141d96392cb30eac98824af6bb0ae278c3939c6",
         "/app/.venv/lib/python3.12/site-packages/joinly/server.py",
     ),
     "kokoro.py": (
@@ -113,6 +113,11 @@ VOICE_PATCH = {
         "/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py",
     ),
 }
+CAPTIONS_PATCH = (
+    "captions.py",
+    "06e0c7bd9cc8d6e134febec5dea2809d38634d335b37cabd102e7155ad49a988",
+    "/app/.venv/lib/python3.12/site-packages/joinly/captions.py",
+)
 VOICE_PATCH_DIR = Path(__file__).resolve().parents[2] / "deploy" / "joinly"
 STOCK_ENV = "SWITCHBOARD_SELFTEST_STOCK_JOINLY"
 # SWITCHBOARD_SELFTEST_LOGS=1 keeps each container's log, scrubbed of the link, in the output folder (0600),
@@ -852,7 +857,8 @@ async def test_every_meetings_feature_against_a_real_call(
         )
     voice_files: list[tuple[Path, str]] = []
     if not stock:  # the voice patch (#713) is this repository's own files, pinned by sha256 all the same
-        for name, (voice_sha256, target) in VOICE_PATCH.items():
+        patch_files = [*VOICE_PATCH.items(), (CAPTIONS_PATCH[0], CAPTIONS_PATCH[1:])]
+        for name, (voice_sha256, target) in patch_files:
             copy = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / name
             copy.write_bytes(selftest.check_pinned((VOICE_PATCH_DIR / name).read_bytes(), voice_sha256))
             copy.chmod(0o644)

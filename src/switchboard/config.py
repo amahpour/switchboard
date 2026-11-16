@@ -184,6 +184,9 @@ MAX_CALLS_CEILING = 50
 # Empty is "joinly's own choice" (``base`` on a CPU, ``distil-large-v3`` on CUDA).
 STT_MODELS = ("base", "small", "distil-large-v3", "large-v3-turbo")
 
+# how the bot's calls become text (#764, DESIGN.md §52.7): the call's own captions, or Whisper in joinly
+TRANSCRIBERS = ("captions", "whisper")
+
 
 @dataclass(frozen=True)
 class MeetingCfg:
@@ -202,18 +205,33 @@ class MeetingCfg:
     ``stt_model`` (``SWITCHBOARD_MEETING_STT_MODEL``) is the Whisper model joinly transcribes with, one of
     ``STT_MODELS``. Empty is unset: the bridge then leaves ``model_name`` out of joinly's settings and
     joinly keeps the model its image was built with, without a lookup on the network. A name sends joinly to
-    Hugging Face for it on the first call (§52)."""
+    Hugging Face for it on the first call (§52).
+
+    ``transcriber`` (``SWITCHBOARD_MEETING_TRANSCRIBER``, #764) is how the bot turns the call into text:
+    ``captions`` reads the platform's own captions and runs no speech model, ``whisper`` runs joinly's.
+    Empty is unset, and unset means captions, except that a ``stt_model`` an admin named is a sign they
+    want Whisper, so with that set and no ``transcriber`` the bot keeps Whisper. ``mode`` is the answer."""
 
     joinly_url: str = ""
     tts_voice: str = "bm_george"
     max_calls: int = 1
     stt_model: str = ""
+    transcriber: str = ""
+
+    @property
+    def mode(self) -> str:
+        """``captions`` or ``whisper``: what the bot transcribes with."""
+        if self.transcriber:
+            return self.transcriber
+        return "whisper" if self.stt_model else "captions"
 
     def __post_init__(self) -> None:
         if not VOICE_RE.fullmatch(self.tts_voice):
             raise ConfigError("[meeting] tts_voice must be a short word of a-z, 0-9 and _, like bm_george")
         if self.stt_model not in ("", *STT_MODELS):  # a wrong type is not in the tuple either
             raise ConfigError(f"[meeting] stt_model must be one of {', '.join(STT_MODELS)}, or empty")
+        if self.transcriber not in ("", *TRANSCRIBERS):
+            raise ConfigError(f"[meeting] transcriber must be one of {', '.join(TRANSCRIBERS)}, or empty")
         if (
             isinstance(self.max_calls, bool)
             or not isinstance(self.max_calls, int)
@@ -360,6 +378,8 @@ JOINLY_URL_ENV = "SWITCHBOARD_JOINLY_URL"
 MAX_CALLS_ENV = "SWITCHBOARD_MEETING_MAX_CALLS"
 # the speech-to-text model, from the environment for the same reason (§52, #617)
 STT_MODEL_ENV = "SWITCHBOARD_MEETING_STT_MODEL"
+# captions or Whisper, from the environment for the same reason (§52.7, #764)
+TRANSCRIBER_ENV = "SWITCHBOARD_MEETING_TRANSCRIBER"
 
 
 def load(paths: Paths) -> Config:
@@ -367,7 +387,8 @@ def load(paths: Paths) -> Config:
     ``SWITCHBOARD_HUMAN_NAME`` sets ``human_name`` over both, a non-empty
     ``SWITCHBOARD_JOINLY_URL`` sets ``[meeting] joinly_url`` over the file, a non-empty
     ``SWITCHBOARD_MEETING_MAX_CALLS`` sets ``[meeting] max_calls`` over it, and a non-empty
-    ``SWITCHBOARD_MEETING_STT_MODEL`` sets ``[meeting] stt_model`` over it."""
+    ``SWITCHBOARD_MEETING_STT_MODEL`` sets ``[meeting] stt_model`` over it, and a non-empty
+    ``SWITCHBOARD_MEETING_TRANSCRIBER`` sets ``[meeting] transcriber``."""
     try:
         raw = paths.config.read_bytes()
     except FileNotFoundError:
@@ -404,4 +425,9 @@ def load(paths: Paths) -> Config:
         if env not in STT_MODELS:
             raise ConfigError(f"{STT_MODEL_ENV} must be one of {', '.join(STT_MODELS)}")
         cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, stt_model=env))
+    env = os.environ.get(TRANSCRIBER_ENV, "").strip()
+    if env:
+        if env not in TRANSCRIBERS:  # never ignored: a typo must not leave the default in force unseen
+            raise ConfigError(f"{TRANSCRIBER_ENV} must be one of {', '.join(TRANSCRIBERS)}")
+        cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, transcriber=env))
     return cfg

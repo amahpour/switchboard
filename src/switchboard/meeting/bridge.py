@@ -15,6 +15,7 @@ Whether voice is on is memory only: a call does not outlive the process, so neit
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import deque
@@ -132,11 +133,24 @@ class MeetingBridge:
     async def _session(self, room_id: int, url: str, stop: asyncio.Event, errors: list[str]) -> None:
         names = self.state.store.active_names(room_id)
         cfg = self.state.cfg.meeting
+        captions = cfg.mode == "captions"
         header = joinly.settings_header(
-            hotwords=hotwords(names), model=cfg.stt_model, voice=cfg.tts_voice, participant=PARTICIPANT
+            hotwords=hotwords(names),
+            model=cfg.stt_model,
+            voice=cfg.tts_voice,
+            participant=PARTICIPANT,
+            transcriber=cfg.mode,
         )
         client, handler = joinly.open_client(cfg.joinly_url, header)
-        async with client:
+        try:
+            await client.__aenter__()
+        except Exception:
+            # a joinly without the captions patch refuses the settings it does not know: that is not "the
+            # call dropped", and the room is told what to do
+            if captions:
+                errors.append(joinly.captions_unpatched_notice())
+            raise
+        try:
             try:
                 if not await joinly.subscribe(client):
                     log.warning("meeting room %s: transcript subscribe failed", room_id)
@@ -149,10 +163,15 @@ class MeetingBridge:
                 except Exception:
                     errors.append("couldn't join the call")
                     return
+                if captions:
+                    reason = await joinly.captions_reason(client)
+                    if reason is not None:
+                        errors.append(joinly.captions_notice(reason))
+                        return
                 # asked before the call is marked live: the bar must never say live while a command that needs
                 # ``_live`` (a snapshot, a voice) still finds no call to act on
                 takes_voice = await joinly.takes_voice(client)
-                self._mark_live(room_id)
+                self._mark_live(room_id, captions)
                 live = self._live[room_id] = _Live(client, voices=takes_voice)
                 try:
                     await self._listen(live, handler, room_id, stop, errors)
@@ -161,6 +180,9 @@ class MeetingBridge:
                     await self._stop_speech(live)
             finally:
                 await self._leave(client, room_id)
+        finally:
+            with contextlib.suppress(Exception):
+                await client.__aexit__(None, None, None)
 
     async def _leave(self, client: Any, room_id: int) -> None:
         try:
@@ -170,7 +192,7 @@ class MeetingBridge:
         except Exception:
             log.warning("meeting room %s: leave_meeting failed", room_id)
 
-    def _mark_live(self, room_id: int) -> None:
+    def _mark_live(self, room_id: int, captions: bool = False) -> None:
         row = self.state.store.open_meeting(room_id)
         if row is None:
             return
@@ -178,6 +200,8 @@ class MeetingBridge:
         self.state.service.publish_settings(room_id)
         label = PLATFORM_LABEL.get(row.platform, "call")
         self.state.service.notice_in(room_id, f'Transcribing a {label} call as "{PARTICIPANT}".')
+        if captions:
+            self.state.service.notice_in(room_id, joinly.CAPTIONS_ON_NOTICE)
 
     async def _listen(
         self, live: _Live, handler: joinly.Updates, room_id: int, stop: asyncio.Event, errors: list[str]
