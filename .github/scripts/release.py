@@ -90,6 +90,10 @@ PLUGIN_MANIFESTS = {
     "plugins/codex": "plugins/codex/.codex-plugin/plugin.json",
 }
 PLUGIN_VERSION_RE = re.compile(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")')
+# the broker's copy of those versions (§49.13): what a session's plugin is compared with. It is the
+# manifests', so a release that bumps a manifest rewrites it, and a test holds the two equal
+PLUGIN_VERSIONS_FILE = "src/switchboard/plugin_versions.py"
+PLUGIN_PINNED_RE = re.compile(r"^PINNED = \{.*\}$", re.M)
 # with the notes files, all a release PR changes
 RELEASE_FILES = (
     *VERSION_FILES,
@@ -98,6 +102,7 @@ RELEASE_FILES = (
     *MARKETPLACE_FILES,
     CHART_FILE,
     *PLUGIN_MANIFESTS.values(),
+    PLUGIN_VERSIONS_FILE,
 )
 CHANGES_DIR = "changes"  # a PR's notes: changes/<name>.md (changes/README.md)
 # a release's headings in this order; any other heading follows them, in the order first seen
@@ -272,6 +277,17 @@ def bump_plugin(text: str, where: str = "a plugin manifest") -> str:
     return bumped
 
 
+def sync_plugin_versions(text: str, versions: dict[str, str], where: str = PLUGIN_VERSIONS_FILE) -> str:
+    """The broker's table of plugin versions (``PINNED`` in plugin_versions.py) set to the manifests', by
+    harness. A file with no such line stops the release instead of leaving the broker comparing against
+    versions no plugin has."""
+    line = "PINNED = {" + ", ".join(f'"{h}": "{v}"' for h, v in sorted(versions.items())) + "}"
+    synced, n = PLUGIN_PINNED_RE.subn(line, text, count=1)
+    if n != 1:
+        raise SystemExit(f"{where} has no `PINNED = {{...}}` line to set")
+    return synced
+
+
 def pin_chart(text: str, version: str, where: str = CHART_FILE) -> str:
     """A chart file with its `appVersion` set to the release (#608). The chart installs the image of its
     appVersion unless told otherwise, so one left on the last release would deploy the last release from the
@@ -371,6 +387,13 @@ def release(root: Path, notes_path: Path, today: str, *, major: bool = False) ->
     for folder in sorted(moved):  # #705
         manifest = root / PLUGIN_MANIFESTS[folder]
         manifest.write_text(bump_plugin(manifest.read_text(), PLUGIN_MANIFESTS[folder]))
+    versions_file = root / PLUGIN_VERSIONS_FILE
+    if moved and versions_file.exists():  # §49.13
+        manifests = {
+            Path(folder).name: json.loads((root / manifest).read_text())["version"]
+            for folder, manifest in PLUGIN_MANIFESTS.items()
+        }
+        versions_file.write_text(sync_plugin_versions(versions_file.read_text(), manifests))
     for rel in MARKETPLACE_FILES:
         p = root / rel
         if p.exists():

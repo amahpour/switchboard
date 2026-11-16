@@ -65,7 +65,12 @@ def test_codex_helper_makes_a_private_rotating_key_and_prints_only_its_hash(mach
     f = machine.data / f"codex-listener-key-{os.getpid()}"
     key = f.read_text().strip()
     assert key.startswith("sbl_") and len(key) == 68
-    assert json.loads(first.stdout) == {"X-Switchboard-Listener": hashlib.sha256(key.encode()).hexdigest()}
+    assert json.loads(first.stdout) == {
+        "X-Switchboard-Plugin-Version": json.loads(
+            (machine.plugin / ".codex-plugin/plugin.json").read_text()
+        )["version"],  # #789
+        "X-Switchboard-Listener": hashlib.sha256(key.encode()).hexdigest(),
+    }
     assert stat.S_IMODE(f.stat().st_mode) == 0o600
     assert key not in first.stdout + first.stderr
     victim = machine.root / "victim"

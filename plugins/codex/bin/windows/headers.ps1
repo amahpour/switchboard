@@ -11,7 +11,15 @@ function Show([string]$text) {
     $stdout.Write($bytes, 0, $bytes.Length)
     $stdout.Flush()
 }
-function None { if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }; Show '{}'; exit 0 }
+# This plugin's own version, from its manifest, goes out as X-Switchboard-Plugin-Version (docs/DESIGN.md section
+# 49.13), even when no listener key can be made. Digits and dots only: anything else sends no header.
+$lead = ''
+try {
+    $manifest = [IO.File]::ReadAllText([IO.Path]::Combine($PSScriptRoot, '..', '..', '.codex-plugin', 'plugin.json'))
+    $found = [regex]::Match($manifest, '"version"\s*:\s*"([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})"')
+    if ($found.Success) { $lead = '"X-Switchboard-Plugin-Version": "' + $found.Groups[1].Value + '", ' }
+} catch { $lead = '' }
+function None { if ($tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }; Show ('{' + $lead.TrimEnd(',', ' ') + '}'); exit 0 }
 trap { None }
 
 function ParentOf([int]$id) { # the pid of the process that started this one, or 0
@@ -117,5 +125,5 @@ foreach ($file in [IO.Directory]::GetFiles($dir, 'codex-listener-key-*')) {
         Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
     }
 }
-Show ('{"X-Switchboard-Listener": "' + $hash + '"}')
+Show ('{' + $lead + '"X-Switchboard-Listener": "' + $hash + '"}')
 exit 0
