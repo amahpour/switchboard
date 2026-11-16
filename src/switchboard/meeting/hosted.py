@@ -15,10 +15,11 @@ the broker instead of the broker pulling it from a bot beside it (§52). The bro
 - **What a push becomes** is what the broker's own bot's lines become: the same ``Assembler`` joins
   segments into lines and the same ``ingest`` checks and posts them, so every source gets the same fixes.
   A line is stored with its call and the machine that heard it. Posts are paced at one a second.
-- **Ending** (``stop``, ``end``): by a person, a closed room, a revoked sign-in, a host that never
-  started sending or went quiet (``tick``, which reads the broker's clock, so a test steps it), or the
-  broker stopping. What is left of the transcript is posted first, the key is refused from then on, and
-  a waiting speech poll is answered with ``ended``.
+- **Ending** (``stop``, ``end``): by a person, a closed room, a revoked sign-in, the call's own key
+  (its relay, or the host script stopping a call that relay never reached), a host that never started
+  sending or went quiet (``tick``, which reads the broker's clock, so a test steps it), or the broker
+  stopping. What is left of the transcript is posted first, the key is refused from then on, and a
+  waiting speech poll is answered with ``ended``.
 
 All of it runs on the broker's loop and never waits, except ``speech``, which is a long poll. Memory is
 the expiring private handoffs, the line being assembled, the lines waiting to be posted and spoken,
@@ -68,6 +69,10 @@ HINTS_MAX = 100  # the room's names sent as the transcriber's hotwords, each cut
 # A hosted call that has not gone live ends after ten minutes: joinly's own join is given 45 s
 # (``bridge.JOIN_TIMEOUT_S``), and a first start also pulls the images and a 1.6 GB model (§52).
 JOIN_WINDOW_S = 600.0
+# A 409 when a call is already open tells the person how to clear it (#759). ``meeting-host stop``
+# reports the end with that call's own key, including when its relay never reached the server.
+END_OPEN_CALL = "End it in the room (End call), or run meeting-host stop on the machine that hosts it."
+END_OWN_CALL = "End it in its room (End call), or run meeting-host stop on that machine."
 # A live one that has heard nothing from its key (no push, no poll) ends after five minutes: more than
 # twice the 130 s a wait nobody answers is given (``rules.WAIT_DROP_GRACE_S``), so a poll that ran long or
 # a laptop that slept a moment does not end it, and a host that is gone does.
@@ -269,9 +274,9 @@ class HostedCalls:
             self._requests.pop((room.id, person_id), None)
             return []
         if store.open_meeting(room.id) is not None:
-            raise ServiceError("conflict", "This room already has a call. End it first.")
+            raise ServiceError("conflict", f"This room already has a call. {END_OPEN_CALL}")
         if store.open_hosted_meeting_of(person_id) is not None:
-            raise ServiceError("conflict", "You already host a call. End it first.")
+            raise ServiceError("conflict", f"You already host a call. {END_OWN_CALL}")
         if store.count_open_meetings() >= self.state.cfg.meeting.max_calls:
             raise ServiceError("conflict", "This broker is already following its maximum number of calls.")
         self._requests[room.id, person_id] = _Request(
@@ -391,11 +396,9 @@ class HostedCalls:
             raise ServiceError("bad_request", "platform is zoom, meet, teams or unknown")
         model = keys.model_in(params.get("model", ""))
         if store.open_meeting(room.id) is not None:
-            raise ServiceError(
-                "conflict", f"{room.name} already has a call. A call has one source: end it first."
-            )
+            raise ServiceError("conflict", f"{room.name} already has a call. {END_OPEN_CALL}")
         if store.open_hosted_meeting_of(token.person_id) is not None:
-            raise ServiceError("conflict", "you already host a call: end it before hosting another")
+            raise ServiceError("conflict", f"you already host a call. {END_OWN_CALL}")
         limit = cfg.meeting.max_calls
         if store.count_open_meetings() >= limit:
             raise ServiceError(
@@ -419,7 +422,7 @@ class HostedCalls:
             )
         except Conflict:
             raise ServiceError(
-                "conflict", f"{room.name} already has a call, or that key was used before"
+                "conflict", f"{room.name} already has a call, or that key was used before. {END_OPEN_CALL}"
             ) from None
         self._state(row)
         svc.start_hands_free(room.id, row.id, self)  # the room's settings, if a person made any (§52.3)

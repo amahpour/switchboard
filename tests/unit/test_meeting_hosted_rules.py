@@ -351,10 +351,12 @@ def test_a_token_may_try_to_register_five_times_a_minute_by_the_clock_and_every_
 
 def test_a_room_with_a_call_open_cannot_have_a_second_whatever_the_source(w: World) -> None:
     """A call has one source: a room that the broker's own bot is following, or that another machine hosts,
-    refuses. Fails if a hosted call can start beside either."""
+    refuses, and the refusal says to end it in the room or with ``meeting-host stop``. Fails if a hosted
+    call can start beside either, or the person is not told what to do."""
     w.store.insert_meeting(w.build.id, started_by="alice", platform="zoom")
-    with pytest.raises(ServiceError, match="already has a call"):
+    with pytest.raises(ServiceError, match="already has a call") as caught:
         w.open()
+    assert "End call" in caught.value.message and "meeting-host stop" in caught.value.message
     w.store.end_meeting(w.store.open_meeting(w.build.id).id, None)  # type: ignore[union-attr]
     w.open()
     with pytest.raises(ServiceError, match="already has a call"):
@@ -365,12 +367,14 @@ def test_a_person_hosts_one_call_at_a_time_across_their_machines_but_two_people_
     w: World,
 ) -> None:
     """One hosted call per person: a second token of the same person is refused (the owner's tokens are the
-    owner's), even in another room, and ends when the first does. Another person is not held by it. Fails if
-    the limit is per token or per room."""
+    owner's), even in another room, and the refusal says how to end the one they host. It ends when the
+    first does. Another person is not held by it. Fails if the limit is per token or per room, or the
+    refusal does not say what to do."""
     w.open(w.laptop())
     desktop = w.token("alice-desktop")
-    with pytest.raises(ServiceError, match="you already host a call"):
+    with pytest.raises(ServiceError, match="you already host a call") as caught:
         w.open(desktop, w.uploads, key_hash="cd" * 32)
+    assert "End call" in caught.value.message and "meeting-host stop" in caught.value.message
     bob = w.store.person_add("bob", b"b" * 16, "x" * 64, 3600.0).id
     w.open(w.token("bobs-laptop", bob), w.uploads, key_hash="cd" * 32)
     assert len(w.store.open_hosted_meetings()) == 2
