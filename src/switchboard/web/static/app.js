@@ -1290,7 +1290,9 @@
   // Each card's header and closing line, from what the room's call is now: only the room's last card can be live,
   // or be the one the call ended on. Run after rows are built, and whenever the call's settings change.
   function syncCallCards(r) {
-    const cards = Array.from($('log').querySelectorAll('.call-card'));
+    const log = $('log');
+    if (typeof log.querySelectorAll !== 'function') return;
+    const cards = Array.from(log.querySelectorAll('.call-card'));
     if (!cards.length) return;
     const windowed = !!(state.around && r && state.around.room === r.name);  // a window around a search hit
     const cur = r && !windowed ? callOf(r) : null;
