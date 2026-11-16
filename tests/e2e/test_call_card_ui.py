@@ -53,6 +53,7 @@ def _plant(
     its text."""
     assert _post(broker, "/api/rooms", {"name": room}).status_code == 200
     ids: dict[str, int] = {}
+    base = _base()  # read once: a run that crosses midnight must not move later rows to another day
 
     def plant() -> None:
         store = broker.state.store
@@ -70,12 +71,23 @@ def _plant(
                 text=text,
                 sender_harness="claude" if kind == "agent" else None,
             )
-            store.con.execute("UPDATE messages SET ts=? WHERE id=?", (_base() + at, m.id))
+            store.con.execute("UPDATE messages SET ts=? WHERE id=?", (base + at, m.id))
             ids[text] = m.id
         broker.state.service.publish_settings(r.id)
 
     broker.on_loop(plant)
     return ids
+
+
+class _Held:
+    """A clock that reads one moment, a second later at each look, whatever the wall clock says."""
+
+    def __init__(self, at: float) -> None:
+        self.at = at
+
+    def now(self) -> float:
+        self.at += 1.0
+        return self.at
 
 
 def test_consecutive_call_lines_make_one_card_and_a_chat_message_ends_it(
@@ -140,6 +152,7 @@ def test_consecutive_call_lines_make_one_card_and_a_chat_message_ends_it(
 
 
 def test_live_call_lines_join_the_last_card_until_a_chat_message_ends_it(
+    request: pytest.FixtureRequest,
     ui: UI,
     calls: InProcBroker,  # noqa: F811
 ) -> None:
@@ -149,6 +162,11 @@ def test_live_call_lines_join_the_last_card_until_a_chat_message_ends_it(
     message joins the old card."""
     _plant(calls, "#livecards", [])
     page = _open(ui, calls, room="livecards")
+    # Every line posted below is stamped by the store's clock. Held at one moment, a run that crosses midnight
+    # can't put a day divider (and so a new card) between two of them.
+    real = calls.state.store.clock
+    request.addfinalizer(lambda: calls.on_loop(lambda: setattr(calls.state.store, "clock", real)))
+    calls.on_loop(lambda: setattr(calls.state.store, "clock", _Held(_base() + 3600)))
 
     def say(text: str) -> None:
         def post() -> None:
