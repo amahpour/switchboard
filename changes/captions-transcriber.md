@@ -1,7 +1,0 @@
-### Upgrading
-
-- **The meeting bot now reads the call's captions by default, and Whisper is off.** Before, the bot next to the server always transcribed with Whisper. Now it turns on Zoom's own captions and reads them, and no speech model runs (no GPU needed). This **shows the captions to everyone in the call**, and the room says so. Check three things. Zoom's automated captions must be allowed for the host's account, or the call ends with a notice that says so. joinly needs two files mounted, `captions.py` and the updated `server.py` ([DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)). Meet and Teams calls end with a notice, because only Zoom's captions are read yet. **To get Whisper back,** set `[meeting] transcriber = "whisper"` (or `SWITCHBOARD_MEETING_TRANSCRIBER=whisper`), restart the broker, and it works on every platform. It is experimental now. An install that already set `stt_model` keeps Whisper without changing anything. A call hosted on your own machine is unchanged.
-
-### Added
-
-- **Captions as the transcription** ([#764](https://github.com/amahpour/switchboard/issues/764)). In the spike, Zoom's captions got 1.4% of the words wrong against 19% for joinly's default Whisper, and knew the agents' names. A call line is sent once it is final, and the speaker is the participant whose initials the caption shows (no speaker when two share them). It never falls back to Whisper by itself.
