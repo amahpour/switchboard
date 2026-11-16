@@ -1,0 +1,6 @@
+# Test-only S3 server/client (#689, DESIGN.md §57.2). test.yml builds these from pinned upstream
+# commits, with CGO disabled and their go.sum files, because MinIO's public images were withdrawn.
+# Reuse the broker image already built by the image job: this is never published or deployed.
+FROM switchboard:ci
+COPY minio mc /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/minio"]

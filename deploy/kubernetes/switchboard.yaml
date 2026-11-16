@@ -139,3 +139,120 @@ spec:
                 name: switchboard
                 port:
                   name: http
+
+# Optional database replication (#689): copy and uncomment the example below into separate
+# ConfigMap/ServiceAccount and strategic-merge patch files; do not apply this patch as a new
+# StatefulSet. docs/DEPLOY.md, "Continuous database replication", has the commands.
+# This includes the separately opt-in restore init step: remove initContainers for replication only.
+# Provide the existing Secret yourself; no credentials belong in this file. For workload identity,
+# annotate the ServiceAccount and remove envFrom from both containers.
+# BEGIN LITESTREAM EXAMPLE
+# apiVersion: v1
+# kind: ConfigMap
+# metadata:
+#   name: switchboard-litestream
+# data:
+#   litestream.yml: |
+#     # No network listener or control socket; only replication, no credentials in this file.
+#     socket:
+#       enabled: false
+#     dbs:
+#       - path: /data/switchboard/switchboard.db
+#         replica:
+#           url: "s3://switchboard-backups/broker"
+#           region: "us-east-1"
+# ---
+# apiVersion: v1
+# kind: ServiceAccount
+# metadata:
+#   name: switchboard-litestream
+# ---
+# apiVersion: apps/v1
+# kind: StatefulSet
+# metadata:
+#   name: switchboard
+# spec:
+#   template:
+#     metadata:
+#       annotations:
+#         kubectl.kubernetes.io/default-container: switchboard
+#     spec:
+#       serviceAccountName: switchboard-litestream
+#       initContainers:
+#       - name: litestream-restore
+#         image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+#         imagePullPolicy: IfNotPresent
+#         envFrom:
+#         - secretRef:
+#             name: litestream-credentials
+#         securityContext:
+#           runAsUser: 10001
+#           runAsGroup: 10001
+#           runAsNonRoot: true
+#           allowPrivilegeEscalation: false
+#           readOnlyRootFilesystem: true
+#           capabilities:
+#             drop:
+#             - ALL
+#         volumeMounts:
+#         - name: data
+#           mountPath: /data
+#         - name: tmp
+#           mountPath: /tmp
+#         - name: litestream-config
+#           mountPath: /etc/litestream.yml
+#           subPath: litestream.yml
+#           readOnly: true
+#         resources:
+#           requests:
+#             cpu: 10m
+#             memory: 64Mi
+#           limits:
+#             memory: 256Mi
+#         command:
+#         - /bin/sh
+#         - -ec
+#         args:
+#         - umask 077; mkdir -p /data/switchboard; exec litestream restore -config /etc/litestream.yml -if-db-not-exists
+#           -if-replica-exists /data/switchboard/switchboard.db
+#       containers:
+#       - name: litestream
+#         image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+#         imagePullPolicy: IfNotPresent
+#         envFrom:
+#         - secretRef:
+#             name: litestream-credentials
+#         securityContext:
+#           runAsUser: 10001
+#           runAsGroup: 10001
+#           runAsNonRoot: true
+#           allowPrivilegeEscalation: false
+#           readOnlyRootFilesystem: true
+#           capabilities:
+#             drop:
+#             - ALL
+#         volumeMounts:
+#         - name: data
+#           mountPath: /data
+#         - name: tmp
+#           mountPath: /tmp
+#         - name: litestream-config
+#           mountPath: /etc/litestream.yml
+#           subPath: litestream.yml
+#           readOnly: true
+#         resources:
+#           requests:
+#             cpu: 10m
+#             memory: 64Mi
+#           limits:
+#             memory: 256Mi
+#         command:
+#         - /bin/sh
+#         - -ec
+#         args:
+#         - umask 077; exec litestream replicate -config /etc/litestream.yml
+#       volumes:
+#       - name: litestream-config
+#         configMap:
+#           name: switchboard-litestream
+# END LITESTREAM EXAMPLE

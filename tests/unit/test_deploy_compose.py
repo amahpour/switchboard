@@ -66,3 +66,22 @@ def test_the_gpu_bot_is_the_same_release_with_cuda_on_a_profile_of_its_own() -> 
         {"driver": "nvidia", "count": 1, "capabilities": ["gpu"]}
     ]
     assert "JOINLY_DEVICE" not in str(gpu.get("environment")), "the cuda image sets its own device"
+
+
+def test_litestream_example_is_commented_private_and_uses_the_chart_pin() -> None:
+    """The optional Compose service stays off, matches Helm's image and never embeds credentials."""
+    text = (ROOT / "deploy/compose/compose.yaml").read_text()
+    block = text.split("  # litestream:\n", 1)[1].split("\n\n", 1)[0]
+    service = yaml.safe_load(
+        "litestream:\n" + "\n".join(line.removeprefix("  # ") for line in block.splitlines())
+    )["litestream"]
+    values = yaml.safe_load((ROOT / "deploy/helm/switchboard/values.yaml").read_text())
+    assert "litestream" not in COMPOSE["services"]
+    assert service["image"] == values["backup"]["litestream"]["image"]
+    assert service["user"] == "10001:10001" and service["read_only"] is True
+    assert service["cap_drop"] == ["ALL"] and service["security_opt"] == ["no-new-privileges:true"]
+    assert service["volumes"] == ["switchboard-data:/data", "./litestream.yml:/etc/litestream.yml:ro"]
+    assert service["env_file"] == "./litestream.env" and "environment" not in service
+    assert "ports" not in service and "expose" not in service
+    assert service["entrypoint"] == ["/bin/sh", "-ec"]
+    assert service["command"] == ["umask 077; exec litestream replicate -config /etc/litestream.yml"]

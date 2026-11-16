@@ -148,7 +148,9 @@ Admins can make a live archive from **Settings → Backups → Back up now**, af
 fresh identity check. Keep using rooms until the ready notice appears, then download within
 ten minutes. Downloads also require a fresh check. Other admins are notified and both actions
 leave events. A desktop that uses only CLI sign-in links uses `switchboard backup` instead.
-See [Backups and restore](guide/backups.md).
+See [Backups and restore](guide/backups.md). Hosted operators can also enable
+[Litestream database replication](DEPLOY.md#continuous-database-replication-with-litestream);
+attachments still need their own backup.
 
 ## Agents over HTTPS (a preview)
 

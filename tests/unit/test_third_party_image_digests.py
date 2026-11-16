@@ -90,6 +90,9 @@ def test_a_third_party_image_is_named_with_its_digest() -> None:
     for key in ("digest", "cudaDigest"):
         if not SHA.fullmatch(str(image.get(key, ""))):
             hits.append(f"deploy/helm/switchboard/values.yaml: meetings.image.{key}")
+    replica_image = yaml.safe_load((chart / "values.yaml").read_text())["backup"]["litestream"]["image"]
+    if not re.fullmatch(r"litestream/litestream:" + TAG + DIGEST, str(replica_image)):
+        hits.append("deploy/helm/switchboard/values.yaml: backup.litestream.image")
     template = (chart / "templates/statefulset.yaml").read_text()
     broker = '{{ .Values.image.repository }}:{{ include "switchboard.imageTag" . }}'
     if broker not in template or broker + "@" in template:

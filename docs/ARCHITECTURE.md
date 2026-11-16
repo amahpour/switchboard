@@ -70,6 +70,9 @@ recovery folder ([§57](DESIGN.md#57-live-backup-archives-and-restore-at-start-6
 `broker/backups.py` schedules the same archive from an admin's web request, in a worker thread,
 and keeps bounded job state and expiring, fresh-check-protected download links. Audit writes
 and admin notices stay on the broker loop ([§57.1](DESIGN.md#571-background-web-backups-and-expiring-downloads)).
+Deployment templates can optionally add a Litestream sidecar for database-only S3 replication
+and an opt-in restore init container that finishes before broker startup; archives still cover
+matched attachments ([§57.2](DESIGN.md#572-optional-litestream-replication-689)).
 
 ## The path of a message
 

@@ -110,3 +110,22 @@ meetings:
   # without it. DEPLOY.md, "A voice for each line". Empty mounts nothing.
   voicePatch:
     configMap: ""
+
+# Continuous database replication (#689, docs/DEPLOY.md, "Continuous database replication").
+# Only switchboard.db, not files/: keep archive/snapshot backups for matched attachments.
+backup:
+  litestream:
+    enabled: false
+    # Multi-platform index from registry-1.docker.io/v2/litestream/litestream/manifests/0.5.18.
+    # Move tag and digest together; release.py only moves switchboard's own image.
+    image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+    replicaUrl: ""        # required when enabled: s3://bucket/unique-prefix, no credentials or query
+    region: ""            # e.g. us-east-1; empty uses the provider's default
+    endpoint: ""          # HTTPS S3-compatible endpoint, empty for AWS S3
+    existingSecret: ""    # existing Secret: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, optional AWS_SESSION_TOKEN
+    restoreOnEmpty: false # opt-in init container, before broker start; empty replica permits first install
+
+# A dedicated account is created only with Litestream enabled. Prefer workload identity over
+# static keys: e.g. eks.amazonaws.com/role-arn for IRSA. No credential values here.
+serviceAccount:
+  annotations: {}

@@ -46,6 +46,26 @@ services:
     # no `ports:`: only Caddy reaches it, over this project's network
     stop_grace_period: 20s
 
+  # Optional database-only replication (#689). Uncomment this service and provision litestream.yml
+  # and a private litestream.env (AWS credentials) beside this file. docs/DEPLOY.md, "Continuous
+  # database replication", has the config and the one-off restore command: restore before starting
+  # either service, with an empty volume owned by uid 10001. No files/ replication.
+  # litestream:
+  #   image: litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
+  #   user: "10001:10001"
+  #   restart: unless-stopped
+  #   entrypoint: ["/bin/sh", "-ec"]
+  #   command: ["umask 077; exec litestream replicate -config /etc/litestream.yml"]
+  #   env_file: ./litestream.env
+  #   volumes:
+  #     - switchboard-data:/data
+  #     - ./litestream.yml:/etc/litestream.yml:ro
+  #   read_only: true
+  #   tmpfs: [/tmp]
+  #   cap_drop: [ALL]
+  #   security_opt: [no-new-privileges:true]
+  #   stop_grace_period: 30s
+
   # The meeting bot, only with the `meetings` profile. It has no sign-in and takes its settings from whoever
   # connects, so it publishes no port: only the broker reaches it, as http://joinly:8000/mcp/ on this
   # project's network.
