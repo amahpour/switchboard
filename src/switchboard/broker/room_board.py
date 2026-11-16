@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
+import logging
 import secrets
 from collections.abc import Callable
 from typing import Any
@@ -22,6 +24,8 @@ from switchboard.envelope import clean, sanitize
 from switchboard.models import Room
 from switchboard.store import Conflict
 
+log = logging.getLogger(__name__)
+
 MAX_CONVERSIONS = 4  # drawings being converted at once, for all rooms
 
 
@@ -31,6 +35,53 @@ class RoomBoard:
         self._converting: set[int] = set()
         self._budget_full_at: dict[int, float] = {}
         self._pending: dict[str, tuple[int, int, asyncio.Future[Any], str]] = {}
+        # the open burst of changes per room, and the timer that closes it once it goes quiet
+        self._bursts: dict[int, tuple[Room, tuple[str, int, float]]] = {}
+        self._timers: dict[int, asyncio.TimerHandle] = {}
+
+    def _note_change(self, room: Room, who: str, now: float) -> None:
+        """Count a saved change in its room's burst; post the notice of the one it closed (§56.3)."""
+        held = self._bursts.get(room.id)
+        closed, current = rules.board_burst_step(held[1] if held else None, who, now)
+        if closed is not None:
+            self.state.service.post_notice(room, rules.board_burst_text(closed), level="info")
+        self._bursts[room.id] = (room, current)
+        self._arm(room.id, rules.BOARD_NOTICE_GAP_S)
+
+    def _arm(self, room_id: int, delay: float) -> None:
+        timer = self._timers.pop(room_id, None)
+        if timer is not None:
+            timer.cancel()
+        self._timers[room_id] = asyncio.get_running_loop().call_later(delay, self._wake, room_id)
+
+    def _wake(self, room_id: int) -> None:
+        self._timers.pop(room_id, None)
+        try:
+            self.flush_due()
+        except Exception:  # pragma: no cover - a failed notice must not kill the loop callback
+            log.exception("board notice failed")
+        held = self._bursts.get(room_id)
+        if held is not None:  # written to while the timer ran: wait out what is left of its gap
+            left = rules.BOARD_NOTICE_GAP_S - (self.state.clock.now() - held[1][2])
+            self._arm(room_id, max(left, 0.05))
+
+    def flush_due(self) -> None:
+        """Post the notice of every burst that has been quiet for the gap."""
+        now = self.state.clock.now()
+        for room_id, (room, burst) in list(self._bursts.items()):
+            if rules.board_burst_due(burst, now):
+                del self._bursts[room_id]
+                self.state.service.post_notice(room, rules.board_burst_text(burst), level="info")
+
+    def close(self) -> None:
+        """At shutdown: stop the timers and post what is still open, so nothing is lost or left pending."""
+        for timer in self._timers.values():
+            timer.cancel()
+        self._timers.clear()
+        bursts, self._bursts = list(self._bursts.values()), {}
+        for room, burst in bursts:
+            with contextlib.suppress(Exception):
+                self.state.service.post_notice(room, rules.board_burst_text(burst), level="info")
 
     def check_budget(self, participant: int) -> float | None:
         """Seconds until this agent may change the board (§56.3), without spending its budget."""
@@ -211,9 +262,9 @@ class RoomBoard:
         if participant_id is not None:
             full_at, _ = rules.board_budget(self._budget_full_at.get(participant_id), now)
             self._budget_full_at[participant_id] = full_at
-        # The notice is its own write: a failure here leaves the board saved and the log a line short,
-        # and it never carries the shape text (that text would otherwise be a system line).
-        self.state.service.post_notice(room, f"{who} changed the board", level="info")
+        # The notice is its own write, posted when the actor's burst ends (§56.3): a failure here leaves
+        # the board saved and the log a line short, and it never carries the shape text.
+        self._note_change(room, who, now)
         assert published is not None
         self.state.hub.room_board(room.name, published)
         ids = list(added) or published["ids"]
