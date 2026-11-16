@@ -223,7 +223,7 @@ class Broker(Protocol):
 class BrokerClient:
     """The broker's key routes over HTTPS, with the standard library: one connection a request, in a thread,
     which ``abort`` closes from outside so a long poll ends the moment the relay is told to stop. TLS uses the
-    machine's own trust store, as the broker's sign-in to an identity provider does (``oidc.py``)."""
+    machine's own trust store, plus the PEM CA file named by ``SWITCHBOARD_RELAY_CA_FILE`` when set."""
 
     def __init__(self, address: str, key: Secret, *, allow_http: bool = False) -> None:
         self.scheme, self.host, self.port, self.prefix = server_target(address, allow_http=allow_http)
@@ -231,13 +231,24 @@ class BrokerClient:
         self._open: set[http.client.HTTPConnection] = set()
         self._lock = threading.Lock()  # the set is used by the request threads and by ``abort``
         self._closed = False
-
-    def _connection(self, timeout: float) -> http.client.HTTPConnection:
+        self._tls: ssl.SSLContext | None = None
         if self.scheme == "https":
             import truststore
 
-            ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            return http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=ctx)
+            self._tls = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ca_file = os.environ.get("SWITCHBOARD_RELAY_CA_FILE")
+            if ca_file:
+                try:
+                    self._tls.load_verify_locations(cafile=ca_file)
+                except (OSError, ssl.SSLError):
+                    raise UsageError(
+                        "the CA file cannot be loaded: restart meeting-host with --ca-file FILE"
+                        " naming a readable PEM CA certificate"
+                    ) from None
+
+    def _connection(self, timeout: float) -> http.client.HTTPConnection:
+        if self.scheme == "https":
+            return http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=self._tls)
         return http.client.HTTPConnection(self.host, self.port, timeout=timeout)
 
     def _post(self, path: str, body: dict[str, Any], timeout: float) -> Reply:
@@ -269,6 +280,11 @@ class BrokerClient:
             except ValueError:
                 parsed = {}
             return Reply(resp.status, parsed if isinstance(parsed, dict) else {}, wait)
+        except ssl.SSLCertVerificationError:
+            raise Unreachable(
+                "certificate verification failed: check the server certificate and hostname;"
+                " for a private CA, restart meeting-host with --ca-file FILE naming its PEM CA certificate"
+            ) from None
         except (OSError, http.client.HTTPException, ssl.SSLError) as e:
             # the class says what went wrong; the text of an HTTP library's error is not repeated
             raise Unreachable(type(e).__name__) from None

@@ -30,3 +30,8 @@ Both files are also formatted with this repository's ruff settings, so its lint 
 breaks and an import order only). Without a `voice`, and unless `share_image` is called, joinly behaves as v0.5.4.
 The same two files are in plugins/claude/meeting/joinly/ and plugins/codex/meeting/joinly/;
 tests/unit/test_joinly_voice_patch.py keeps the three copies identical.
+
+captions.py (#764, DESIGN.md section 52.7) is not a copy of a joinly file: it is switchboard's own, MIT licensed like
+the rest of this repository, a new file mounted at joinly/captions.py. The patched server.py above points joinly's
+`stt`, `vad` and `transcription_controller` settings at its three classes when asked for `captions`, hands the
+controller the meeting provider, and adds the `transcription_status` tool. Only the server's bot mounts it.

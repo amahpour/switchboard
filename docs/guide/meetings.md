@@ -4,7 +4,7 @@ A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a m
 
 ## See it work
 
-A real Zoom call, a real Claude Code session and the room, in about 70 seconds. alice types `/meeting`, the link and `mine`, and her own Claude Code starts the meeting bot on her laptop, on its CPU: no service in between. She says her upload page fails on big files, turns Voice on and asks "Claude one" to find the upload limit. Claude reads the code and answers in the room and out loud in the call. Then she ends the call, and the bot on her laptop stops. The waits are cut, and nothing is sped up. alice's voice is a second bot reading her lines.
+A real Zoom call, a real Claude Code session and the room, in about 70 seconds. alice types `/meeting`, the link and `mine`, and her own Claude Code starts the meeting bot on her laptop: no service in between. (That is the advanced way, [in the reference](meetings-reference.md#host-the-bot-on-your-own-machine); the steps below use the bot next to the server.) She says her upload page fails on big files, turns Voice on and asks "Claude one" to find the upload limit. Claude reads the code and answers in the room and out loud in the call. Then she ends the call, and the bot on her laptop stops. The waits are cut, and nothing is sped up. alice's voice is a second bot reading her lines.
 
 <video controls preload="metadata" width="100%" src="https://github.com/user-attachments/assets/9ed98b5d-1eda-448a-a68d-883c3d62bda6"></video>
 
@@ -13,12 +13,12 @@ A real Zoom call, a real Claude Code session and the room, in about 70 seconds. 
 1. An admin runs the bot once, next to the broker. The bot is [joinly](https://github.com/joinly-ai/joinly), a separate open-source project.
 2. You type `/meeting` and a call link in a room, in the web UI.
 3. The bot joins the call as a guest named `switchboard (transcribing)`. The room shows a bar: **Transcribing a call**.
-4. The bot turns speech into text. switchboard joins the pieces into one line each time the speaker pauses, and posts it in the room, in the call's card.
+4. The bot reads the call's own captions: it turns Zoom's captions on, and no speech model runs. **That shows the captions to everyone in the call**, and the room says so. switchboard joins the pieces into one line each time the speaker pauses, and posts it in the room, in the call's card.
 5. Talk that names nobody waits unless you [turn listening on](meetings-reference.md#let-an-agent-listen).
 6. When someone says an agent's name, only that agent wakes. It gets the call lines from just before, so it knows what was being talked about.
 7. **Leave call**, or `/meeting leave`, ends it.
 
-The bot only listens. Two more things are off until you ask: [agents can speak in the call](meetings-reference.md#let-agents-speak), and, for the bot next to the server, [an agent can see the shared screen](meetings-reference.md#show-an-agent-the-shared-screen). A call hosted on your machine has no snapshot.
+Captions work on Zoom today. For a Meet or Teams link the call is refused with a notice, because those captions are not read yet. The bot only listens. Two more things are off until you ask: [agents can speak in the call](meetings-reference.md#let-agents-speak), and, for the bot next to the server, [an agent can see the shared screen](meetings-reference.md#show-an-agent-the-shared-screen). A call hosted on your machine has no snapshot.
 
 ```mermaid
 sequenceDiagram
@@ -44,6 +44,8 @@ sequenceDiagram
 
 An admin does this once. If someone already did, skip to [Use it](#use-it).
 
+**First, allow captions.** The bot reads Zoom's automated captions, so they must be allowed for the host's Zoom account (the setting is called automated captions). If it is off, Zoom shows no Show Captions button, and the call ends with a notice that says so. Turning captions on shows them to everyone in the call.
+
 1. **Run joinly beside the broker.** [DEPLOY.md](../DEPLOY.md#a-meeting-bot) has the container command, the Compose example, a patch for Kubernetes and the Helm chart.
 2. **Keep joinly private.** It has no sign-in. Publish its port on `127.0.0.1` only, or only on the compose network. Never on an open address.
 3. **Tell the broker where joinly is.** In the broker's `config.toml`:
@@ -56,14 +58,15 @@ An admin does this once. If someone already did, skip to [Use it](#use-it).
     Then restart the broker. In a Kubernetes manifest, set `SWITCHBOARD_JOINLY_URL` instead.
 4. **Try it.** In a room, type `/meeting` and a test meeting's link. If the room says it is joining, you are done.
 
-Four things are optional, and [Set it up, in full](meetings-reference.md#set-it-up) has each:
+Three things are optional, and [Set it up, in full](meetings-reference.md#set-it-up) has each:
 
 - **More than one call at once:** `max_calls` under `[meeting]`, from 1 to 50. Give joinly 2.7 GiB for each call, and 0.5 GiB more.
 - **Another voice for agents:** `tts_voice`. The default is `bm_george`.
-- **A better speech model,** if the default mishears names: `stt_model`, one of `base`, `small`, `distil-large-v3` or `large-v3-turbo`. The big ones want a GPU.
-- **Two fixes for joinly 0.5.4,** mounted until a joinly release has them: speaker names on Zoom, and a line keeping its first word.
+- **joinly 0.5.4 patches,** mounted until a joinly release has them: the captions reader (it is a new file, so captions need it), a voice for each agent, speaker names on Zoom, and a line keeping its first word.
 
-**Hosting the bot on your own machine.** The bot can run on your laptop instead, for one call in one room. Your own GPU and speech model do the listening, and the server needs no joinly. In the room, type `/meeting <link> mine`. The server's bot stays out, and your own Claude Code or Codex session is woken to host the call, without the link going to a model. It needs the switchboard plugin, a session in the room, and Docker with Compose. A hosted call has no snapshot: the Snapshot button, `/meeting snapshot`, and a line that addresses an agent and says "screen" take no picture. The line is still posted. [Host the bot on your own machine](meetings-reference.md#host-the-bot-on-your-own-machine) has the steps, Codex's browser sign-in, and asking your agent directly.
+**Upgrading from an earlier release:** the bot used to transcribe with Whisper by default, and now it reads captions. An install that set `stt_model` keeps Whisper. To get Whisper back, or to use Meet or Teams, see [Whisper (experimental)](meetings-reference.md#whisper-experimental).
+
+Two advanced options, both in the reference: [Whisper](meetings-reference.md#whisper-experimental), and [hosting the bot on your own machine](meetings-reference.md#host-the-bot-on-your-own-machine), which uses Whisper there and is experimental.
 
 ## Use it
 

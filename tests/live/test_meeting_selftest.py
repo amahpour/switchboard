@@ -105,7 +105,7 @@ CONTROLLER_PY = "/app/.venv/lib/python3.12/site-packages/joinly/controllers/tran
 # repository, mounted into every container on any platform, pinned by sha256 like the others. Step 6 uses it.
 VOICE_PATCH = {
     "server.py": (
-        "109183c96e5eab82893d5e230e1daf55c062b092f27c7ed53babd415405e4fa3",
+        "7503b8c1f3a0a65fffe943a0fee7ab2bdb19c5b75157936f4235119e6dacd188",
         "/app/.venv/lib/python3.12/site-packages/joinly/server.py",
     ),
     "kokoro.py": (
@@ -113,6 +113,11 @@ VOICE_PATCH = {
         "/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py",
     ),
 }
+CAPTIONS_PATCH = (
+    "captions.py",
+    "342a711f8c07dc10a99e3c33d6d3244d91aeed269f779efa9bab3d37e589632f",
+    "/app/.venv/lib/python3.12/site-packages/joinly/captions.py",
+)
 VOICE_PATCH_DIR = Path(__file__).resolve().parents[2] / "deploy" / "joinly"
 STOCK_ENV = "SWITCHBOARD_SELFTEST_STOCK_JOINLY"
 # SWITCHBOARD_SELFTEST_LOGS=1 keeps each container's log, scrubbed of the link, in the output folder (0600),
@@ -381,6 +386,7 @@ async def until(check: Callable[[], Any], seconds: float, every: float = POLL_S)
 class World:
     """The broker, its room, its scripted agent, the speaker and the seven steps."""
 
+    captions_mode = True  # the broker here runs with the default transcriber (#764)
     voice_patch = os.environ.get(STOCK_ENV, "") != "1"  # step 6 needs the patched joinly; stock has none
 
     def __init__(
@@ -485,7 +491,9 @@ class World:
         got = await until(settled, JOIN_S)
         if got == "live":
             self.bot_live = True
-            return Outcome(True, f"state=live platform={self.link.platform}")
+            told = "Captions are on for everyone" in self.notices(last=10)
+            seen = f"state=live platform={self.link.platform}; room told captions are on for everyone: {told}"
+            return Outcome(told or not self.captions_mode, seen)
         if got == "ended":
             return Outcome(False, f"the call ended before it went live: {self.notices()}")
         return Outcome(False, f"still joining after {JOIN_S:.0f} s: {self.notices()}")
@@ -709,6 +717,17 @@ class World:
     async def leave(self) -> Outcome:
         if not self.bot_seen:  # "the bot is gone" means nothing if the bot was never seen
             self.bot_seen = await self.bot_listed() is True
+        lines = [m for m in self.messages() if m.get("sender_kind") == "meeting"]
+        texts = [
+            (", ".join(f"{k}={v}" for k, v in m.items() if "sender" in k or "speaker" in k), m["text"])
+            for m in lines
+        ]
+        print("call lines (speaker: text):")
+        for who, text in texts:
+            print(f"  {who}: {selftest.scrub(text, self.pieces)}")
+        repeats = len(texts) - len(set(texts)) if self.captions_mode else 0
+        if repeats:
+            print(f"A call line was posted twice: {repeats} repeats")
         began = time.monotonic()
         r = self.command("/meeting leave")
         if r.status_code != 200:
@@ -852,7 +871,8 @@ async def test_every_meetings_feature_against_a_real_call(
         )
     voice_files: list[tuple[Path, str]] = []
     if not stock:  # the voice patch (#713) is this repository's own files, pinned by sha256 all the same
-        for name, (voice_sha256, target) in VOICE_PATCH.items():
+        patch_files = [*VOICE_PATCH.items(), (CAPTIONS_PATCH[0], CAPTIONS_PATCH[1:])]
+        for name, (voice_sha256, target) in patch_files:
             copy = Path(tempfile.mkdtemp(prefix="sb-selftest-fix-")) / name
             copy.write_bytes(selftest.check_pinned((VOICE_PATCH_DIR / name).read_bytes(), voice_sha256))
             copy.chmod(0o644)

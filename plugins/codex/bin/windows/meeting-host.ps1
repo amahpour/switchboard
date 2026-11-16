@@ -2,7 +2,7 @@
 # twin of bin/meeting-host, which bin/meeting-host (under Git Bash) and bin/meeting-host.cmd (under PowerShell)
 # hand over to. Read bin/meeting-host first: it says what each command does and why; this does the same.
 #
-#   meeting-host start [-server URL] [-data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM
+#   meeting-host start [-server URL] [-data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--ca-file FILE] [--no-join|--from-room] ROOM
 #                                                                                     (the meeting link on stdin)
 #   meeting-host stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]
 #
@@ -30,7 +30,7 @@ function Err([string]$text) { [Console]::Error.WriteLine($text) }
 function Die([string]$text) { Err "${Prog}: $text"; exit 1 }
 function Usage([string]$text) {
     Err "${Prog}: $text"
-    Err "usage: $Prog start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM"
+    Err "usage: $Prog start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--ca-file FILE] [--no-join|--from-room] ROOM"
     Err '       (the meeting link on stdin)'
     Err "       $Prog stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]"
     exit 2
@@ -417,7 +417,7 @@ function Cmd-Stop([string[]]$rest) {
 }
 
 function Cmd-Start([string[]]$rest) {
-    $o = Parse $rest @('--server', '--data', '--model', '--add-host') @('--cpu', '--gpu', '--no-join', '--from-room')
+    $o = Parse $rest @('--server', '--data', '--model', '--add-host', '--ca-file') @('--cpu', '--gpu', '--no-join', '--from-room')
     if ($o['--from-room'] -and $o['--no-join']) { Usage 'cannot combine --from-room and --no-join' }
     if ($o['_'].Count -gt 1) { Usage 'start: one room' }
     if ($o['_'].Count -lt 1) { Usage 'start: which room?' }
@@ -434,6 +434,15 @@ function Cmd-Start([string[]]$rest) {
     if ($server -cnotmatch '^[A-Za-z0-9._~:/@%+=-]+\z') { Die 'the server address has a character it should not' }
     $addHost = First $o['--add-host'] $env:SWITCHBOARD_RELAY_ADD_HOST
     if ($addHost -and $addHost -cnotmatch '^[A-Za-z0-9.-]+:[A-Za-z0-9.:-]+\z') { Usage '--add-host is NAME:IP (or NAME:host-gateway), such as sb.example.internal:192.0.2.7' }
+    $caFile = $o['--ca-file']
+    $caBytes = $null
+    if ($o.ContainsKey('--ca-file')) {
+        if (-not $caFile) { Usage '--ca-file needs a value' }
+        try {
+            if (-not (Test-Path -LiteralPath $caFile -PathType Leaf)) { throw 'not a file' }
+            $caBytes = [IO.File]::ReadAllBytes($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($caFile))
+        } catch { Die '--ca-file must name a readable file (PEM CA certificate)' }
+    }
     $noJoin = [bool]$o['--no-join']
 
     # ---- everything that can be wrong before a key exists
@@ -497,6 +506,7 @@ function Cmd-Start([string[]]$rest) {
     Make-PrivateDir $calls
     [void][IO.Directory]::CreateDirectory($cdir)
     Make-PrivateDir $cdir
+    if ($caFile) { [IO.File]::WriteAllBytes((Join-Path $cdir 'ca.pem'), $caBytes) }
     Write-Private (Join-Path $cdir 'key') $key
     if ($link) { Write-Private (Join-Path $cdir 'link') $link }
     $link = ''
@@ -564,9 +574,24 @@ function Cmd-Start([string[]]$rest) {
         $link = ''; $decoded = $null
     }
     $override = ''
-    if ($addHost) {
+    if ($addHost -or $caFile) {
         $override = Join-Path $cdir 'override.yaml'
-        [IO.File]::WriteAllText($override, "services:`n  relay:`n    extra_hosts: [`"$addHost`"]`n")
+        $yaml = "services:`n  relay:`n"
+        if ($addHost) { $yaml += "    extra_hosts: [`"$addHost`"]`n" }
+        if ($caFile) {
+            $yaml += @'
+    environment:
+      SWITCHBOARD_RELAY_CA_FILE: /ca.pem
+    volumes:
+      - type: bind
+        source: ${SB_CALL_DIR}/ca.pem
+        target: /ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+'@ + "`n"
+        }
+        [IO.File]::WriteAllText($override, $yaml)
     }
     $started = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     [IO.File]::WriteAllText((Join-Path $cdir 'info'), "room=#$room`nplatform=$platform`nfingerprint=$fp8`ndevice=$device`nmodel=$($m.Model)`nproject=$project`nserver=$server`nstarted=$started`n")
