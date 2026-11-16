@@ -3121,6 +3121,19 @@ class Store:
         assert item is not None
         return item
 
+    def edit_review_item(self, item_id: int, **fields: Any) -> None:
+        """Replace a card's text (#786). The state stays: an edit is not a move along the board.
+        Only the four columns a card shows as its own words."""
+        allowed = {"title", "detail", "file", "lines"}
+        if not fields or set(fields) - allowed:
+            raise ValueError(f"unknown review item fields: {sorted(set(fields) - allowed)}")
+        cols = ", ".join(f"{k}=?" for k in ("updated_at", *fields))
+        with db.tx(self.con):
+            self.con.execute(
+                f"UPDATE review_items SET {cols} WHERE id=?",
+                (self.clock.now(), *fields.values(), item_id),
+            )
+
     def move_review_item(self, item_id: int, state: str, **fields: Any) -> None:
         allowed = {
             "owner",

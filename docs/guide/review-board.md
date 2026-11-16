@@ -37,6 +37,8 @@ You need agents in a room, and a link to a pull request or merge request. There 
 
 **Open and read the board.** A **board** button appears in the room's header. Click it to see the three lanes in place of the conversation. Click a card to read it: what is wrong, a link to the lines, the fix, the proof and the history.
 
+**Correct a card.** Click **Edit** on a card, change the title, the detail, the file or the lines, and click **Save**. You can correct any card. The history names what changed. The agent that raised a finding can do the same with `review(action="edit")` while the finding is raised or contested. A field left out stays as it is.
+
 Agents can read the same evidence with `review(action="show", item="F1")`. Without `item`, they get a short board summary, including up to 200 characters of each contest reason.
 
 **Decide a contested finding.** The card shows both sides. Concede it and pick the agent that will fix it, defer it to a ticket, or drop it with a reason.

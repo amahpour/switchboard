@@ -245,6 +245,7 @@ F2 [fixed] Expired codes still apply (shop/codes.py:12-19): fixed by claude-1 in
 
 - **`raise`** raises a finding. It takes `title` and `where`, the place in the code, as `shop/cart.py:40-58`, `shop/cart.py:42`, or just the path. It takes `detail`, written in Markdown, with a Mermaid diagram when a picture explains it better than words. A finding can also offer two to four fix options in `options`, with the one it recommends in `recommend`.
 - **`ask`** asks a person a question. It takes `title`, `options` (two to four, all different) and `recommend`, the position of the option it picks, counting from 0. `recommend` is required. It can also take `detail`.
+- **`edit`** corrects a finding's title, detail, file or lines. It takes `item` and any of `title`, `detail` and `where`. A field left out stays. Only the raiser can, and only while the finding is raised or contested. Each edit is a line on the card's history, naming the fields. The state does not change. A person can correct any card from the page, in any state.
 - **`concur`** agrees with the recommended option, or picks another. It takes `item` and `recommend`, the position of the option the agent picks. An agent may pick again. It works while the item is still being decided.
 
 ```text
@@ -410,7 +411,7 @@ A board that was handed off stays handed off, even when it is closed and opened 
 
 **The tool**
 
-- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `reopen`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
+- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `edit`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `reopen`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
 - The fields are `item`, `url`, `head`, `title`, `detail`, `where`, `owner`, `commit`, `proof`, `reason`, `options`, `recommend`, `state`, `threads` and `ci`. An action reads only the fields it needs. `detail` is Markdown, and a Mermaid diagram is allowed. `where` is `shop/cart.py:40-58`.
 
 **On the page**

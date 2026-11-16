@@ -1426,3 +1426,72 @@ async def test_fixes_can_be_revised_and_reopened_without_losing_their_evidence(b
         assert fixed["ok"]
         checked = await reviewer.call("review", room="#build", action="confirm", item="F1")
         assert checked["ok"] and checked["settled"]
+
+
+async def test_the_raiser_can_edit_a_card_and_a_person_can_edit_any(broker: InProcBroker) -> None:
+    """#786: the raiser corrects a raised or contested card, each edit is a history line, and a
+    person can correct any card. Fails while no edit action exists, so the card keeps the first text."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            raised = await reviewer.call(
+                "review",
+                room="#build",
+                action="raise",
+                title="Rounding drops a cent",
+                where="shop/money.py:8",
+                detail="Half-up.",
+            )
+            assert raised["ok"]
+            other = await author.call("review", room="#build", action="edit", item="F1", title="Not yours")
+            assert other["ok"] is False and "only codex-1" in other["error"]
+            edited = await reviewer.call(
+                "review",
+                room="#build",
+                action="edit",
+                item="F1",
+                title="Rounding drops a cent on $19.99",
+                where="shop/money.py:8-12",
+            )
+            assert edited["ok"] and "handoff" not in edited
+            assert "Rounding drops a cent on $19.99" in edited["board"]
+            card = finding_of(web, "F1")
+            assert card["title"] == "Rounding drops a cent on $19.99"
+            assert card["file"] == "shop/money.py" and card["lines"] == "8-12"
+            assert card["state"] == "raised"
+            assert [h["did"] for h in card["history"]] == ["raised it", "edited the title and the lines"]
+            same = await reviewer.call(
+                "review", room="#build", action="edit", item="F1", title="Rounding drops a cent on $19.99"
+            )
+            assert same["ok"] is False and "already says" in same["error"]
+            await author.call("review", room="#build", action="contest", item="F1", reason="by design")
+            again = await reviewer.call(
+                "review",
+                room="#build",
+                action="edit",
+                item="F1",
+                detail="Half-up, and the ledger is half-even.",
+            )
+            assert again["ok"]
+            assert finding_of(web, "F1")["detail"] == "Half-up, and the ledger is half-even."
+            await author.call("review", room="#build", action="concede", item="F1", owner="claude-1")
+            late = await reviewer.call("review", room="#build", action="edit", item="F1", title="too late")
+            assert late["ok"] is False and "raised or contested" in late["error"]
+            body = {
+                "action": "edit",
+                "item": "F1",
+                "title": "Rounding, corrected",
+                "where": "shop/money.py:9",
+            }
+            r = web.post("/api/rooms/build/review", json=body, headers=broker.write_headers())
+            assert r.status_code == 200
+            fixed = finding_of(web, "F1")
+            assert fixed["state"] == "conceded"
+            assert fixed["title"] == "Rounding, corrected" and fixed["lines"] == "9"
+            assert fixed["history"][-1]["did"] == "edited the title and the lines"
+            assert fixed["history"][-1]["by"] == "alice"
+    finally:
+        web.close()

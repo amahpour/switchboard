@@ -3563,6 +3563,25 @@ def test_the_board_header_says_what_an_agent_reported_and_whose_it_is(ui: UI) ->
     expect(report).to_have_attribute("title", re.compile(r"^claude-1 read this off the pull request"))
 
 
+def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> None:
+    """#786: Edit opens the card's text, Save writes the fields that changed, and the history
+    names them. Fails while a card has no edit, so a wrong title stays on the card."""
+    page = review_room(ui, "e2e-board-edit")
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="F3"]')
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator("h3")).to_have_text("F3 · Rounding drops a cent on $19.99")
+    expect(page.locator("#board-edit-title")).to_be_hidden()
+    page.click("#board-edit")
+    expect(page.locator("#board-edit-title")).to_be_visible()
+    expect(page.locator("#board-edit-title")).to_be_focused()
+    page.fill("#board-edit-title", "Rounding drops two cents on $19.99")
+    page.click("#board-edit-save")
+    expect(detail.locator("h3")).to_have_text("F3 · Rounding drops two cents on $19.99")
+    expect(page.locator("#board-edit-title")).to_be_hidden()
+    expect(detail.locator(".board-history")).to_contain_text("edited the title")
+
+
 def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
     page = review_room(ui, "e2e-board-drop")
     page.click("#board-toggle")

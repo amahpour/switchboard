@@ -1969,6 +1969,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             allowed = (
                 {"action", "agent", "url"}
                 if body.get("action") == "handoff"
+                else {"action", "item", "url", "title", "detail", "where"}
+                if body.get("action") == "edit"
                 else {"action", "item", "option", "owner", "reason", "url"}
             )
             if set(body) - allowed:
