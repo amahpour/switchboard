@@ -223,7 +223,7 @@ Items are named by their label, `F1` or `Q2`. Capital or small letters both work
 
 - **`open`** opens the room's board for a link, or brings a closed one back. With `head`, the pull request's head commit, it also moves an open board to that commit. A head is seven to 64 hexadecimal digits.
 - **`list`** names every board of the room, open ones first, with what is open and settled on each, its head, who opened it and who closed it.
-- **`show`** gives the whole board as text, open work first, one line per card. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
+- **`show`** gives the whole board as text, open work first, one line per card. Add `item="F1"` (or a question label) to read one card in full: detail, options, contest and insist reasons, proof and history. Without `item`, each contested line includes the first 200 characters of its reason. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
 
 ```text
 review(room="build", action="open",

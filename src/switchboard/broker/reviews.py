@@ -213,7 +213,7 @@ class Boards:
         rv = self._board_for(room, actor, params)
         if action == "show":  # a closed board too: it is kept
             self._remember(room, actor, rv)
-            return self._shown(room, rv)
+            return self._shown(room, rv, selected=params.get("item"))
         if action == "close":  # settled boards can close even after handoff
             return self._close(room, rv, actor, params)
         if rv["closed_at"] is not None:
@@ -734,7 +734,9 @@ class Boards:
         return {"ok": True, "boards": self._publish(room)}
 
     # ---------------------------------------------------------------- output
-    def _shown(self, room: Room, rv: dict[str, Any], touched: str | None = None) -> dict[str, Any]:
+    def _shown(
+        self, room: Room, rv: dict[str, Any], touched: str | None = None, selected: Any = None
+    ) -> dict[str, Any]:
         """``rv`` as the agent reads it. An open board goes to the pages showing the room too; a
         closed one is only read."""
         if rv["closed_at"] is None:
@@ -743,11 +745,20 @@ class Boards:
         else:
             b = self.board(room, rv)
         items = self.store.review_items(b["id"])
-        out: dict[str, Any] = {
-            "ok": True,
-            "settled": b["settled"],
-            "board": reviews.render(b, items, self.state.clock.now(), b["agents"], b["offline"]),
-        }
+        now = self.state.clock.now()
+        rendered = reviews.render(b, items, now, b["agents"], b["offline"])
+        if selected not in (None, ""):
+            kind, n = reviews.parse_label(selected)
+            item = next((i for i in items if i.kind == kind and i.n == n), None)
+            if item is None:
+                raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
+            events = [
+                {"ts": e.ts, "data": e.data}
+                for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])
+            ]
+            rendered = reviews.render_item(b, item, events, now, b["agents"], b["offline"])
+            touched = item.label
+        out: dict[str, Any] = {"ok": True, "settled": b["settled"], "board": rendered}
         if touched:
             out["item"] = touched
         return out
