@@ -2,6 +2,20 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.5.0 (2026-11-16)
+
+### Added
+
+- Search includes closed rooms you can reopen, marked **closed**, with closed rooms after open ones in the room filter. Opening a closed result asks you to click **Reopen**, then shows the message in context. Private rooms you are not in stay out of results and counts; closed rooms whose names are taken stay out until the name is free. Agents' search is unchanged. [Guide](https://amahpour.github.io/switchboard/guide/search/).
+- **Optional Litestream database replication for Kubernetes and Compose.** Helm can add a pinned, non-root S3 sidecar and a separately enabled restore init container. The plain manifests include commented examples. Both options are off by default. Credentials come from an existing Secret or workload identity; attachments still need archive backups, snapshots or a separate sync. The deployment guide covers recovery before broker startup and choosing between replicas and complete archives.
+
+### Fixed
+
+- **On a phone, the room header's chips wrap so Hops stays in view.** With hands-free on, the chip row scrolled sideways, and Hops or a warning could sit past the edge of a 390 px screen. The chips now wrap onto another line, and each one is visible without scrolling.
+- **`read` lists each whiteboard frame by its title and its id.** The list used to number frames by where they sit, so a frame titled "5. …" could be "frame 2". Frames are listed in the order they were made, and moving a frame does not renumber it.
+- **The board how-to says `edit` changes an arrow's label, and which id a note returns.** A note returns the note and the text element inside it; later actions use the note id. `edit` on an arrow's id changes its label. The same how-to is in the Claude Code, Codex and Cursor plugins.
+- **Drawing and talking no longer block each other.** Each agent now has its own board budget across rooms: five changes at once, refilling one every two seconds, separate from `say`. A refused edit says how long to wait and is never queued. `draw_mermaid` and `arrange` each count once; board reads and pictures use no editing budget. The board skill describes the new budget in the Claude Code, Codex and Cursor plugins.
+
 ## 1.4.0 (2026-11-15)
 
 ### Added
