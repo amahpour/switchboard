@@ -234,6 +234,15 @@ sequenceDiagram
 
 **Where things are.** The script keeps each call in `calls/<fingerprint>/` under its data folder (Claude Code's plugin data folder; `~/.cache/switchboard` for Codex by default, or `--data DIR`), readable by you alone: the call's key, and the meeting link until the call is joined. The relay deletes the link as soon as it has joined, and the key when it exits. There is one Compose project for each call, named `switchboard-call-<fingerprint>`, so two calls on one machine don't meet. `meeting-host status` lists them and the relay's last lines. The next `start` clears the folders and containers of calls that have ended.
 
+**A server with a private CA.** The relay runs in a container with its own trust store, so it does not
+inherit a CA installed on your machine (for example Caddy's internal CA). Add `--ca-file /path/to/ca.pem`
+to `meeting-host start`, including with `--from-room` or `--no-join`. This works in both plugins and in
+PowerShell. Name a readable PEM file containing your CA certificate, without its private key. The script
+copies it into this call's folder and mounts the copy read-only at `/ca.pem` in the relay. The relay loads
+it in addition to the container's system CAs; certificate and hostname verification stay on. Stop and
+start the bot with the new file if the CA changes. The host script's registration still uses your
+machine's trust store, so install the CA there too if registration cannot connect.
+
 **Check the setup first, without a call.** Add `--no-join` and give no link: the containers start, the relay reaches joinly and is heard from, and nothing is joined. `meeting-host stop` removes it. It is the quick way to learn that Docker, the images and the sign-in all work.
 
 **On Windows,** the plugin has the same script for PowerShell (`meeting-host.cmd`), and under Git Bash the shell script hands over to it. In PowerShell the link is piped in: `'<the link>' | & meeting-host.cmd start --server <the server> --data <the plugin's data folder> '#uploads'`. The skill gives your agent the right form. The PowerShell script is newer than the shell one and has had less use.
@@ -314,6 +323,12 @@ of 15, so you can talk with it without saying its name each time. A question use
 holds ordinary unaddressed agent messages. It can answer in the room with voice off; turn Voice
 on separately if you want it heard. On the Stop path it sees call stubs and a one-line reminder
 to `read()` the words. Call text stays untrusted peer input.
+
+**Who answers a general question.** If exactly one agent in the room is listening to the call, it is told
+it may answer a question addressed to nobody in particular ("what is the capital of California?") as well as
+anything about its own work. If several are listening, each is told to speak only about its own work, so
+they don't all answer at once. The count is of agents listening right now. A spoken name wins either way: an
+agent named in a call line answers it.
 
 Turning the switch off, or `/meeting listen claude-1 off`, stops it, in the web UI; the command also works from your own CLI. Ending the call also stops
 all its listeners. By default each agent has 40 listening wakes on that call; the last switches
@@ -439,6 +454,8 @@ Call lines are ordinary room messages, with the sender kind `meeting`. An agent 
 How a name is matched:
 
 - It has to be an address, not a mention. The name at the start of a sentence, after "hey", "hi", "ok" or "okay", or right before a comma, counts. "I asked Claude yesterday" does not.
+- A name in the middle of a line counts when the line asks it for something: after "ask", "tell", "please", "can", "could", "would", "will" or "should" ("can Claude one check the tests"), after "have", "want" or "need" when "to" or a request follows ("I want the Widgetboard Claude to tell me about the plan"), or right before "can you" or "please". "I asked Claude yesterday", "I told Claude to go away" and "Claude said that earlier" (not at the start of a line) wake no one.
+- Spaces and hyphens do not matter. "Widget board Claude" is `widgetboard-claude`, and a bare "widgetboard" works when only one agent starts that way.
 - `claude-1` is also heard as "claude one", "claude 1" and "claude number one". Numbers up to twenty are understood as words ("claude twelve"). Past twenty, only digits work ("claude 21").
 - A bare "Claude" or "Codex" works when exactly one agent in the room has a name that starts with it.
 - With `claude-1` and `claude-2` both in the room, "Claude" is ambiguous. The line is posted with no one named, and the room adds a notice: `Someone on the call said "Claude", and this room has claude-1 and claude-2. Say the number.` Say "Claude one" or "Claude two" next time.
@@ -502,6 +519,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The key fingerprint in the room is not the one `meeting-host` printed:** do not use it. The script stops by itself when the server's answer names another fingerprint. If the bar shows a fingerprint you don't recognise on a machine you don't recognise, tell an admin: anyone with the call's key can push lines into it, and ending the call from the bar refuses the key at once.
 - **The room says "The call ended: its host never started sending.":** the call was registered, but nothing joined it within ten minutes. Run `meeting-host status`, and `docker logs` of the relay's container (`docker ps -a --filter label=com.switchboard.call` lists it) says why. The usual causes are a link joinly can't open, a waiting room nobody admitted, and a first GPU call still downloading its model. Ask again.
 - **The room says "The call ended: its host went quiet.":** the relay stopped without End call (the machine slept, Docker stopped without a chance to report departure), and the server heard nothing from it for five minutes.
+- **The relay reports a certificate verification error:** check the server's certificate and hostname. If it uses a private CA, stop the bot and start it with `--ca-file /path/to/ca.pem`; the host's installed CA is not inherited by the container. A missing or invalid PEM in the relay stops setup with a CA file error. Certificate checks cannot be disabled.
 - **The relay stopped, and you want to know why:** its exit code says. `0` the call ended (End call, a closed room, or a stopped server), `2` the key or the link could not be used, `3` the server did not accept the key (revoked or wrong), `4` joinly could not join the call, `5` joinly was lost, `6` the server could not be reached for five minutes, `7` it was stopped. `meeting-host status` shows the relay's last lines, and `docker ps -a --filter label=com.switchboard.call` its containers.
 - **It chose the CPU, and you have a GPU:** `meeting-host plan` says why: the driver sees no GPU (`nvidia-smi` is missing or lists none), or Docker has no `nvidia` runtime (install the NVIDIA Container Toolkit and restart Docker). `--gpu` forces it.
 - **The first call on a GPU takes minutes before it goes live:** joinly is downloading `large-v3-turbo` (about 1.6 GB) into a volume that the next call reuses. The bar says **Joining a Zoom call…** meanwhile, and the server waits up to ten minutes.
@@ -573,7 +591,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 
 **The host script** (`meeting-host`, in either the Claude Code or Codex plugin's `bin`; your agent runs it):
 
-- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM` registers a call for `ROOM` and starts its two containers. Without `--from-room`, the meeting link is read from stdin, never from an argument. Claude Code's skill fills in `--server` and `--data` from the plugin's settings. Codex uses `SWITCHBOARD_URL` and its default data folder; its script uses `SWITCHBOARD_AGENT_TOKEN` or its own [browser-sign-in key](#codex-with-browser-sign-in). `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--no-join` checks the setup without a call.
+- `meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--ca-file FILE] [--no-join|--from-room] ROOM` registers a call for `ROOM` and starts its two containers. Without `--from-room`, the meeting link is read from stdin, never from an argument. Claude Code's skill fills in `--server` and `--data` from the plugin's settings. Codex uses `SWITCHBOARD_URL` and its default data folder; its script uses `SWITCHBOARD_AGENT_TOKEN` or its own [browser-sign-in key](#codex-with-browser-sign-in). `--add-host` names a server that only this machine can resolve (the containers' own `/etc/hosts`). `--ca-file FILE` adds a private CA to the relay's system trust store. `--no-join` checks the setup without a call.
 - `meeting-host stop [FINGERPRINT]` stops this machine's hosted call (or the one with that fingerprint). It tells the server the call ended, with that call's own key, then removes both containers and their files. A relay that never reached the server cannot report this itself. If the server cannot be reached, the script says to press End call in the room.
 - `meeting-host status` lists the calls on this machine, the relay's last lines, and whether they run.
 - `meeting-host plan [--cpu|--gpu] [--model NAME]` prints the device, the model and the joinly image it would use, and starts nothing.

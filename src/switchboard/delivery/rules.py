@@ -206,6 +206,26 @@ def asks(text: str) -> bool:
     return text.rstrip().rstrip(_CLOSERS).rstrip().endswith("?")
 
 
+LISTEN_ALONE = (
+    "You are the only agent listening to this call: answer a question addressed to nobody in particular,"
+    " as well as anything about your own work."
+)
+LISTEN_SHARED = (
+    "Other agents are listening to this call too: speak only about your own work, so you don't all answer"
+    " at once."
+)
+LISTEN_NAMED = " A line that names you is yours to answer."
+
+
+def listen_guidance(listeners: int) -> str:
+    """What a listening agent is told about when to speak (#761, DESIGN.md §52.1).
+
+    One listener in the call answers a general question as well as its own work; with several,
+    each speaks only about its own work. A spoken name wins either way.
+    """
+    return (LISTEN_ALONE if listeners <= 1 else LISTEN_SHARED) + LISTEN_NAMED
+
+
 def chatter_due(
     room: Room,
     chatter: Sequence[Item],

@@ -309,6 +309,9 @@ class Engine:
             notes = self.attachments.download_notes(fit.items, m.id)
             if notes:
                 text += "\n" + notes
+        # a listening agent with call lines: whether it alone may answer a general question (§52.1)
+        if m.listen and any(it.sender_kind == "meeting" for it in fit.items):
+            text += "\n" + rules.listen_guidance(self._listeners(room, m))
         # a batch with call lines, while a person has voice on in the call: how an agent speaks (§52).
         # Said here and only here, so there is no tool parameter and no join text for it.
         if (
@@ -320,6 +323,17 @@ class Engine:
         # each caller records ``chars=len(text)`` in the batch's ``offer`` event: what the agent
         # was handed, for ``switchboard report``'s characters by path (DESIGN.md §12.6, #275)
         return text
+
+    def _listeners(self, room: Room, m: Membership) -> int:
+        """Agents in the room listening to the call ``m`` listens to, ``m`` included (§52.1)."""
+        return max(
+            1,
+            sum(
+                1
+                for x in self.store.room_memberships(room.id)
+                if x.listen and x.listen_call_id == m.listen_call_id
+            ),
+        )
 
     def _rooms_of(self, participant_id: int) -> list[int]:
         return [m.room_id for m in self.store.participant_memberships(participant_id)]
