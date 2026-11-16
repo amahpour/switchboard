@@ -208,15 +208,18 @@ def report(params: dict[str, Any]) -> dict[str, Any]:
 
 def report_line(review: dict[str, Any], now: float) -> str:
     """The latest report, as the agent and the page read it: "2 open on the PR, CI failing (per
-    claude-1, 3 min ago)". Empty when no agent has reported."""
+    claude-1, 3 min ago)", or "on the MR" for a GitLab merge request. Empty when no agent has
+    reported."""
     if not review.get("reported_by"):
         return ""
+    f = forge(str(review.get("url") or ""))
+    pr = "MR" if f and f["kind"] == "gitlab" else "PR"  # GitLab's own word (#799)
     bits = []
     if review.get("pr_state") in ("merged", "closed"):
         bits.append(str(review["pr_state"]))
     if review.get("pr_threads") is not None:
         n = int(review["pr_threads"])
-        bits.append(f"{n} open on the PR" if n else "no threads open on the PR")
+        bits.append(f"{n} open on the {pr}" if n else f"no threads open on the {pr}")
     if review.get("pr_ci"):
         bits.append(f"CI {review['pr_ci']}")
     age = envelope.ago(float(review.get("reported_at") or now), now)

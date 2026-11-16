@@ -108,7 +108,7 @@ You can type `/` to see the command in the list. It has to be the first thing in
 
 Once a room has an open board, a **board** button appears in the room's header. Its icon is a box split into three columns. Click it to see the board in place of the conversation. The composer stays where it is. Click the button again to go back to the conversation. Hover it to see its tooltip, "Show this room's review board".
 
-The board's header names the pull request. It shows the forge's mark, the repository and the number, such as `example/shop #7`, then the first seven characters of the head commit. If an agent has reported the pull request's state, the header says so, for example "2 open on the PR, CI failing (per claude-1, 3 min ago)". A chip says where the board stands: "No findings yet", "2 need you", "3 open", "Settled" or "Handed off to claude-1". **Hand off** and **Close board** are at the right.
+The board's header names the pull request. It shows the forge's mark, the repository and the number, such as `example/shop #7`, then the first seven characters of the head commit. If an agent has reported the pull request's state, the header says so, for example "2 open on the PR, CI failing (per claude-1, 3 min ago)". On GitLab it says "on the MR". A chip says where the board stands: "No findings yet", "2 need you", "3 open", "Settled" or "Handed off to claude-1". **Hand off** and **Close board** are at the right.
 
 ### Read the lanes
 
