@@ -22,6 +22,7 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -711,19 +712,18 @@ class AgentService:
         return res
 
     def board(self, conn: "HttpConn", params: dict[str, Any]) -> Any:
-        """One action on the room's whiteboard (DESIGN.md §56). A change is rate-limited like a post
-        and, when it is kept, shares that post's clock. A read is not. The text an agent reads back
-        is already run through the envelope."""
+        """One action on the room's whiteboard (DESIGN.md §56). Saved changes spend the agent's
+        board budget, independent of say. Reads are free; their text goes through the envelope."""
         p, m, room = self._member(conn, params)
         action = params.get("action")
         if action != "read":
-            retry = self.engine.check_say(p, m, None)
+            retry = self.state.room_board.check_budget(p.id)
             if retry is not None:
                 return {
                     "changed": False,
                     "reason": "rate_limited",
                     "retry_after_s": retry,
-                    "error": f"rate limited: try again in about {retry:.0f} s",
+                    "error": f"rate limited: try again in about {math.ceil(retry)} s",
                 }
         if action == "draw_mermaid":
             return self._board_mermaid(conn, params)
@@ -732,18 +732,18 @@ class AgentService:
         return self.state.room_board.agent(room, m.screen_name, params, p.id if action != "read" else None)
 
     async def _board_mermaid(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
-        """Convert off the event loop, then recheck membership and the shared post limit before anything
-        is stored: the agent may have left, or posted, while the diagram was being made."""
+        """Convert off the event loop, then recheck membership and the board budget before storing:
+        the agent may have left, or edited the board, while the diagram was being made."""
         p, m, room = self._member(conn, params)
         flow = await self.state.room_board.convert(params.get("text"), p.id)
         p, m, room = self._member(conn, params)
-        retry = self.engine.check_say(p, m, None)
+        retry = self.state.room_board.check_budget(p.id)
         if retry is not None:
             return {
                 "changed": False,
                 "reason": "rate_limited",
                 "retry_after_s": retry,
-                "error": f"rate limited: try again in about {retry:.0f} s",
+                "error": f"rate limited: try again in about {math.ceil(retry)} s",
             }
         return self.state.room_board.drawn(room, m.screen_name, p.id, flow)
 

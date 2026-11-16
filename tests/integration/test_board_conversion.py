@@ -86,23 +86,25 @@ async def test_a_converted_shape_can_be_moved_and_edited(broker: InProcBroker, c
     assert label["text"] == "Renamed" and label["x"] > 4900
 
 
-async def test_the_say_limit_and_membership_still_apply(broker: InProcBroker, clock: FakeClock):  # noqa: F811
-    """A diagram shares the ten-second say limit and needs a member: after a post it is refused and
-    stores nothing; a stranger is refused; once the window passes it draws."""
+async def test_the_board_budget_and_membership_apply_to_diagrams(broker: InProcBroker):  # noqa: F811
+    """A diagram needs membership and costs one change, however many shapes it draws; arrange also
+    costs one. A preceding say leaves all five board changes available."""
     async with FakeAgent(broker.home, "drawer") as drawer, FakeAgent(broker.home, "stranger") as stranger:
         await drawer.join("#build", "claude-1")
         refused = await stranger.call("board", room="#build", action="draw_mermaid", text=FLOW)
         assert refused["ok"] is False and refused["code"] == "not_member"
         await drawer.say("#build", "starting")
-        limited = await drawer.call("board", room="#build", action="draw_mermaid", text=FLOW)
-        assert limited["changed"] is False and limited["reason"] == "rate_limited"
-        assert q(broker, "SELECT count(*) AS n FROM room_boards")[0]["n"] == 0
-        clock.advance(11)
-        ok = await drawer.call("board", room="#build", action="draw_mermaid", text=FLOW)
-        assert ok["changed"] is True
+        made = await drawer.call("board", room="#build", action="draw_mermaid", text=FLOW)
+        assert made["changed"] is True
+        frame = next(e["id"] for e in stored(broker) if e["type"] == "frame")
+        arranged = await drawer.call("board", room="#build", action="arrange", id=frame)
+        assert arranged["changed"] is True
+        for i in range(3):
+            made = await drawer.call("board", room="#build", action="note", text=f"step {i}")
+            assert made["changed"] is True
         again = await drawer.call("board", room="#build", action="draw_mermaid", text=FLOW)
-        assert again["reason"] == "rate_limited"
-    assert q(broker, "SELECT seq FROM room_boards")[0]["seq"] == 1
+        assert again["reason"] == "rate_limited" and again["retry_after_s"] == 2.0
+    assert q(broker, "SELECT seq FROM room_boards")[0]["seq"] == 5
 
 
 async def test_a_bad_diagram_is_refused_with_the_line_and_stores_nothing(broker: InProcBroker):  # noqa: F811
@@ -216,8 +218,8 @@ async def test_membership_and_the_rate_limit_are_checked_again_after_the_convers
     broker: InProcBroker,  # noqa: F811
     monkeypatch,  # noqa: F811
 ):
-    """An agent that leaves, or posts, while its diagram is being made stores nothing."""
-    for intervene in ("leave", "say"):
+    """Membership and the board budget are rechecked after conversion; a say during it stays independent."""
+    for intervene in ("leave", "board", "say"):
         gate = Gate(monkeypatch)
         async with FakeAgent(broker.home, f"drawer-{intervene}") as drawer:
             await drawer.join("#build", f"claude-{intervene}")
@@ -227,12 +229,21 @@ async def test_membership_and_the_rate_limit_are_checked_again_after_the_convers
             assert await asyncio.to_thread(gate.started.wait, 10)
             if intervene == "leave":
                 await drawer.leave("#build")
+            elif intervene == "board":
+                for i in range(5):
+                    made = await drawer.call("board", room="#build", action="note", text=f"step {i}")
+                    assert made["changed"] is True
             else:
                 await drawer.say("#build", "a post while converting")
             gate.release.set()
             got = await asyncio.wait_for(pending, 10)
-            assert not got.get("changed"), got
-    assert q(broker, "SELECT count(*) AS n FROM room_boards")[0]["n"] == 0
+            if intervene == "say":
+                assert got["changed"] is True, got
+            elif intervene == "board":
+                assert got["reason"] == "rate_limited" and got["retry_after_s"] == 2.0
+            else:
+                assert got["ok"] is False and got["code"] == "unauthorized"
+    assert q(broker, "SELECT seq FROM room_boards")[0]["seq"] == 6
 
 
 async def test_placement_uses_the_board_as_it_is_after_the_conversion(

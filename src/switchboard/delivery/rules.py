@@ -459,6 +459,25 @@ def check_rate_limit(
     return round(left, 1) if left > 0 else None
 
 
+# Five edits cover a small repair; a two-second refill bounds sustained loops (§56.3).
+BOARD_BURST = 5
+BOARD_REFILL_S = 2.0
+
+
+def board_budget(full_at: float | None, now: float) -> tuple[float, float | None]:
+    """Candidate time the board budget is full again, and a wait if empty (DESIGN.md §56.3).
+
+    Each saved change adds one refill interval to the debt. At most ``BOARD_BURST`` intervals
+    may be owed. The caller keeps the candidate only after saving a change; checking before a
+    conversion, a refused call and a failed edit spend nothing. No chat state or exemptions apply.
+    """
+    debt = max(now, full_at if full_at is not None else now)
+    wait = debt - now - (BOARD_BURST - 1) * BOARD_REFILL_S
+    if wait > 0:
+        return debt, wait
+    return debt + BOARD_REFILL_S, None
+
+
 def rate_limit_exempt(
     *, reply_to_kind: str | None, reply_to_mentions: Iterable[str], sender_name: str, unhandled_priority: int
 ) -> bool:

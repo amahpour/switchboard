@@ -17,6 +17,7 @@ from typing import Any
 from switchboard import board, board_checks, board_flow, db
 from switchboard.broker.agent_icons import PNG_SIGNATURE, IconError, png_size
 from switchboard.broker.service import ServiceError
+from switchboard.delivery import rules
 from switchboard.envelope import clean, sanitize
 from switchboard.models import Room
 from switchboard.store import Conflict
@@ -28,7 +29,17 @@ class RoomBoard:
     def __init__(self, state: Any) -> None:
         self.state = state
         self._converting: set[int] = set()
+        self._budget_full_at: dict[int, float] = {}
         self._pending: dict[str, tuple[int, int, asyncio.Future[Any], str]] = {}
+
+    def check_budget(self, participant: int) -> float | None:
+        """Seconds until this agent may change the board (§56.3), without spending its budget."""
+        now = self.state.clock.now()
+        # Only outstanding debt matters. Drop old sessions once the map grows, without a timer.
+        if len(self._budget_full_at) >= 1000:
+            self._budget_full_at = {p: at for p, at in self._budget_full_at.items() if at > now}
+        _, retry = rules.board_budget(self._budget_full_at.get(participant), now)
+        return retry
 
     async def image(self, room: Room) -> dict[str, Any]:
         """Ask an already-open board to rasterize. No browser is launched by the broker."""
@@ -118,8 +129,7 @@ class RoomBoard:
     def agent(
         self, room: Room, actor: str, params: dict[str, Any], participant_id: int | None
     ) -> dict[str, Any]:
-        """One ``board`` call from a member. ``participant_id`` shares the say rate limit when set
-        and the call changed the board."""
+        """One ``board`` call from a member. A saved change spends its participant's board budget."""
         action = params.get("action")
         if not isinstance(action, str) or action not in board.ACTIONS:
             raise ServiceError("bad_request", "unknown action")
@@ -191,8 +201,6 @@ class RoomBoard:
                 problems = tuple(
                     board_checks.warnings(list(result.elements), only={e["id"] for e in result.taken})
                 )
-            if participant_id is not None:
-                self.state.store.update_participant(participant_id, last_say_at=now)
             published = {
                 "seq": seq + 1,
                 "elements": list(result.taken),
@@ -200,6 +208,9 @@ class RoomBoard:
                 "ids": [e["id"] for e in result.taken],
                 "full": False,
             }
+        if participant_id is not None:
+            full_at, _ = rules.board_budget(self._budget_full_at.get(participant_id), now)
+            self._budget_full_at[participant_id] = full_at
         # The notice is its own write: a failure here leaves the board saved and the log a line short,
         # and it never carries the shape text (that text would otherwise be a system line).
         self.state.service.post_notice(room, f"{who} changed the board", level="info")
