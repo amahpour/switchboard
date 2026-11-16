@@ -2,10 +2,10 @@
 hits, and the limit on how fast one person may ask.
 
 It reads what is stored and writes nothing. The rooms come from ``RoomService.visible`` (§44), the one rule
-for who sees a room, so a private room the person is not in, a room they left and a closed room are never
-searched, and are not counted either. The query is input from outside: ``switchboard.search`` makes it safe
-and ``Store.search`` is the only code that knows the index. Snippets are text with highlight offsets, never
-HTML, and the page draws them with ``textContent``.
+for who sees a room. Closed rooms are included only when the person can reopen them (§28.4). A private
+room the person is not in is never searched or counted. The query is input from outside:
+``switchboard.search`` makes it safe and ``Store.search`` is the only code that knows the index.
+Snippets are text with highlight offsets, never HTML, and the page draws them with ``textContent``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any
 from switchboard import search
 from switchboard.broker.service import ServiceError
 from switchboard.clock import Clock
-from switchboard.models import Room
+from switchboard.models import InvalidName, Room, normalize_room, split_closed
 
 PAGE = 50
 MAX_NAME = 100  # a screen name is cut to this before it is compared
@@ -63,8 +63,10 @@ def _number(raw: str | None, name: str) -> float | None:
 
 
 def visible_rooms(state: Any, viewer: int) -> list[Room]:
-    """The open rooms ``viewer`` can see now (§44): the same test every room route uses."""
-    return [r for r in state.store.list_rooms() if state.service.visible(r, viewer)]
+    """Visible open rooms followed by closed rooms the person can reopen (§44, §28.4)."""
+    opened = [r for r in state.store.list_rooms() if state.service.visible(r, viewer)]
+    closed = [r for r in state.store.list_rooms(closed=True) if state.service.can_reopen(r, viewer)]
+    return opened + closed
 
 
 def run(
@@ -82,9 +84,17 @@ def run(
     """One page of hits for ``viewer``, newest first, as the route answers it. ``room`` is a room name the
     viewer must be able to see ("no such room" otherwise, as every room route says it)."""
     rooms = visible_rooms(state, viewer)
+    filters = [{"id": r.id, "name": r.display_name, "slug": r.slug, "closed": r.closed} for r in rooms]
     if room:
-        wanted = state.service.room_for(room, viewer)  # raises for a room they cannot see, or a closed one
-        rooms = [r for r in rooms if r.id == wanted.id]
+        name = "#" + room.strip().lower().lstrip("#")
+        if split_closed(name) is None:
+            try:
+                name = normalize_room(room)
+            except InvalidName as e:
+                raise ServiceError("bad_request", str(e)) from None
+        rooms = [r for r in rooms if r.name == name]
+        if not rooms:
+            raise ServiceError("not_found", f"no such room: {name}")
     by_id = {r.id: r for r in rooms}
     words = search.words_of(q)
     match = search.match_query(q)
@@ -114,7 +124,9 @@ def run(
         hits.append(
             {
                 "id": h["id"],
-                "room": r.name,
+                "room": r.display_name,
+                "room_id": r.id,
+                "closed": r.closed,
                 "slug": r.slug,
                 "from": h["sender_name"],
                 "kind": kind,
@@ -128,6 +140,7 @@ def run(
     out: dict[str, Any] = {
         "q": q[: search.MAX_QUERY_CHARS],
         "words": words,
+        "rooms": filters,
         "searchable": match is not None,
         "hits": hits,
         "next": hits[-1]["id"] if got["more"] and hits else None,

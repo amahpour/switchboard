@@ -3615,6 +3615,13 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   color: var(--muted-2);
   font-size: calc(11px * var(--text-scale));
 }
+.search-closed {
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: calc(11px * var(--text-scale));
+}
 .search-hit-time { color: var(--muted); font-size: calc(12px * var(--text-scale)); }
 .search-hit-text { display: block; overflow-wrap: anywhere; }
 .search mark, .search-hit-text mark { background: var(--mark-bg); color: inherit; border-radius: 2px; padding: 0 1px; }

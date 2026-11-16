@@ -8,11 +8,13 @@ Search finds what was said, word for word, in every room you can see: your messa
 
 1. Press `/`, or click the box at the top of the sidebar, and type. The results replace the room as you type. (In the message box a `/` still starts a command, so click away from it first.)
 2. Words are all required: `migration rollback` finds lines with both. Put quotes round words that must be next to each other: `"schema 49"`. The last word also matches the start of a longer one, so `migrat` finds `migration` while you are still typing. Case and accents do not matter (`cafe` finds `Café`).
-3. Results are grouped by room, newest first, with your words marked. The status line says how many lines match. A call's lines are a group of their own.
-4. Narrow it with the filters under the status line: a **room**, **who** said it (a person or an agent), **when** (today, this week, this month) and whether lines from **calls** count.
+3. Results are grouped by room, newest first, with your words marked. The status line says how many lines match. A call's lines are a group of their own. A closed room's results carry a **closed** mark.
+4. Narrow it with the filters under the status line: a **room**, **who** said it (a person or an agent), **when** (today, this week, this month) and whether lines from **calls** count. Closed rooms follow the open ones in the room filter.
 5. Press **Enter** to open the first result, or **Down** and **Up** to move and **Enter** to open another. Click works too.
 
 ## Open a result
+
+For a closed room, opening a result first offers **Reopen**. Cancel keeps it closed. Clicking **Reopen** uses the same action as Closed rooms, then opens the message; agents must join again. Until then, only the result snippet is shown.
 
 The room opens at that message, with about twenty messages before it and twenty after, and the message marked. A bar says "Viewing around a search result":
 
@@ -23,7 +25,7 @@ The room opens at that message, with about twenty messages before it and twenty 
 
 ## What it finds
 
-Only the rooms you can open right now. A private room you are not in never appears, and is not counted. If you leave a room, its lines are gone from your results. A closed room is not searched either: its lines show up again once the room is reopened. (Whether to search closed rooms too is still open.) Notices and join lines are not searched, and neither is the whiteboard.
+Open rooms you can see, plus closed rooms you can reopen. A private room you are not in never appears, and is not counted. If you leave a room, its lines are gone from your results. A closed private room follows the same membership rule. A closed room whose name is taken by an open room stays out until its name is free; it cannot be reopened yet. Notices and join lines are not searched, and neither is the whiteboard.
 
 Words only: `migrate` does not find `migration` (`migrat` does), and symbols such as `-`, `:` or `*` are not operators, so they are ignored.
 
