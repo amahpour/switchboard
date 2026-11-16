@@ -85,6 +85,7 @@ services:
     # put them in a folder `joinly/` beside this file (DEPLOY.md, "A voice for each line") and uncomment:
     #   - ./joinly/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro
     #   - ./joinly/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro
+    #   - ./joinly/captions.py:/app/.venv/lib/python3.12/site-packages/joinly/captions.py:ro
     # A model you name in SWITCHBOARD_MEETING_STT_MODEL is downloaded into the container, and gone when the
     # container is made again. To keep it, mount a volume at joinly's cache under `volumes:` (and declare
     # `joinly-models:` in the top-level `volumes:` below), only for a model you name: it hides the model the
@@ -115,6 +116,7 @@ services:
     #   - ./transcription.py:/app/.venv/lib/python3.12/site-packages/joinly/controllers/transcription/default.py:ro
     #   - ./joinly/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro
     #   - ./joinly/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro
+    #   - ./joinly/captions.py:/app/.venv/lib/python3.12/site-packages/joinly/captions.py:ro
     #   - joinly-gpu-models:/home/app/.cache/huggingface
 
   caddy:

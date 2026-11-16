@@ -40,9 +40,13 @@ def joinly() -> Iterator[FakeJoinly]:
 
 
 def _broker(
-    tmp_home: Path, joinly: FakeJoinly, max_calls: int, stt_model: str = ""
+    tmp_home: Path, joinly: FakeJoinly, max_calls: int, stt_model: str = "", transcriber: str = "whisper"
 ) -> Iterator[InProcBroker]:
-    meeting = MeetingCfg(joinly_url=joinly.url, max_calls=max_calls, stt_model=stt_model)
+    """Most of these tests are about the Whisper path (hotwords, pieces of speech), so it is chosen here: the
+    default is captions (#764), which ``captions_broker`` and its tests cover."""
+    meeting = MeetingCfg(
+        joinly_url=joinly.url, max_calls=max_calls, stt_model=stt_model, transcriber=transcriber
+    )
     cfg = Config(human_name="alice").replace(meeting=meeting)
     cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0)
     b = InProcBroker(tmp_home, cfg).start()
@@ -58,6 +62,20 @@ def _broker(
 def broker(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
     """A broker that follows one call at a time, as a default install does."""
     yield from _broker(tmp_home, joinly, 1)
+
+
+@pytest.fixture
+def captions_broker(tmp_home: Path, joinly: FakeJoinly) -> Iterator[InProcBroker]:
+    """A broker with the default transcriber (captions, #764): nothing set under ``[meeting]`` but joinly."""
+    cfg = Config(human_name="alice").replace(meeting=MeetingCfg(joinly_url=joinly.url))
+    cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0)
+    b = InProcBroker(tmp_home, cfg).start()
+    web = b.web_client()
+    assert web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers()).status_code == 200
+    b.web = web  # type: ignore[attr-defined]
+    yield b
+    web.close()
+    b.stop()
 
 
 @pytest.fixture
@@ -513,3 +531,63 @@ async def test_a_call_that_is_joining_counts_and_one_that_failed_to_join_stops_c
     assert out.status_code == 200, out.text
     await wait_until(lambda: [j["meeting_url"] for j in joinly.joins] == [NEXT])
     assert call_states(broker) and open_calls(broker) == 1
+
+
+# --------------------------------------------------------------------------------------- captions (#764)
+async def test_the_default_transcriber_asks_joinly_for_captions_and_sends_no_speech_model_settings(
+    captions_broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """With nothing set, the bot asks joinly for the call's captions: its `stt`, `vad` and
+    `transcription_controller` are `captions`, and no `stt_args` (hotwords, model) go along, so no speech
+    model is loaded or run. The room is told captions are on for everyone. Fails if the default is still
+    Whisper, a Whisper setting is sent in captions mode, or the room is not told."""
+    b = captions_broker
+    command(b, f"/meeting {ZOOM}")
+    await wait_until(lambda: len(joinly.joins) == 1)
+    await wait_until(lambda: "Captions are on for everyone" in notices(b))
+    for header in (json.loads(s) for s in joinly.settings):
+        assert (header["stt"], header["vad"], header["transcription_controller"]) == ("captions",) * 3
+        assert "stt_args" not in header and "vad_args" not in header, header
+    assert call_states(b) == ["live"]
+
+
+async def test_a_call_whose_captions_cannot_be_turned_on_ends_with_the_reason_and_what_an_admin_can_change(
+    captions_broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """When joinly says captions could not be turned on (Zoom shows no Show Captions button, as with the host
+    account's automated captions off), the call ends at once and the room is told why and that an admin can
+    allow captions or turn Whisper on. It never falls back to Whisper by itself. Fails if the call goes live
+    anyway, falls back silently, or ends without the reason."""
+    b = captions_broker
+    joinly.captions = {"ok": False, "reason": "no_button"}
+    command(b, f"/meeting {ZOOM}")
+    await wait_until(lambda: open_calls(b) == 0 and meeting_rows(b) == 1)
+    text = notices(b)
+    assert "automated captions are off" in text and 'transcriber = "whisper"' in text, text
+    assert "Transcribing a Zoom call" not in text
+    assert joinly.leaves == 1
+
+
+async def test_a_joinly_without_the_captions_patch_ends_the_call_saying_so(
+    captions_broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """A stock joinly refuses the settings of a transcriber it does not have, so the session never starts. The
+    room must say the bot lacks the captions patch, not "the call dropped". Fails if it is the generic
+    words."""
+    b = captions_broker
+    joinly.refuse_captions = True
+    command(b, f"/meeting {ZOOM}")
+    await wait_until(lambda: meeting_rows(b) == 1 and open_calls(b) == 0)
+    assert "captions patch" in notices(b), notices(b)
+
+
+async def test_a_platform_without_captions_is_refused_never_run_on_whisper_by_itself(
+    captions_broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """Meet and Teams have no captions reader yet, so joinly answers `unsupported_platform` and the call ends
+    with a notice that says so. Fails if the call stays live."""
+    b = captions_broker
+    joinly.captions = {"ok": False, "reason": "unsupported_platform"}
+    command(b, f"/meeting {ZOOM}")
+    await wait_until(lambda: meeting_rows(b) == 1 and open_calls(b) == 0)
+    assert "not supported on this platform yet" in notices(b), notices(b)

@@ -70,3 +70,22 @@ def test_the_downloads_docs_name_are_files_of_this_folder() -> None:
     for name in FILES:
         assert f"/deploy/joinly/{name}" in deploy
         assert (FOLDERS[0] / name).is_file()
+
+
+def test_the_captions_file_is_switchboards_own_new_file_pinned_in_the_self_test_and_deploy_md() -> None:
+    """``captions.py`` (#764) is not a copy of a joinly file: it is a new one, mounted at
+    joinly/captions.py by
+    the server's bot only (a hosted call reads no captions), so there is one copy and no ``fixes.pins`` line.
+    A mount makes it run inside the bot, so its sha256 is in the self-test and DEPLOY.md. Fails if it changes
+    and one of them is not updated, or if it grows a joinly import at its top (the rule and the mapping are
+    tested without joinly)."""
+    path = FOLDERS[0] / "captions.py"
+    ast.parse(path.read_text())
+    digest = sha(path)
+    assert digest in (ROOT / "tests" / "live" / "test_meeting_selftest.py").read_text()
+    assert digest in (ROOT / "docs" / "DEPLOY.md").read_text()
+    assert "/deploy/joinly/captions.py" in (ROOT / "docs" / "DEPLOY.md").read_text()
+    top_level = [n for n in ast.parse(path.read_text()).body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    assert not any((getattr(n, "module", "") or "").startswith("joinly") for n in top_level)
+    for plugin in ("claude", "codex"):
+        assert not (ROOT / "plugins" / plugin / "meeting" / "joinly" / "captions.py").exists()

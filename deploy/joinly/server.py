@@ -1,4 +1,4 @@
-# joinly v0.5.4, server.py, changed by switchboard (#713, #763): see deploy/joinly/NOTICE for what.
+# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764): see deploy/joinly/NOTICE for what.
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. MIT License:
 #
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand
@@ -84,6 +84,29 @@ def _patch_experimental(server: FastMCP, extra: dict[str, dict[str, Any]]) -> No
     server._mcp_server.get_capabilities = _get_capabilities  # type: ignore[assignment]  # noqa: SLF001
 
 
+CAPTIONS = "captions"  # switchboard patch (#764): the token that selects joinly/captions.py's three classes
+
+
+def _captions_settings(settings: Settings) -> Settings:
+    """switchboard patch (#764): `captions` for `stt`, `vad` and `transcription_controller` means the classes of
+    joinly/captions.py, which load and run no speech model. Anything else is left as it was."""
+    if CAPTIONS not in (settings.stt, settings.vad, settings.transcription_controller):
+        return settings
+    from joinly.captions import CaptionsSTT, CaptionsTranscriptionController, CaptionsVAD
+
+    return settings.model_copy(
+        update={
+            "stt": CaptionsSTT if settings.stt == CAPTIONS else settings.stt,
+            "vad": CaptionsVAD if settings.vad == CAPTIONS else settings.vad,
+            "transcription_controller": (
+                CaptionsTranscriptionController
+                if settings.transcription_controller == CAPTIONS
+                else settings.transcription_controller
+            ),
+        }
+    )
+
+
 @dataclass
 class SessionContext:
     """Context for the meeting session."""
@@ -118,7 +141,7 @@ def _extract_settings() -> Settings:
         logger.warning("Continuing with current settings")
         return current
 
-    return settings
+    return _captions_settings(settings)
 
 
 @asynccontextmanager
@@ -131,6 +154,10 @@ async def session_lifespan(server: FastMCP) -> AsyncIterator[SessionContext]:
     usage_token = set_usage(usage)
     session_container = SessionContainer()
     meeting_session = await session_container.__aenter__()
+    # switchboard patch (#764): the captions controller reaches the call's page through the provider
+    _attach = getattr(meeting_session._transcription_controller, "attach", None)  # noqa: SLF001
+    if _attach is not None:
+        _attach(meeting_session._meeting_provider, settings.name)  # noqa: SLF001
 
     _remover: dict[AnyUrl, Callable[[], None]] = {}
 
@@ -640,6 +667,22 @@ async def unmute_yourself(
     ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
     await ms.unmute()
     return "Unmuted yourself."
+
+
+@mcp.tool(
+    "transcription_status",
+    description=(
+        "Whether the call's own captions are on (switchboard patch). Waits for them to be turned on. "
+        'Answers JSON: {"ok": true} or {"ok": false, "reason": "<word>"}; with a speech model it is always ok.'
+    ),
+)
+async def transcription_status(ctx: Context) -> str:
+    """Say whether captions could be turned on (switchboard patch, #764)."""
+    ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
+    wait = getattr(ms._transcription_controller, "wait_decided", None)  # noqa: SLF001
+    if wait is None:
+        return json.dumps({"ok": True, "reason": "speech_model"})
+    return json.dumps(await wait())
 
 
 @mcp.custom_route("/health", methods=["GET"])

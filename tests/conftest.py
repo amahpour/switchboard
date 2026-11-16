@@ -102,7 +102,12 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     # the meeting bot's address (#591), how many calls it follows (#607) and the model it transcribes with
     # (#617): a machine that has any set must not give a test a meeting server, or a limit or model the test
     # did not choose
-    for k in ("SWITCHBOARD_JOINLY_URL", "SWITCHBOARD_MEETING_MAX_CALLS", "SWITCHBOARD_MEETING_STT_MODEL"):
+    for k in (
+        "SWITCHBOARD_JOINLY_URL",
+        "SWITCHBOARD_MEETING_MAX_CALLS",
+        "SWITCHBOARD_MEETING_STT_MODEL",
+        "SWITCHBOARD_MEETING_TRANSCRIBER",
+    ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("SWITCHBOARD_TEST", "1")
     # Only switchboard.config's view of the login name: getpass itself stays real.
