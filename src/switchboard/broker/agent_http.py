@@ -59,6 +59,7 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent, ToolAnnotations
 from starlette.routing import Route
 
+from switchboard import plugin_versions
 from switchboard.adapters.https import DEVIN_TOOL_PREFIX
 from switchboard.broker import agent_tokens, listener_keys
 from switchboard.broker.agents import AgentConn
@@ -135,6 +136,7 @@ SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as c
 SESSION_EVENTS = frozenset({"SessionStart", "SessionEnd"})  # Claude Code runs no mcp_tool hook at these
 SESSION_FIELDS = ("event", "session_id", "source", "reason", "permission_mode")  # all /mcp/session reads
 SESSION_BODY_MAX = 2048
+PLUGIN_RAW_MAX = 64  # the plugin-version header, cut here before it is kept; parsed strictly later (§49.13)
 LISTENER_META_MAX = 8192  # inspect only a bounded handshake; the MCP body's own limits remain unchanged
 INPUT_SESSION = "switchboard_session_id"
 INPUT_USE = "switchboard_tool_use_id"
@@ -467,7 +469,8 @@ class HttpTools:
             }
         else:
             harness = CLIENTS.get(info.get("name", ""), "unknown")
-        conn = self.conn_for(token, harness, info, test=test)
+        plugin = (_header(scope, plugin_versions.HEADER) or "")[:PLUGIN_RAW_MAX]
+        conn = self.conn_for(token, harness, info, test=test, plugin=plugin)
         if harness == "test":
             thread = None
         elif harness in ("cursor", "devin"):
@@ -497,6 +500,7 @@ class HttpTools:
         info: dict[str, str] | None = None,
         *,
         test: dict[str, str] | None = None,
+        plugin: str | None = None,
     ) -> HttpConn:
         """A connection for one call of ``harness`` on the token's device (§49.3). A scripted test
         agent (``test``: its session key and ack mode, from its headers, §9.6) has no device: its
@@ -508,6 +512,7 @@ class HttpTools:
             client_info=info or {},
             test_session=(test or {}).get("session"),
             ack_mode=(test or {}).get("ack"),
+            plugin_header=plugin,
         )
         return HttpConn(next(self._ids), host, agent)
 

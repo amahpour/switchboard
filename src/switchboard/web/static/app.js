@@ -2653,6 +2653,8 @@
     }
     if (m.inflight) fact(dl, 'In flight', plural(m.inflight, 'message', 'messages'));
     if (m.away) fact(dl, 'Away', m.away);
+    // the plugin's version, when it is behind this release's or never said (the server sets plugin_note, §49.13)
+    if (m.plugin_note) fact(dl, 'Plugin', m.plugin_note);
     const qNote = el('p', 'fine' + (ui.queueOpen && queued ? '' : ' hidden'),
       'Peer messages wait while it is busy and go out as one batch when it is idle.');
     details.append(el('div', 'group-label', 'Details'), dl, queueList, qNote);

@@ -181,6 +181,10 @@ class AgentConn:
     client_info: dict[str, Any] = field(default_factory=dict)
     test_session: str | None = None
     ack_mode: str | None = None
+    # what the plugin's ``X-Switchboard-Plugin-Version`` header said, as sent: "" for a call over MCP that
+    # carried none, None for a call the broker made itself (it says nothing). A claim, parsed only by
+    # ``plugin_versions.parse`` (§49.13)
+    plugin_header: str | None = None
 
 
 # what an agent over HTTPS passes instead of a credential: the membership it means (§49.3)
@@ -365,6 +369,7 @@ class AgentService:
         credential_error = self.engine.adapter(p).credential_error(p, params)
         if credential_error is not None:
             raise ServiceError("unauthorized", credential_error)
+        self.svc.note_plugin(p, conn.agent.plugin_header)
         if next_call:
             self.run(self.engine.before_call(p))
             p = self.store.get_participant(p.id) or p
@@ -516,6 +521,7 @@ class AgentService:
             )
         nonce = secrets.token_hex(8)
         p = self.store.upsert_participant(h, key, **fields)
+        self.svc.note_plugin(p, mc.plugin_header)
         if mc.ack_mode is not None:
             self.engine.ack_modes[p.id] = mc.ack_mode
         rejoined = cur is not None
@@ -582,6 +588,7 @@ class AgentService:
             room_rules=room.rules_text,
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
+        text += self.svc.plugin_join_note(p)
         # the join text is the standing guidance in full: a later /clear's reminder may point to it (#543)
         self.engine.note_guidance_given(p.id)
         # the join text's length (issue #275, DESIGN.md §12.6): every join() answer, first one
@@ -647,11 +654,15 @@ class AgentService:
                 bits.append("parked=yes")
             if x.away:
                 bits.append(f"away={sanitize(x.away, 80)}")
+            if x.plugin_note:
+                bits.append(f"plugin={x.plugin_state}")  # the note below says how to update it
             bits.extend(_work_bits(x))  # claims and the status line, which the page already shows (#545)
             line = " ".join(bits)
             if x.status == "waiting-approval":
                 line += f" ({WAITING_APPROVAL_WHO})"
             lines.append(line)
+            if x.plugin_note:
+                lines.append(f"  note: {envelope._word(x.name)}: {sanitize(x.plugin_note, 300)}")
         return {"room": room.name, "text": "\n".join(lines), "count": len(rows)}
 
     def rooms(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
@@ -1191,6 +1202,7 @@ class AgentService:
             return inert  # no session to name (a Codex hook without its thread)
         if p is None:
             return inert  # a session that hasn't joined: nothing of it to report
+        self.svc.note_plugin(p, conn.agent.plugin_header)
         ev = parse_hook_event(harness, event, params)
         report_only = ev.ev in REPORT_ONLY_EVENTS
         if report_only and not self.engine.adapter_for(harness).asks_approval(ev):

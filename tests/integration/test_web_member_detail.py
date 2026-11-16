@@ -30,6 +30,9 @@ from switchboard.delivery.engine import STOP_BUSY_SRCS
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 SECRET = "the quick secret text 7f3a"  # a message body that must never appear in a detail
 MEMBER_KEYS = {
+    "plugin_state",  # "" or current, older, unknown: how its plugin compares to the release's (#789)
+    "plugin_version",  # the X.Y.Z its plugin reported, parsed strictly, or None
+    "plugin_note",  # one server-written sentence with the harness's update command, or ""
     "voice",  # the Kokoro voice its @call lines are spoken in: the pinned one, else its default (#713)
     "voice_pinned",  # whether a person pinned it
     "wakes_at",  # when chatter held for it wakes it, or None (#137): a time, never text

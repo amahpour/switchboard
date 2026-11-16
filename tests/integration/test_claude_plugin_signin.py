@@ -54,6 +54,7 @@ KEY = "sbl_" + "0123456789abcdef" * 4
 KEY_RE = re.compile(r"sbl_[0-9a-f]{64}")
 HASH_RE = re.compile(r"[0-9a-f]{64}")
 HEADER = "X-Switchboard-Listener"
+VERSION_HEADER = "X-Switchboard-Plugin-Version"  # the plugin's own version, sent whatever else happens (#789)
 UNKNOWN = '{"error": "unknown_key", "message": "the listener key was not accepted"}'
 REVOKED = '{"error": "revoked", "message": "the listener key was not accepted"}'
 WRONG = '{"error": "wrong_session", "message": "the listener key is for another session"}'
@@ -102,9 +103,21 @@ def run_headers(
 
 def printed_hash(r: subprocess.CompletedProcess[str]) -> str:
     assert (r.returncode, r.stderr) == (0, ""), r
-    [(name, h)] = json.loads(r.stdout).items()
+    headers = json.loads(r.stdout)
+    headers.pop(VERSION_HEADER, None)  # a copy of bin/ alone has no manifest to read it from
+    [(name, h)] = headers.items()
     assert name == HEADER and HASH_RE.fullmatch(h), r.stdout
     return str(h)
+
+
+def plugin_version() -> str:
+    """The version in the plugin's manifest, which the helper sends as a header of its own (§49.13)."""
+    return str(json.loads((CLAUDE_PLUGIN / ".claude-plugin" / "plugin.json").read_text())["version"])
+
+
+def only_the_version() -> str:
+    """What the helper prints when it can make no key: no listener header, and still the plugin's version."""
+    return json.dumps({VERSION_HEADER: plugin_version()}) + "\n"
 
 
 def key_file(data: Path, owner: int = ME) -> Path:
@@ -301,7 +314,7 @@ def test_the_helper_prints_an_empty_object_when_it_cant_make_a_key(tmp_path: Pat
         r = run_headers(arg, path=path)
     finally:
         data.chmod(0o700)
-    assert (r.returncode, r.stdout, r.stderr) == (0, "{}\n", ""), r
+    assert (r.returncode, r.stdout, r.stderr) == (0, only_the_version(), ""), r
     assert [p.name for p in data.iterdir()] == []
 
 
@@ -340,7 +353,7 @@ def test_the_powershell_helper_prints_an_empty_object_when_it_cant_make_a_key(
         r = run_headers(arg)
     finally:
         data.chmod(0o700)
-    assert (r.returncode, r.stdout, r.stderr) == (0, "{}\n", ""), r
+    assert (r.returncode, r.stdout, r.stderr) == (0, only_the_version(), ""), r
     assert sorted(p.name for p in data.iterdir()) == (["afile"] if why.startswith("a file") else [])
 
 
@@ -787,3 +800,16 @@ def test_a_revoked_sign_in_tells_the_idle_session_through_its_listener(
     build.on_loop(agent_tokens.revoke, build.state, None, token["id"], "alice")
     r = run_listen(build, NO_TOKEN, SESSION_1, data=data)
     assert r.returncode == 2 and "401 (revoked)" in r.stderr and "Authenticate" in r.stderr, r
+
+
+def test_the_helper_sends_the_plugins_version_with_the_key_hash_and_without_it(tmp_path: Path) -> None:
+    """The plugin's version goes out as its own header, read from its manifest, next to the key hash, so the
+    server can tell an old plugin from a new one (#789); the two tests above that print no key check it is
+    still sent alone. Fails if the header is missing or isn't the manifest's version."""
+    data = tmp_path / "data"
+    r = run_headers(data)
+    assert (r.returncode, r.stderr) == (0, ""), r
+    got = json.loads(r.stdout)
+    assert got[VERSION_HEADER] == plugin_version() and HASH_RE.fullmatch(got[HEADER]), r.stdout
+    assert only_the_version() == json.dumps({VERSION_HEADER: plugin_version()}) + "\n"
+    assert re.fullmatch(r"[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}", plugin_version())

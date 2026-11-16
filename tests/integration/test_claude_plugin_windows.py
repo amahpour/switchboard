@@ -438,7 +438,8 @@ def test_the_powershell_helper_keeps_the_key_off_every_command_line() -> None:
         "{ $_.ToString('x2') }) -join '')",
         '[IO.File]::WriteAllBytes($tmp, [Text.Encoding]::ASCII.GetBytes($key + "`n"))',
     ], mentions
-    assert "Show ('{\"X-Switchboard-Listener\": \"' + $hash + '\"}')" in code
+    # the plugin's own version goes first, when its manifest has one (#789)
+    assert "Show ('{' + $lead + '\"X-Switchboard-Listener\": \"' + $hash + '\"}')" in code
     assert "[Security.Cryptography.RandomNumberGenerator]::Create()" in code  # the system's generator
 
 
