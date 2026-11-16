@@ -10,10 +10,11 @@ it, it reaches in over HTTPS, holding the key made for this one call.
   (the same eight characters the room's call bar shows, ``meeting/keys.py``) so its owner can check it.
 - It asks the broker for the room's names (``POST /mcp/meeting/speech``, answered at once), joins the call
   through joinly with them as hints, and marks the call live with a first, empty push.
-- It then does two things until the call ends. It reads joinly's transcript and pushes each new segment to
+- It then does three things until the call ends. It reads joinly's transcript and pushes each new segment to
   ``POST /mcp/meeting/push`` (the broker joins them into lines and posts them, the same code its own bot's
-  lines go through). And it long-polls ``POST /mcp/meeting/speech`` for the ``@call`` lines of agents, while
-  voice is on, and has joinly say them (``speak_text``).
+  lines go through). It long-polls ``POST /mcp/meeting/speech`` for the ``@call`` lines of agents, while
+  voice is on, and has joinly say them (``speak_text``). When that poll names a snapshot, it asks its own
+  joinly for ``get_video_snapshot`` and posts the bytes to ``POST /mcp/meeting/snapshot``.
 - It leaves the call and exits when the broker says so: ``ended`` in a poll, a 410 on any request (a person
   ended the call, the room closed, the broker stopped), or a 401 (the key is not accepted, or its machine's
   sign-in was revoked). A 429 is waited out for as long as ``Retry-After`` says. An error is retried with a
@@ -52,10 +53,12 @@ from typing import Any, Protocol, TextIO
 from switchboard.meeting import joinly, keys
 from switchboard.meeting.lines import Segment
 from switchboard.meeting.links import LinkError, parse_link
+from switchboard.meeting.screen import SNAPSHOT_TIMEOUT_S, image_bytes
 from switchboard.meeting.turns import MAX_ID
 
 PUSH_PATH = "/mcp/meeting/push"
 SPEECH_PATH = "/mcp/meeting/speech"
+SNAPSHOT_PATH = "/mcp/meeting/snapshot"
 LEAVE_PATH = "/mcp/meeting/leave"
 DEFAULT_VOICE = "bm_george"  # the Kokoro voice the broker's own bot speaks with by default (§52)
 DEFAULT_JOINLY = "http://127.0.0.1:8000/mcp/"
@@ -217,6 +220,8 @@ class Unreachable(Exception):
 class Broker(Protocol):
     async def post(self, path: str, body: dict[str, Any], timeout: float) -> Reply: ...
 
+    async def post_bytes(self, path: str, data: bytes, timeout: float) -> Reply: ...
+
     def abort(self) -> None: ...
 
 
@@ -251,8 +256,12 @@ class BrokerClient:
             return http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=self._tls)
         return http.client.HTTPConnection(self.host, self.port, timeout=timeout)
 
-    def _post(self, path: str, body: dict[str, Any], timeout: float) -> Reply:
-        raw = json.dumps(body, ensure_ascii=True).encode("ascii")
+    def _post(self, path: str, body: dict[str, Any], timeout: float, *, raw: bytes | None = None) -> Reply:
+        if raw is None:
+            payload = json.dumps(body, ensure_ascii=True).encode("ascii")
+            content = "application/json"
+        else:
+            payload, content = raw, "application/octet-stream"
         conn = self._connection(timeout)
         with self._lock:
             self._open.add(conn)
@@ -260,10 +269,10 @@ class BrokerClient:
             conn.request(
                 "POST",
                 self.prefix + path,
-                body=raw,
+                body=payload,
                 headers={
                     "Authorization": "Bearer " + self._key.reveal(),
-                    "Content-Type": "application/json",
+                    "Content-Type": content,
                     "Accept": "application/json",
                     "User-Agent": "switchboard-meeting-relay",
                 },
@@ -298,6 +307,12 @@ class BrokerClient:
             raise Unreachable("closed")
         return await asyncio.to_thread(self._post, path, body, timeout)
 
+    async def post_bytes(self, path: str, data: bytes, timeout: float) -> Reply:
+        """A picture, as bytes. The broker decides what they are; the type here is only the transport."""
+        if self._closed:
+            raise Unreachable("closed")
+        return await asyncio.to_thread(self._post, path, {}, timeout, raw=data)
+
     def abort(self) -> None:
         """Close every request that is under way (and refuse new ones). A thread blocked in a read wakes
         with an error, which ``post`` turns into ``Unreachable``."""
@@ -329,6 +344,8 @@ class Joinly(Protocol):
 
     async def speak(self, text: str, voice: str | None = None) -> str: ...
 
+    async def snapshot(self) -> bytes | None: ...
+
     async def leave(self) -> None: ...
 
 
@@ -340,6 +357,7 @@ class JoinlyClient:
         self._voices = False
         self._client: Any = None
         self._handler: joinly.Updates | None = None
+        self._lock = asyncio.Lock()  # one MCP session: a snapshot must not overlap a read or a speech
 
     async def open(self) -> None:
         client, handler = joinly.open_client(self.url, self.header)
@@ -355,9 +373,10 @@ class JoinlyClient:
                 await asyncio.wait_for(client.__aexit__(None, None, None), joinly.LEAVE_TIMEOUT_S)
 
     async def join(self, url: str, name: str, timeout: float) -> None:
-        await self._client.call_tool(
-            "join_meeting", {"meeting_url": url, "participant_name": name}, timeout=timeout
-        )
+        async with self._lock:
+            await self._client.call_tool(
+                "join_meeting", {"meeting_url": url, "participant_name": name}, timeout=timeout
+            )
 
     def _updates(self) -> joinly.Updates:
         if self._handler is None:
@@ -365,22 +384,38 @@ class JoinlyClient:
         return self._handler
 
     async def segments(self) -> list[Segment]:
-        self._updates().updated.clear()
-        return joinly.segments(await self._client.read_resource(joinly.RESOURCE))
+        async with self._lock:
+            self._updates().updated.clear()
+            return joinly.segments(await self._client.read_resource(joinly.RESOURCE))
 
     async def changed(self, stop: asyncio.Event, timeout: float) -> None:
         await joinly.wait_for(self._updates(), stop, timeout)
 
     async def speak(self, text: str, voice: str | None = None) -> str:
         args = {"text": text} if voice is None or not self._voices else {"text": text, "voice": voice}
-        result = await self._client.call_tool("speak_text", args, timeout=joinly.SPEAK_TIMEOUT_S)
+        async with self._lock:
+            result = await self._client.call_tool("speak_text", args, timeout=joinly.SPEAK_TIMEOUT_S)
         return joinly.reply(result)
 
+    async def snapshot(self) -> bytes | None:
+        """One frame from this joinly, or None when it could not take one. The bytes are not checked:
+        the broker does that, so a body that is not a picture is still delivered."""
+        try:
+            async with self._lock:
+                result = await asyncio.wait_for(
+                    self._client.call_tool("get_video_snapshot", {}, timeout=SNAPSHOT_TIMEOUT_S),
+                    SNAPSHOT_TIMEOUT_S + 2,
+                )
+        except Exception:
+            return None
+        return image_bytes(result)
+
     async def leave(self) -> None:
-        await asyncio.wait_for(
-            self._client.call_tool("leave_meeting", {}, timeout=joinly.LEAVE_TIMEOUT_S),
-            joinly.LEAVE_TIMEOUT_S + 3,
-        )
+        async with self._lock:
+            await asyncio.wait_for(
+                self._client.call_tool("leave_meeting", {}, timeout=joinly.LEAVE_TIMEOUT_S),
+                joinly.LEAVE_TIMEOUT_S + 3,
+            )
 
 
 # ---------------------------------------------------------------------------------- the relay
@@ -426,6 +461,8 @@ class Relay:
         self._line_voice: dict[int, str] = {}  # speech id -> the voice its line is spoken in (§52.6)
         self._speech_ready = asyncio.Event()
         self._speech_done: deque[int] = deque()
+        self._shots: deque[int] = deque()  # snapshot ids the broker has asked this call to take
+        self._shot_ready = asyncio.Event()
         self._down_since: float | None = None
         self._pause = BACKOFF_FIRST_S
         self._pending: deque[dict[str, Any]] = deque()
@@ -457,12 +494,18 @@ class Relay:
             await asyncio.wait_for(self.stop.wait(), seconds)
 
     # ------------------------------------------------------------------ talking to the broker
-    async def _call(self, path: str, body: dict[str, Any], timeout: float) -> Reply | None:
+    async def _call(
+        self, path: str, body: dict[str, Any], timeout: float, *, raw: bytes | None = None
+    ) -> Reply | None:
         """One request, and what the answer means for the relay as a whole. A usable answer is returned.
         The ones that end the call finish the relay (401: the key is not accepted; 410: the call has ended)
-        and return None; so do the ones that were waited out (429, an error, a 5xx): the caller asks again."""
+        and return None; so do the ones that were waited out (429, an error, a 5xx): the caller asks again.
+        ``raw`` is a picture's bytes, posted as themselves."""
         try:
-            reply = await self.broker.post(path, body, timeout)
+            if raw is None:
+                reply = await self.broker.post(path, body, timeout)
+            else:
+                reply = await self.broker.post_bytes(path, raw, timeout)
         except Unreachable as e:
             if not self.stop.is_set():
                 await self._lost(f"the broker could not be reached ({e})")
@@ -520,7 +563,11 @@ class Relay:
             tasks.append(asyncio.create_task(self._speech_loop()))
             if await self._start(jy):
                 pump = asyncio.create_task(self._pump(jy))
-                tasks += [pump, asyncio.create_task(self._speaker(jy))]
+                tasks += [
+                    pump,
+                    asyncio.create_task(self._speaker(jy)),
+                    asyncio.create_task(self._snapshots(jy)),
+                ]
             await self.stop.wait()
             if self.exit is Exit.STOPPED and pump is not None:
                 pump.cancel()
@@ -760,6 +807,10 @@ class Relay:
                     break  # a turn id identifies one line, never a batch
         if self._speech:
             self._speech_ready.set()
+        shot = body.get("snapshot")
+        if type(shot) is int and 1 <= shot <= MAX_ID and shot not in self._shots:
+            self._shots.append(shot)
+            self._shot_ready.set()
 
     def _drop_speech(self) -> None:
         """Locally dropped claimed lines cannot remain reserved at the broker (§52.2)."""
@@ -798,6 +849,30 @@ class Relay:
                         self._heard(reply.body)
                     elif not self.stop.is_set():
                         self._speech_done.append(line_id)  # retry the receipt, never the speech
+
+    async def _snapshots(self, jy: Joinly) -> None:
+        """Take each picture the broker asked for, from this call's own joinly, and post the bytes.
+        A joinly that gives nothing is reported as a failure, so the line that asked is not held."""
+        while not self.stop.is_set():
+            if not self._shots:
+                self._shot_ready.clear()
+                if not self._shots:
+                    await self._wait_event(self._shot_ready)
+                continue
+            self._shots.popleft()
+            try:
+                data = await jy.snapshot()
+            except Exception:
+                data = None
+            if self.stop.is_set():
+                return
+            while not self.stop.is_set():
+                if data:
+                    reply = await self._call(SNAPSHOT_PATH, {}, REQUEST_TIMEOUT_S, raw=data)
+                else:
+                    reply = await self._call(SNAPSHOT_PATH, {"failed": True}, REQUEST_TIMEOUT_S)
+                if reply is not None:
+                    break
 
     async def _wait_event(self, ev: asyncio.Event) -> None:
         waiting = asyncio.ensure_future(ev.wait())

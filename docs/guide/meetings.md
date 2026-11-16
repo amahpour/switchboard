@@ -18,7 +18,7 @@ A real Zoom call, a real Claude Code session and the room, in about 70 seconds. 
 6. When someone says an agent's name, only that agent wakes. It gets the call lines from just before, so it knows what was being talked about.
 7. **Leave call**, or `/meeting leave`, ends it.
 
-The bot only listens. Two more things are off until you ask: [agents can speak in the call](meetings-reference.md#let-agents-speak), and, for the bot next to the server, [an agent can see the shared screen](meetings-reference.md#show-an-agent-the-shared-screen). A call hosted on your machine has no snapshot.
+The bot only listens. Two more things are off until you ask: [agents can speak in the call](meetings-reference.md#let-agents-speak), and [an agent can see the shared screen](meetings-reference.md#show-an-agent-the-shared-screen). A call hosted on your machine takes a snapshot the same way.
 
 ```mermaid
 sequenceDiagram
@@ -63,7 +63,7 @@ Four things are optional, and [Set it up, in full](meetings-reference.md#set-it-
 - **A better speech model,** if the default mishears names: `stt_model`, one of `base`, `small`, `distil-large-v3` or `large-v3-turbo`. The big ones want a GPU.
 - **Two fixes for joinly 0.5.4,** mounted until a joinly release has them: speaker names on Zoom, and a line keeping its first word.
 
-**Hosting the bot on your own machine.** The bot can run on your laptop instead, for one call in one room. Your own GPU and speech model do the listening, and the server needs no joinly. In the room, type `/meeting <link> mine`. The server's bot stays out, and your own Claude Code or Codex session is woken to host the call, without the link going to a model. It needs the switchboard plugin, a session in the room, and Docker with Compose. A hosted call has no snapshot: the Snapshot button, `/meeting snapshot`, and a line that addresses an agent and says "screen" take no picture. The line is still posted. [Host the bot on your own machine](meetings-reference.md#host-the-bot-on-your-own-machine) has the steps, Codex's browser sign-in, and asking your agent directly.
+**Hosting the bot on your own machine.** The bot can run on your laptop instead, for one call in one room. Your own GPU and speech model do the listening, and the server needs no joinly. In the room, type `/meeting <link> mine`. The server's bot stays out, and your own Claude Code or Codex session is woken to host the call, without the link going to a model. It needs the switchboard plugin, a session in the room, and Docker with Compose. A hosted call takes a snapshot the same way as the bot next to the server. [Host the bot on your own machine](meetings-reference.md#host-the-bot-on-your-own-machine) has the steps, Codex's browser sign-in, and asking your agent directly.
 
 ## Use it
 
@@ -100,7 +100,7 @@ unknown gets a warning. [The reference](meetings-reference.md#let-an-agent-liste
 
 **Voice.** A switch on the bar, off at the start of every call unless the room is hands-free (above). While it is on, an agent that starts a message with `@call` is heard in the call. Turn it on only if you would let those agents speak for you. See [Let agents speak](meetings-reference.md#let-agents-speak).
 
-**Snapshot.** On the bot next to the server, a button on the bar takes one picture of what the bot sees, such as a shared screen. The room keeps it as a file, and the agents receive it. A call line that addresses an agent and says "screen" asks for one too. A call hosted on your machine has no snapshot: the button, `/meeting snapshot`, and the word "screen" take no picture. See [Show an agent the shared screen](meetings-reference.md#show-an-agent-the-shared-screen).
+**Snapshot.** A button on the bar takes one picture of what the bot sees, such as a shared screen. The room keeps it as a file, and the agents receive it. A call line that addresses an agent and says "screen" asks for one too. A call hosted on your machine does this the same way. See [Show an agent the shared screen](meetings-reference.md#show-an-agent-the-shared-screen).
 
 **Share a picture.** `/meeting share plan.png` shows a PNG or JPEG from the room to everyone in a Zoom call, as a screen share by the bot. The bar says so and has a **Stop sharing** button. Only you can start it, it sends the bot the picture itself and never a link, and Zoom's host must allow participants to share. See [Show a room picture in the call](meetings-reference.md#show-a-room-picture-in-the-call).
 
@@ -117,7 +117,7 @@ The call also ends by itself when the room closes, when the connection to joinly
 - **Anyone on the call can reach your agents.** Keep an agent that runs with approvals off out of a room that has a call.
 - **The bot hears text, not audio.** switchboard stores the text like any room message, and never stores audio.
 - **On Zoom, lines show `call` instead of a speaker's name** until joinly releases a fix.
-- **Voice is off in every new call.** On the bot next to the server, a snapshot is taken at most every 10 seconds. A call hosted on your machine has no snapshot.
+- **Voice is off in every new call.** A snapshot is taken at most every 10 seconds, on the bot next to the server and on a call hosted on your machine.
 
 Every limit, with the reasons, is in [Limits](meetings-reference.md#limits).
 

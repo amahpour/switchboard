@@ -381,7 +381,7 @@ def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_ne
     button is End call (a hosted call's key ends with it). A line the machine pushed says "via" that machine
     beside the speaker. Light, dark and a phone all show both, with nothing cut off or scrolling sideways.
     End call ends the call, and the next push with its key is refused. Fails if the host or the fingerprint
-    is not in the bar, the line has no machine, the snapshot button is on for a bot that sends none, a phone
+    is not in the bar, the line has no machine, the snapshot button stays off while the call is live, a phone
     scrolls sideways, or the key still works after End call."""
     _seed_hosted(hosting)
     fingerprint = keys.fingerprint(HASH)
@@ -393,7 +393,9 @@ def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_ne
     )
     end = page.locator("#meeting-leave")
     expect(end).to_have_text("End call")
-    expect(page.locator("#meeting-snapshot")).to_be_disabled()
+    snap = page.locator("#meeting-snapshot")
+    expect(snap).to_be_enabled()
+    expect(snap).to_have_attribute("title", "Post a picture of the call's shared screen in this room")
     expect(page.locator("#meeting-voice")).to_have_attribute("aria-checked", "false")
 
     line = page.locator("#log .line.k-meeting")

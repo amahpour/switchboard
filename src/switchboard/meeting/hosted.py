@@ -8,13 +8,15 @@ the broker instead of the broker pulling it from a bot beside it (§52). The bro
   the sha256 of a key it made for this call, at ``POST /mcp/meeting/host``. It is no agent tool: the model
   never handles the key or even its hash. The call is the person's: its owner and its machine's label come
   from the token, not from anything the script says, and the room must have a member on that machine.
-- **The key** is a bearer for three routes (``broker/call_http.py``) and nothing else: pushing segments
-  (``push``), waiting for what is to be spoken (``speech``), and reporting departure (``left``).
-  ``check`` is what each asks first. It ends
+- **The key** is a bearer for four routes (``broker/call_http.py``) and nothing else: pushing segments
+  (``push``), waiting for what is to be spoken (``speech``), delivering a snapshot the broker asked for
+  (``take_picture``), and reporting departure (``left``). ``check`` is what each asks first. It ends
   with the call, and it is refused at once when the call is over or its machine's sign-in is revoked.
 - **What a push becomes** is what the broker's own bot's lines become: the same ``Assembler`` joins
   segments into lines and the same ``ingest`` checks and posts them, so every source gets the same fixes.
-  A line is stored with its call and the machine that heard it. Posts are paced at one a second.
+  A line is stored with its call and the machine that heard it. Posts are paced at one a second. A line
+  that addresses an agent and says "screen" is held until the relay has brought a picture, or the wait
+  is up, and the picture is posted first (§52, §54).
 - **Ending** (``stop``, ``end``): by a person, a closed room, a revoked sign-in, the call's own key
   (its relay, or the host script stopping a call that relay never reached), a host that never started
   sending or went quiet (``tick``, which reads the broker's clock, so a test steps it), or the broker
@@ -40,10 +42,18 @@ from typing import TYPE_CHECKING, Any
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
 from switchboard.meeting import ingest, keys, voices
-from switchboard.meeting.ingest import LINE_GAP_S
+from switchboard.meeting.ingest import LINE_GAP_S, Incoming
 from switchboard.meeting.lines import CAP, Assembler, Line, Segment
 from switchboard.meeting.links import PLATFORM_LABEL, MeetingLink
 from switchboard.meeting.names import hotwords
+from switchboard.meeting.screen import (
+    SNAPSHOT_GAP_S,
+    SNAPSHOT_TIMEOUT_S,
+    Asker,
+    NoFrame,
+    post_snapshot,
+    says_screen,
+)
 from switchboard.meeting.speech import call_text, speakable
 from switchboard.meeting.turns import MAX_ID, STALE_NOTICE, Turns
 from switchboard.meeting.voices import voice_of
@@ -122,6 +132,17 @@ class Refused(Exception):
         self.status, self.code, self.message, self.retry_after = status, code, message, retry_after
 
 
+@dataclass
+class _Shot:
+    """A snapshot this call has asked its relay for. ``asker`` is the person, or None when a line on the
+    call asked (the file is then from the call). ``line`` is that line, held so the picture is posted
+    first; a person's button or command holds none."""
+
+    asker: Asker | None
+    line: Incoming | None
+    at: float
+
+
 @dataclass(frozen=True)
 class Checked:
     """What ``HostedCalls.check`` says of a key: the call when it may act, else ``why`` is the word the
@@ -156,6 +177,10 @@ class _Call:
     refilled: float = 0.0
     seen: set[tuple[float, float, str, str | None]] = field(default_factory=set)
     seen_order: deque[tuple[float, float, str, str | None]] = field(default_factory=deque)
+    last_snapshot: float | None = None  # when a snapshot was last asked for, by the broker's clock
+    shot: _Shot | None = None  # the one in flight, if the relay has been asked and has not answered
+    shot_gen: int = 0  # how many this call has asked for; the poll names the current one once
+    shot_sent: int = 0  # the generation a poll has already been told to take
 
     def __post_init__(self) -> None:
         self.last_seen = self.refilled = self.now
@@ -525,20 +550,121 @@ class HostedCalls:
         st.warned = ingest.enqueue(st.queue, line, st.warned, overflow)
 
     def _drain(self, row: Meeting, st: _Call, now: float, *, everything: bool = False) -> None:
-        """Post the next waiting line when its turn has come (one a second), or all of them, at the end."""
+        """Post the next waiting line when its turn has come (one a second), or all of them, at the end.
+
+        A line that is waiting on a picture stays at the front: nothing behind it is posted until the
+        picture is in the room, or the wait is up (``_finish``). Ending posts what is left without asking."""
         while st.queue and (everything or st.last_post is None or now - st.last_post >= LINE_GAP_S):
-            self._post(row, st.queue.popleft())
+            if st.shot is not None and not everything:
+                return
+            outcome = self._post(row, st, st.queue.popleft(), ending=everything)
+            if outcome == "held":
+                return
             st.last_post = now
             if not everything:
                 return
 
-    def _post(self, row: Meeting, line: Line) -> None:
+    def _post(self, row: Meeting, st: _Call, line: Line, *, ending: bool = False) -> str:
+        """``posted`` when the line is in the room, ``held`` when it waits on a picture, ``skipped`` when
+        the check left nothing to post. An error is logged and treated as posted: the line is not retried."""
         try:
             incoming = ingest.receive(self.state, row, line)
-            if incoming is not None:
-                incoming.post(self.state)
+            if incoming is None:
+                return "skipped"
+            if not ending and self._hold_screen(row, st, incoming):
+                return "held"
+            incoming.post(self.state)
+            return "posted"
         except Exception:
             log.warning("hosted call %s: a line could not be posted", row.id)  # never its words
+            return "posted"
+
+    # ------------------------------------------------------------------ snapshot (§54, #766)
+    def request_snapshot(self, room_id: int, asker: Asker) -> str | None:
+        """A person asks for a picture of the hosted call. None when the relay has been asked: the picture
+        is posted as that person's message when it arrives. Otherwise why not, as a sentence for them."""
+        row = self.state.store.open_meeting(room_id)
+        st = self._calls.get(row.id) if row is not None and row.hosted else None
+        if st is None or not st.live:
+            return "The bot is not in the call yet."
+        if self.state.attachments is None:
+            return "This broker keeps no files."
+        why = self._gate(st)
+        if why is not None:
+            return why
+        self._arm(st, _Shot(asker, None, self.state.clock.now()))
+        return None
+
+    def _gate(self, st: _Call) -> str | None:
+        """At most one snapshot every ``SNAPSHOT_GAP_S``, from any of the three ways to ask. The clock
+        starts when the picture is asked for, as the server bot's does."""
+        now = self.state.clock.now()
+        if st.shot is not None or (st.last_snapshot is not None and now - st.last_snapshot < SNAPSHOT_GAP_S):
+            return f"A snapshot was taken less than {SNAPSHOT_GAP_S:.0f} seconds ago. Try again in a moment."
+        st.last_snapshot = now
+        return None
+
+    def _hold_screen(self, row: Meeting, st: _Call, incoming: Incoming) -> bool:
+        """Hold a line that addresses one agent and says "screen", and ask the relay for the picture.
+        False when it should be posted now: it does not ask, or one was taken within the gap (the room
+        is told, and the line is not held back)."""
+        if not incoming.prepared.mentions or not says_screen(incoming.prepared.text):
+            return False
+        why = self._gate(st)
+        if why is not None:
+            self.state.service.notice_in(row.room_id, why)
+            return False
+        self._arm(st, _Shot(None, incoming, self.state.clock.now()))
+        return True
+
+    def _arm(self, st: _Call, shot: _Shot) -> None:
+        st.shot_gen += 1
+        st.shot = shot
+        self._wake(st)  # a poll that is waiting is answered now, so the relay hears it
+
+    def take_picture(self, row: Meeting, data: bytes) -> None:
+        """The relay brought the bytes the broker asked this call for. Checked and stored as the server
+        bot's picture is. A body nobody asked for is refused and kept nowhere."""
+        row = self._fresh(row)
+        st = self._state(row)
+        now = self.state.clock.now()
+        st.last_seen = now
+        self._take(st, 1, now)
+        if st.shot is None:
+            raise Refused(409, "conflict", "no snapshot was asked for")
+        self._finish(row, st, None, data)
+
+    def picture_failed(self, row: Meeting, notice: str) -> None:
+        """The relay could not bring a picture, or the body was past the file limit. The room hears
+        ``notice`` and a line that was waiting is posted."""
+        row = self._fresh(row)
+        st = self._state(row)
+        st.last_seen = self.state.clock.now()
+        if st.shot is None:
+            return
+        self._finish(row, st, notice, None)
+
+    def _finish(self, row: Meeting, st: _Call, notice: str | None, data: bytes | None) -> None:
+        """End the snapshot in flight: post the picture when ``data`` is a picture, tell the room when
+        it is not, then post the line that was waiting and anything queued behind it."""
+        shot = st.shot
+        if shot is None:
+            return
+        st.shot = None
+        if data is not None:
+            try:
+                post_snapshot(self.state, row.room_id, shot.asker, data)
+            except NoFrame as e:
+                notice = str(e)
+        if notice:
+            self.state.service.notice_in(row.room_id, notice)
+        if shot.line is not None:
+            try:
+                shot.line.post(self.state)
+            except Exception:
+                log.warning("hosted call %s: a line could not be posted", row.id)
+            st.last_post = self.state.clock.now()
+        self._drain(row, st, self.state.clock.now())
 
     # ------------------------------------------------------------------ speaking
     def voice(self, room_id: int) -> bool:
@@ -603,9 +729,11 @@ class HostedCalls:
         voice_missing: bool = False,
     ) -> dict[str, Any]:
         """The long poll: what the relay is to speak (only while voice is on), the room's names as the
-        transcriber's hotwords, the voice switch and whether the call is over. Answered at once when there
-        is a line to say or the call ended, and otherwise after ``wait_s`` seconds, or when the voice
-        switch changes or a newer poll comes. Only the newest poll is given lines."""
+        transcriber's hotwords, the voice switch, whether the call is over, and the id of a snapshot to
+        take when this call has asked for one. Answered at once when there is a line to say, a snapshot
+        to take, or the call ended, and otherwise after ``wait_s`` seconds, or when the voice switch
+        changes or a newer poll comes. Only the newest poll is given lines, and only one poll is told
+        each snapshot id."""
         row = self._fresh(row)
         now = self.state.clock.now()
         st = self._state(row)
@@ -620,9 +748,16 @@ class HostedCalls:
         st.polling += 1
         try:
             started = st.voice
+            seen_shot = st.shot_sent
             loop = asyncio.get_running_loop()
             deadline = loop.time() + wait_s
-            while not (st.ended or self._speech_ready(st) or st.voice != started or st.seq != mine):
+            while not (
+                st.ended
+                or self._speech_ready(st)
+                or st.voice != started
+                or st.seq != mine
+                or st.shot_gen != seen_shot
+            ):
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     break
@@ -642,9 +777,16 @@ class HostedCalls:
             # an older relay never says a line ended; it speaks one at a time and polls again after
             st.turns.finish(line.id)
         words = [w[:40] for w in hotwords(self.state.store.active_names(row.room_id))[:HINTS_MAX]]
+        snapshot: int | None = None
+        if st.seq == mine and st.shot is not None and st.shot_sent < st.shot_gen:
+            st.shot_sent = st.shot_gen
+            snapshot = st.shot_gen
         return {
             "lines": [line.text] if line is not None else [],
             "speech_id": line.id if line is not None else None,
+            # null when none is wanted. An older relay ignores the field and takes no picture; the line
+            # then posts when the wait is up (§54).
+            "snapshot": snapshot,
             # the Kokoro voice for that line, or null: the relay checks its shape again; an older relay
             # ignores the field and speaks in the call's one voice (§52.6)
             "line_voice": line.voice if line is not None else None,
@@ -700,6 +842,13 @@ class HostedCalls:
         st = self._calls.pop(row.id, None)
         self._rooms.pop(row.room_id, None)
         if st is not None:
+            held = st.shot.line if st.shot is not None else None
+            st.shot = None  # the call is ending: no picture is waited for (§52, ending skips it)
+            if held is not None:
+                try:
+                    held.post(self.state)
+                except Exception:
+                    log.warning("hosted call %s: a line could not be posted", row.id)
             for line in st.asm.flush():
                 st.queue.append(line)
             self._drain(row, st, self.state.clock.now(), everything=True)
@@ -747,6 +896,8 @@ class HostedCalls:
             elif now - st.last_seen >= QUIET_S:
                 self.end(row, "quiet")
             else:
+                if st.shot is not None and now - st.shot.at >= SNAPSHOT_TIMEOUT_S:
+                    self._finish(row, st, "Couldn't get a snapshot of the call.", None)
                 if self._speech_ready(st):
                     self._wake(st)
                 for line in st.asm.poll(now):

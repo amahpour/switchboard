@@ -967,14 +967,14 @@ def _meeting_snapshot(room: Room, actor: Actor, svc: "RoomService") -> Result:
     row = svc.store.open_meeting(room.id)
     if row is None:
         return Result(True, f"{room.name}: no call is being transcribed")
-    if row.hosted:
-        raise CommandError(
-            "conflict", "A snapshot isn't available yet for a call hosted on a person's machine."
-        )
-    if svc.meetings is None:
-        return Result(True, "No meeting server is running. See DEPLOY.md.")
     asker = Asker(actor.who(svc.cfg.human_name), actor.person_id, actor.via)
-    why = svc.meetings.request_snapshot(room.id, asker)
+    if row.hosted:
+        calls = svc.hosted_calls
+    else:
+        calls = svc.meetings
+    if calls is None:
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    why = calls.request_snapshot(room.id, asker)
     if why is not None:
         raise CommandError("conflict", why)
     return Result(
