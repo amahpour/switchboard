@@ -141,7 +141,10 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # #785 names `abstain` in the review description ("abstain, ", 9 characters) and shortens the
     # lead-in by the same 9 ("One room's pull-request review boards." to "A room's pull-request
     # boards."), so the list stays 4,649. The cap does not move.
-    assert size == 4649, size
+    # #783 named `reopen` ("reopen, ", 8) and paid for it the same way ("review boards." to "reviews.").
+    # The two met in one description: both names, and the lead-in "A room's PR boards." (10 shorter
+    # than "A room's pull-request boards."), so the list measures 4,647. The cap moves down to it.
+    assert size == 4647, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
