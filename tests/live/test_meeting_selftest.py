@@ -115,7 +115,7 @@ VOICE_PATCH = {
 }
 CAPTIONS_PATCH = (
     "captions.py",
-    "06e0c7bd9cc8d6e134febec5dea2809d38634d335b37cabd102e7155ad49a988",
+    "342a711f8c07dc10a99e3c33d6d3244d91aeed269f779efa9bab3d37e589632f",
     "/app/.venv/lib/python3.12/site-packages/joinly/captions.py",
 )
 VOICE_PATCH_DIR = Path(__file__).resolve().parents[2] / "deploy" / "joinly"
@@ -386,6 +386,7 @@ async def until(check: Callable[[], Any], seconds: float, every: float = POLL_S)
 class World:
     """The broker, its room, its scripted agent, the speaker and the seven steps."""
 
+    captions_mode = True  # the broker here runs with the default transcriber (#764)
     voice_patch = os.environ.get(STOCK_ENV, "") != "1"  # step 6 needs the patched joinly; stock has none
 
     def __init__(
@@ -490,7 +491,9 @@ class World:
         got = await until(settled, JOIN_S)
         if got == "live":
             self.bot_live = True
-            return Outcome(True, f"state=live platform={self.link.platform}")
+            told = "Captions are on for everyone" in self.notices(last=10)
+            seen = f"state=live platform={self.link.platform}; room told captions are on for everyone: {told}"
+            return Outcome(told or not self.captions_mode, seen)
         if got == "ended":
             return Outcome(False, f"the call ended before it went live: {self.notices()}")
         return Outcome(False, f"still joining after {JOIN_S:.0f} s: {self.notices()}")
@@ -714,6 +717,17 @@ class World:
     async def leave(self) -> Outcome:
         if not self.bot_seen:  # "the bot is gone" means nothing if the bot was never seen
             self.bot_seen = await self.bot_listed() is True
+        lines = [m for m in self.messages() if m.get("sender_kind") == "meeting"]
+        texts = [
+            (", ".join(f"{k}={v}" for k, v in m.items() if "sender" in k or "speaker" in k), m["text"])
+            for m in lines
+        ]
+        print("call lines (speaker: text):")
+        for who, text in texts:
+            print(f"  {who}: {selftest.scrub(text, self.pieces)}")
+        repeats = len(texts) - len(set(texts)) if self.captions_mode else 0
+        if repeats:
+            print(f"A call line was posted twice: {repeats} repeats")
         began = time.monotonic()
         r = self.command("/meeting leave")
         if r.status_code != 200:

@@ -105,7 +105,8 @@ def ends_sentence(text: str) -> bool:
 def initials_of(name: str) -> set[str]:
     """What Zoom may show on a participant's avatar: the first letters of the first and last word, of the
     first two words, and the first two letters of the first word. A set, because the rule is not published."""
-    words = [re.sub(r"^\W+", "", w) for w in re.split(r"[\s_.\-]+", name)]
+    raw = [w for w in re.split(r"[\s_.\-]+", name) if w]
+    words = [re.sub(r"^\W+", "", w) for w in raw]
     words = [w for w in words if w]
     if not words:
         return set()
@@ -113,6 +114,10 @@ def initials_of(name: str) -> set[str]:
     if len(words) >= 2:
         out.add((words[0][0] + words[-1][0]).upper())
         out.add((words[0][0] + words[1][0]).upper())
+    # Zoom takes the first character of each word as written: "switchboard (transcribing)" shows "S("
+    if len(raw) >= 2:
+        out.add((raw[0][0] + raw[1][0]).upper())
+        out.add((raw[0][0] + raw[-1][0]).upper())
     return out
 
 
@@ -289,6 +294,10 @@ class CaptionsTranscriptionController:
         self._rule = FinalRule()
         self._participants: list[str] = []
         self._looked_at = float("-inf")
+        self._lookup_failures = 0
+        self._seen_text: dict[str, str] = {}
+        self._active: dict[str, dict[str, int]] = {}  # initials -> who the call showed as speaking meanwhile
+        self._dumped = False
         self._clock: Any = None
         self._transcript: Any = None
         self._events: Any = None
@@ -382,6 +391,7 @@ class CaptionsTranscriptionController:
             if reason != "on":
                 self._decide(False, reason)
                 return
+            logger.info("captions: on; no speech model is used")
             self._decide(True, "on")
             last_on, last_try = time.monotonic(), float("-inf")
             while True:
@@ -419,23 +429,71 @@ class CaptionsTranscriptionController:
             for it in items
             if isinstance(it, dict)
         ]
+        self._sample_active(entries)
         finals = self._rule.feed(entries, now)
         if finals:
+            await self._dump_buttons()
             await self._look_up(now, {f.key.split("|", 1)[0] for f in finals})
         self._emit(finals)
+
+    def _sample_active(self, entries: list[tuple[str, str]]) -> None:
+        """While a speaker's caption changes, note who the call's own active-speaker detection names (joinly's
+        Zoom fix reads the speaking tile). It names a speaker without opening Zoom's participant panel."""
+        name = getattr(getattr(self._provider, "_platform_controller", None), "active_speaker", None)
+        for key, text in entries:
+            if text != self._seen_text.get(key):
+                self._seen_text[key] = text
+                if isinstance(name, str) and name:
+                    counts = self._active.setdefault(key.split("|", 1)[0], {})
+                    counts[name[:80]] = counts.get(name[:80], 0) + 1
+
+    def _name_for(self, initials: str) -> str | None:
+        """The speaker for ``initials``: the participant list's one match, else the name the call showed as
+        speaking most while the caption changed, if its initials are these. Never a guess."""
+        who = speaker_for(initials, self._participants, self._bot)
+        if who is not None:
+            return who
+        counts = self._active.get(initials.strip().upper()) or self._active.get(initials) or {}
+        for name, _ in sorted(counts.items(), key=lambda kv: -kv[1]):
+            if initials.strip().upper() in initials_of(name):
+                return name
+            break
+        return None
 
     async def _look_up(self, now: float, wanted: set[str]) -> None:
         """The participant list, when a speaker's initials do not map yet. Not more often than ``LOOKUP_GAP_S``
         because asking opens Zoom's participant panel."""
-        unknown = [i for i in wanted if speaker_for(i, self._participants, self._bot) is None]
+        unknown = [i for i in wanted if self._name_for(i) is None]
         if not unknown or now - self._looked_at < LOOKUP_GAP_S or self._provider is None:
+            return
+        if self._lookup_failures >= 2:  # the panel can't be opened here: the active speaker is the way
             return
         self._looked_at = now
         try:
             people = await asyncio.wait_for(self._provider.get_participants(), 20)
             self._participants = [str(getattr(p, "name", "")) for p in people if getattr(p, "name", "")]
         except Exception:
+            self._lookup_failures += 1
             logger.warning("captions: the participant list could not be read")
+            await self._dump_buttons()
+
+    async def _dump_buttons(self) -> None:
+        """Once, for a person to read: the labels of the page's buttons as they are, and again after the click
+        that joinly uses to bring up Zoom's control bar, to see why a control was not found (#773)."""
+        page = self._page()
+        if self._dumped or page is None:
+            return
+        self._dumped = True
+        js = """() => [...document.querySelectorAll('button')].slice(0, 60).map(
+          (b) => (b.getAttribute('aria-label') || b.innerText || '').trim().slice(0, 40)
+          + (b.offsetParent === null ? ' [hidden]' : ''))"""
+        try:
+            logger.info("captions: buttons at rest: %s", await page.evaluate(js))
+            await page.mouse.click(640, 360)
+            await page.wait_for_timeout(300)
+            logger.info("captions: buttons after joinly's click: %s", await page.evaluate(js))
+        except Exception:
+            logger.info("captions: the page's buttons could not be listed")
 
     def _emit(self, finals: list[Final]) -> None:
         if not finals or self._transcript is None or self._clock is None:
@@ -444,7 +502,14 @@ class CaptionsTranscriptionController:
 
         end = self._clock.now_s
         for f in finals:
-            who = speaker_for(f.key.split("|", 1)[0], self._participants, self._bot)
+            initials = f.key.split("|", 1)[0]
+            who = self._name_for(initials)
+            logger.info(
+                "captions: line from initials %r as %s (%d participants known)",
+                initials,
+                "the bot itself" if who == SELF else repr(who),
+                len(self._participants),
+            )
             if who == SELF:
                 continue
             start = max(0.0, end - max(0.0, f.t_end - f.t_start))

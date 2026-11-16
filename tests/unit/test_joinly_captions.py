@@ -243,3 +243,42 @@ async def test_a_caption_that_goes_quiet_becomes_one_segment_with_the_speaker_th
     await c.stop()
     assert [(s.text, s.speaker) for s in ts.segments] == [("Hey Codex, run the tests", "alice brown")]
     assert "segment" in bus.events
+
+
+def test_zoom_shows_the_first_character_of_each_word_as_written_so_the_bot_is_s_paren() -> None:
+    """The live call (#773) showed "S(" for "switchboard (transcribing)": the parenthesis is not stripped.
+    Fails if the bot's own initials are not recognised, which would post its lines back as call lines."""
+    assert "S(" in cap.initials_of("switchboard (transcribing)")
+    assert cap.speaker_for("S(", ["alice brown"], "switchboard (transcribing)") == cap.SELF
+
+
+async def test_a_speaker_is_named_by_the_active_speaker_when_the_participant_list_cannot_be_read(
+    joinly_types: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zoom's panel may not open for the bot (the live call showed "Participants button not found"), so the
+    name comes from the call's active speaker while the caption changed, and only if its initials are the
+    caption's. Fails if a line gets no speaker though the call showed one, or if a name whose initials
+    differ is used (a guess)."""
+    monkeypatch.setattr(cap, "POLL_S", 0.01)
+    item = {"i": "SS", "c": "rgb(1, 1, 1)", "t": "Hey Codex, run the tests"}
+    page = Page([[item]])
+    c = controller(page)
+    c._rule = cap.FinalRule(0.05)
+    c._provider._platform_controller.active_speaker = "switchboard self-test speaker"
+
+    async def no_panel() -> list[Any]:
+        raise RuntimeError("Participants button not found or not visible.")
+
+    c._provider.get_participants = no_panel
+    ts = Transcript()
+    await c.start(Clock(), ts, Bus())
+    await c.wait_decided(5)
+    for _ in range(200):
+        if ts.segments:
+            break
+        await asyncio.sleep(0.02)
+    await c.stop()
+    assert [(s.text, s.speaker) for s in ts.segments] == [
+        ("Hey Codex, run the tests", "switchboard self-test speaker")
+    ]
+    assert c._name_for("AB") is None  # nobody speaking has those initials: unknown, not guessed
