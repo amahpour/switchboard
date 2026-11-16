@@ -73,6 +73,12 @@ services:
     stop_grace_period: 20s   # the last words are pushed and the call left before it is killed
     labels:
       com.switchboard.call: "relay"
+    # The image's HEALTHCHECK polls a broker at 127.0.0.1:7419 (/healthz). This container runs
+    # `meeting relay`, which is not a broker and opens no port, so that check is always down and
+    # the relay always read "unhealthy" (#760; it hid #758). The process is the signal: the relay
+    # exits when the call ends, the key is revoked, or joinly is lost.
+    healthcheck:
+      disable: true
 
   joinly:
     <<: *joinly
