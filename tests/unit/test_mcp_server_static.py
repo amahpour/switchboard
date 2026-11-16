@@ -140,8 +140,9 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # options. Can I raise the cap by exactly what the new tool measures?": "Yes."
     # #784 names `take` ("take, ", 6). The lead-in becomes "PR boards." (9 shorter than "A room's PR
     # boards."), so the list measures 4,644 and the cap moves down to it. #786 names `edit`
-    # ("edit, ", 6) and shortens the lead-in by the same 6 ("PR boards." to "PRs."), so the list
-    # stays 4,644. The cap does not move. No new field: edit uses title, detail and where.
+    # ("edit, ", 6) and pays for it in the lead-in: "PR boards. action:" becomes "PRs and MRs:", which
+    # names GitLab's merge requests too, so the list stays 4,644. The cap does not move. No new field:
+    # edit uses title, detail and where.
     assert size == 4644, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
