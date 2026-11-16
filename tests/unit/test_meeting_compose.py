@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
-COMPOSE = Path(__file__).resolve().parents[2] / "plugins" / "claude" / "meeting" / "compose.yaml"
+ROOT = Path(__file__).resolve().parents[2]
+COMPOSE = ROOT / "plugins" / "claude" / "meeting" / "compose.yaml"
 
 
 def test_joinly_s_tmp_lets_its_speech_engine_load_its_library() -> None:
@@ -25,3 +27,15 @@ def test_joinly_s_tmp_lets_its_speech_engine_load_its_library() -> None:
         assert tmp, name
         opts = tmp[0].split(":", 1)[1].split(",") if ":" in tmp[0] else []
         assert "exec" in opts and "noexec" not in opts, (name, tmp[0])
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_the_relay_turns_off_the_images_broker_health_check(harness: str) -> None:
+    """The relay container is switchboard's image, whose HEALTHCHECK polls a broker on
+    127.0.0.1:7419. Nothing in that container listens there, so Docker always reported the
+    relay unhealthy (#760), and that label hid a real failure (#758). Fails if the relay
+    service inherits the image check, or if the file no longer says why it is off."""
+    path = ROOT / "plugins" / harness / "meeting" / "compose.yaml"
+    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert doc["services"]["relay"].get("healthcheck") == {"disable": True}
+    assert "127.0.0.1:7419" in path.read_text(encoding="utf-8")
