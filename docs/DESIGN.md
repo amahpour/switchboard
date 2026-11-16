@@ -3039,6 +3039,13 @@ holds keep their values. Listening explicitly opts into call chatter even for a 
 quiet still holds its ordinary unaddressed agent chatter. `wait()` uses the same call timing.
 `chatter_wakes_at` uses those same deadlines for Members' next wake time.
 
+**Who answers a general question (#761).** A batch with call lines for a listening agent ends with
+guidance from the pure `rules.listen_guidance(n)`, `n` being the agents in the room listening to that
+call now (`Engine._listeners`). With one, the agent may answer a question addressed to nobody in
+particular as well as anything about its own work; with several, each speaks only about its own work, so
+they do not all answer at once. Either way, a line that names the agent is its to answer. The text only
+guides: it grants no permission and changes no delivery, so who wakes and when is unchanged.
+
 **A question is answered faster.** A conversation with one listening agent cannot wait 15 seconds for each
 reply. A pending call line from the listened-to call whose text ends in `?` (after trailing whitespace and
 closing quotes or brackets, `rules.asks`) is due after `[delivery] listen_ask_s` (3 by default, the same

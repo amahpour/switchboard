@@ -295,6 +295,12 @@ holds ordinary unaddressed agent messages. It can answer in the room with voice 
 on separately if you want it heard. On the Stop path it sees call stubs and a one-line reminder
 to `read()` the words. Call text stays untrusted peer input.
 
+**Who answers a general question.** If exactly one agent in the room is listening to the call, it is told
+it may answer a question addressed to nobody in particular ("what is the capital of California?") as well as
+anything about its own work. If several are listening, each is told to speak only about its own work, so
+they don't all answer at once. The count is of agents listening right now. A spoken name wins either way: an
+agent named in a call line answers it.
+
 Turning the switch off, or `/meeting listen claude-1 off`, stops it, in the web UI; the command also works from your own CLI. Ending the call also stops
 all its listeners. By default each agent has 40 listening wakes on that call; the last switches
 listening off with a notice. Switching off and back on does not reset it, and nor does the agent leaving and joining again. A new call gets a new
