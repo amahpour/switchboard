@@ -139,3 +139,32 @@ async def test_a_voice_kokoro_lacks_is_reported_with_the_receipt_and_nothing_els
     assert receipts[2]["voice_missing"] is True
     rig.relay.finish(Exit.ENDED)
     await rig.code()
+
+
+async def test_a_hosted_line_is_spoken_one_sentence_at_a_time_under_one_id() -> None:
+    """The broker hands the relay one line; joinly makes a call into speech before playing any, so the
+    relay says it a sentence at a time (#761). One id, one completion: the sentences are not separate turns.
+    Fails if the line is one speak_text, or each sentence is reported as its own turn."""
+    rig = await joined(Rig())
+    rig.broker.answer(lines=["First one. Then two. And three."], voice=True, speech_id=7)
+    await rig.until(lambda: any(b.get("done") == 7 for _, b in rig.broker.calls), "completion")
+    assert rig.joinly.spoken == ["First one.", "Then two.", "And three."]
+    assert [b["done"] for _, b in rig.broker.calls if b.get("done")] == [7]
+    rig.relay.finish(Exit.ENDED)
+    await rig.code()
+
+
+async def test_voice_off_drops_the_sentences_of_a_line_not_yet_spoken() -> None:
+    """Voice goes off while the first sentence plays: the rest never reach joinly, and the turn is still
+    completed so the broker's slot is freed. Fails if a line's later sentences are spoken after voice off."""
+    rig = await joined(Rig())
+    rig.joinly.gate_speech = True
+    rig.broker.answer(lines=["First one. Then two."], voice=True, speech_id=7)
+    await rig.until(lambda: rig.joinly.spoken == ["First one."], "the first sentence to begin")
+    rig.broker.answer(lines=[], voice=False)
+    await rig.until(lambda: not rig.relay._voice_on, "the relay to hear voice go off")
+    rig.joinly.hold_speech.set()
+    await rig.until(lambda: any(b.get("done") == 7 for _, b in rig.broker.calls), "completion")
+    assert rig.joinly.spoken == ["First one."]
+    rig.relay.finish(Exit.ENDED)
+    await rig.code()

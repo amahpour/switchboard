@@ -460,6 +460,9 @@ class Relay:
         self._speech: deque[tuple[str, int | None]] = deque()
         self._line_voice: dict[int, str] = {}  # speech id -> the voice its line is spoken in (§52.6)
         self._speech_ready = asyncio.Event()
+        self._voice_on = (
+            True  # the broker's last word on the voice switch; off drops a line's later sentences
+        )
         self._speech_done: deque[int] = deque()
         self._shots: deque[int] = deque()  # snapshot ids the broker has asked this call to take
         self._shot_ready = asyncio.Event()
@@ -785,6 +788,7 @@ class Relay:
     def _heard(self, body: dict[str, Any]) -> None:
         if body.get("ended"):
             self.finish(Exit.ENDED)
+        self._voice_on = bool(body.get("voice"))
         if not body.get("voice"):
             self._drop_speech()  # the line being said finishes; queued claims are completed as dropped
         lines = body.get("lines")
@@ -829,7 +833,14 @@ class Relay:
             voice = self._line_voice.pop(line_id, None) if line_id is not None else None
             missing = False
             try:
-                said = await jy.speak(line, voice) if voice is not None else await jy.speak(line)
+
+                async def one(sentence: str, voice: str | None = voice) -> str:
+                    return await jy.speak(sentence, voice) if voice is not None else await jy.speak(sentence)
+
+                # a sentence at a time, so the first plays early (#761); voice off drops the rest
+                said = await joinly.speak_by_sentence(
+                    one, line, lambda: self._voice_on and not self.stop.is_set()
+                )
                 missing = voice is not None and "voice was not found" in said
             except Exception:
                 self.say("could not speak in the call")
