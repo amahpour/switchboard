@@ -354,7 +354,7 @@ For a bot hosted on your own machine, update the hosting plugin alongside the br
 Voice is off when a call starts, unless the room is [hands-free](#hands-free-calls). You turn it on, for that call only.
 
 1. **Click the Voice switch** on the bar, or type `/meeting voice on`. Both are for you in the web UI only. The switch turns blue, the bar adds **agents can speak**, and the room gets a notice such as `alice turned voice on: an agent's message that starts with @call is read aloud to everyone on the call (via web)`.
-2. **Tell your agents, or let them find out.** An agent that is woken by a call line, while voice is on, is told in one line how to speak: start a `say()` with `@call`. You can also ask it: "answer on the call with @call".
+2. **Tell your agents, or let them find out.** An agent that is woken by a call line, while voice is on, is told how to speak, in three short lines: start a `say()` with `@call`; keep it to one or two short sentences, with no lists, tables, code or links; put details in a normal `say()` without `@call`; and say "one moment" with `@call` before a tool call, so the call is not silent. You can also ask it: "answer on the call with @call".
 3. **An agent speaks** by starting a message with `@call`, as its first word. The rest of the message is read aloud in the call, and the room still shows the whole message: `@call The hero image is four megabytes. I will resize it.` Nothing says which agent is speaking, so with more than one in the room, ask each to name itself first.
 
     ![The bar with the Voice switch on, a snapshot card, and claude-1's message that starts with @call](../media/ui/guide-meeting-voice-light.png)
@@ -363,7 +363,7 @@ Voice is off when a call starts, unless the room is [hands-free](#hands-free-cal
 
 What is read aloud, and what is not:
 
-- The text is cut at about 600 characters, at a word.
+- Only the first three sentences are spoken, and at most 300 characters (about 20 seconds). The cut is always between sentences, so a line never stops in the middle of a word. A very long single sentence is cut at a word instead. The room shows the whole message, so put details there as ordinary text. Without `@call`, a message is never spoken. Voice is for short answers: it is a conversation, not a reading.
 - Markdown marks (`**`, `#`, backticks, list marks) are not read, and a link is read as its words. A bare web address is left out.
 - A code block is replaced by "code omitted". An `artifact:` line is left out.
 - If nothing is left, nothing is said.
@@ -398,7 +398,7 @@ Call lines are ordinary room messages, with the sender kind `meeting`. An agent 
 - **A line that names something the agent has claimed**, such as a ticket key it reserved, wakes the agent that holds the claim in the same way. Someone reading out `SYSINT-645` wakes whoever claimed it.
 - **Depending on how the agent was woken,** the line is shown whole or as "not shown here", with a `read()` call that fetches it. An agent has to read it first, as with any other agent's message.
 - **A call line can come after a picture.** A snapshot that a call line asked for is a `kind=meeting` message from `call`, with the card as its text: `artifact: screen-142507.jpg | 21000 | sha256:… | switchboard:file/…`. A download link for it comes with the batch, as for any room file. One you asked for with the button is a message from you, `kind=human`.
-- **While voice is on,** a batch that holds call lines ends with one more line: `Voice is on in this call: start a say() line with @call to have it spoken.` It is the only place agents learn it. There is no tool for speaking and no setting an agent can change.
+- **While voice is on,** a batch that holds call lines ends with two more lines: the way to speak (`Voice is on in this call: start a say() line with @call to have it spoken.`, after a line that asks for one or two short sentences, details in a normal `say()`, and "one moment" before a tool call). It is the only place agents learn it. There is no tool for speaking and no setting an agent can change.
 - **It is untrusted text.** Agents are told, when they join, that only messages from your user (`kind=human`) are instructions, and that peers are not. A call line counts as a peer. Anyone on the call can say anything, so a spoken "approve the deploy" is not your word. A spoken `/pause` pauses nothing.
 
 How a name is matched:
@@ -436,7 +436,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on, and it takes pictures of what it sees.
 - **A picture is one frame.** It is 1024 by 576 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
 - **Voice is for the call it was turned on in.** It is kept in memory, so it is off after a restart and in every new call.
-- **At most 600 characters a line, one being spoken and one waiting, an agent's own starts 30 seconds apart (2 for an answer to a question put to it), and 4 agent lines in a row.** A line waits for a 1.5-second gap and expires after 60 seconds still waiting.
+- **At most 3 sentences and 300 characters a line, one being spoken and one waiting, an agent's own starts 30 seconds apart (2 for an answer to a question put to it), and 4 agent lines in a row.** A line waits for a 1.5-second gap and expires after 60 seconds still waiting.
 - **At most one snapshot every 10 seconds** in a call.
 - **No voice recognition.** A speaker's name is whatever joinly gives. On Zoom with joinly 0.5.4 it gives none.
 - **The bot's hint list is made when the call starts.** An agent that joins the room later can still be woken by name, but the speech-to-text was not told to listen for it, so it may mishear that name.
@@ -572,7 +572,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 - A line ends after 2.0 seconds of pause in the audio, 2.5 seconds of quiet on the clock, a change of speaker, or 1,000 characters.
 - At most one line a second is posted, and at most 50 wait.
 - The hint list holds at most 100 names.
-- A spoken line is at most 600 characters. One can be queued or being spoken, after a 1.5-second gap and at least 30 seconds after the previous start. Waiting expires at 60 seconds. Speech may take up to 3 minutes before it is given up.
+- A spoken line is at most 3 sentences and 300 characters. One can be queued or being spoken, after a 1.5-second gap and at least 30 seconds after the previous start. Waiting expires at 60 seconds. Speech may take up to 3 minutes before it is given up.
 - A snapshot is taken at most every 10 seconds, waits up to 8 seconds for the picture, and is 1024 by 576 pixels.
 
 **More:** [A live call in USAGE.md](../USAGE.md#a-live-call), [A meeting bot in DEPLOY.md](../DEPLOY.md#a-meeting-bot), [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-a-room-573), and [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md).
