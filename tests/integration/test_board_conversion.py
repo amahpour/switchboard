@@ -24,7 +24,10 @@ def stored(b: InProcBroker) -> list[dict]:
     return json.loads(q(b, "SELECT elements FROM room_boards")[0]["elements"])
 
 
-async def test_a_diagram_is_one_change_with_no_page_open_and_a_later_page_gets_it(broker: InProcBroker):  # noqa: F811
+async def test_a_diagram_is_one_change_with_no_page_open_and_a_later_page_gets_it(
+    broker: InProcBroker,  # noqa: F811
+    clock: FakeClock,
+):  # noqa: F811
     """With nobody looking at the board one call stores the whole drawing as one version, one notice
     and, for a page that is subscribed, one delta; a page that subscribes afterwards finds it in its
     snapshot. Fails if conversion still waited for a page, or wrote the shapes one by one."""
@@ -38,6 +41,8 @@ async def test_a_diagram_is_one_change_with_no_page_open_and_a_later_page_gets_i
         len(rows) == len(made["ids"]) == 4 * 2 + 3 + 1 + 1
     )  # shapes with labels, arrows, an arrow label, a frame
     assert q(broker, "SELECT seq FROM room_boards")[0]["seq"] == 1
+    clock.advance(130)
+    broker.on_loop(broker.state.room_board.flush_due)
     notes = [r["text"] for r in q(broker, "SELECT text FROM messages") if "changed the board" in r["text"]]
     assert notes == ["claude-1 changed the board"]
     web = broker.web_client()
@@ -153,7 +158,10 @@ async def test_arrange_is_one_change_over_the_tool(broker: InProcBroker, clock: 
         assert refused["ok"] is False
     assert {e["id"] for e in stored(broker)} == before
     assert q(broker, "SELECT seq FROM room_boards")[0]["seq"] == 2
-    assert len([r for r in q(broker, "SELECT text FROM messages") if "changed the board" in r["text"]]) == 2
+    clock.advance(130)
+    broker.on_loop(broker.state.room_board.flush_due)
+    notes = [r["text"] for r in q(broker, "SELECT text FROM messages") if "changed the board" in r["text"]]
+    assert notes == ["claude-1 changed the board (2 edits)"]
 
 
 @pytest.mark.parametrize("text", ["flowchart LR\nA-->B", "graph TB\nA & B --> C"])

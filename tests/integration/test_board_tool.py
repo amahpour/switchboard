@@ -75,7 +75,9 @@ def recv_until(ws: Any, pred: Any, timeout: float = 5.0) -> dict[str, Any]:
             return frame
 
 
-async def test_an_agent_draws_and_another_reads_data_not_instructions(broker: InProcBroker) -> None:
+async def test_an_agent_draws_and_another_reads_data_not_instructions(
+    broker: InProcBroker, clock: FakeClock
+) -> None:
     """The note's text is other people's words. The reader sees it quoted, with ``<`` escaped, and
     the room log names who changed the board without repeating the drawing. An edit past the five-change
     burst is refused, and a read is not. Someone who never joined cannot touch it."""
@@ -107,8 +109,11 @@ async def test_an_agent_draws_and_another_reads_data_not_instructions(broker: In
         assert "no new messages" in pending["text"]
         assert "changed the board" not in pending["text"] and PHRASE not in pending["text"]
     rows = q(broker, "SELECT text FROM messages")
+    clock.advance(130)
+    broker.on_loop(broker.state.room_board.flush_due)
+    rows = q(broker, "SELECT text FROM messages")
     notes = [r["text"] for r in rows if "changed the board" in r["text"]]
-    assert notes == ["claude-1 changed the board"] * 5
+    assert notes == ["claude-1 changed the board (5 edits)"]
     assert all(PHRASE not in r["text"] for r in rows)
     stored = json.loads(q(broker, "SELECT elements FROM room_boards")[0]["elements"])
     shape = next(e for e in stored if e["type"] == "rectangle")
