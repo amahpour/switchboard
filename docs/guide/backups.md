@@ -59,3 +59,12 @@ If the hostname changed, sign in with a password and enrol a new passkey in **Se
 Every person needs a new passkey for the new hostname. If nobody can sign in, use the
 [owner recovery procedure](../DEPLOY.md#signing-in); that removes all people and credentials,
 so the team must be invited again.
+
+## Continuous database replication
+
+Kubernetes and Compose can run an optional Litestream sidecar to replicate the database to
+S3 or an S3-compatible store you own. It is off by default and does not copy attachments.
+Keep archives or snapshots for a matched database and files. For setup and database-only
+recovery before startup, see [Continuous database replication](../DEPLOY.md#continuous-database-replication-with-litestream).
+Choose an archive or an S3 replica for a recovery; do not queue both. Disable the sidecar
+while applying an archive, and resume with a fresh replica prefix as the deployment guide says.

@@ -777,3 +777,167 @@ def test_the_notes_say_where_the_one_time_password_is() -> None:
         env=child_env(),
     ).stdout
     assert "logs switchboard-0 -c switchboard" in bot and "ingress.enabled is false" in bot
+
+
+@needs_helm
+def test_litestream_is_absent_until_enabled(render: Callable[..., Rendered]) -> None:
+    """Disabled replication adds no resource, credential, service account or init step (#689)."""
+    chart = render(*SET_BASE)
+    assert chart.returncode == 0, chart.stderr
+    assert _yaml(CHART / "values.yaml")["backup"]["litestream"]["enabled"] is False
+    assert "litestream" not in json.dumps(chart.docs)
+    assert "serviceAccountName" not in chart.pod
+    assert "initContainers" not in chart.pod
+
+
+@needs_helm
+@pytest.mark.parametrize("restore", [False, True])
+@pytest.mark.parametrize("secret", ["", "replica-credentials"])
+def test_litestream_shares_only_data_and_uses_external_credentials(
+    render: Callable[..., Rendered], restore: bool, secret: str
+) -> None:
+    """Replication is hardened, restores before startup, and never gives keys to the broker."""
+    chart = render(
+        *SET_BASE,
+        "backup.litestream.enabled=true",
+        "backup.litestream.replicaUrl=s3://switchboard-backups/broker",
+        f"backup.litestream.restoreOnEmpty={str(restore).lower()}",
+        f"backup.litestream.existingSecret={secret}",
+        "backup.litestream.region=us-east-1",
+        "backup.litestream.endpoint=https://s3.example.com",
+        values={"serviceAccount": {"annotations": {"eks.amazonaws.com/role-arn": "example-role"}}},
+    )
+    assert chart.returncode == 0, chart.stderr
+    sidecar = chart.container("litestream")
+    values = _yaml(CHART / "values.yaml")["backup"]["litestream"]
+    assert sidecar["image"] == values["image"]
+    assert "@sha256:" in sidecar["image"]
+    assert sidecar["command"] == ["/bin/sh", "-ec"]
+    assert "umask 077" in sidecar["args"][0] and "litestream replicate" in sidecar["args"][0]
+    assert sidecar["securityContext"] == {
+        "runAsUser": 10001,
+        "runAsGroup": 10001,
+        "runAsNonRoot": True,
+        "allowPrivilegeEscalation": False,
+        "readOnlyRootFilesystem": True,
+        "capabilities": {"drop": ["ALL"]},
+    }
+    mounts = {m["name"]: m for m in sidecar["volumeMounts"]}
+    assert mounts["data"] == {"name": "data", "mountPath": "/data"}
+    assert mounts["litestream-config"]["readOnly"] is True
+    assert "ports" not in sidecar and "readinessProbe" not in sidecar
+    assert "envFrom" not in chart.container("switchboard")
+    assert sidecar.get("envFrom", []) == ([{"secretRef": {"name": secret}}] if secret else [])
+    assert chart.pod["serviceAccountName"] == "switchboard-litestream"
+    assert chart.docs["ServiceAccount"]["metadata"]["annotations"] == {
+        "eks.amazonaws.com/role-arn": "example-role"
+    }
+    config = yaml.safe_load(chart.docs["ConfigMap"]["data"]["litestream.yml"])
+    assert config["dbs"] == [
+        {
+            "path": "/data/switchboard/switchboard.db",
+            "replica": {
+                "url": "s3://switchboard-backups/broker",
+                "region": "us-east-1",
+                "endpoint": "https://s3.example.com",
+            },
+        }
+    ]
+    assert config["socket"]["enabled"] is False
+    if restore:
+        (init,) = chart.pod["initContainers"]
+        assert init["image"] == sidecar["image"]
+        assert init["volumeMounts"] == sidecar["volumeMounts"]
+        assert init.get("envFrom", []) == sidecar.get("envFrom", [])
+        assert init["securityContext"] == sidecar["securityContext"]
+        assert "mkdir -p /data/switchboard" in init["args"][0]
+        assert "restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists" in init["args"][0]
+    else:
+        assert "initContainers" not in chart.pod
+
+
+@needs_helm
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "backup.litestream.replicaUrl=",
+        "backup.litestream.replicaUrl=https://s3.example.com/bucket",
+        "backup.litestream.replicaUrl=s3://user:password@bucket/prefix",
+        "backup.litestream.image=litestream/litestream:latest",
+        "backup.litestream.endpoint=https://user:password@s3.example.com",
+        "backup.litestream.accessKey=secret",
+        "backup.litestream.restoreOnEmpty=maybe",
+    ],
+)
+def test_litestream_refuses_bad_settings(render: Callable[..., Rendered], setting: str) -> None:
+    """Bad destinations, unpinned images and inline credentials fail at render, before deployment."""
+    assert "backup" in _yaml(CHART / "values.schema.json")["properties"]
+    chart = render(
+        *SET_BASE,
+        "backup.litestream.enabled=true",
+        "backup.litestream.replicaUrl=s3://switchboard-backups/broker",
+        setting,
+    )
+    assert chart.returncode != 0
+
+
+def _litestream_example() -> dict[str, dict[str, Any]]:
+    """The commented Kubernetes example is real YAML when the operator uncomments it."""
+    text = (KUBE / "switchboard.yaml").read_text().split("# BEGIN LITESTREAM EXAMPLE\n", 1)[1]
+    text = text.split("# END LITESTREAM EXAMPLE", 1)[0]
+    uncommented = "\n".join(line.removeprefix("# ") for line in text.splitlines())
+    return {d["kind"]: d for d in yaml.safe_load_all(uncommented) if d}
+
+
+@needs_helm
+def test_litestream_kubernetes_example_matches_chart(render: Callable[..., Rendered]) -> None:
+    """The commented manifest and Helm install the same sidecar, restore step and configuration."""
+    chart = render(
+        *SET_BASE,
+        "backup.litestream.enabled=true",
+        "backup.litestream.replicaUrl=s3://switchboard-backups/broker",
+        "backup.litestream.restoreOnEmpty=true",
+        "backup.litestream.existingSecret=litestream-credentials",
+        "backup.litestream.region=us-east-1",
+    )
+    assert chart.returncode == 0, chart.stderr
+    example = _litestream_example()
+    patch = example.pop("StatefulSet")
+    assert patch["metadata"]["name"] == "switchboard"
+    want_pod = _merge(_manifest()["StatefulSet"], patch)["spec"]["template"]["spec"]
+    got_pod = copy.deepcopy(chart.pod)
+    got_pod["containers"][0].pop("imagePullPolicy")
+    assert got_pod == want_pod
+    for kind in ("ConfigMap", "ServiceAccount"):
+        assert chart.docs[kind]["metadata"]["name"] == example[kind]["metadata"]["name"]
+    assert chart.docs["ConfigMap"]["data"] == example["ConfigMap"]["data"]
+
+
+@needs_helm
+def test_litestream_and_meetings_share_the_pod_without_losing_volumes(
+    render: Callable[..., Rendered],
+) -> None:
+    """Both optional sidecars coexist; enabling one must not drop the other's mounts or init step."""
+    chart = render(
+        *SET_BASE,
+        "backup.litestream.enabled=true",
+        "backup.litestream.replicaUrl=s3://switchboard-backups/broker",
+        "backup.litestream.restoreOnEmpty=true",
+        "meetings.enabled=true",
+    )
+    assert chart.returncode == 0, chart.stderr
+    assert {c["name"] for c in chart.pod["containers"]} == {"switchboard", "litestream", "joinly"}
+    assert {v["name"] for v in chart.pod["volumes"]} == {
+        "tmp",
+        "joinly-tmp",
+        "joinly-shm",
+        "litestream-config",
+    }
+    disabled = render(
+        *SET_BASE,
+        "backup.litestream.restoreOnEmpty=true",
+        "backup.litestream.existingSecret=unused",
+        "serviceAccount.annotations.test=unused",
+    )
+    assert disabled.returncode == 0, disabled.stderr
+    assert disabled.docs == render(*SET_BASE).docs

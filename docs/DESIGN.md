@@ -3711,6 +3711,41 @@ stays visible on Home and in rooms; Settings also keeps the ready link. The exis
 or passkey guard is unchanged: a desktop login-link session has no fresh-check path, and its
 panel directs the owner to the CLI instead. Desktop reauthentication needs a maintainer decision.
 
+
+### 57.2. Optional Litestream replication (#689)
+
+The Helm chart can add Litestream 0.5 as a non-root sidecar; Kubernetes and Compose ship
+commented examples. Disabled by default, it adds no resource or pod change. It follows only
+`switchboard.db` on the same read-write data volume, using WAL locks and checkpointing, not
+application row writes. There is one broker and one replicator per volume and one unique S3
+prefix per deployment. `files/`, configuration and migration `.bak` files are outside this
+replica; archives remain the matched database-and-files recovery source.
+
+The sidecar and optional restore init container run as uid/gid 10001 with umask 077, a read-only
+root, no capabilities and no listener. Destination settings live in a ConfigMap; static keys
+come only from an operator-named existing Secret in those two containers. A dedicated service
+account can carry workload identity annotations instead. No credential value is a Helm value.
+The image is pinned by release tag and multi-platform index digest and is independent of the
+broker's release pin. The sidecar's health does not gate the broker's readiness.
+
+`restoreOnEmpty` is independently off by default: a missing DB can mean a wrong volume. When
+selected, the init container creates a private home and runs restore with `-if-db-not-exists`
+and `-if-replica-exists` before either application container starts. An existing DB is untouched;
+an empty replica permits a first install; other restore failures block startup. Operators choose
+an S3 database restore or an archive restore, never both at once: the daemon's `restore_pending`
+would otherwise replace the init container's restored database. Archive recovery disables the
+sidecar too, so it cannot watch the daemon replace data; resuming moves old metadata aside
+and uses a fresh replica prefix. Restore requires stopped containers and an empty target without old WAL or replication metadata. Attachment recovery
+and checking credentials/revocations remain operator work (DEPLOY.md).
+
+The broker retains its WAL and checkpoint policy (PASSIVE every minute, TRUNCATE at shutdown,
+SQLite's default autocheckpoint threshold). Litestream 0.5 detects intervening checkpoints and
+can resnapshot; upstream recommends disabling application autocheckpoints under very high
+write load. Migration transactions, including `writable_schema`, are followed through the WAL.
+The image CI recovery drill replicates an old release fixture while the broker migrates and
+writes, checkpoints, loses its volume, then restores through the shipped init command and
+checks schema, integrity and all schema table counts before reopening the broker.
+
 ---
 
 ## 58. Search (#724)

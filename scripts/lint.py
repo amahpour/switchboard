@@ -45,6 +45,14 @@ CHART_VALUES = (
         "meetings.gpu.enabled=true",
         "meetings.sttModel=large-v3-turbo",
     ),
+    (
+        "publicUrl=https://sb.example.com",
+        "backup.litestream.enabled=true",
+        "backup.litestream.replicaUrl=s3://switchboard-backups/broker",
+        "backup.litestream.restoreOnEmpty=true",
+        "backup.litestream.existingSecret=litestream-credentials",
+        "meetings.enabled=true",
+    ),
 )
 # tool -> (version, where it comes from, per platform: archive, sha256, the file to take out of it).
 # "where" is a GitHub repository (releases/download/<version>/<archive>), or a base URL.

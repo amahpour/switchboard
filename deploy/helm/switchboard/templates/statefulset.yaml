@@ -24,7 +24,7 @@ spec:
     metadata:
       labels:
         {{- include "switchboard.selectorLabels" . | nindent 8 }}
-      {{- if .Values.meetings.enabled }}
+      {{- if or .Values.meetings.enabled .Values.backup.litestream.enabled }}
       annotations:
         {{- /*
         With two containers, `kubectl logs` and `kubectl exec` (the admin's one-time password,
@@ -39,6 +39,20 @@ spec:
       SWITCHBOARD_PORT=7419; the broker refuses it as its port and crash-loops (#595). It reads none
       of them, so they stay off whatever the Service is called.
       */}}
+      {{- if .Values.backup.litestream.enabled }}
+      serviceAccountName: {{ include "switchboard.fullname" . }}-litestream
+      {{- if .Values.backup.litestream.restoreOnEmpty }}
+      initContainers:
+        - name: litestream-restore
+          {{- include "switchboard.litestreamContainer" . | nindent 10 }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - >-
+              umask 077; mkdir -p /data/switchboard;
+              exec litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists
+              /data/switchboard/switchboard.db
+      {{- end }}
+      {{- end }}
       enableServiceLinks: false
       securityContext:
         runAsUser: 10001        # the image's `switchboard` user, from the start
@@ -112,6 +126,12 @@ spec:
             timeoutSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.backup.litestream.enabled }}
+        - name: litestream
+          {{- include "switchboard.litestreamContainer" . | nindent 10 }}
+          command: ["/bin/sh", "-ec"]
+          args: ["umask 077; exec litestream replicate -config /etc/litestream.yml"]
+        {{- end }}
         {{- if .Values.meetings.enabled }}
         {{- /*
         joinly, the meeting bot (DESIGN.md §52), as deploy/kubernetes/meetings/joinly.yaml has it. It has
@@ -264,6 +284,11 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+      {{- end }}
+      {{- if .Values.backup.litestream.enabled }}
+        - name: litestream-config
+          configMap:
+            name: {{ include "switchboard.fullname" . }}-litestream
       {{- end }}
   volumeClaimTemplates:
     {{- /*

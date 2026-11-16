@@ -99,3 +99,34 @@ reference does not select it.
 {{- .Values.meetings.image.digest -}}
 {{- end -}}
 {{- end }}
+
+{{/* The init and replication containers share hardening, volume access and external credentials. */}}
+{{- define "switchboard.litestreamContainer" -}}
+image: {{ .Values.backup.litestream.image | quote }}
+imagePullPolicy: IfNotPresent
+{{- with .Values.backup.litestream.existingSecret }}
+envFrom:
+  - secretRef:
+      name: {{ . | quote }}
+{{- end }}
+securityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+volumeMounts:
+  - name: data
+    mountPath: /data
+  - name: tmp
+    mountPath: /tmp
+  - name: litestream-config
+    mountPath: /etc/litestream.yml
+    subPath: litestream.yml
+    readOnly: true
+resources:
+  requests: {cpu: 10m, memory: 64Mi}
+  limits: {memory: 256Mi}
+{{- end -}}

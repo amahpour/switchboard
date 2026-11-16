@@ -252,7 +252,38 @@ jobs:
           cache-to: type=gha,scope=image,mode=max
       - run: uv sync --frozen
       - run: uv run --frozen playwright install --with-deps chromium
+      # #689: MinIO withdrew its public images. Build the test server/client from upstream commits,
+      # with their checked-in go.sum; never rely on an unreviewed third-party mirror.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          repository: minio/minio
+          ref: 07c3a429bfed433e49018cb0f78a52145d4bedeb  # RELEASE.2025-09-07T16-13-09Z
+          path: .cache/minio-src
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          repository: minio/mc
+          ref: 7394ce0dd2a80935aded936b09fa12cbb3cb8096  # RELEASE.2025-08-13T08-35-41Z
+          path: .cache/mc-src
+          persist-credentials: false
+      - name: Build test-only MinIO and provision Litestream
+        env:
+          GOTOOLCHAIN: go1.24.2
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p .cache/minio-bin
+          (cd .cache/minio-src && go build -mod=readonly -p 2 -trimpath -o ../minio-bin/minio .)
+          (cd .cache/mc-src && go build -mod=readonly -p 2 -trimpath -o ../minio-bin/mc .)
+          docker build -f tests/image/Dockerfile.minio -t switchboard:litestream-minio .cache/minio-bin
+          docker pull litestream/litestream:0.5.18@sha256:513bff62a88fc0c86c73d27333c41c54c89fe890a7c32a551600adff9309b11b
       - run: uv run --frozen pytest -q -p no:cacheprovider -m image tests/image
+      # Process/socket tests must survive 20 isolated runs and xdist (CLAUDE.md, "The tests").
+      - name: Repeat the Litestream recovery drill
+        run: |
+          for _ in $(seq 1 20); do
+            uv run --frozen pytest -q -p no:cacheprovider -m image tests/image/test_litestream.py || exit 1
+          done
+          uv run --frozen pytest -q -n auto -m image tests/image/test_litestream.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:

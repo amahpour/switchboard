@@ -1,0 +1,35 @@
+{{- if .Values.backup.litestream.enabled }}
+{{- $replica := required "backup.litestream.replicaUrl is required when Litestream is enabled" .Values.backup.litestream.replicaUrl }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "switchboard.fullname" . }}-litestream
+  labels:
+    {{- include "switchboard.labels" . | nindent 4 }}
+data:
+  litestream.yml: |
+    # No network listener or control socket; only replication, no credentials in this file.
+    socket:
+      enabled: false
+    dbs:
+      - path: /data/switchboard/switchboard.db
+        replica:
+          url: {{ $replica | quote }}
+          {{- with .Values.backup.litestream.region }}
+          region: {{ . | quote }}
+          {{- end }}
+          {{- with .Values.backup.litestream.endpoint }}
+          endpoint: {{ . | quote }}
+          {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "switchboard.fullname" . }}-litestream
+  labels:
+    {{- include "switchboard.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

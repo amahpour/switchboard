@@ -516,7 +516,159 @@ On Kubernetes, a backup Job can mount the broker's volume while it runs only whe
 can be mounted twice (on the same node, or with a ReadWriteMany storage class). Run the Job as
 uid and gid 10001, with `switchboard backup /data/switchboard/saved.tar` and the broker's volume
 mounted at `/data`. Otherwise use a volume snapshot, or scale to zero for that copy. Continuous
-replication is tracked in #689; it is separate from these archives.
+replication with [Litestream](#continuous-database-replication-with-litestream) is an optional
+sidecar, separate from these archives.
+
+### Continuous database replication with Litestream
+
+The Helm chart has an optional Litestream sidecar, off by default. It copies only
+`/data/switchboard/switchboard.db` to an S3 bucket or an S3-compatible store you own. It does
+**not** copy `files/`, configuration or the `switchboard.db.v<N>.bak` migration backups. Keep
+scheduled [verified archives](#backups) or volume snapshots for a matched database and
+attachments, or sync `files/` separately and check references after recovery. A database
+restored to a later time than its files can refer to missing attachments.
+
+Use one broker and one replicator per volume, and a unique bucket prefix per deployment.
+Litestream needs the data volume **read-write** for SQLite's WAL locks, checkpoints and local
+tracking files; the broker remains the only application writing database rows. This is not
+an additional broker replica or a way to share SQLite over NFS.
+
+#### Helm setup
+
+Create the bucket first. Prefer workload identity: grant its service account access to only
+that bucket prefix (list, get, put and delete, including multipart uploads), and set the
+provider's annotations under `serviceAccount.annotations`. For example, EKS IRSA uses
+`eks.amazonaws.com/role-arn`; Azure Workload Identity also requires its pod label, which this
+chart does not configure. Otherwise provision a Kubernetes Secret in the release's namespace
+through your secret manager, named `litestream-credentials`, with keys `AWS_ACCESS_KEY_ID`
+and `AWS_SECRET_ACCESS_KEY` (and `AWS_SESSION_TOKEN` for temporary credentials). Never put
+credential values in Helm values, a ConfigMap, a replica URL, source control or command output.
+The Secret is passed only to Litestream's sidecar and restore init container. With
+`existingSecret: ""`, the AWS SDK uses the workload identity credential chain.
+
+```yaml
+# replica-values.yaml: destinations and Secret names only, no credentials.
+backup:
+  litestream:
+    enabled: true
+    replicaUrl: s3://switchboard-backups/broker
+    region: us-east-1
+    endpoint: ""                  # HTTPS URL for an S3-compatible store; empty for AWS
+    existingSecret: litestream-credentials  # empty when using workload identity
+    restoreOnEmpty: false          # choose restore separately, below
+serviceAccount:
+  annotations: {}                  # provider-specific workload identity annotations
+```
+
+```bash
+helm upgrade --install switchboard deploy/helm/switchboard -n switchboard \
+  --set publicUrl=https://sb.example.com -f replica-values.yaml
+kubectl -n switchboard logs switchboard-0 -c litestream
+```
+
+The chart creates a service account and a configuration ConfigMap only when replication is
+enabled. Both Litestream containers run as uid and gid 10001, with a read-only root, no
+capabilities and a private umask. They share the PVC; they expose no ports. The sidecar has
+no readiness probe, so a storage outage does not remove the broker from its Service. Monitor
+its restarts and replication errors: a running broker does not prove that S3 is current. A
+changed ConfigMap or Secret takes effect after restarting the pod. Keep the image's release
+tag and multi-platform digest together when upgrading; the current pin comes from
+[Docker Hub's registry API](https://distribution.github.io/distribution/spec/api/#manifest)
+for [Litestream 0.5.18](https://github.com/benbjohnson/litestream/releases/tag/v0.5.18).
+
+#### Restore a database replica
+
+The init container is simpler than a separate restore Job: Kubernetes guarantees it finishes
+before either the broker or the replicator starts. It is behind its own flag because a
+missing database can also mean a PVC was mounted incorrectly.
+
+1. Scale the StatefulSet to zero and wait for its pod to disappear. Confirm the correct PVC,
+   bucket prefix and deployment configuration. Preserve the old volume or take a snapshot;
+   never delete a database or WAL while either container is running.
+2. Choose **one recovery source**. For a matched database and attachments, use the archive
+   procedure below with **Litestream disabled** (`backup.litestream.enabled: false`) until
+   the archive has been applied and checked. Its sidecar must not watch a database being
+   replaced at broker startup. Resume replication only after stopping the broker again,
+   moving the old local tracking directory into a private recovery folder and choosing a
+   fresh S3 prefix. Do not queue a `restore/` archive while restoring an S3 replica: the broker would apply that archive after the init container and
+   replace the recovered database. For database-only recovery, mount an empty replacement
+   volume and recover `files/` separately before serving traffic. Keep the same StatefulSet
+   identity and claim mapping; do not delete your only copy to make a volume empty.
+3. For S3 recovery, set `backup.litestream.restoreOnEmpty: true` in the values file and run the
+   Helm command above. It restores with `-if-db-not-exists -if-replica-exists`. An existing DB
+   is left untouched. An empty replica on first install succeeds without creating a DB, and
+   the broker initializes a fresh one. Network, credential and corrupt-replica errors fail
+   the init step and keep the broker stopped. An unexpected empty bucket is therefore a
+   reason to stop and check the prefix before permitting first startup.
+4. Inspect `kubectl -n switchboard logs switchboard-0 -c litestream-restore`, then the broker
+   and sidecar logs. The broker opens the recovered schema, migrating an older one normally.
+   Check rooms, history and attachment downloads. Credentials and revocations are from the
+   replica's recovery time; review agent tokens and sessions as with archive recovery.
+5. Return `restoreOnEmpty` to `false` and upgrade once recovery is verified. Keep the old
+   volume until the recovered broker has been checked.
+
+To restore onto a retained volume that already has data, keep the broker scaled to zero and
+first move its database, `-wal`, `-shm` and Litestream's local tracking directory into a private
+recovery folder. Restore into the empty home with uid 10001 and umask 077. Never mix old WAL
+or replication metadata with a restored database. A new empty volume avoids that manual step.
+
+#### Plain Kubernetes and Compose
+
+The bottom of
+[deploy/kubernetes/switchboard.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/switchboard.yaml)
+has a **commented** ConfigMap, ServiceAccount and StatefulSet patch. Copy the block between
+`BEGIN LITESTREAM EXAMPLE` and `END LITESTREAM EXAMPLE` into `litestream.yaml`, removing one
+leading `# ` from each line. Replace the destination, region and Secret name. Save the
+StatefulSet document separately as `litestream-patch.yaml`, and the ConfigMap and
+ServiceAccount documents as `litestream-config.yaml`. Apply the latter, then merge the patch:
+
+```bash
+kubectl -n switchboard apply -f litestream-config.yaml
+kubectl -n switchboard patch statefulset switchboard --type strategic \
+  --patch-file litestream-patch.yaml
+```
+
+The patch includes the opt-in restore init container: remove its `initContainers` block if
+you only want replication. Follow the recovery steps above before enabling it. Applying the
+original manifest alone still installs the broker alone. When recovering after scaling to
+zero, run `kubectl -n switchboard scale statefulset switchboard --replicas=1` only after the
+correct PVC and configuration are in place. Disable/remove the sidecar during archive recovery,
+as above. For workload identity, annotate the
+example's ServiceAccount and remove `envFrom` from **both** containers.
+
+[deploy/compose/compose.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/compose/compose.yaml)
+has a commented `litestream` service. Uncomment it, put the same `litestream.yml` from the
+Kubernetes example beside the Compose file, and provision a private `litestream.env` (0600)
+through your secret manager with the AWS variables above; do not commit that file. Workload
+identity on the host can replace the env file when its credential endpoint is accessible to
+the container. To recover, stop the stack first and use an empty data volume. Run this one-off
+restore **before** `up -d`:
+
+```bash
+docker compose -f deploy/compose/compose.yaml run --rm --no-deps litestream \
+  'umask 077; mkdir -p /data/switchboard; exec litestream restore -config /etc/litestream.yml -if-db-not-exists -if-replica-exists /data/switchboard/switchboard.db'
+docker compose -f deploy/compose/compose.yaml up -d
+```
+
+The volume must allow uid 10001 to create its private home; a fresh Docker named volume is
+root-owned, so provision it for that uid first, as for any non-root container. Never run the
+restore while the broker or the replicator is running.
+
+#### WAL checkpoints and migrations
+
+The broker uses WAL, a five-second busy timeout, SQLite's default autocheckpoint threshold,
+a PASSIVE checkpoint every 60 seconds and a TRUNCATE attempt on shutdown. These remain
+unchanged. Litestream 0.5 detects intervening checkpoints and takes a new snapshot when needed;
+[upstream recommends disabling application autocheckpoints for very high write loads](https://litestream.io/tips/#disable-autocheckpoints-for-high-write-load-servers).
+At those loads, monitor snapshot frequency and storage costs; this chart does not change
+broker checkpoint policy. Replication is asynchronous, so unuploaded commits can be lost.
+A successful local commit is not an acknowledgement from S3.
+
+Schema migrations use one transaction, including `writable_schema` edits, and write a separate
+verified `.v<N>.bak` file. Litestream follows the database's WAL, not that backup file. The CI
+MinIO recovery drill starts replication on an old release database, runs the broker's actual
+migration and checkpoint paths, writes rooms and messages, removes the data volume, then
+restores and compares all schema table counts and integrity before starting the broker again.
 
 ### Restore at the next start
 
