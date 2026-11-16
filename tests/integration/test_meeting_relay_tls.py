@@ -8,16 +8,50 @@ import ssl
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from switchboard.meeting.relay import BrokerClient, Secret, Unreachable, UsageError
 
 KEY = Secret("sbc_" + "ab" * 32)
+
+
+async def _respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """Answer a request, closing the connection even when the client rejects its certificate."""
+    try:
+        await reader.readuntil(b"\r\n\r\n")
+        await reader.readexactly(2)  # the request body is {}
+        writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{"ok": true}')
+        await writer.drain()
+    except (ConnectionError, asyncio.IncompleteReadError):
+        # truststore can reject the peer after TLS completes, before sending an HTTP request.
+        pass
+    finally:
+        writer.close()
+        with contextlib.suppress(ConnectionError):
+            await writer.wait_closed()
+
+
+@pytest.mark.parametrize("reset", [False, True], ids=["eof", "reset"])
+async def test_tls_server_handles_client_rejection(reset: bool) -> None:
+    """Native trust checks can reject TLS after the server handshake, causing EOF or a reset before HTTP.
+    Neither may escape the handler at teardown, and a reset while closing must still be awaited."""
+    reader = asyncio.StreamReader()
+    if reset:
+        reader.set_exception(ConnectionResetError("client rejected the certificate"))
+    else:
+        reader.feed_eof()
+    writer = Mock(spec=asyncio.StreamWriter)
+    writer.wait_closed = AsyncMock(side_effect=ConnectionResetError("client closed"))
+    await _respond(reader, writer)
+    writer.close.assert_called_once_with()
+    writer.wait_closed.assert_awaited_once_with()
+    writer.write.assert_not_called()
 
 
 @pytest.fixture
@@ -47,6 +81,8 @@ async def private_server(tmp_path: Path) -> AsyncIterator[tuple[str, Path]]:
         .not_valid_before(now - timedelta(days=1))
         .not_valid_after(now + timedelta(days=1))
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
+        # Apple's native trust policy requires an explicit TLS server purpose.
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
     ca_path, cert_path, key_path = (tmp_path / name for name in ("ca.pem", "server.pem", "key.pem"))
@@ -63,19 +99,8 @@ async def private_server(tmp_path: Path) -> AsyncIterator[tuple[str, Path]]:
     ctx.load_cert_chain(cert_path, key_path)
     handlers: list[asyncio.Task[None]] = []
 
-    async def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        task = asyncio.current_task()
-        assert task is not None
-        handlers.append(task)
-        try:
-            await reader.readuntil(b"\r\n\r\n")
-            await reader.readexactly(2)  # the request body is {}
-            writer.write(b'HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\n{"ok": true}')
-            await writer.drain()
-        finally:
-            writer.close()
-            with contextlib.suppress(ConnectionError):
-                await writer.wait_closed()
+    def respond(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        handlers.append(asyncio.create_task(_respond(reader, writer)))
 
     server = await asyncio.start_server(respond, "127.0.0.1", 0, ssl=ctx)
     port = server.sockets[0].getsockname()[1]
