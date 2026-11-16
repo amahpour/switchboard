@@ -1,0 +1,41 @@
+{
+  "_source": "Zoom web client caption box, read by a guest bot in the #762 spike (2026-11-15), reduced to the text of the one speaker shown at each change. Speaker names are test names.",
+  "reads": [
+    [
+      0.0,
+      "\"Claude one, can you hear me"
+    ],
+    [
+      1.0,
+      "\"Claude one, can you hear me?"
+    ],
+    [
+      7.9,
+      "\"Claude one, can you hear me? Hey Codex, run the tests"
+    ],
+    [
+      10.0,
+      "\"Claude one, can you hear me? Hey Codex, run the tests"
+    ],
+    [
+      16.0,
+      "\"Claude one, can you hear me? Hey Codex, run the tests Claude Kiln, what's the"
+    ],
+    [
+      17.2,
+      "\"Claude one, can you hear me? Hey Codex, run the tests Claude Kiln, what's the max temperature?"
+    ],
+    [
+      19.5,
+      "\"Claude one, can you hear me? Hey Codex, run the tests Claude Kiln, what's the max temperature?"
+    ],
+    [
+      24.5,
+      "Hey Codex, run the tests Claude Kiln, what's the max temperature? The purple ele"
+    ],
+    [
+      25.8,
+      "Hey Codex, run the tests Claude Kiln, what's the max temperature? The purple elephant is reading the"
+    ]
+  ]
+}

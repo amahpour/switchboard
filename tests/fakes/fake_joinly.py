@@ -52,9 +52,10 @@ def tiny_png() -> bytes:
 class _Headers:
     """The ``joinly-settings`` header of each request, for the test to read."""
 
-    def __init__(self, app: ASGIApp, sink: list[str]):
+    def __init__(self, app: ASGIApp, sink: list[str], refuse: Any = None):
         self.app = app
         self.sink = sink
+        self.refuse = refuse
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
@@ -62,6 +63,10 @@ class _Headers:
             got = raw.get("joinly-settings")
             if got:
                 self.sink.append(got)
+                if self.refuse is not None and self.refuse() and b'"captions"' in got.encode():
+                    await send({"type": "http.response.start", "status": 500, "headers": []})
+                    await send({"type": "http.response.body", "body": b"unknown stt"})
+                    return
         await self.app(scope, receive, send)
 
 
@@ -81,6 +86,10 @@ class FakeJoinly:
         self.join_attempts = 0
         self._join_gate = asyncio.Event()
         self.drop = False
+        # the patched joinly's `transcription_status` (#764): the answer when captions are asked for;
+        # None is a joinly without the tool (stock 0.5.4 never starts the session: see refuse_captions)
+        self.captions: dict[str, Any] | None = {"ok": True, "reason": "on"}
+        self.refuse_captions = False  # stock joinly: the captions settings make the session fail to start
         self.patched = True  # speak_text takes a voice (deploy/joinly); False: stock joinly 0.5.4
         self.spoken: list[str] = []
         self.voices: list[str | None] = []  # the voice each line was asked for (the patched speak_text)
@@ -190,6 +199,13 @@ class FakeJoinly:
                 type="image", data=base64.b64encode(fake.frame).decode(), mimeType=fake.frame_type
             )
 
+        @mcp.tool
+        async def transcription_status() -> str:
+            fake._note_loop()
+            if fake.captions is None:
+                raise RuntimeError("no such tool")
+            return json.dumps(fake.captions)
+
         if fake.share_tools:
 
             @mcp.tool
@@ -231,6 +247,7 @@ class FakeJoinly:
         app = _Headers(
             mcp.http_app(path="/mcp/", transport="streamable-http", host_origin_protection=False),
             self.settings,
+            lambda: fake.refuse_captions,
         )
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

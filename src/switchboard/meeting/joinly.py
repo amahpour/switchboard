@@ -1,4 +1,4 @@
-"""Driving joinly over MCP: what it is told, what it keeps, what it answers (DESIGN.md §52, §54).
+"""Driving joinly over MCP: what it is told, what it keeps, what it answers (DESIGN.md §52, §52.7, §54).
 
 Two programs drive a joinly. The broker's own bot (``bridge.py``) does, beside the broker, and the relay of a
 call hosted on a person's machine (``relay.py``) does, beside a joinly of its own. What either sends and
@@ -46,6 +46,8 @@ STT_MIN_SILENCE_S = 0.35
 STT_MIN_AUDIO_S = 1.0
 HOTWORDS_MAX = 100  # the room's names sent as the transcriber's hotwords, each cut to 40 characters
 RESOURCE = "transcript://live/segments"
+CAPTIONS = "captions"  # the token joinly resolves to the captions patch's classes (§52.7)
+STATUS_TOOL = "transcription_status"  # the patched server's answer to "are the captions on?"
 LEAVE_TIMEOUT_S = 5.0
 POLL_S = 3.0  # how long to go without reading the transcript when joinly says nothing changed
 SPEAK_TIMEOUT_S = 180.0  # speak_text returns when the speech has ended; 600 characters is under a minute
@@ -84,13 +86,35 @@ def install_redact() -> None:
 
 
 def settings_header(
-    *, hotwords: Sequence[str], model: str = "", voice: str, participant: str = PARTICIPANT
+    *,
+    hotwords: Sequence[str],
+    model: str = "",
+    voice: str,
+    participant: str = PARTICIPANT,
+    transcriber: str = "whisper",
 ) -> str:
     """The ``joinly-settings`` header of a session: the bot's name, the speech-to-text arguments (the room's
     names as hotwords, and longer pieces of speech, ``STT_MIN_SILENCE_S``), the voice, and the size of a
     snapshot. ``model`` is only sent when the operator named one: a ``model_name`` that is given at all, even
     an empty one, makes joinly look for the model on the network, where leaving it out keeps its own files
-    (§52). Each hotword is cut to 40 characters and at most ``HOTWORDS_MAX`` are sent."""
+    (§52). Each hotword is cut to 40 characters and at most ``HOTWORDS_MAX`` are sent.
+
+    With ``transcriber="captions"`` (#764, §52.7) joinly is told to read the call's captions: its
+    transcription controller, speech-to-text and voice-activity services are the do-nothing ones of the
+    captions patch (``deploy/joinly/captions.py``), so no speech model is loaded or run. No Whisper
+    argument is sent then. A joinly without the patch refuses the settings, which the bridge reports."""
+    if transcriber == "captions":
+        return json.dumps(
+            {
+                "name": participant,
+                "stt": CAPTIONS,
+                "vad": CAPTIONS,
+                "transcription_controller": CAPTIONS,
+                "tts_args": {"voice": voice},
+                "meeting_provider_args": {"snapshot_size": list(SNAPSHOT_SIZE)},
+            },
+            ensure_ascii=True,
+        )
     stt_args: dict[str, Any] = {
         "hotwords": [w[:40] for w in list(hotwords)[:HOTWORDS_MAX]],
         "min_silence": STT_MIN_SILENCE_S,
@@ -143,6 +167,58 @@ async def subscribe(client: Any) -> bool:
     except Exception:
         return False
     return True
+
+
+# why captions were not turned on, as the patched joinly names it, and what to tell the room. Whisper is not
+# a fallback the bot takes by itself (#764): an admin chooses it, so each sentence says what they can change.
+_CAPTIONS_WHY = {
+    "unsupported_platform": "captions are not supported on this platform yet (only Zoom's are)",
+    "no_button": (
+        "Zoom did not offer Show Captions, which usually means automated captions are off for the "
+        "host's Zoom account"
+    ),
+    "no_box": "Zoom did not show the captions after they were turned on",
+    "no_page": "the bot was not in the call's page",
+}
+_CAPTIONS_FIX = (
+    "An admin can allow automated captions in the host's Zoom account settings. Whisper, which works on "
+    'any platform, is experimental and off: an admin can set `[meeting] transcriber = "whisper"` to use it.'
+)
+
+
+CAPTIONS_ON_NOTICE = (
+    "Captions are on for everyone in the call: the bot turned on the platform's captions to read them."
+)
+
+
+def captions_notice(reason: str) -> str:
+    """The reason a call ended when its captions could not be used (the room reads "The call ended: <this>."):
+    why, and what an admin can change.
+    An unknown reason word is shown as the generic one, never as the word."""
+    why = _CAPTIONS_WHY.get(reason, "the call's captions could not be turned on")
+    return f"{why}. {_CAPTIONS_FIX}".rstrip(".")
+
+
+def captions_unpatched_notice() -> str:
+    """The room's sentence when joinly refused the captions settings: it has no captions patch."""
+    return (
+        "the meeting bot does not have the captions patch. An admin can mount it "
+        '(docs/DEPLOY.md, "A meeting bot") or set `[meeting] transcriber = "whisper"` (experimental)'
+    )
+
+
+async def captions_reason(client: Any) -> str | None:
+    """None when the call's captions are on, otherwise the reason word. A joinly whose server lacks the
+    status tool (an older patch) is a ``no_page``-like unknown: never taken as on."""
+    try:
+        result = await client.call_tool(STATUS_TOOL, {}, timeout=50.0)
+        data = json.loads(reply(result))
+    except Exception:
+        return "unknown"
+    if isinstance(data, dict) and data.get("ok") is True:
+        return None
+    reason = data.get("reason") if isinstance(data, dict) else None
+    return reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,32}", reason) else "unknown"
 
 
 async def takes_voice(client: Any) -> bool:

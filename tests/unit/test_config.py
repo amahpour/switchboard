@@ -581,3 +581,38 @@ def test_start_stops_on_a_bad_stt_model_variable(
     assert cli.main(["start", "--foreground", "--home", str(tmp_path)]) == cli.EXIT_ERR
     err = capsys.readouterr().err
     assert f"config error: {STT_MODEL_ENV} must be one of base, small, distil-large-v3, large-v3-turbo" in err
+
+
+# captions or Whisper (#764, DESIGN.md §52.7)
+def test_the_transcriber_is_captions_unless_whisper_is_chosen_or_a_model_was_named() -> None:
+    """Unset means captions: Whisper is off by default. An install that already named an stt_model is taken to
+    want Whisper (it chose a model), and an explicit transcriber always wins over that. Fails if the
+    default is
+    Whisper, a named model is ignored, or the explicit choice loses to the guess."""
+    assert from_dict({}).meeting.mode == "captions"
+    assert from_dict({"meeting": {"stt_model": "small"}}).meeting.mode == "whisper"
+    assert from_dict({"meeting": {"transcriber": "whisper"}}).meeting.mode == "whisper"
+    explicit = {"meeting": {"transcriber": "captions", "stt_model": "small"}}
+    assert from_dict(explicit).meeting.mode == "captions"
+
+
+@pytest.mark.parametrize("bad", ["Whisper", "caption", 3, None, "vosk"])
+def test_an_unknown_transcriber_is_a_config_error_never_the_default(bad: object) -> None:
+    """A typo must not leave captions in force unseen. Fails if one is accepted."""
+    with pytest.raises(ConfigError, match="transcriber"):
+        from_dict({"meeting": {"transcriber": bad}})
+
+
+def test_the_transcriber_environment_variable_wins_over_the_file_and_a_bad_one_stops_the_broker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SWITCHBOARD_MEETING_TRANSCRIBER`` sets ``[meeting] transcriber`` over the file, like the other
+    variables, and a value that is not one of the two stops the broker at start with its name."""
+    config = switchboard.config
+    paths = Paths.from_home(tmp_path)
+    paths.config.write_text('[meeting]\ntranscriber = "captions"\n')
+    monkeypatch.setenv("SWITCHBOARD_MEETING_TRANSCRIBER", "whisper")
+    assert config.load(paths).meeting.mode == "whisper"
+    monkeypatch.setenv("SWITCHBOARD_MEETING_TRANSCRIBER", "voxtral")
+    with pytest.raises(ConfigError, match="SWITCHBOARD_MEETING_TRANSCRIBER"):
+        config.load(paths)

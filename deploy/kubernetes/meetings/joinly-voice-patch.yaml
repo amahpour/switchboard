@@ -2,7 +2,7 @@
 # Apply it after joinly.yaml. Without it a call has one voice for everything the bot says.
 #
 # joinly 0.5.4 takes the voice once, when a bot session starts, and `speak_text` has no voice argument.
-# The patch is two files of joinly (server.py and the Kokoro voice, kokoro.py): `speak_text` takes an
+# The patch is three files (server.py and the Kokoro voice, kokoro.py, and captions.py, #764): `speak_text` takes an
 # optional `voice` for that line, and Kokoro uses it, falling back to the session's voice. Nothing
 # changes for a caller that sends none. deploy/joinly/NOTICE says what changed and keeps joinly's MIT
 # licence. Until a joinly release has it, the files go over the image's copies, read-only, from one
@@ -12,7 +12,8 @@
 #
 #   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.5.0/deploy/joinly/server.py
 #   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.5.0/deploy/joinly/kokoro.py
-#   kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
+#   curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.5.0/deploy/joinly/captions.py
+#   kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py --from-file=captions.py
 #   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
 #
 # Drop this patch once joinly has a release with a voice on `speak_text`, and move the image in
@@ -34,6 +35,10 @@ spec:
             - name: joinly-voice-patch
               mountPath: /app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py
               subPath: kokoro.py
+              readOnly: true
+            - name: joinly-voice-patch
+              mountPath: /app/.venv/lib/python3.12/site-packages/joinly/captions.py
+              subPath: captions.py      # a new file: the call's own captions, #764 (no speech model runs)
               readOnly: true
       volumes:
         - name: joinly-voice-patch

@@ -307,7 +307,7 @@ async def test_the_voice_goes_to_joinly_in_its_settings(
         await start_call(b, joinly)
         sent = [json.loads(s) for s in joinly.settings]
         assert sent and all(s.get("tts_args") == {"voice": expected} for s in sent), sent
-        assert all(s.get("name") == "switchboard (transcribing)" and "stt_args" in s for s in sent)
+        assert all(s.get("name") == "switchboard (transcribing)" and s.get("stt") == "captions" for s in sent)
         assert all(s.get("meeting_provider_args") == {"snapshot_size": [1024, 576]} for s in sent), sent
     finally:
         b.web.close()  # type: ignore[attr-defined]
