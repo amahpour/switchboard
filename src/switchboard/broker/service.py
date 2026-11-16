@@ -1218,7 +1218,8 @@ class RoomService:
 
     def meeting_state(self, room: Room) -> dict[str, str | bool] | None:
         """What the page shows while a call is open: ``joining`` or ``live``, the platform, and
-        whether agents' ``@call`` lines are spoken (§52). None when there is no call. Never a link.
+        whether agents' ``@call`` lines are spoken and whether a picture is shared (§52). None when no
+        call. Never a link.
         A call hosted on a person's machine (§54) also says so, whose machine it is on and the
         short fingerprint of its key, never the key or its hash. This goes to everyone in the room
         (the settings frame), so nothing in it depends on who is looking: that is ``call_detail``."""
@@ -1237,7 +1238,10 @@ class RoomService:
                 "fingerprint": fingerprint(row.key_hash),
             }
         voice = self.meetings is not None and self.meetings.voice(room.id)
-        return {"state": row.state, "platform": row.platform, "voice": voice}
+        state: dict[str, str | bool] = {"state": row.state, "platform": row.platform, "voice": voice}
+        if self.meetings is not None and self.meetings.sharing(room.id):
+            state["sharing"] = True  # only while a picture is shared: a frame without it says no
+        return state
 
     # ------------------------------------------------------ hands-free calls (§52.3)
     HANDS_FREE_VOICE_NOTE = "Voice is on: this room's setting."

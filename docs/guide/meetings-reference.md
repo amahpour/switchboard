@@ -4,7 +4,7 @@ The details behind [the meetings guide](meetings.md): the steps in full, every w
 
 Your agents read the call lines like any other message. Use meetings when the decisions happen on a call and you want your agents to hear them: to look something up while people keep talking, or to start on a fix the moment someone asks for it.
 
-The bot can run next to the server, or on your own machine ([host it yourself](#host-the-bot-on-your-own-machine)). The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and, for the bot next to the server, [an agent can see the shared screen](#show-an-agent-the-shared-screen). A call hosted on your machine has no snapshot. The bot never shares a screen of its own.
+The bot can run next to the server, or on your own machine ([host it yourself](#host-the-bot-on-your-own-machine)). The bot listens. Two more things are off until you ask: [your agents can speak in the call](#let-agents-speak), and, for the bot next to the server, [an agent can see the shared screen](#show-an-agent-the-shared-screen). A call hosted on your machine has no snapshot. The bot shares only a picture you hand it with [`/meeting share`](#show-a-room-picture-in-the-call), and never its own screen.
 
 ## How it works
 
@@ -388,6 +388,17 @@ Someone on the call shares a screen, and you want an agent to see it. There are 
 Ask again later to see what changed. At most one picture is taken every 10 seconds, however it was asked for. A click sooner than that is refused with a short message. A line on the call that says "screen" inside that time is still posted, with a notice and without a new picture.
 
 The picture is stored as a [room file](attachments.md), named like `screen-142507.jpg`, and shown as a download card. An agent is given a download link to it the same way as for any file. It is a small image, 1024 by 576 pixels, so it shows what is shared, not the fine print. If a picture can't be taken, the room says so, and a line on the call is posted all the same.
+
+## Show a room picture in the call
+
+`/meeting share <file>` shows one PNG or JPEG from this room to everyone on the call, as a screen share by the bot. `<file>` is the file's name as the room lists it, its id, or `switchboard:file/<id>`. `/meeting share stop`, the **Stop sharing** button on the bar, leaving the call and the call ending all stop it. The bar says "sharing a picture" while it is on.
+
+- **Only you can start it**, in the web UI. An agent's `/meeting share` is plain text, an `@call` line is only spoken, and nothing said on the call starts one. There is no agent tool for it.
+- **The bot is sent the picture's bytes**, never a link, so it opens no page. A file counts as a picture by its bytes: a PNG or a JPEG, at most 8 MB (or the room's file limit, if that is lower). A WebP, a GIF, an SVG or anything else is refused, whatever its name.
+- **One share at a time.** A second `/meeting share` is refused until the first is stopped.
+- **The host decides.** Zoom lets a guest share only when the host allows it. If not, the room is told: "the host has not allowed participants to share. In Zoom, open Security and turn on Share Screen for all participants". Allow it in the call (Security, Share Screen), or in your Zoom account settings under who can share, then share again.
+- **Zoom only, on the server's own bot**, and it needs the joinly patch of [the DEPLOY guide](../DEPLOY.md#a-meeting-bot). A call hosted on your own machine says it is not available yet. Meet and Teams are refused in words: they have not been tried.
+- **What everyone sees** is the picture, centred in the bot's 16:9 frame on a dark background, with the bot named as the presenter. If the host stops the share in Zoom, the bar keeps saying "sharing" until you stop it here.
 
 ## What agents see
 

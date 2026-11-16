@@ -3340,6 +3340,60 @@ Tests: `test_meeting_voices.py` (the defaults, stable across processes and sprea
 shapes refused, the missing-voice notice once), `test_listen_turns.py` and `test_relay_turns.py` (the poll
 field, the relay's check and the receipt flag).
 
+### 52.9 Showing a room picture in the call (#763)
+
+A person can show one picture of the room to everyone on the call, as a screen share by the bot. The spike
+(#757) tried it on a real Zoom call: the platform's own Share button, given a canvas stream, shared it, and a
+second bot's snapshot showed it.
+
+**Who starts it.** Only `/meeting share <file>`, a command with the role `human` (the web session, like `/meeting
+voice on`): the command line and every agent are refused, an agent's `say("/meeting share ...")` is stored as
+text (§10), an `@call` line is only ever spoken (§52.2), a call line is only text, and no MCP tool exists. The
+bar's **Stop sharing** button types `/meeting share stop` for the person. `<file>` is the words after `share`
+put back together: a stored file's name, its id, or `switchboard:file/<id>`. It must be a stored file of the
+room the command is run in (`commands._meeting_share`); another room's file, a missing one and a made-up id are
+the same refusal.
+
+**What is sent.** The broker reads the file's bytes itself and sends joinly their base64 as the one argument of
+`share_image` (`meeting/share.py`, `bridge.request_share`). It never sends a URL, so the bot's browser is never
+told to fetch a page. A file is a picture by its bytes only, the first bytes of a PNG or a JPEG
+(`share.picture_kind`); a WebP, a GIF, an SVG or a text file named `.png` is refused with a sentence, and
+nothing reaches joinly. The cap is 8 MB or the room's file limit, whichever is lower; the commands read one byte
+past it to say "too large" without reading more.
+
+**What joinly does.** `deploy/joinly/server.py` (§52.5's patch file, pinned by sha256 in the same places) adds
+`share_image` and `stop_share_image`. It checks the bytes again (PNG or JPEG, 8 MB, 50 million pixels, from
+the PNG header or the JPEG frame header, so a small file cannot claim a huge picture), draws the picture on a
+1280 by 720 canvas in the meeting page, replaces `navigator.mediaDevices.getDisplayMedia` with a function that
+returns that canvas's stream, and clicks Zoom's Share button with a real user gesture (CDP `Runtime.evaluate`).
+Zoom calls the override and shares the canvas. The override lives for the length of the share. The browser's
+own screen picker, and so the bot's virtual display, is never reached: the patch never opens a page for a share
+and never uses `getDisplayMedia`'s own capture. It works on Zoom only, the one platform tried; any other page
+answers "only supported in a Zoom call". Stopping stops the canvas stream and clicks Zoom's Stop Share.
+
+**When the host has not allowed it.** Zoom answers a guest's Share with a dialog, "Host disabled attendee screen
+sharing". The tool notices the words, closes the dialog and fails with that sentence. The bridge matches it
+(`share.host_refused`) and posts one notice of its own: the host has not allowed participants to share, and
+Security, Share Screen is where to change it. joinly's text is matched, never repeated. A joinly without the
+patch (no `share_image` in its tool list) gets a notice that names the patch.
+
+**One at a time, and its end.** A call holds one share (`_Live.sharing`) and a flag while one is starting or
+stopping (`share_busy`); a second `/meeting share` is refused until `/meeting share stop`. Leaving the call
+asks joinly to stop it before `leave_meeting`, and the call ending drops it. The bar reads `meeting.sharing`
+(present, and true, only while a picture is shared) and shows "sharing a picture" with **Stop sharing**. If the
+host stops the share in Zoom, the bar keeps saying so until a person stops it: the broker does not watch Zoom.
+
+**Out of scope here.** A call hosted on a person's machine (§54): the relay path has no picture route yet, so
+the command says so. An agent starting a share, and a live view of the board.
+
+**What this adds.** No authority. A person chooses a file of the room and the call's host's setting has the
+last word. It does widen who sees that file from the room to the call, which is why only a person can do it and
+the room is told who did. Tests: `test_meeting_share_pure.py` (unit: the bytes decide; the caps; the reference; the
+host's words), `test_joinly_share_patch.py` (the patch's own checks, read out of the file the container runs, and
+that it takes no URL), `test_commands.py` (parsing and roles), `test_meeting_share.py` (integration, the real
+broker and `FakeJoinly`: share and stop reach joinly, bytes only, the refusals, one at a time, leaving, an agent
+and a call line never start one) and the call bar's e2e test.
+
 ## 53. Attachments (#544)
 
 A room can hold a file. The message still names it with the artifact line (§29.4). The bytes live beside the database. No new tool or parameter: the agents' tool list and `JOIN_BUDGET` stay where they are. Agents learn the line from the eighth fixed room rule (#588), which every join carries: without it nothing an agent read mentioned the line, so an agent shared a file only when a room's own rules or a pin said how. The tool list had no room for it under its approved 3,900 characters.
