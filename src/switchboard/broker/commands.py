@@ -10,7 +10,8 @@ removed in 0.4; it opens a review board now.) ``/close`` (§28.3) ends every mem
 so it reduces activity: ``human_cli``. ``/quiet`` reduces what wakes an agent, so
 ``human_cli``; ``/unquiet`` raises it, so ``human`` (§50). ``/meeting`` joins a call,
 which raises what the room's agents can be asked to do, so ``human`` (§52); so do its
-``voice on|off`` (agents speaking in the call) and ``snapshot`` (a picture of its shared screen).
+``voice on|off`` (agents speaking in the call), ``snapshot`` (a picture of its shared screen) and
+``share <file>|stop`` (a room's picture shown in the call, §52.9).
 ``/room voice|listen on|off`` (§52.3) sets what every call in the room starts with, so it raises
 what agents can do and needs ``human`` too; ``/room`` alone only reads them.
 """
@@ -24,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from switchboard import reviews
 from switchboard.broker import catchup
 from switchboard.delivery.rules import parse_mentions
-from switchboard.meeting import voices
+from switchboard.meeting import share, voices
 from switchboard.meeting.links import PLATFORM_LABEL, LinkError, MeetingLink, parse_link
 from switchboard.meeting.screen import Asker
 from switchboard.models import MAX_BUDGET, MAX_HOPS, SCREEN_NAME_RE, Room
@@ -79,6 +80,8 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
                       <voice> is a-z, 0-9 and _, up to 32 characters, or "default" for the one picked
                       from its name
   /meeting snapshot   post a picture of the call's shared screen (web only)
+  /meeting share <file>  show a PNG or JPEG of this room in the call, by its name or id (web only)
+  /meeting share stop    stop showing it (web only)
   /room               show this room's call settings (hands-free calls)
   /room voice on|off  every call here starts with Voice on (web only)
   /room listen on|off every agent here listens on calls (web only)
@@ -229,8 +232,8 @@ def parse_command(text: str) -> Command:
 
 
 MEETING_USAGE = (
-    "usage: /meeting [<link> [mine]|leave|snapshot|voice on|voice off|voice <name> <voice>"
-    "|listen <name> [off]]"
+    "usage: /meeting [<link> [mine]|leave|snapshot|share <file>|share stop|voice on|voice off"
+    "|voice <name> <voice>|listen <name> [off]]"
 )
 
 
@@ -246,6 +249,15 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     word = args[0].lower()
     if len(args) == 1 and word in ("leave", "snapshot"):
         return Command(name="meeting", args=(word,), raw=raw)
+    if word == "share":
+        # a file's name may have had spaces: the words after "share" are one reference
+        if len(args) == 2 and args[1].lower() == "stop":
+            return Command(name="meeting", args=("share", "stop"), raw=raw)
+        try:
+            ref = share.reference(args[1:])
+        except share.ShareError as e:
+            raise CommandError("bad_request", str(e)) from None
+        return Command(name="meeting", args=("share", ref), raw=raw)
     if word == "listen":
         if len(args) not in (2, 3) or (len(args) == 3 and args[2].lower() != "off"):
             raise CommandError("bad_request", "usage: /meeting listen <name> [off]")
@@ -741,6 +753,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         )
     if cmd.args == ("snapshot",):
         return _meeting_snapshot(room, actor, svc)
+    if cmd.args[:1] == ("share",):
+        return _meeting_share(cmd, room, actor, svc)
     if cmd.args[:1] == ("listen",):
         return _meeting_listen(cmd, room, svc)
     if cmd.args[:1] == ("voice",):
@@ -967,6 +981,54 @@ def _meeting_snapshot(room: Room, actor: Actor, svc: "RoomService") -> Result:
         True,
         f"{room.name}: asking the bot for a snapshot of the call",
         event="meeting_snapshot",
+    )
+
+
+def _meeting_share(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
+    """Show one of this room's pictures in the call, or stop showing it (§52.9). Only this command starts a
+    share: it is a person's web session, and nothing an agent says is parsed as it. The bytes go to the bot,
+    never a link; what may be shared is a stored file of this room that is a PNG or a JPEG by its bytes."""
+    row = svc.store.open_meeting(room.id)
+    if row is None:
+        return Result(True, f"{room.name}: no call is being transcribed")
+    if row.hosted:
+        raise CommandError(
+            "conflict", "Sharing a picture isn't available yet for a call hosted on a person's machine."
+        )
+    if svc.meetings is None:
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    if cmd.args == ("share", "stop"):
+        why = svc.meetings.request_stop_share(room.id)
+        if why is not None:
+            raise CommandError("conflict", why)
+        return Result(True, f"{room.name}: asking the bot to stop sharing", event="meeting_share_stop")
+    att = svc.attachments
+    if att is None:
+        raise CommandError("conflict", "This broker keeps no files.")
+    ref = cmd.args[1]
+    file_id = share.file_id_of(ref)
+    stored = svc.store.file_get(file_id) if file_id else svc.store.stored_file_named(room.id, ref)
+    path = att.folder.path(stored.id) if stored is not None else None
+    if stored is None or stored.room_id != room.id or stored.state != "stored" or path is None:
+        raise CommandError("bad_request", f"No file named {ref[:60]} in {room.name}. Give its name or id.")
+    cap = min(att.max_bytes, share.SHARE_MAX_BYTES)
+    try:
+        with path.open("rb") as f:
+            data = f.read(cap + 1)  # one byte over the cap says too large without reading more
+        share.check_picture(data, att.max_bytes)
+    except share.ShareError as e:
+        raise CommandError("bad_request", str(e)) from None
+    except OSError:
+        raise CommandError("bad_request", f"{stored.name} could not be read.") from None
+    asker = Asker(actor.who(svc.cfg.human_name), actor.person_id, actor.via)
+    why = svc.meetings.request_share(room.id, data, stored.name, asker)
+    if why is not None:
+        raise CommandError("conflict", why)
+    return Result(
+        True,
+        f"{room.name}: asking the bot to share {stored.name} in the call",
+        event="meeting_share",
+        event_data={"file": stored.id},
     )
 
 

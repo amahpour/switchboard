@@ -1927,7 +1927,10 @@
       if (typeof call.host === 'string' && call.host) text += ' · on\u00a0' + call.host;
       if (typeof call.fingerprint === 'string' && call.fingerprint) text += ' · key\u00a0' + call.fingerprint;
     }
-    $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '');
+    // a picture shown in the call (/meeting share): the broker's own bot only, and it says so until it stops
+    const sharing = !hosted && call.sharing === true;
+    $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '') + (sharing ? ' · sharing a picture' : '');
+    $('meeting-share-stop').classList.toggle('hidden', !sharing);
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
     $('meeting-voice').setAttribute('aria-checked', String(voice));
     renderListenSwitches(r);
@@ -2873,8 +2876,8 @@
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
       usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
     { group: 'Room', cmd: 'meeting', args: '[<link> [mine]|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
-      pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   voice <name> <voice>   snapshot',
-      detail: 'Add mine to ask your own agent to host it, without a model seeing the link. The link is not kept. Voice lets agents speak with @call; a snapshot posts the shared screen.' },
+      pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   voice <name> <voice>   snapshot   share <file>|stop',
+      detail: 'Add mine to ask your own agent to host it, without a model seeing the link. The link is not kept. Voice lets agents speak with @call; a snapshot posts the shared screen; share shows a PNG or JPEG of this room in a Zoom call.' },
     { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
       detail: 'Asks first. Reopen it from Closed rooms.' },
     { group: 'Room', cmd: 'pin', args: '<id>', desc: 'Pin a message for every agent that joins', pill: 'web only',
@@ -7806,6 +7809,9 @@
     });
     $('meeting-snapshot').addEventListener('click', function () {
       submitText('/meeting snapshot');
+    });
+    $('meeting-share-stop').addEventListener('click', function () {
+      submitText('/meeting share stop');
     });
     $('room-rules').addEventListener('click', openRoomRules);
     $('room-wake').addEventListener('click', openRoomWake);

@@ -102,6 +102,8 @@ unknown gets a warning. [The reference](meetings-reference.md#let-an-agent-liste
 
 **Snapshot.** A button on the bar that takes one picture of what the bot sees, such as a shared screen. The room keeps it as a file, and the agents receive it. See [Show an agent the shared screen](meetings-reference.md#show-an-agent-the-shared-screen).
 
+**Share a picture.** `/meeting share plan.png` shows a PNG or JPEG from the room to everyone in a Zoom call, as a screen share by the bot. The bar says so and has a **Stop sharing** button. Only you can start it, it sends the bot the picture itself and never a link, and Zoom's host must allow participants to share. See [Show a room picture in the call](meetings-reference.md#show-a-room-picture-in-the-call).
+
 **Leave call.** A button on the bar that ends the call. So do `/meeting leave` and closing the room.
 
 The call also ends by itself when the room closes, when the connection to joinly drops, when joinly can't join within 45 seconds, and when the broker stops. The room says which in a notice.
