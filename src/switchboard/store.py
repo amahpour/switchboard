@@ -3060,13 +3060,20 @@ class Store:
             "SELECT * FROM review_items WHERE review_id=? ORDER BY kind, n", (review_id,)
         ).fetchall()
         picked = self._review_picks(review_id)
-        return [_review_item(r, picked.get(r["id"], ())) for r in rows]
+        abstained = self._review_abstentions(review_id)
+        return [_review_item(r, picked.get(r["id"], ()), abstained.get(r["id"], ())) for r in rows]
 
     def review_item(self, review_id: int, kind: str, n: int) -> reviews.Item | None:
         r = self.con.execute(
             "SELECT * FROM review_items WHERE review_id=? AND kind=? AND n=?", (review_id, kind, n)
         ).fetchone()
-        return _review_item(r, self._review_picks(review_id).get(r["id"], ())) if r else None
+        if r is None:
+            return None
+        return _review_item(
+            r,
+            self._review_picks(review_id).get(r["id"], ()),
+            self._review_abstentions(review_id).get(r["id"], ()),
+        )
 
     def _review_picks(self, review_id: int) -> dict[int, tuple[tuple[str, int], ...]]:
         """Every pick on the board's items (#423), by item id, the oldest first."""
@@ -3080,6 +3087,52 @@ class Store:
         for r in rows:
             out.setdefault(r["item_id"], []).append((r["agent"], r["choice"]))
         return {k: tuple(v) for k, v in out.items()}
+
+    def _review_abstentions(self, review_id: int) -> dict[int, tuple[str, ...]]:
+        """Agents whose latest option move on each item is an abstention (#785), oldest first.
+
+        An abstention is a ``review`` event (``to: "abstained"``), not a ``review_picks`` row: that
+        table's check only allows an option index. The later of ``abstained`` and ``picked`` for an
+        agent is what counts, so a later ``concur`` drops them from this list. An agent who left is
+        still named here; ``consensus`` keeps only those in the room now."""
+        row = self.con.execute("SELECT room_id, opened_at FROM reviews WHERE id=?", (review_id,)).fetchone()
+        if row is None:
+            return {}
+        labels = {
+            ("F" if r["kind"] == "finding" else "Q") + str(r["n"]): r["id"]
+            for r in self.con.execute("SELECT id, kind, n FROM review_items WHERE review_id=?", (review_id,))
+        }
+        latest: dict[tuple[int, str], tuple[int, str]] = {}
+        for event in self.review_events(row["room_id"], review_id, row["opened_at"]):
+            data = event.data
+            to = data.get("to")
+            label = data.get("item")
+            by = data.get("by")
+            if (
+                to not in ("picked", "abstained")
+                or not isinstance(to, str)
+                or not isinstance(label, str)
+                or not isinstance(by, str)
+                or not by
+            ):
+                continue
+            item_id = labels.get(label)
+            if item_id is None:
+                continue
+            latest[(item_id, by)] = (event.id, to)
+        when = sorted(
+            (eid, item_id, agent) for (item_id, agent), (eid, to) in latest.items() if to == "abstained"
+        )
+        out: dict[int, list[str]] = {}
+        for _, item_id, agent in when:
+            out.setdefault(item_id, []).append(agent)
+        return {k: tuple(v) for k, v in out.items()}
+
+    def clear_review_pick(self, item_id: int, agent: str) -> None:
+        """Drop ``agent``'s pick on an item (#785). An abstention is not a choice, and the picks
+        table only holds option indexes, so the row goes. The event is what records the abstention."""
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM review_picks WHERE item_id=? AND agent=?", (item_id, agent))
 
     def set_review_pick(self, item_id: int, agent: str, choice: int) -> None:
         """``agent``'s pick among an item's options (``concur``), replacing the one they made
@@ -3523,7 +3576,11 @@ def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
     return any(r[1] == column for r in con.execute(f"PRAGMA table_info({table})").fetchall())
 
 
-def _review_item(r: sqlite3.Row, picks: tuple[tuple[str, int], ...] = ()) -> reviews.Item:
+def _review_item(
+    r: sqlite3.Row,
+    picks: tuple[tuple[str, int], ...] = (),
+    abstentions: tuple[str, ...] = (),
+) -> reviews.Item:
     try:
         opts = tuple(str(o) for o in json.loads(r["options"]))
     except (ValueError, TypeError):
@@ -3553,4 +3610,5 @@ def _review_item(r: sqlite3.Row, picks: tuple[tuple[str, int], ...] = ()) -> rev
         created_at=r["created_at"],
         updated_at=r["updated_at"],
         picks=picks,
+        abstentions=abstentions,
     )
