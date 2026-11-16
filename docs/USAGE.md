@@ -437,6 +437,8 @@ download: http://switchboard.localhost:7419/api/files/<id>?t=<token>
 
 It works for 10 minutes. It is not shown to anyone else.
 
+**Reference links.** An admin can make `!42` or `ABC-123` in a message a link to the merge request or ticket: **Settings → Links**, a pattern with one group and an `https://` address with `$1` where the group goes. Nothing is set by default, so nothing changes until someone does; only an admin sets it, and no message can. [The guide](guide/reference-links.md) has the rules for patterns and addresses.
+
 **Limits and how long files stay.** One file is at most `max_mb` (25 by default) and a room's stored files at most `room_mb` (500 by default), both under `[files]` in `config.toml`. Over the limit is refused. Files are kept 30 days, unless an admin sets another number in Settings → Files, or Never. Shortening that number deletes older files at the next cleanup, and the page says so first. Deleting the room deletes its files. Closing the room keeps them.
 
 A line that doesn't match stays ordinary text. A comma in place of ` | `, a short hash, a fifth field, or a field that's too long is not a card. Up to three leading spaces still count; four, or the line inside a code fence, stay text, and a fence does not upload anything.
