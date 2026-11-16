@@ -1230,6 +1230,33 @@ def test_an_owner_can_replace_only_an_unconfirmed_fix() -> None:
         reviews.agent_move(replace(item, confirmed_by="codex-1"), "fix", "claude-1")
 
 
+def test_the_raiser_can_edit_a_raised_or_contested_card_and_the_history_names_the_fields() -> None:
+    """#786: a correction changes only the fields given, and the card's history names them. Fails
+    while a raised card has no edit, so a wrong title can only be corrected in chat."""
+    item = replace(finding(), detail="the old note")
+    changed = reviews.edit_changes(
+        item, "codex-1", {"title": "off by two", "where": "b.py:9"}, by_person=False
+    )
+    assert changed == {"title": "off by two", "file": "b.py", "lines": "9"}
+    with pytest.raises(ReviewError, match="already says"):
+        reviews.edit_changes(item, "codex-1", {"title": "off by one"}, by_person=False)
+    with pytest.raises(ReviewError, match="only codex-1"):
+        reviews.edit_changes(item, "claude-1", {"title": "no"}, by_person=False)
+    with pytest.raises(ReviewError, match="raised or contested"):
+        reviews.edit_changes(replace(item, state="conceded"), "codex-1", {"title": "no"}, by_person=False)
+    # a person corrects any card, including one an agent may not
+    person = reviews.edit_changes(
+        replace(item, state="dropped", kind="question"), "alice", {"detail": ""}, by_person=True
+    )
+    assert person == {"detail": ""}
+    events = [
+        {"ts": 2.0, "data": {"item": "F1", "to": "edited", "by": "codex-1", "fields": ["title", "lines"]}}
+    ]
+    assert reviews.history(item, events)[-1]["did"] == "edited the title and the lines"
+    junk = [{"ts": 3.0, "data": {"item": "F1", "to": "edited", "by": "codex-1", "fields": ["title", "nope"]}}]
+    assert [h["did"] for h in reviews.history(item, junk)] == ["raised it"]
+
+
 def test_reopening_is_named_in_the_history_and_wakes_the_owner() -> None:
     """A reopen is distinct from conceding and hands the rejected fix back to its owner."""
     item = replace(finding("conceded", owner="claude-1"), reason="The shutdown race remains")

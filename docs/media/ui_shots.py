@@ -4005,11 +4005,56 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names``, ``admins`` and ``backups`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
+def shoot_review_edit(browser: Any, out: Path, world: Any) -> None:
+    """#786: a person corrects a card. Light shows the card before; light, dark and the phone
+    show it after, with the new title and the history line."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#edit-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            page.click('#board .board-card[data-item="F3"]')
+            if slug == "light":
+                page.locator("#board .board-history").scroll_into_view_if_needed()
+                settle(page)
+                shot(page, out, "review-edit-before-light.png")
+            page.click("#board-edit")
+            expect(page.locator("#board-edit-title")).to_have_value("Rounding drops a cent on $19.99")
+            page.fill("#board-edit-title", "Rounding drops two cents on $19.99")
+            page.click("#board-edit-save")
+            expect(page.locator("#board .board-detail h3")).to_have_text(
+                "F3 · Rounding drops two cents on $19.99"
+            )
+            page.locator("#board .board-history").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, "review-edit-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
 ONLY: dict[str, Any] = {
     "backups": shoot_backups,
     "home": shoot_home,
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
+    "review_edit": shoot_review_edit,
     "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,

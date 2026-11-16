@@ -30,6 +30,7 @@ ACTIONS = (
     "show",
     "raise",
     "ask",
+    "edit",
     "concur",
     "abstain",
     "concede",
@@ -236,6 +237,8 @@ class Boards:
         here = self.store.active_names(room.id)
         if action == "concur":
             return self._concur(room, rv, item, actor, here, params)
+        if action == "edit":
+            return self._edit(room, rv, item, actor, params, by_person=False)
         if action == "abstain":
             return self._abstain(room, rv, item, actor, here)
         to = reviews.agent_move(
@@ -362,6 +365,32 @@ class Boards:
             said = f"{actor} picked another option for {item.label}: the agents are split"
         else:
             said = f"{actor} picked an option for {item.label}; waiting on {reviews.names(c.waiting)}"
+        return self._told(room, rv, moved, actor, said, wake=False)
+
+    def _edit(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        item: reviews.Item,
+        actor: str,
+        params: dict[str, Any],
+        *,
+        by_person: bool,
+    ) -> dict[str, Any]:
+        """Correct a card's title, detail, file or lines (#786). The state stays. A notice, like a
+        pick: the new words are on the card, and the history names which fields changed. The notice
+        names the fields, not the new text, so a card's title is not posted into the room as the
+        editor's words."""
+        changes = reviews.edit_changes(item, actor, params, by_person=by_person)
+        self.store.edit_review_item(item.id, **changes)
+        fields = [name for name in reviews.EDIT_FIELDS if name in changes]
+        self._event(room, rv, item=item.label, to="edited", by=actor, fields=fields, person=by_person)
+        moved = self.store.review_item(rv["id"], item.kind, item.n)
+        assert moved is not None
+        said = f"{actor} edited {item.label}: {', '.join(fields)}"
+        if by_person:
+            self._notice(room, said)
+            return {"ok": True, "boards": self._publish(room)}
         return self._told(room, rv, moved, actor, said, wake=False)
 
     def _abstain(
@@ -663,12 +692,16 @@ class Boards:
             return self._handoff(room, rv, name, person_id, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
-        if action not in ("answer", "concede", "confirm", "drop", "fix", "defer"):
-            raise ReviewError("action must be answer, concede, confirm, fix, drop, defer, handoff or close")
+        if action not in ("answer", "concede", "confirm", "drop", "fix", "defer", "edit"):
+            raise ReviewError(
+                "action must be answer, concede, confirm, fix, drop, defer, edit, handoff or close"
+            )
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
             raise ReviewError(f"{room.name}'s board has no {('F' if kind == 'finding' else 'Q')}{n}")
+        if action == "edit":
+            return self._edit(room, rv, item, name, params, by_person=True)
         reassigned = action == "concede" and item.state == "conceded"
         if action == "confirm":
             # a person may confirm any fix, the raiser's check or not: a person's ruling (#371)

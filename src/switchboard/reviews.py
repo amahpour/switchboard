@@ -252,6 +252,56 @@ def where(value: Any) -> tuple[str, str]:
     return text(path, "file", MAX_FILE), lines(span)
 
 
+# the card text an edit may replace (#786), in the order a history line names them
+EDIT_FIELDS = ("title", "detail", "file", "lines")
+
+
+def edit_changes(item: Item, actor: str, params: dict[str, Any], *, by_person: bool) -> dict[str, str]:
+    """The text an edit replaces on ``item``, or ReviewError (#786).
+
+    ``params`` may carry ``title``, ``detail`` and ``where`` (file and lines, the same string
+    ``raise`` takes). A key that is absent stays as it is. ``where`` replaces file and lines
+    together, and an empty ``where`` clears both. Nothing that differs from the card is a refusal,
+    so a save of the same text does not become a history line. An agent may edit only a finding
+    they raised, and only while it is raised or contested. A person may edit any card: the page
+    is how a wrong title gets corrected after the finding has moved on."""
+    if not by_person:
+        if actor != item.raised_by:
+            raise ReviewError(f"only {item.raised_by}, who raised {item.label}, can edit it")
+        if item.kind != "finding" or item.state not in ("raised", "contested"):
+            raise ReviewError(
+                f"{item.label} is {item.state}: only a raised or contested finding can be edited"
+            )
+    if not any(key in params for key in ("title", "detail", "where")):
+        raise ReviewError(f"{item.label} needs a title, detail or where to edit")
+    changes: dict[str, str] = {}
+    if "title" in params:
+        title = text(params.get("title"), "title", MAX_TITLE, required=True)
+        if title != item.title:
+            changes["title"] = title
+    if "detail" in params:
+        detail = text(params.get("detail"), "detail", MAX_DETAIL)
+        if detail != item.detail:
+            changes["detail"] = detail
+    if "where" in params:
+        file, span = where(params.get("where"))
+        if file != item.file:
+            changes["file"] = file
+        if span != item.lines:
+            changes["lines"] = span
+    if not changes:
+        raise ReviewError(f"{item.label} already says that")
+    return changes
+
+
+def edit_did(fields: Sequence[str]) -> str:
+    """How an edit reads on a card's history: the fields it changed, in ``EDIT_FIELDS`` order."""
+    names = [name for name in EDIT_FIELDS if name in fields]
+    if len(names) == 1:
+        return f"edited the {names[0]}"
+    return f"edited the {', the '.join(names[:-1])} and the {names[-1]}"
+
+
 def options(value: Any) -> tuple[str, ...]:
     if not isinstance(value, list) or not 2 <= len(value) <= MAX_OPTIONS:
         raise ReviewError(f"options must be a list of 2 to {MAX_OPTIONS} choices")
@@ -567,6 +617,18 @@ def history(item: Item, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for e in events:
         d = e.get("data") or {}
         did = HISTORY_VERBS.get(d.get("to"))  # type: ignore[arg-type]
+        if d.get("to") == "edited":
+            # only the field names the broker wrote: anything else is left out, so a stored event
+            # cannot put its own words on the card (#786)
+            changed = d.get("fields")
+            if (
+                isinstance(changed, list)
+                and changed
+                and all(isinstance(name, str) and name in EDIT_FIELDS for name in changed)
+            ):
+                did = edit_did(changed)
+            else:
+                did = None
         if d.get("item") == item.label and did and isinstance(d.get("by"), str):
             if d.get("to") == "taken" and isinstance(d.get("previous_raiser"), str):
                 did = f"took over from {d['previous_raiser']}"

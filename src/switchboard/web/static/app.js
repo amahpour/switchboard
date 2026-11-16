@@ -7119,8 +7119,76 @@
       });
       acts.append(label, drop);
     }
+    acts.append(boardEdit(i));
     if (acts.childNodes.length) d.append(acts);
     return d;
+  }
+
+  // The location a card already shows, in the `where` shape raise and edit take.
+  function boardWhereValue(i) {
+    if (i.file && i.lines) return i.file + ':' + i.lines;
+    if (i.file) return i.file;
+    if (i.lines) return ':' + i.lines;
+    return '';
+  }
+
+  // A person corrects any card's title, detail, file and lines (#786). The form starts closed;
+  // Save sends only the fields that differ, and an empty title is refused here before the request.
+  function boardEdit(i) {
+    const box = el('div', 'board-edit');
+    box.hidden = true;
+    function labeled(id, labelText, value, max) {
+      const label = el('label', 'board-field', labelText);
+      const input = el('input');
+      input.id = id;
+      input.type = 'text';
+      input.maxLength = max;
+      input.value = value;
+      label.append(input);
+      return label;
+    }
+    const title = labeled('board-edit-title', 'Title', i.title || '', 200);
+    const detailLabel = el('label', 'board-field', 'Detail');
+    const detail = el('textarea');
+    detail.id = 'board-edit-detail';
+    detail.maxLength = 4000;
+    detail.value = i.detail || '';
+    detailLabel.append(detail);
+    const file = labeled('board-edit-file', 'File', i.file || '', 300);
+    const lines = labeled('board-edit-lines', 'Lines', i.lines || '', 40);
+    const save = btn('btn', 'Save');
+    save.id = 'board-edit-save';
+    save.addEventListener('click', function () {
+      const body = { action: 'edit', item: i.label };
+      const nextTitle = title.querySelector('input').value.trim();
+      if (!nextTitle) { title.querySelector('input').focus(); return; }
+      if (nextTitle !== i.title) body.title = nextTitle;
+      const nextDetail = detail.value.trim();
+      if (nextDetail !== (i.detail || '')) body.detail = nextDetail;
+      const f = file.querySelector('input').value.trim();
+      const ln = lines.querySelector('input').value.trim();
+      const where = f ? (ln ? f + ':' + ln : f) : (ln ? ':' + ln : '');
+      if (where !== boardWhereValue(i)) body.where = where;
+      if (body.title === undefined && body.detail === undefined && body.where === undefined) {
+        box.hidden = true;
+        return;
+      }
+      boardMove(body);
+    });
+    box.append(title, detailLabel, file, lines, save);
+    const edit = btn('btn', 'Edit');
+    edit.id = 'board-edit';
+    edit.addEventListener('click', function () {
+      box.hidden = false;
+      const input = title.querySelector('input');
+      if (!input) return;
+      input.focus();
+      // the composer covers the bottom of the page, so the field has to come up into view
+      input.scrollIntoView({ block: 'center', inline: 'nearest' });
+    });
+    const wrap = el('div', 'board-edit-wrap');
+    wrap.append(edit, box);
+    return wrap;
   }
 
   // A person's move on the board on show: its url says which, since the room may have several.

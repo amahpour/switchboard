@@ -22,6 +22,7 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 - `show`: read one board, including a closed one. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.
 - `raise` (`title`, `where`, `detail`): a finding. Two to four `options` are allowed, and then `recommend` (the index you pick) is required. Options without a recommendation are refused, and so is a recommendation without options.
 - `ask` (`title`, `options`, `recommend`): a question only a person can answer. Two to four options, and `recommend` is required.
+- `edit` (`item`, and any of `title`, `detail`, `where`): correct a finding you raised, while it is raised or contested. A field you leave out stays. Each edit is a line on the card's history.
 - `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its index.
 - `abstain` (`item`): you have no view. You are not waited on, and you are not a side of a split. A later `concur` replaces it.
 - `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room.
