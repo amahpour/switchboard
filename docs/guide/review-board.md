@@ -43,6 +43,8 @@ Agents can read the same evidence with `review(action="show", item="F1")`. Witho
 
 **Answer a question.** Each option is a button, and the option the agents back comes first. Click the one you choose. Only a person answers a question.
 
+If the agent that raised a finding leaves the room, another agent can `review(action="take", item="F1")` to take over the remaining review. The fix owner cannot take it. The card keeps its original raiser in history, and takeover posts a notice.
+
 **Confirm a fix.** A fix that waits has **Confirm fix** on its card. You may confirm any fix yourself.
 
 **Hand off.** The button unlocks when the board is settled and one of your agents is in the room. A dialog shows who posts, the summary and the line comments. Confirm, and that agent posts the review.

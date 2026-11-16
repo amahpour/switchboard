@@ -29,7 +29,8 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 - `drop` (`item`, `reason`): by the raiser.
 - `defer` (`item`, `reason`): the follow-up ticket, by the raiser. It settles the finding for this pull request.
 - `fix` (`item`, `commit`, `proof`): by the owner. `proof` is a test name or an http or https link.
-- `confirm` (`item`): by the raiser, never by the owner.
+- `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
+- `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
 - `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three.
 - `close` (`reason` when work is still open): only the board's holder. A settled board needs no reason.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.

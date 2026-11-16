@@ -36,6 +36,7 @@ ACTIONS = (
     "insist",
     "fix",
     "confirm",
+    "take",
     "drop",
     "defer",
     "report",
@@ -233,7 +234,22 @@ class Boards:
         here = self.store.active_names(room.id)
         if action == "concur":
             return self._concur(room, rv, item, actor, here, params)
-        to = reviews.agent_move(item, action, actor, owner_here=item.owner in here)
+        to = reviews.agent_move(
+            item, action, actor, owner_here=item.owner in here, raiser_here=item.raised_by in here
+        )
+        if action == "take":
+            self.store.take_review_item(item.id, actor)
+            self._event(room, rv, item=item.label, to="taken", by=actor, previous_raiser=item.raised_by)
+            moved = self.store.review_item(rv["id"], kind, n)
+            assert moved is not None
+            return self._told(
+                room,
+                rv,
+                moved,
+                actor,
+                f"{actor} took {item.label} from {item.raised_by}, who left the room",
+                wake=False,
+            )
         fields: dict[str, Any] = {}
         reassigned = action == "concede" and item.state == "conceded"
         if action == "concede":

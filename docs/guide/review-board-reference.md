@@ -58,8 +58,8 @@ Your own moves on the page are different. Each one is a message from you in the 
 The middle lane is called **Needs you**. It holds only what the agents cannot settle themselves:
 
 - A **question** the agents asked you.
-- A **finding both sides have argued.** The agent that raised it insisted, so it waits for your ruling. The other agent can still concede it, and the raiser can still drop it. A contested finding also comes to you at once when the agent that raised it has left the room or is offline, because nobody is there to answer the contest.
-- A **fix nobody else can check.** Its raiser has left the room, or its raiser is also its owner, or 24 hours went by and the raiser never confirmed it.
+- A **finding both sides have argued.** The agent that raised it insisted, so it waits for your ruling. The other agent can still concede it, and the raiser can still drop it. A contested finding also comes to you at once when the agent that raised it has left the room or is offline, until an independent agent takes over its review.
+- A **fix nobody else can check.** Its raiser has left the room and nobody has taken over, or its raiser is also its owner, or 24 hours went by and the responsible reviewer never confirmed it.
 
 Everything else stays with the agents, in **Agents working**. A finding that was only raised, and that nobody has answered yet, stays there too.
 
@@ -262,10 +262,16 @@ review(room="build", action="concur", item="Q1", recommend=0)
 - **`drop`** withdraws a finding, with a `reason`. Only the raiser can, and only until the finding is fixed.
 - **`defer`** settles a finding for this pull request. `reason` is the follow-up ticket's key or a link. Only the raiser can.
 
+### Taking over a departed reviewer's work
+
+`take(item)` transfers the raiser's moves on an unsettled finding to the caller, once the raiser has left the room. The caller must be in the room and must not be the fix owner. A raiser that is offline but still a member has not left, so takeover is refused. Questions, dropped findings and confirmed fixes cannot be taken.
+
+The finding keeps its state, owner, evidence, proof and fix age. Its history still names the original raiser and records each takeover. Picks among fix options stay with the agents who actually made them; taking over does not endorse the old recommendation. The replacement may confirm the fix, or drop or defer open work under the usual rules. The fixer still cannot confirm its own fix. Takeover posts a notice and wakes nobody. A person can still rule or confirm at any time.
+
 ### Fixing and checking
 
 - **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
-- **`confirm`** is the raiser's check of a fix. It takes `item`. The owner and everyone else are refused. Then the finding is settled.
+- **`confirm`** is the raiser's check of a fix. It takes `item`. A reviewer that took over with `take` has this check instead. The owner and everyone else are refused. Then the finding is settled.
 
 ```text
 review(room="build", action="concede", item="F1")
@@ -312,7 +318,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 - A finding's file is 300 characters at most, and its lines are a number or a range, such as `42` or `40-58`.
 - A card's history shows at most 12 lines.
 - `list` names at most 50 boards. The older closed ones are counted.
-- Only a person answers a question. Only the agent that raised a finding confirms its fix. You can confirm any fix too.
+- Only a person answers a question. Only the agent responsible for reviewing a finding (its raiser, or a replacement through `take`) confirms its fix. You can confirm any fix too.
 - Only the agent that holds a board can close it or reset it. The holder is the one that opened the board, or opened it again last. A board you open, or open again, with `/review` is held by you. An agent cannot close or reset it. It can ask you to close it.
 - After a hand off, a board takes no more moves on its cards. It takes reports and a close.
 - You can start a review, answer, rule, confirm, defer, drop, hand off and close from the page. You cannot raise a finding, ask a question or move the head commit. Agents do.
@@ -405,7 +411,7 @@ A board that was handed off stays handed off, even when it is closed and opened 
 
 **The tool**
 
-- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
+- `review(room, action, ...)`. The actions are `open`, `list`, `show`, `raise`, `ask`, `concur`, `concede`, `contest`, `insist`, `fix`, `confirm`, `take`, `drop`, `defer`, `report`, `close` and `reset`. The tool's description names those and nothing else. Claude Code, Codex and Cursor read the rest from the `review-board` skill. Devin and OpenCode V2 read it from the `/review` request, the wake lines and the fields below.
 - The fields are `item`, `url`, `head`, `title`, `detail`, `where`, `owner`, `commit`, `proof`, `reason`, `options`, `recommend`, `state`, `threads` and `ci`. An action reads only the fields it needs. `detail` is Markdown, and a Mermaid diagram is allowed. `where` is `shop/cart.py:40-58`.
 
 **On the page**
