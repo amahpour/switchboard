@@ -46,6 +46,13 @@ docker build -t switchboard:dev -f deploy/image/Dockerfile .
 SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # about 20 seconds; unset, it builds switchboard:test itself
 ```
 
+The same image job also checks Litestream recovery against MinIO (#689): an old schema is replicated,
+then migrated by the broker, written and checkpointed, and recovered from S3 after losing the volume.
+CI provisions the pinned Litestream image and builds `switchboard:litestream-minio` from pinned
+upstream server/client commits and their `go.sum` files (`tests/image/Dockerfile.minio`), since the
+public MinIO images were withdrawn. Local runs use cached images only and skip this drill if either
+image is absent; they never pull. The process/socket drill also runs 20 times alone and once with xdist.
+
 The UI's screenshot lands in `e2e-artifacts/image/`. CI's `image` job builds the image for linux/amd64 on every PR that runs the tests (with the build cache), runs these, and uploads the screenshot as `image-artifacts`.
 On Linux, the fixture waits for the Docker bridge and both container links to finish IPv6 address setup before opening Chromium. A proxy health check can pass earlier, while the later address change interrupts a browser request with `ERR_NETWORK_CHANGED`.
 

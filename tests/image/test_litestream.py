@@ -1,6 +1,6 @@
 """The shipped Litestream sidecar restores the broker from MinIO (#689, DESIGN.md §57.2).
 
-Opt-in with the existing image marker. CI provisions the pinned images; local runs never pull.
+Opt-in with the existing image marker. CI provisions Litestream and builds MinIO; local runs never pull.
 The restore probe waits for the expected rows in S3 instead of assuming a sync delay has elapsed.
 """
 
