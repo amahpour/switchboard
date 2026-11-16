@@ -434,6 +434,8 @@ Call lines are ordinary room messages, with the sender kind `meeting`. An agent 
 How a name is matched:
 
 - It has to be an address, not a mention. The name at the start of a sentence, after "hey", "hi", "ok" or "okay", or right before a comma, counts. "I asked Claude yesterday" does not.
+- A name in the middle of a line counts when the line asks it for something: after "ask", "tell", "please", "can", "could", "would", "will" or "should" ("can Claude one check the tests"), after "have", "want" or "need" when "to" or a request follows ("I want the Widgetboard Claude to tell me about the plan"), or right before "can you" or "please". "I asked Claude yesterday", "I told Claude to go away" and "Claude said that earlier" (not at the start of a line) wake no one.
+- Spaces and hyphens do not matter. "Widget board Claude" is `widgetboard-claude`, and a bare "widgetboard" works when only one agent starts that way.
 - `claude-1` is also heard as "claude one", "claude 1" and "claude number one". Numbers up to twenty are understood as words ("claude twelve"). Past twenty, only digits work ("claude 21").
 - A bare "Claude" or "Codex" works when exactly one agent in the room has a name that starts with it.
 - With `claude-1` and `claude-2` both in the room, "Claude" is ambiguous. The line is posted with no one named, and the room adds a notice: `Someone on the call said "Claude", and this room has claude-1 and claude-2. Say the number.` Say "Claude one" or "Claude two" next time.

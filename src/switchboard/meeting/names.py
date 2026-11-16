@@ -1,7 +1,10 @@
 """Spoken forms of a screen name, and which member a transcript line addresses (DESIGN.md §52).
 
 Speech-to-text writes "Claude one" or "claude 1", never ``@claude-1``. A bare "Claude"
-matches when exactly one member's name starts with it. Nothing here reads a clock or
+matches when exactly one member's name starts with it. Spaces and hyphens do not matter ("coral
+board claude" is ``coralboard-claude``), and a name inside a clearly addressed line counts
+("I want the Coralboard Claude to ...", "can Claude one check ..."), see ``_addressed``.
+Nothing here reads a clock or
 the store: the bridge passes the room's members in.
 """
 
@@ -277,14 +280,92 @@ def match(text: str, members: Iterable[str]) -> Match:
         return Match("none", text=shown, echo=not shown)
     forms = {n: set(spoken_forms(n)) for n in names}
     for phrase in _phrases(said):
-        specific = [n for n in names if phrase in forms[n]]
-        if len(specific) == 1:
-            return Match("one", name=specific[0], heard=_heard(said, phrase), text=shown)
-        if len(specific) > 1:
-            return Match("ambiguous", heard=_heard(said, phrase), names=tuple(specific), text=shown)
-        hits = [n for n in names if _starts(n, phrase)]
+        found = _resolve(phrase, names, forms, _heard(said, phrase), shown)
+        if found:
+            return found
+    found = _find_anywhere(said, names, forms, shown)
+    return found or Match("none", text=shown)
+
+
+def _compact(text: str) -> str:
+    """``text`` with spaces and hyphens taken out: how a name compares when the transcript
+    split it into words, or joined them."""
+    return re.sub(r"[\s\-]+", "", text.lower())
+
+
+def _leads(screen: str, phrase: str) -> bool:
+    """``phrase`` is the first words of ``screen``, spacing ignored, ending where a word ends:
+    ``coralboard`` and ``coral board`` both start ``coral-board-claude``, ``coral`` does not
+    start ``coralboard-claude``."""
+    parts = base_of(screen).split()
+    want = _compact(phrase)
+    return bool(want) and any("".join(parts[:n]) == want for n in range(1, len(parts) + 1))
+
+
+def _resolve(
+    phrase: str, names: list[str], forms: dict[str, set[str]], heard: str, shown: str
+) -> Match | None:
+    """Who ``phrase`` names: a spoken form, then the same with spacing ignored (only when the
+    transcript wrote it as more than one word, so "claudeone" stays no name), then the bare start of
+    a name. Two or more are ambiguous; nobody is None."""
+    split = " " in phrase or "-" in phrase
+    steps = [
+        [n for n in names if phrase in forms[n]],
+        [n for n in names if split and _compact(phrase) in {_compact(f) for f in forms[n]}],
+        [n for n in names if _starts(n, phrase) or _leads(n, phrase)],
+    ]
+    for hits in steps:
         if len(hits) == 1:
-            return Match("one", name=hits[0], heard=_heard(said, phrase), text=shown)
+            return Match("one", name=hits[0], heard=heard, text=shown)
         if len(hits) > 1:
-            return Match("ambiguous", heard=_heard(said, phrase), names=tuple(hits), text=shown)
-    return Match("none", text=shown)
+            return Match("ambiguous", heard=heard, names=tuple(hits), text=shown)
+    return None
+
+
+_FILLER = frozenset({"the", "my", "our", "that", "this", "a", "to", "over", "up", "out", "with", "about"})
+_ASKS = frozenset({"ask", "tell"})  # "ask Claude", not "asked"
+_WANTS = frozenset({"have", "want", "wants", "need", "needs"})  # then the name, then a request
+_MODALS = frozenset({"can", "could", "would", "will", "should", "please"})  # "can Claude one check"
+_ASKED_OF = frozenset({"can you", "could you", "would you", "will you", "please"})
+_REQUESTS = frozenset(
+    "check look review fix run summarize summarise write take send draft explain read update build handle "
+    "join say tell show find make add try test pull push merge post list plan".split()
+)
+_CONNECT = frozenset({"so", "and", "then", "now", "but", "also", "ok", "okay", "hey", "hi", "well"})
+
+
+def _addressed(before: list[str], after: list[str]) -> bool:
+    """Whether a name with these words around it is asked to do something, not just mentioned.
+
+    Yes: "ask/tell" right before it, "have/want/need" before it and "to" or a request after it,
+    "can/could/would/will/should/please" before it, "can you/please" after it, and a request verb
+    after it when a connector ("so", "and", "then") comes before. No: "I asked Claude yesterday",
+    "Claude said that earlier", "I told Claude to ...", "the prices Claude mentioned". Small on
+    purpose: a missed wake is said again, a false wake sends an agent off."""
+    lead = [w for w in before if w not in _FILLER]
+    prev = lead[-1] if lead else ""
+    nxt = after[0] if after else ""
+    if prev in _ASKS or prev in _MODALS:
+        return bool(after)
+    if prev in _WANTS:
+        return nxt == "to" or nxt in _REQUESTS
+    if " ".join(after[:2]) in _ASKED_OF or nxt == "please":
+        return True
+    return prev in _CONNECT and nxt in _REQUESTS
+
+
+def _find_anywhere(said: str, names: list[str], forms: dict[str, set[str]], shown: str) -> Match | None:
+    """A name inside the line, where ``_addressed`` says it is a request. Longest run of words
+    first, then the leftmost, so "coral board claude" is not read as the bare "claude"."""
+    toks = list(_TOKEN.finditer(said))
+    words = [m.group(0).lower() for m in toks]
+    for size in range(min(4, len(words)), 0, -1):
+        for i in range(len(words) - size + 1):
+            if not _addressed(words[:i], words[i + size :]):
+                continue
+            phrase = " ".join(words[i : i + size])
+            heard = said[toks[i].start() : toks[i + size - 1].end()]
+            found = _resolve(phrase, names, forms, heard, shown)
+            if found:
+                return found
+    return None
