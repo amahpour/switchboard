@@ -62,7 +62,7 @@ a change. Text and image reads use no editing budget.
 Each agent's voice on a call comes from `meeting/voices.py` (§52.6): a default picked from its name, or the one a person pinned with `/meeting voice <name> <voice>`. Spoken call replies share the pure `meeting/turns.py` policy (§52.2): one line being spoken and
 one waiting, a 1.5-second speech gap, a 60-second wait limit, each agent's own lines 30 seconds
 apart (2 seconds for an answer to a question put to it) and at most 4 agent lines in a row until a
-person speaks. The bridge holds the slot until `speak_text` returns. A hosted call holds it after its speech poll, until
+person speaks. The bridge holds the slot until the last of its sentences (one `speak_text` each, #761) has been said. A hosted call holds it after its speech poll, until
 the same call's relay reports completion of that exact id at the existing speech route.
 Refusals and expiry are fixed system notices, also queued for the member who tried to speak. In a
 room with a live call the engine adds a rule of its own (`rules.voice_loop_run`, §52.4): after 8

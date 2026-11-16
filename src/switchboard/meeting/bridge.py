@@ -317,11 +317,18 @@ class MeetingBridge:
                     pass
                 continue
             try:
-                args: dict[str, str] = {"text": line.text}
-                if line.voice is not None:
-                    args["voice"] = line.voice  # the patched joinly reads it (deploy/joinly, §52.5)
-                result = await live.client.call_tool("speak_text", args, timeout=SPEAK_TIMEOUT_S)
-                said = joinly.reply(result)
+                voice = line.voice
+
+                async def one(sentence: str, voice: str | None = voice) -> str:
+                    args: dict[str, str] = {"text": sentence}
+                    if voice is not None:
+                        args["voice"] = voice  # the patched joinly reads it (deploy/joinly, §52.5)
+                    return joinly.reply(
+                        await live.client.call_tool("speak_text", args, timeout=SPEAK_TIMEOUT_S)
+                    )
+
+                # a sentence at a time, so the first plays early (#761); voice off drops the rest
+                said = await joinly.speak_by_sentence(one, line.text, lambda: room_id in self._voice)
                 if line.voice is not None and voices.NOT_FOUND in said and line.voice not in live.missing:
                     live.missing.add(line.voice)  # once a call for each voice: the room is told, not nagged
                     self.state.service.notice_in(

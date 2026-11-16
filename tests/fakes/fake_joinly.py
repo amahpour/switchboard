@@ -5,7 +5,8 @@ pushes segments the way the real server does: the resource is the whole transcri
 and a subscriber is told it changed. ``speak_text`` records what it was asked to say and,
 like the real one, returns only when the speech is over: ``hold_speech`` keeps it in the
 middle of a line until ``release_speech``, and ``interrupt_next`` makes the next reply the
-one joinly gives when someone talks over it. ``get_video_snapshot`` returns ``frame`` as an
+one joinly gives when someone talks over it. ``synth_s_per_char`` models the time joinly takes to make speech
+before any of it plays. ``get_video_snapshot`` returns ``frame`` as an
 image, claiming ``frame_type``. ``share_image`` (the patch of deploy/joinly, §52.9) records the picture's
 decoded bytes in ``shared`` and ``stop_share_image`` counts in ``share_stops``; ``share_error`` is the
 sentence the tool fails with, and ``share_tools = False`` is a joinly without the patch.
@@ -85,6 +86,12 @@ class FakeJoinly:
         self.voices: list[str | None] = []  # the voice each line was asked for (the patched speak_text)
         self.unknown_voices: set[str] = set()  # voices this stand-in's Kokoro does not have
         self.hold_speech = False
+        # Making speech takes time before any of it plays, as in joinly: ``synth_s_per_char`` seconds a
+        # character of a call's text; ``started`` is when each call began to play (time.monotonic), and
+        # ``arrived`` when it came in.
+        self.synth_s_per_char = 0.0
+        self.arrived: list[float] = []
+        self.started: list[float] = []
         self.interrupt_next = False
         self.fail_speech = False
         self._gate = asyncio.Event()
@@ -104,6 +111,12 @@ class FakeJoinly:
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None
         self.url = ""
+
+    async def _synthesize(self, text: str) -> None:
+        self.arrived.append(time.monotonic())
+        if self.synth_s_per_char:
+            await asyncio.sleep(self.synth_s_per_char * len(text))
+        self.started.append(time.monotonic())
 
     def start(self) -> "FakeJoinly":
         fake = self
@@ -139,6 +152,7 @@ class FakeJoinly:
                 fake._note_loop()
                 fake.spoken.append(text)
                 fake.voices.append(voice)
+                await fake._synthesize(text)
                 if voice is not None and voice in fake.unknown_voices:
                     return "Finished speaking. The voice was not found, so the session's voice was used."
                 if fake.fail_speech:
@@ -156,6 +170,7 @@ class FakeJoinly:
                 fake._note_loop()
                 fake.spoken.append(text)
                 fake.voices.append(None)
+                await fake._synthesize(text)
                 if fake.fail_speech:
                     raise RuntimeError("could not speak")
                 if fake.hold_speech:

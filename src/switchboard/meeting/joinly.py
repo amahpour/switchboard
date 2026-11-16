@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import warnings
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
 from fastmcp import Client
@@ -27,6 +27,8 @@ from fastmcp.client.transports import StreamableHttpTransport
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from switchboard.meeting.lines import Segment
+from switchboard.meeting.speech import split_sentences
+from switchboard.meeting.voices import NOT_FOUND
 
 PARTICIPANT = "switchboard (transcribing)"
 # joinly screenshots its 1280x720 page, trims a tenth off each edge and fits the rest to this size. Its
@@ -221,6 +223,31 @@ def reply(result: Any) -> str:
         if isinstance(text, str):
             return text
     return ""
+
+
+async def speak_by_sentence(
+    speak: Callable[[str], Awaitable[str]], text: str, going: Callable[[], bool]
+) -> str:
+    """Say ``text`` one sentence at a time, in order (§52.2, #761).
+
+    joinly makes a whole ``speak_text`` into speech before it plays any of it, so one call for three
+    sentences is silence until all three are made. One call each lets the first start while the next
+    is made. ``going`` is asked before every sentence after the first: when it says no (voice went off, the
+    call is ending) the sentences not yet spoken are dropped. So is the rest when someone speaks over
+    one, as the whole line was before. The reply is joinly's own: the interruption if there was one, else
+    a reply that says a voice was missing, else the last.
+    """
+    said = ""
+    missing = ""
+    for number, sentence in enumerate(split_sentences(text) or [text]):
+        if number and not going():
+            break
+        said = await speak(sentence)
+        if said.startswith(INTERRUPTED):
+            return said
+        if NOT_FOUND in said:
+            missing = said
+    return missing or said
 
 
 async def wait_for(handler: Updates, stop: asyncio.Event, timeout: float) -> None:

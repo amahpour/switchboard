@@ -381,6 +381,7 @@ Voice is off when a call starts, unless the room is [hands-free](#hands-free-cal
 What is read aloud, and what is not:
 
 - Only the first three sentences are spoken, and at most 300 characters (about 20 seconds). The cut is always between sentences, so a line never stops in the middle of a word. A very long single sentence is cut at a word instead. The room shows the whole message, so put details there as ordinary text. Without `@call`, a message is never spoken. Voice is for short answers: it is a conversation, not a reading.
+- The spoken part goes to the call one sentence at a time, in order, so the first sentence plays while the next is made instead of the whole answer waiting to be ready. It is still one line for the limits below. Turning voice off, or leaving the call, drops the sentences not yet spoken, and so does someone speaking over one.
 - Markdown marks (`**`, `#`, backticks, list marks) are not read, and a link is read as its words. A bare web address is left out.
 - A code block is replaced by "code omitted". An `artifact:` line is left out.
 - If nothing is left, nothing is said.
@@ -468,7 +469,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **The bot never speaks by itself or shares its own screen.** It speaks an agent's `@call` line when you have voice on. The server's bot takes a picture of what it sees when you ask. A hosted bot does not.
 - **A picture is one frame.** It is 1024 by 576 pixels and a screenshot of the bot's own view of the call, the same on Zoom, Meet and Teams. What a shared screen looks like there depends on the platform's page. On Zoom, joinly's browser shows one tile that follows whoever is talking, so a shared screen may not be what the picture shows. It has not been tried on a real Zoom or Teams call.
 - **Voice is for the call it was turned on in.** It is kept in memory, so it is off after a restart and in every new call.
-- **At most 3 sentences and 300 characters a line, one being spoken and one waiting, an agent's own starts 30 seconds apart (2 for an answer to a question put to it), and 4 agent lines in a row.** A line waits for a 1.5-second gap and expires after 60 seconds still waiting.
+- **At most 3 sentences and 300 characters a line, one being spoken and one waiting, an agent's own starts 30 seconds apart (2 for an answer to a question put to it), and 4 agent lines in a row.** A line waits for a 1.5-second gap and expires after 60 seconds still waiting. The sentences of one line are not separate lines.
 - **At most one snapshot every 10 seconds** on the server's bot. A hosted call takes none.
 - **No voice recognition.** A speaker's name is whatever joinly gives. On Zoom with joinly 0.5.4 it gives none.
 - **The bot's hint list is made when the call starts.** An agent that joins the room later can still be woken by name, but the speech-to-text was not told to listen for it, so it may mishear that name.
