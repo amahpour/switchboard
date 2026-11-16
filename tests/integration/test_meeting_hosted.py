@@ -936,6 +936,8 @@ async def test_a_room_has_one_source_for_its_call(world: World) -> None:
         assert "transcribing a Zoom call, hosted on" in status
         snap = w.command("/meeting snapshot", expect=409)
         assert "isn't available yet for a call hosted" in snap["message"]
+        shared = w.command("/meeting share plan.png", expect=409)
+        assert "isn't available yet for a call hosted" in shared["message"]
     finally:
         await a.close()
 

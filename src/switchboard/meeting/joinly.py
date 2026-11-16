@@ -236,6 +236,15 @@ async def takes_voice(client: Any) -> bool:
     return False
 
 
+async def has_tool(client: Any, name: str) -> bool:
+    """Whether this joinly has a tool called ``name`` (the patch's ``share_image``, §52.9). Anything
+    unexpected is no, so a joinly without the patch is told so and never sent a call it would refuse."""
+    try:
+        return any(getattr(tool, "name", None) == name for tool in await client.list_tools())
+    except Exception:
+        return False
+
+
 def segments(contents: Any) -> list[Segment]:
     """The segments in what ``read_resource`` gave back: the whole transcript so far, in whatever shape the
     client library returned it. An item without a numeric start and end is skipped, a speaker that is not

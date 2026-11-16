@@ -1,4 +1,4 @@
-joinly v0.5.4 files, changed by switchboard (#713, DESIGN.md section 52.5)
+joinly v0.5.4 files, changed by switchboard (#713, #763, DESIGN.md sections 52.5 and 52.9)
 
 server.py and kokoro.py are copies of two files of joinly v0.5.4
 (https://github.com/joinly-ai/joinly, tag v0.5.4), which is MIT licensed:
@@ -16,13 +16,18 @@ What changed from v0.5.4
     - It sets the voice for the length of the call and clears it afterwards.
     - When Kokoro did not know the voice, the answer reads "Finished speaking. The voice was
       not found, so the session's voice was used." instead of "Finished speaking."
+    - Two tools, `share_image` and `stop_share_image` (#763): the first takes the base64 of a PNG or
+      JPEG (checked by its bytes, at most 8 MB and 50 million pixels), draws it on a canvas in the Zoom
+      page and hands the page's Share button that canvas as the stream, through an override of
+      getDisplayMedia that lasts for the share. No URL is taken or opened. If Zoom says the host has not
+      allowed sharing, the tool fails with "Host disabled attendee screen sharing.". The second ends it.
 
   joinly/services/tts/kokoro.py
     - A context variable holds the voice of the line being spoken. `_tts` reads it and falls
       back to the session's voice (`tts_args`) when it is unset or Kokoro has no such voice.
 
 Both files are also formatted with this repository's ruff settings, so its lint passes (line
-breaks and an import order only). Without a `voice`, joinly behaves as v0.5.4.
+breaks and an import order only). Without a `voice`, and unless `share_image` is called, joinly behaves as v0.5.4.
 The same two files are in plugins/claude/meeting/joinly/ and plugins/codex/meeting/joinly/;
 tests/unit/test_joinly_voice_patch.py keeps the three copies identical.
 

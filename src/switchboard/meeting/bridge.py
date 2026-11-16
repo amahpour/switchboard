@@ -6,10 +6,12 @@ each open call is one task and one MCP session. The task always calls
 the connection drops, the room closes, or the broker stops. The meeting link
 lives only in the task, long enough to join, and is never logged.
 
-Two things go back into the call through the same session, both started by a person. While
+Three things go back into the call through the same session, all started by a person. While
 voice is on, an agent's ``@call`` line is spoken (``speak_text``), one line at a time off the
-request that posted it. A snapshot (``get_video_snapshot``) is stored as a room file and posted.
-Whether voice is on is memory only: a call does not outlive the process, so neither does it.
+request that posted it. A snapshot (``get_video_snapshot``) is stored as a room file and posted. A
+room's picture is shown as a screen share (``share_image``, §52.9), one at a time, and ends with
+the call. Whether voice is on, and whether a picture is shared, is memory only: a call does not
+outlive the process, so neither does either.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from switchboard.meeting import ingest, joinly, voices
+from switchboard.meeting import ingest, joinly, share, voices
 from switchboard.meeting.ingest import LINE_GAP_S
 from switchboard.meeting.joinly import (
     INTERRUPTED,
@@ -44,6 +46,7 @@ log = logging.getLogger("switchboard.meeting")
 
 JOIN_TIMEOUT_S = 45.0
 SNAPSHOT_TIMEOUT_S = 8.0  # a call-out's line waits no longer than this for its picture
+SHARE_TIMEOUT_S = 40.0  # joinly waits about eight seconds for Zoom to answer, after it has drawn the picture
 
 
 @dataclass
@@ -58,6 +61,8 @@ class _Live:
     last_snapshot: float | None = None
     voices: bool = False  # this joinly's speak_text takes a voice (the patch, §52.5)
     missing: set[str] = field(default_factory=set)  # voices Kokoro lacked, already told to the room
+    sharing: str | None = None  # the name of the picture being shared in the call, once Zoom has taken it
+    share_busy: bool = False  # a share or its stop is under way: no second one starts beside it
 
 
 class MeetingBridge:
@@ -178,6 +183,7 @@ class MeetingBridge:
                 finally:
                     self._live.pop(room_id, None)
                     await self._stop_speech(live)
+                    await self._end_share(live)  # leaving ends a share; the call may be over already
             finally:
                 await self._leave(client, room_id)
         finally:
@@ -437,6 +443,114 @@ class MeetingBridge:
         except Exception:
             log.warning("meeting room %s: snapshot failed", room_id)
             self.state.service.notice_in(room_id, "Couldn't get a snapshot of the call.")
+
+    # ------------------------------------------------------- share a picture (§52.9)
+    def sharing(self, room_id: int) -> bool:
+        """Whether a picture is being shown in this room's call (for the bar)."""
+        live = self._live.get(room_id)
+        return live is not None and live.sharing is not None
+
+    def request_share(self, room_id: int, data: bytes, name: str, asker: Asker) -> str | None:
+        """A person asks for ``data`` (a PNG or JPEG the command already checked) to be shown in the call.
+        None when it is under way; the room hears how it went. Otherwise why not, as a sentence for them.
+        Only a person's command reaches here: no call line, no agent message and no tool does."""
+        live = self._live.get(room_id)
+        if live is None:
+            return "The bot is not in the call yet."
+        if live.sharing is not None or live.share_busy:
+            return share.BUSY
+        try:
+            task = asyncio.get_running_loop().create_task(self._share(room_id, live, data, name, asker))
+        except RuntimeError:
+            return "The meeting bridge is not running."
+        live.share_busy = True
+        self._side.add(task)
+        task.add_done_callback(self._side.discard)
+        return None
+
+    def request_stop_share(self, room_id: int) -> str | None:
+        """A person ends the share. None when it is under way, else why not."""
+        live = self._live.get(room_id)
+        if live is None:
+            return "The bot is not in the call yet."
+        if live.sharing is None:
+            return share.NOT_SHARING
+        if live.share_busy:
+            return "A share is starting or stopping. Try again in a moment."
+        try:
+            task = asyncio.get_running_loop().create_task(self._unshare(room_id, live))
+        except RuntimeError:
+            return "The meeting bridge is not running."
+        live.share_busy = True
+        self._side.add(task)
+        task.add_done_callback(self._side.discard)
+        return None
+
+    async def _share(self, room_id: int, live: _Live, data: bytes, name: str, asker: Asker) -> None:
+        notice: str
+        try:
+            if not await joinly.has_tool(live.client, "share_image"):
+                notice = (
+                    "This meeting server cannot share a picture: it needs the joinly patch of"
+                    " deploy/joinly (DEPLOY.md)."
+                )
+            else:
+                await asyncio.wait_for(
+                    live.client.call_tool(
+                        "share_image", {"image": share.encode(data)}, timeout=SHARE_TIMEOUT_S
+                    ),
+                    SHARE_TIMEOUT_S + 3,
+                )
+                live.sharing = name
+                notice = f"{asker.name} is sharing {name} in the call. /meeting share stop ends it."
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            notice = self._share_failure(str(e))
+            log.warning("meeting room %s: share_image failed", room_id)
+        finally:
+            live.share_busy = False
+        self.state.service.publish_settings(room_id)
+        self.state.service.notice_in(room_id, notice)
+
+    @staticmethod
+    def _share_failure(text: str) -> str:
+        """The sentence for a share that did not start. joinly's own words are matched, never repeated."""
+        if share.host_refused(text):
+            return share.NOT_ALLOWED
+        if "only supported in a zoom call" in text.lower():
+            return "Sharing a picture works only in a Zoom call."
+        return "Couldn't share the picture in the call."
+
+    async def _unshare(self, room_id: int, live: _Live) -> None:
+        notice = "The bot stopped sharing."
+        try:
+            await asyncio.wait_for(
+                live.client.call_tool("stop_share_image", {}, timeout=SHARE_TIMEOUT_S), SHARE_TIMEOUT_S + 3
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("meeting room %s: stop_share_image failed", room_id)
+            notice = "Couldn't stop the share from here. Stop it in Zoom if it is still showing."
+        finally:
+            live.sharing = None  # the bar must not say sharing for a share the bot no longer holds
+            live.share_busy = False
+        self.state.service.publish_settings(room_id)
+        self.state.service.notice_in(room_id, notice)
+
+    async def _end_share(self, live: _Live) -> None:
+        """Leaving or a call that is ending: stop a picture that is showing, once, without a word to the room
+        (the call's own notice says it is over). The call may be gone already, so any failure is quiet."""
+        if live.sharing is None:
+            return
+        live.sharing = None
+        try:
+            await asyncio.wait_for(
+                live.client.call_tool("stop_share_image", {}, timeout=LEAVE_TIMEOUT_S), LEAVE_TIMEOUT_S + 3
+            )
+        except Exception:
+            log.debug("meeting: stop_share_image on leaving failed")
 
     def _finish(self, room_id: int, error: str | None) -> None:
         # a call does not outlive the process, and its voice does not outlive the call

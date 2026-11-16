@@ -3301,6 +3301,15 @@ class Store:
         row = self.con.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
         return None if row is None else StoredFile.from_row(row)
 
+    def stored_file_named(self, room_id: int, name: str) -> StoredFile | None:
+        """The newest stored file of this room with exactly this name (``/meeting share <name>``, §52.9)."""
+        row = self.con.execute(
+            "SELECT * FROM files WHERE room_id=? AND name=? AND state='stored'"
+            " ORDER BY stored_at DESC, created_at DESC LIMIT 1",
+            (room_id, name),
+        ).fetchone()
+        return None if row is None else StoredFile.from_row(row)
+
     def backup_files(self, *, limit: int = 100_000) -> list[tuple[str, int, str]]:
         """Stored immutable attachments in a backup's SQLite snapshot (DESIGN.md §57)."""
         return [

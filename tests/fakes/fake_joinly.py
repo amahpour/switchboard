@@ -6,7 +6,10 @@ and a subscriber is told it changed. ``speak_text`` records what it was asked to
 like the real one, returns only when the speech is over: ``hold_speech`` keeps it in the
 middle of a line until ``release_speech``, and ``interrupt_next`` makes the next reply the
 one joinly gives when someone talks over it. ``get_video_snapshot`` returns ``frame`` as an
-image, claiming ``frame_type``. ``hold_join`` keeps ``join_meeting`` waiting until ``release_join``,
+image, claiming ``frame_type``. ``share_image`` (the patch of deploy/joinly, §52.9) records the picture's
+decoded bytes in ``shared`` and ``stop_share_image`` counts in ``share_stops``; ``share_error`` is the
+sentence the tool fails with, and ``share_tools = False`` is a joinly without the patch.
+``hold_join`` keeps ``join_meeting`` waiting until ``release_join``,
 so a test can look at a call that is still joining.
 """
 
@@ -97,6 +100,14 @@ class FakeJoinly:
         self.snapshots = 0
         self.fail_snapshot = False
         self.frame = tiny_png()
+        self.share_tools = True  # the patch's share_image and stop_share_image; False: stock joinly 0.5.4
+        self.shared: list[bytes] = []  # the pictures share_image was given, decoded
+        self.share_raw: list[str] = []  # and the text it was given: what travelled
+        self.share_stops = 0
+        self.share_error: str | None = None
+        self.hold_share = False  # share_image waits (counted in share_attempts) until release_share
+        self.share_attempts = 0
+        self._share_gate = asyncio.Event()
         self.frame_type = "image/png"
         self.loop: asyncio.AbstractEventLoop | None = None
         self._server: uvicorn.Server | None = None
@@ -180,6 +191,26 @@ class FakeJoinly:
                 raise RuntimeError("no such tool")
             return json.dumps(fake.captions)
 
+        if fake.share_tools:
+
+            @mcp.tool
+            async def share_image(image: str) -> str:
+                fake._note_loop()
+                fake.share_attempts += 1
+                if fake.hold_share:
+                    await fake._share_gate.wait()
+                if fake.share_error is not None:
+                    raise RuntimeError(fake.share_error)
+                fake.share_raw.append(image)
+                fake.shared.append(base64.b64decode(image, validate=True))
+                return "Sharing the picture."
+
+            @mcp.tool
+            async def stop_share_image() -> str:
+                fake._note_loop()
+                fake.share_stops += 1
+                return "Stopped sharing the picture."
+
         @mcp.resource(URI)
         def transcript() -> str:
             fake._note_loop()
@@ -244,6 +275,12 @@ class FakeJoinly:
         self.hold_join = False
         if self.loop is not None:
             self.loop.call_soon_threadsafe(self._join_gate.set)
+
+    def release_share(self) -> None:
+        """Let every share_image that is waiting, and every later one, go on."""
+        self.hold_share = False
+        if self.loop is not None:
+            self.loop.call_soon_threadsafe(self._share_gate.set)
 
     def release_speech(self) -> None:
         """Let every line that is waiting in ``speak_text``, and every later one, finish."""

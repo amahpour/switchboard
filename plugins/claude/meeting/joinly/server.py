@@ -1,4 +1,4 @@
-# joinly v0.5.4, server.py, changed by switchboard (#713, #764): see deploy/joinly/NOTICE for what.
+# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764): see deploy/joinly/NOTICE for what.
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. MIT License:
 #
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand
@@ -21,15 +21,18 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import asyncio
 import base64
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Union, get_args
 
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from joinly.container import SessionContainer
 from joinly.services.tts.kokoro import LINE_VOICE, VOICE_FELL_BACK
 from joinly.session import MeetingSession
@@ -434,6 +437,210 @@ async def stop_sharing(
     ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
     await ms.stop_sharing()
     return "Stopped sharing screen."
+
+
+# --- switchboard patch (#763): share one picture in the call ----------------------------------------------
+# The picture arrives as bytes (base64 of a PNG or JPEG), never as a URL, and is drawn on a canvas in the
+# meeting page. Only that canvas is handed to the platform's own Share button, through an override of
+# getDisplayMedia that lives for the length of the share: the browser's own screen picker, and so the bot's
+# virtual display, is never reached. Zoom only (the one platform it was tried on); anything else is refused.
+SHARE_MAX_BYTES = 8 * 1024 * 1024
+SHARE_MAX_PIXELS = 50_000_000  # a PNG or JPEG that claims more is refused before the browser decodes it
+SHARE_WAIT_S = 8.0
+_SHARE_REFUSED = re.compile(
+    r"host disabled attendee screen sharing|disabled share|screen sharing is disabled", re.IGNORECASE
+)
+_JPEG_FRAMES = frozenset({0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF})
+
+_SHARE_JS = """
+async (dataUrl) => {
+  const stale = window.__sbShare;
+  if (stale && stale.stop) stale.stop();
+  const img = new Image();
+  await new Promise((ok, bad) => {
+    img.onload = ok;
+    img.onerror = () => bad(new Error('picture'));
+    img.src = dataUrl;
+  });
+  const c = document.createElement('canvas');
+  c.width = 1280; c.height = 720;
+  const x = c.getContext('2d');
+  const k = Math.min(1280 / img.naturalWidth, 720 / img.naturalHeight);
+  const w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
+  const draw = () => {
+    x.fillStyle = '#111'; x.fillRect(0, 0, 1280, 720);
+    x.drawImage(img, Math.round((1280 - w) / 2), Math.round((720 - h) / 2), w, h);
+  };
+  draw();
+  const timer = setInterval(draw, 200);
+  const md = navigator.mediaDevices;
+  const original = md.getDisplayMedia;
+  const state = { called: false, stream: null };
+  state.stop = () => {
+    clearInterval(timer);
+    if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+    md.getDisplayMedia = original;
+    window.__sbShare = null;
+  };
+  md.getDisplayMedia = async () => {
+    state.called = true;
+    state.stream = c.captureStream(10);
+    return state.stream;
+  };
+  window.__sbShare = state;
+  const buttons = [...document.querySelectorAll('button')];
+  buttons.forEach((b) => { if ((b.innerText || '').trim() === 'Got it') b.click(); });
+  const share = buttons.find((b) => /^share$/i.test(b.getAttribute('aria-label') || ''));
+  if (!share) { state.stop(); return 'no-button'; }
+  share.click();
+  return 'clicked';
+}
+"""
+
+_SHARE_STATUS_JS = """
+() => {
+  const s = window.__sbShare;
+  const text = (document.body && document.body.innerText) || '';
+  return { called: !!(s && s.called), text: text.slice(0, 20000) };
+}
+"""
+
+_SHARE_STOP_JS = (
+    "() => { const s = window.__sbShare; if (s && s.stop) { s.stop(); return true; } return false; }"
+)
+
+
+def _share_picture(data: bytes) -> str:
+    """The data URL of a PNG or JPEG. The type is decided by the bytes alone.
+
+    Raises ValueError with a short reason for anything else, for a body past SHARE_MAX_BYTES, and for a
+    picture whose header cannot be read or claims more than SHARE_MAX_PIXELS."""
+    if len(data) > SHARE_MAX_BYTES:
+        msg = "The picture is too large to share."
+        raise ValueError(msg)
+    width = height = 0
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and data[12:16] == b"IHDR" and len(data) >= 24:
+        kind = "image/png"
+        width = int.from_bytes(data[16:20], "big")
+        height = int.from_bytes(data[20:24], "big")
+    elif data.startswith(b"\xff\xd8\xff"):
+        kind = "image/jpeg"
+        i = 2
+        while i + 9 < len(data):
+            if data[i] != 0xFF:
+                i += 1
+                continue
+            marker = data[i + 1]
+            if marker == 0xFF:
+                i += 1
+                continue
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                i += 2
+                continue
+            if marker in _JPEG_FRAMES:
+                height = int.from_bytes(data[i + 5 : i + 7], "big")
+                width = int.from_bytes(data[i + 7 : i + 9], "big")
+                break
+            i += 2 + max(int.from_bytes(data[i + 2 : i + 4], "big"), 2)
+    else:
+        msg = "Only a PNG or JPEG picture can be shared."
+        raise ValueError(msg)
+    if width < 1 or height < 1 or width * height > SHARE_MAX_PIXELS:
+        msg = "The picture's size could not be read, or is too large to share."
+        raise ValueError(msg)
+    return f"data:{kind};base64,{base64.b64encode(data).decode()}"
+
+
+def _share_page(ms: MeetingSession) -> Any:  # noqa: ANN401
+    """The meeting's own page, and only when it is a Zoom call."""
+    page = getattr(getattr(ms, "_meeting_provider", None), "_page", None)
+    if page is None or "zoom" not in str(getattr(page, "url", "")).lower():
+        msg = "Sharing a picture is only supported in a Zoom call."
+        raise ToolError(msg)
+    return page
+
+
+@mcp.tool(
+    "share_image",
+    description=(
+        "Share one picture in the meeting as a screen share. The picture is given as base64 of a PNG or "
+        "JPEG; everyone sees it until stop_share_image. Zoom only, and the host must allow participants "
+        "to share."
+    ),
+)
+async def share_image(
+    ctx: Context,
+    image: Annotated[str, Field(description="Base64 of a PNG or JPEG picture (at most 8 MB)")],
+) -> str:
+    """Share a picture from bytes, never from a URL."""
+    ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
+    if len(image) > SHARE_MAX_BYTES * 4 // 3 + 8:
+        msg = "The picture is too large to share."
+        raise ToolError(msg)
+    try:
+        url = _share_picture(base64.b64decode(image, validate=True))
+    except ValueError as e:
+        raise ToolError(str(e)) from None
+    page = _share_page(ms)
+    if getattr(ms, "_sb_sharing", False):
+        msg = "Already sharing. Stop the current share first."
+        raise ToolError(msg)
+    await page.bring_to_front()
+    await page.mouse.move(640, 690)  # the toolbar hides until the pointer is over the page
+    cdp = await page.context.new_cdp_session(page)
+    try:
+        # the platform's Share button needs a user gesture: Runtime.evaluate can say it is one
+        reply = await cdp.send(
+            "Runtime.evaluate",
+            {
+                "expression": f"({_SHARE_JS})({json.dumps(url)})",
+                "awaitPromise": True,
+                "userGesture": True,
+                "returnByValue": True,
+            },
+        )
+    finally:
+        await cdp.detach()
+    if reply.get("exceptionDetails") is not None or reply.get("result", {}).get("value") != "clicked":
+        msg = "The Share button was not found in the call."
+        raise ToolError(msg)
+    for _ in range(int(SHARE_WAIT_S / 0.5)):
+        await asyncio.sleep(0.5)
+        status = await page.evaluate(_SHARE_STATUS_JS)
+        if status["called"]:
+            ms._sb_sharing = True  # noqa: SLF001
+            return "Sharing the picture."
+        if _SHARE_REFUSED.search(status["text"]):
+            await page.evaluate(_SHARE_STOP_JS)
+            for name in ("OK", "Got it", "Close"):
+                button = page.get_by_role("button", name=name, exact=True)
+                if await button.count():
+                    await button.first.click(timeout=1000)
+                    break
+            msg = "Host disabled attendee screen sharing."
+            raise ToolError(msg)
+    await page.evaluate(_SHARE_STOP_JS)
+    msg = "Zoom did not start the share."
+    raise ToolError(msg)
+
+
+@mcp.tool(
+    "stop_share_image",
+    description="Stop the picture that share_image is showing in the meeting.",
+)
+async def stop_share_image(ctx: Context) -> str:
+    """Stop a picture share (stop_sharing is joinly's own, for a shared page)."""
+    ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
+    page = _share_page(ms)
+    await page.evaluate(_SHARE_STOP_JS)  # ends the canvas stream, and Zoom ends the share with it
+    ms._sb_sharing = False  # noqa: SLF001
+    stop = page.get_by_role("button", name=re.compile(r"stop share", re.IGNORECASE))
+    try:
+        if await stop.count():
+            await stop.first.click(timeout=2000)
+    except Exception:
+        logger.warning("The Stop Share button could not be clicked")
+    return "Stopped sharing the picture."
 
 
 @mcp.tool(
