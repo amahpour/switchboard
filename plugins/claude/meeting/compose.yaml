@@ -19,6 +19,8 @@
 #
 #   GPU if there is one, CPU if not: the host script picks a profile. `gpu` is joinly's CUDA build and needs the
 #   NVIDIA driver and the NVIDIA Container Toolkit; `cpu` is the plain image.
+# With --ca-file the host script adds an override: a read-only /ca.pem bind and
+# SWITCHBOARD_RELAY_CA_FILE, loaded in addition to the relay's system trust store (#758).
 name: switchboard-call
 
 x-joinly: &joinly

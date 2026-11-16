@@ -21,6 +21,13 @@ Replace `'#room'` with the user's room, quoted because `#` starts a shell commen
 
 The first start may pull several GB of images and a GPU model. The script chooses an NVIDIA GPU Docker can use, else a CPU (including Macs), and returns once the containers start. Tell the user the room, key fingerprint and device from the output. The fingerprint should match the room's call bar. If it doesn't, stop the bot and report it.
 
+If the user names a private CA certificate file, add `--ca-file '/path/to/ca.pem'` to `start`
+(PowerShell too, also with `--from-room` or `--no-join`). The file must be a readable PEM CA certificate,
+without a private key. The script mounts a copy read-only into the relay and adds it to the container's
+system trust store. Registration still needs the host to trust the server. If the relay reports a
+certificate verification error, explain this option and report the error; never disable certificate or
+hostname checks. Changing the CA requires stopping and starting the bot again with the new file.
+
 ## A request from your own person in the room
 
 Your own person's `/meeting <link> mine` request arrives as a human message mentioning your agent,

@@ -965,6 +965,56 @@ def test_a_missing_image_is_pulled_before_the_server_hears_of_the_call(machine: 
     assert len(m.stub.requests) == 1  # the second never told the server
 
 
+@pytest.mark.parametrize("with_host", [False, True])
+def test_named_ca_is_copied_and_mounted_read_only_in_the_relay(machine: Machine, with_host: bool) -> None:
+    """A host-trusted CA is absent in the container. The named file, including spaces in its path,
+    must reach only the relay through a read-only bind, alongside an optional DNS override."""
+    m = machine
+    ca = m.root / "private CA.pem"
+    ca.write_bytes(b"a stand-in CA\n")
+    args = ["--ca-file", str(ca)]
+    if with_host:
+        args += ["--add-host", "sb.internal:192.0.2.7"]
+    result = m.start(*args)
+    assert result.returncode == 0, result.stderr
+    [call] = m.call_dirs()
+    assert (call / "ca.pem").read_bytes() == ca.read_bytes()
+    [up] = m.compose("up")
+    assert up["files"][-1] == str(call / "override.yaml")
+    config = yaml.safe_load((call / "override.yaml").read_text())["services"]["relay"]
+    assert config["environment"] == {"SWITCHBOARD_RELAY_CA_FILE": "/ca.pem"}
+    assert config["volumes"] == [
+        {
+            "type": "bind",
+            "source": "${SB_CALL_DIR}/ca.pem",
+            "target": "/ca.pem",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        }
+    ]
+    assert config.get("extra_hosts") == (["sb.internal:192.0.2.7"] if with_host else None)
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory"])
+def test_an_unusable_ca_is_refused_before_registration(machine: Machine, kind: str) -> None:
+    """A missing file or directory must fail before creating a key or reserving a room's call."""
+    m = machine
+    ca = m.root / "CA.pem"
+    if kind == "directory":
+        ca.mkdir()
+    result = m.start("--ca-file", str(ca))
+    assert result.returncode == 1 and "--ca-file" in result.stderr and "readable file" in result.stderr
+    assert not m.stub.requests and not m.call_dirs()
+
+
+def test_ca_file_requires_a_value(machine: Machine) -> None:
+    """A forgotten CA path is a usage error, not a call start."""
+    m = machine
+    result = m.run(["start", "--ca-file"], stdin="")
+    assert result.returncode == 2 and "--ca-file needs a value" in result.stderr
+    assert not m.stub.requests
+
+
 def test_extra_hosts_for_a_server_the_containers_cannot_resolve_go_in_a_second_compose_file(
     machine: Machine,
 ) -> None:

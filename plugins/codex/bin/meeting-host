@@ -2,7 +2,7 @@
 # Host the meeting bot for one call on this machine (docs/DESIGN.md section 54, docs/guide/meetings.md, #623).
 # Started by the agent from its shell when its person asks (skills/host-meeting-bot), never by a hook.
 #
-#   meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM
+#   meeting-host start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--ca-file FILE] [--no-join|--from-room] ROOM
 #                                                                                                       (link on stdin)
 #   meeting-host stop [FINGERPRINT]       stop this machine's hosted call(s): both containers, then the files
 #   meeting-host status                   what is running, and what the relay last said
@@ -49,7 +49,7 @@ die() { # a sentence on stderr, exit 1
 }
 usage() { # a bad command line: exit 2
   printf '%s: %s\n' "$PROG" "$*" >&2
-  printf 'usage: %s start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--no-join|--from-room] ROOM\n' "$PROG" >&2
+  printf 'usage: %s start [--server URL] [--data DIR] [--cpu|--gpu] [--model NAME] [--add-host NAME:IP] [--ca-file FILE] [--no-join|--from-room] ROOM\n' "$PROG" >&2
   printf '       (the meeting link on stdin)\n' >&2
   printf '       %s stop [FINGERPRINT] | status | plan [--cpu|--gpu] [--model NAME]\n' "$PROG" >&2
   exit 2
@@ -375,7 +375,7 @@ cmd_stop() {
 
 cmd_start() {
   force='' model_arg='' server=${SWITCHBOARD_URL:-${CLAUDE_PLUGIN_OPTION_SERVER_URL:-}} data_arg='' nojoin='' from_room='' room='' allow_http=''
-  add_host=${SWITCHBOARD_RELAY_ADD_HOST:-} override=''
+  add_host=${SWITCHBOARD_RELAY_ADD_HOST:-} override='' ca_file=''
   [ "${SWITCHBOARD_RELAY_ALLOW_HTTP:-}" = 1 ] && allow_http=1
   while [ $# -gt 0 ]; do
     case $1 in
@@ -399,6 +399,12 @@ cmd_start() {
       --add-host)
         [ $# -ge 2 ] || usage "--add-host needs NAME:IP"
         add_host=$2
+        shift 2
+        ;;
+      --ca-file)
+        [ $# -ge 2 ] || usage "--ca-file needs a value"
+        [ -n "$2" ] || usage "--ca-file needs a value"
+        ca_file=$2
         shift 2
         ;;
       --no-join) nojoin=1; shift ;;
@@ -433,6 +439,10 @@ cmd_start() {
     *:*) ;;
     *) usage "--add-host is NAME:IP (or NAME:host-gateway), such as sb.example.internal:192.0.2.7" ;;
   esac
+
+  if [ -n "$ca_file" ]; then
+    [ -f "$ca_file" ] && [ -r "$ca_file" ] || die "--ca-file must name a readable file (PEM CA certificate)"
+  fi
 
   # ---- everything that can be wrong before a key exists
   command -v docker >/dev/null 2>&1 || die "Docker is needed: the bot runs in two containers (https://docs.docker.com/get-docker/)"
@@ -500,6 +510,9 @@ cmd_start() {
   cdir=$data/calls/$fp8
   mkdir -p "$data/calls" "$cdir" 2>/dev/null || die "cannot make $cdir"
   chmod 700 "$data/calls" "$cdir" 2>/dev/null
+  if [ -n "$ca_file" ]; then
+    cat <"$ca_file" >"$cdir/ca.pem" 2>/dev/null || { rm -rf "$cdir"; die "--ca-file must name a readable file (PEM CA certificate)"; }
+  fi
   printf '%s\n' "$key" >"$cdir/key" || die "cannot write the key's file"
   chmod 600 "$cdir/key"
   if [ -n "$link" ]; then
@@ -562,11 +575,26 @@ cmd_start() {
     fi
     chmod 600 "$cdir/link"
   fi
-  if [ -n "$add_host" ]; then
-    # a server whose name the containers' resolver does not know (a LAN name, a test address): written beside the
-    # call's files, passed to Compose as a second file, the one place the relay's /etc/hosts is made
-    printf 'services:\n  relay:\n    extra_hosts: ["%s"]\n' "$add_host" >"$cdir/override.yaml"
+  if [ -n "$add_host$ca_file" ]; then
+    # Keep user paths out of YAML: the CA copy is beside the key, with a separate read-only mount.
     override=$cdir/override.yaml
+    {
+      printf 'services:\n  relay:\n'
+      [ -z "$add_host" ] || printf '    extra_hosts: ["%s"]\n' "$add_host"
+      if [ -n "$ca_file" ]; then
+        cat <<'CA'
+    environment:
+      SWITCHBOARD_RELAY_CA_FILE: /ca.pem
+    volumes:
+      - type: bind
+        source: ${SB_CALL_DIR}/ca.pem
+        target: /ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+CA
+      fi
+    } >"$override"
   fi
   {
     printf 'room=#%s\nplatform=%s\nfingerprint=%s\ndevice=%s\nmodel=%s\nproject=%s\nserver=%s\nstarted=%s\n' \
