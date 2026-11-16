@@ -14,8 +14,15 @@
 # Native Windows has its own: Claude Code runs a headersHelper with cmd.exe there, whichever shell its hooks use,
 # so "bin/headers" finds headers.cmd, which starts windows/headers.ps1 (#499). This script prints {} under Git
 # Bash, MSYS and Cygwin: their process tree is not Windows', so it could not find Claude Code's pid.
+# This plugin's own version, from its manifest, goes out as X-Switchboard-Plugin-Version (docs/DESIGN.md §49.13), so
+# the server can tell a session on an old plugin from one on a current plugin. Only digits and dots are kept: a
+# manifest that says anything else sends no header. It rides along even when the listener key can't be made.
+plugin=$(sed -n '/"version"/{s/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)".*/\1/p;q;}' "${0%/*}/../.claude-plugin/plugin.json" 2>/dev/null)
+case $plugin in '' | *[!0-9.]*) plugin='' ;; esac
+lead=''
+[ -n "$plugin" ] && lead="\"X-Switchboard-Plugin-Version\": \"$plugin\", "
 none() {
-  printf '{}\n'
+  printf '{%s}\n' "${lead%, }"
   exit 0
 }
 case $(uname -s) in MINGW* | MSYS* | CYGWIN*) none ;; esac
@@ -68,5 +75,5 @@ for f in "$dir"/listener-key-*; do
   case $pid in '' | *[!0-9]*) continue ;; esac
   [ "$pid" = "$claude" ] || kill -0 "$pid" 2>/dev/null || rm -f "$f"
 done
-printf '{"X-Switchboard-Listener": "%s"}\n' "$hash"
+printf '{%s"X-Switchboard-Listener": "%s"}\n' "$lead" "$hash"
 exit 0

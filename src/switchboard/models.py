@@ -344,6 +344,11 @@ class Member:
     # the display name of the person it belongs to (#496, §29.10): its device's token's person. None
     # when that can't be worked out, and the page and who() then say nothing. Set by member_rows
     owner: str | None = None
+    # the plugin's version as its calls reported it, and how it compares to the release's (§49.13):
+    # "" when nothing was seen of it or its harness has no versioned plugin, else current, older or unknown
+    plugin_state: str = ""
+    plugin_version: str | None = None
+    plugin_note: str = ""  # one sentence when it isn't current, with the harness's update command
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
