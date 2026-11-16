@@ -206,17 +206,25 @@ def report(params: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def gitlab(review: dict[str, Any]) -> bool:
+    """Whether the board is on a GitLab merge request, so its lines say MR, GitLab's own word."""
+    f = forge(str(review.get("url") or ""))
+    return bool(f and f["kind"] == "gitlab")
+
+
 def report_line(review: dict[str, Any], now: float) -> str:
     """The latest report, as the agent and the page read it: "2 open on the PR, CI failing (per
-    claude-1, 3 min ago)". Empty when no agent has reported."""
+    claude-1, 3 min ago)", or "on the MR" for a GitLab merge request. Empty when no agent has
+    reported."""
     if not review.get("reported_by"):
         return ""
+    pr = "MR" if gitlab(review) else "PR"
     bits = []
     if review.get("pr_state") in ("merged", "closed"):
         bits.append(str(review["pr_state"]))
     if review.get("pr_threads") is not None:
         n = int(review["pr_threads"])
-        bits.append(f"{n} open on the PR" if n else "no threads open on the PR")
+        bits.append(f"{n} open on the {pr}" if n else f"no threads open on the {pr}")
     if review.get("pr_ci"):
         bits.append(f"CI {review['pr_ci']}")
     age = envelope.ago(float(review.get("reported_at") or now), now)
@@ -921,7 +929,7 @@ def render(
     out = [f"Review of {review['url']}{head_s}: {state}"]
     line = report_line(review, now if now is not None else float(review.get("reported_at") or 0))
     if line:
-        out.append(f"The pull request: {line}")
+        out.append(f"The {'merge' if gitlab(review) else 'pull'} request: {line}")
     order = {
         s: n
         for n, s in enumerate(("contested", "open", "raised", "conceded", "answered", "fixed", "dropped"))
