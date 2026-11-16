@@ -65,7 +65,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from switchboard import __version__, board, build_info, db
+from switchboard import __version__, board, build_info, db, ref_links
 from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people
 from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
@@ -1523,6 +1523,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # broker the one person signed in, on a hosted one an admin (§51)
                 "can_set_icons": w.is_admin,
                 "can_backup": w.is_admin,
+                # the admin's reference-link rules (§60): shown to every signed-in person, for the page to
+                # link !42 and ABC-123 with; only an admin may change them
+                "ref_links": [r.to_dict() for r in ref_links.load(state.store)],
+                "can_set_links": w.is_admin,
                 "version": __version__,
                 "commit": build_info.commit(),
                 "test_mode": state.test_mode,
@@ -2166,6 +2170,15 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return None, _err(403, "forbidden", "only an admin sets how long files are kept")
         return w, None
 
+    def _links_admin(request: Request) -> tuple[people.Who | None, JSONResponse | None]:
+        """Reference links are an admin's setting (the owner, on a desktop broker)."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return None, unauthorized()
+        if not w.is_admin:
+            return None, _err(403, "forbidden", "only an admin sets the reference links")
+        return w, None
+
     @app.get("/api/settings/files")
     async def files_settings_get(request: Request) -> Response:
         _w, no = _files_admin(request)
@@ -2189,6 +2202,35 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ValueError as e:
             return _err(400, "bad_request", str(e))
         return _ok({"days": days})
+
+    @app.get("/api/settings/links")
+    async def link_settings_get(request: Request) -> Response:
+        """Reference-link rules (§60): an admin's setting, read by the Settings form."""
+        _w, no = _links_admin(request)
+        if no is not None:
+            return no
+        return _ok({"rules": [r.to_dict() for r in ref_links.load(state.store)], "max": ref_links.MAX_RULES})
+
+    @app.put("/api/settings/links")
+    async def link_settings_put(request: Request) -> Response:
+        """Replace the rules, all or none: a rule that doesn't pass ``ref_links`` refuses the whole save, with
+        the reason. Only an admin's signed-in page can reach this (the Origin and X-Switchboard checks of
+        every unsafe request apply); nothing a room says does."""
+        _w, no = _links_admin(request)
+        if no is not None:
+            return no
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if set(body) != {"rules"}:
+            return _err(400, "bad_request", "rules is required")
+        try:
+            rules = ref_links.save(state.store, body.get("rules"))
+        except ref_links.RuleError as e:
+            return _err(400, "bad_request", str(e))
+        log.info("reference-link rules changed: %d", len(rules))
+        return _ok({"rules": [r.to_dict() for r in rules], "max": ref_links.MAX_RULES})
 
     @app.post("/api/rooms/{slug}/files")
     async def room_file(request: Request, slug: str) -> Response:

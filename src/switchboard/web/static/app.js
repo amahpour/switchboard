@@ -4078,6 +4078,7 @@
     { key: 'rooms', label: 'New rooms', icon: 'hash' },
     { key: 'agents', label: 'Agents', icon: 'terminal' },
     { key: 'files', label: 'Files', icon: 'clip' },
+    { key: 'links', label: 'Links', icon: 'hash' },
     { key: 'backups', label: 'Backups', icon: 'clip' },
     { key: 'security', label: 'Sign-in & security', icon: 'key' },
   ];
@@ -4977,6 +4978,108 @@
     });
   }
 
+  // Settings → Links (§60): rules that turn a reference such as !42 or ABC-123 in a message into a link.
+  // Admins only (the owner, on a desktop broker). Each rule is a pattern with one group and an address
+  // whose $1 stands for what the group matched. The server decides what may be saved and says why when
+  // it refuses; the page only collects the text and shows the answer. A save replaces the whole list.
+  function buildSettingsLinks(panel) {
+    panel.append(el('h3', null, 'Links'),
+      el('p', 'fine', 'Turn references in messages into links. A rule has a pattern with one group in'
+        + ' parentheses, and an address where $1 is what that group matched. For example, the pattern'
+        + ' !(\\d+) with https://gitlab.example.com/group/project/-/merge_requests/$1 makes !42 a link.'
+        + ' The address must start with https://. Only an admin sets these; a message can\u2019t.'));
+    const list = el('div', 'settings-links');
+    list.id = 'settings-links-list';
+    const status = el('p', 'fine');
+    status.id = 'settings-links-status';
+    const add = btn('btn', 'Add a rule');
+    add.id = 'settings-links-add';
+    const save = btn('btn btn-primary', 'Save');
+    save.id = 'settings-links-save';
+    let max = 8;
+    function rows() { return Array.from(list.querySelectorAll('.settings-link-row')); }
+    function refresh() {
+      add.disabled = rows().length >= max;
+      const none = list.querySelector('.settings-links-none');
+      if (rows().length && none) none.remove();
+      else if (!rows().length && !none) list.append(el('p', 'fine settings-links-none', 'No rules yet: nothing in a message becomes a link.'));
+    }
+    function addRow(rule) {
+      const row = el('div', 'settings-link-row');
+      const n = rows().length + 1;
+      const pat = el('input');
+      pat.type = 'text';
+      pat.className = 'settings-link-pattern';
+      pat.maxLength = 60;
+      pat.placeholder = 'Pattern, like !(\\d+)';
+      pat.setAttribute('aria-label', 'Pattern of rule ' + n);
+      pat.setAttribute('autocomplete', 'off');
+      pat.setAttribute('spellcheck', 'false');
+      pat.value = rule ? rule.pattern : '';
+      const url = el('input');
+      url.type = 'text';
+      url.className = 'settings-link-url';
+      url.maxLength = 100;
+      url.placeholder = 'Address, like https://example.com/issues/$1';
+      url.setAttribute('aria-label', 'Address of rule ' + n);
+      url.setAttribute('autocomplete', 'off');
+      url.setAttribute('spellcheck', 'false');
+      url.value = rule ? rule.url : '';
+      const del = btn('btn', 'Remove');
+      del.setAttribute('aria-label', 'Remove rule ' + n);
+      del.addEventListener('click', function () {
+        row.remove();
+        refresh();
+        status.textContent = '';
+        (add.disabled ? save : add).focus();
+      });
+      pat.addEventListener('input', function () { status.textContent = ''; });
+      url.addEventListener('input', function () { status.textContent = ''; });
+      row.append(pat, url, del);
+      for (const n2 of list.querySelectorAll('.settings-links-none')) n2.remove();
+      list.append(row);
+      refresh();
+      return pat;
+    }
+    function fill(rules) {
+      for (const r of rows()) r.remove();
+      for (const r of rules) addRow(r);
+      refresh();
+    }
+    add.addEventListener('click', function () { addRow(null).focus(); status.textContent = ''; });
+    api('GET', '/api/settings/links').then(function (res) {
+      max = res.max || 8;
+      fill(res.rules || []);
+    }, function (e) {
+      status.textContent = String(e.message || e);
+      status.classList.add('bad');
+    });
+    save.addEventListener('click', async function () {
+      const rules = [];
+      for (const r of rows()) {
+        const pattern = r.querySelector('.settings-link-pattern').value.trim();
+        const url = r.querySelector('.settings-link-url').value.trim();
+        if (pattern || url) rules.push({ pattern: pattern, url: url });
+      }
+      status.classList.remove('bad');
+      try {
+        const res = await api('PUT', '/api/settings/links', { rules: rules });
+        fill(res.rules || []);
+        if (state.me) state.me.ref_links = res.rules || [];
+        window.SBMarkdown.setRefLinks(res.rules || []);
+        renderLog();
+        status.textContent = 'Saved.';
+      } catch (e) {
+        status.textContent = String(e.message || e);
+        status.classList.add('bad');
+      }
+    });
+    const actions = el('div', 'settings-links-actions');
+    actions.append(add, save);
+    panel.append(list, status, actions);
+    refresh();
+  }
+
   // Settings → Backups (§57.1): JSON checks precede native downloads, so large archives
   // never enter JavaScript memory. Creation and the actual GET both require fresh identity.
   function backupLink(job) {
@@ -5093,7 +5196,7 @@
 
   const SETTINGS_BUILDERS = {
     profile: buildSettingsProfile, appearance: buildSettingsAppearance,
-    rooms: buildSettingsRooms, agents: buildSettingsAgents, files: buildSettingsFiles,
+    rooms: buildSettingsRooms, agents: buildSettingsAgents, files: buildSettingsFiles, links: buildSettingsLinks,
     security: buildSettingsSecurity, backups: buildSettingsBackups,
   };
 
@@ -5123,6 +5226,10 @@
       if (!list) return 'Tokens for your agents';
       return list.tokens.length ? plural(list.tokens.length, 'device', 'devices') : 'No agent tokens yet';
     }
+    if (key === 'links') {
+      const n = (me.ref_links || []).length;
+      return n ? plural(n, 'rule', 'rules') : 'No reference links yet';
+    }
     if (key === 'files') {
       const days = state.fileDays;
       if (days === 0) return 'Kept until the room is deleted';
@@ -5144,6 +5251,7 @@
     const groups = SETTINGS_GROUPS.filter(function (g) {
       if (g.key === 'security') return hasSecurity;
       if (g.key === 'files') return !!me.can_set_icons;
+      if (g.key === 'links') return !!me.can_set_links;
       if (g.key === 'backups') return !!me.can_backup;
       return true;
     });
@@ -8629,6 +8737,7 @@
     } catch (e) {
       return;
     }
+    window.SBMarkdown.setRefLinks(state.me.ref_links || []);  // an admin's reference-link rules (§60)
     document.documentElement.dataset.theme = (state.me.preferences || {}).theme || 'system';
     if (whiteboard) whiteboard.theme();
     document.documentElement.dataset.textSize = (state.me.preferences || {}).text_size || 'default';

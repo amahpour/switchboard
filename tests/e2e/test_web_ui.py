@@ -1825,14 +1825,15 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     ui.world.command("e2e-wake", "/close")
 
 
-def test_settings_shows_six_tabs_on_a_desktop_broker(ui: UI) -> None:
+def test_settings_shows_seven_tabs_on_a_desktop_broker(ui: UI) -> None:
     """A desktop broker has no password or passkeys to show, so Settings has no Sign-in &
-    security tab, but it has Agents (#382) and, for its owner, Files (#544) and Backups (#688).
+    security tab, but it has Agents (#382) and, for its owner, Files (#544), Links (#790) and Backups (#688).
     Backups explains the CLI fallback until desktop reauthentication exists; Sign out stays in the rail."""
     page = ui.open()
     open_settings(page)
-    expect(page.locator("#settings-rail [role='tab']")).to_have_count(6)
+    expect(page.locator("#settings-rail [role='tab']")).to_have_count(7)
     expect(page.locator("#settings-tab-files")).to_be_visible()
+    expect(page.locator("#settings-tab-links")).to_be_visible()
     expect(page.locator("#settings-tab-agents")).to_be_visible()
     expect(page.locator("#settings-tab-backups")).to_be_visible()
     expect(page.locator("#settings-tab-security")).to_have_count(0)
