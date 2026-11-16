@@ -104,6 +104,7 @@ def test_the_request_asks_for_markdown_a_diagram_and_a_recommendation() -> None:
     assert "write its detail in Markdown" in text and "Mermaid diagram" in text
     assert "with the option you recommend" in text
     assert 'agree with the others\' questions or pick another option with review(action="concur")' in text
+    assert 'or abstain with review(action="abstain") when you have no view' in text
 
 
 def test_the_request_asks_agents_to_settle_a_contest_between_themselves() -> None:

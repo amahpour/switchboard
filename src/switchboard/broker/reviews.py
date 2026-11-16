@@ -31,6 +31,7 @@ ACTIONS = (
     "raise",
     "ask",
     "concur",
+    "abstain",
     "concede",
     "contest",
     "insist",
@@ -235,6 +236,8 @@ class Boards:
         here = self.store.active_names(room.id)
         if action == "concur":
             return self._concur(room, rv, item, actor, here, params)
+        if action == "abstain":
+            return self._abstain(room, rv, item, actor, here)
         to = reviews.agent_move(
             item, action, actor, owner_here=item.owner in here, raiser_here=item.raised_by in here
         )
@@ -359,6 +362,34 @@ class Boards:
             said = f"{actor} picked another option for {item.label}: the agents are split"
         else:
             said = f"{actor} picked an option for {item.label}; waiting on {reviews.names(c.waiting)}"
+        return self._told(room, rv, moved, actor, said, wake=False)
+
+    def _abstain(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        item: reviews.Item,
+        actor: str,
+        here: list[str],
+    ) -> dict[str, Any]:
+        """``actor`` records no view on ``item``'s options (#785). The pick row, if any, goes, and
+        a ``review`` event (``to: "abstained"``) is what the board reads back: the later of that
+        and a ``picked`` event wins, so a later ``concur`` replaces it. A notice, like a pick:
+        the agents who haven't spoken were asked when the item was raised or asked."""
+        reviews.abstain(item, actor, here)
+        self.store.clear_review_pick(item.id, actor)
+        self._event(room, rv, item=item.label, to="abstained", by=actor)
+        moved = self.store.review_item(rv["id"], item.kind, item.n)
+        assert moved is not None
+        c = reviews.consensus(moved, here)
+        if c.state == "agreed":
+            said = f"{actor} abstained on {item.label}: recommended by {reviews.names(c.by)}"
+        elif c.state == "split":
+            said = f"{actor} abstained on {item.label}: the agents are split"
+        elif c.waiting:
+            said = f"{actor} abstained on {item.label}; waiting on {reviews.names(c.waiting)}"
+        else:
+            said = f"{actor} abstained on {item.label}"
         return self._told(room, rv, moved, actor, said, wake=False)
 
     def _report(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -839,6 +870,7 @@ def item_dict(
             "waiting": list(c.waiting),
             "order": list(c.order),
             "notes": list(c.notes),
+            "abstained": list(c.abstained),
         },
         "answer": i.answer,
         "answered_by": i.answered_by,

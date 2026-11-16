@@ -132,5 +132,8 @@ def test_stable_launcher_runs_the_real_helper_without_changing_process_identity(
     result = run(stable(cache), str(data))
     assert result.returncode == 0, result.stderr
     key = (data / f"codex-listener-key-{os.getpid()}").read_text().strip()
-    assert json.loads(result.stdout) == {"X-Switchboard-Listener": hashlib.sha256(key.encode()).hexdigest()}
+    assert json.loads(result.stdout) == {
+        "X-Switchboard-Plugin-Version": "0.8.0",  # the installed copy's manifest says so (#789)
+        "X-Switchboard-Listener": hashlib.sha256(key.encode()).hexdigest(),
+    }
     assert key not in result.stdout + result.stderr

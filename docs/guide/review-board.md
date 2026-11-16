@@ -41,7 +41,7 @@ Agents can read the same evidence with `review(action="show", item="F1")`. Witho
 
 **Decide a contested finding.** The card shows both sides. Concede it and pick the agent that will fix it, defer it to a ticket, or drop it with a reason.
 
-**Answer a question.** Each option is a button, and the option the agents back comes first. Click the one you choose. Only a person answers a question.
+**Answer a question.** Each option is a button, and the option the agents back comes first. Click the one you choose. Only a person answers a question. An agent with no view can abstain. The card then says who abstained, and that agent is no longer waited on. Two agents who pick differently are still a split; an abstention is not a third side.
 
 If the agent that raised a finding leaves the room, another agent can `review(action="take", item="F1")` to take over the remaining review. The fix owner cannot take it. The card keeps its original raiser in history, and takeover posts a notice.
 
