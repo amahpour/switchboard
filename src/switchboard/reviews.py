@@ -116,6 +116,10 @@ class Item:
     # the picks agents made with ``concur`` (#423), oldest first: (screen name, option index).
     # The asker's own ``recommend`` is their pick too, and is not repeated here (``effective_picks``).
     picks: tuple[tuple[str, int], ...] = ()
+    # agents who recorded no view with ``abstain`` (#785), oldest first. A later pick is not listed:
+    # the store keeps whichever of the two moves is later. While a name is here, that agent's pick
+    # does not count (``effective_picks``).
+    abstentions: tuple[str, ...] = ()
     # the raiser's reason for insisting on a contested finding (#424), empty until it does: both
     # sides have then made their case once, and a person decides
     insisted: str = ""
@@ -281,11 +285,15 @@ def names(who: Sequence[str]) -> str:
 def effective_picks(item: Item) -> dict[str, int]:
     """Every agent's pick on ``item``'s options, in the order they were made, the asker first. The
     asker's ``recommend`` is their pick; a ``concur`` of their own replaces it. A pick that points
-    at no option is dropped, so a row out of range never counts for anything."""
+    at no option is dropped, so a row out of range never counts for anything. An agent who abstained
+    (#785) is left out, including the asker: no view replaces their recommendation until they pick."""
+    abstained = set(item.abstentions)
     out: dict[str, int] = {}
-    if item.options and item.recommend is not None and item.raised_by:
+    if item.options and item.recommend is not None and item.raised_by and item.raised_by not in abstained:
         out[item.raised_by] = item.recommend
-    out.update(item.picks)
+    for agent, option in item.picks:
+        if agent not in abstained:
+            out[agent] = option
     return {a: o for a, o in out.items() if 0 <= o < len(item.options)}
 
 
@@ -295,7 +303,9 @@ class Consensus:
     never stored or claimed: ``state`` is "none" (no one here has picked), "proposed" (those who
     picked agree, and others are still to), "agreed" (every agent in the room picked the same
     option) or "split" (two picks differ: no option is recommended). ``order`` lists the options,
-    the recommended one first; ``notes`` says, per option (by index), who is behind it."""
+    the recommended one first; ``notes`` says, per option (by index), who is behind it.
+    ``abstained`` (#785) names agents in the room who recorded no view: they are in neither
+    ``waiting`` nor any option's picks."""
 
     state: str
     option: int | None
@@ -303,26 +313,31 @@ class Consensus:
     waiting: tuple[str, ...]
     order: tuple[int, ...]
     notes: tuple[str, ...]
+    abstained: tuple[str, ...] = ()
 
 
 def consensus(item: Item, present: Sequence[str]) -> Consensus:
     """The agreement on ``item``'s options among ``present``, the agents in the room now (the only
     ones who can still agree: a pick by an agent who left is history, and counts for nothing). An
-    option is "recommended" only when every one of them has picked it; an agent who hasn't is
-    waited on, and a split names each pick without recommending any."""
+    option is "recommended" only when every one of them who has not abstained has picked it; an
+    agent who hasn't picked or abstained is waited on, an abstention is neither (#785), and a
+    split names each pick without recommending any."""
     count = len(item.options)
     base = tuple(range(count))
     here = list(dict.fromkeys(present))
-    live = {a: o for a, o in effective_picks(item).items() if a in here}
-    waiting = tuple(a for a in here if a not in live)
+    here_set = set(here)
+    abstained = tuple(dict.fromkeys(a for a in item.abstentions if a in here_set))
+    abstained_set = set(abstained)
+    live = {a: o for a, o in effective_picks(item).items() if a in here_set and a not in abstained_set}
+    waiting = tuple(a for a in here if a not in live and a not in abstained_set)
     notes = [""] * count
     if not live:
-        return Consensus("none", None, (), waiting, base, tuple(notes))
+        return Consensus("none", None, (), waiting, base, tuple(notes), abstained)
     chosen = set(live.values())
     if len(chosen) > 1:
         for o in sorted(chosen):
             notes[o] = "picked by " + names([a for a, p in live.items() if p == o])
-        return Consensus("split", None, (), waiting, base, tuple(notes))
+        return Consensus("split", None, (), waiting, base, tuple(notes), abstained)
     (option,) = chosen
     by = tuple(live)
     if waiting:
@@ -330,7 +345,9 @@ def consensus(item: Item, present: Sequence[str]) -> Consensus:
     else:
         notes[option] = "recommended by " + names(by)
     order = (option, *(o for o in base if o != option))
-    return Consensus("agreed" if not waiting else "proposed", option, by, waiting, order, tuple(notes))
+    return Consensus(
+        "agreed" if not waiting else "proposed", option, by, waiting, order, tuple(notes), abstained
+    )
 
 
 def concur(item: Item, actor: str, value: Any, here: Sequence[str]) -> int:
@@ -349,6 +366,19 @@ def concur(item: Item, actor: str, value: Any, here: Sequence[str]) -> int:
             f"concur needs recommend, the index of the option you pick, 0 to {len(item.options) - 1}"
         )
     return value
+
+
+def abstain(item: Item, actor: str, here: Sequence[str]) -> None:
+    """``actor`` records no view on ``item``'s options (#785), or ReviewError. The same gates as
+    ``concur``, and no index: an agent in the room, an item with options that is still being
+    decided. A later ``concur`` replaces it. ``recommend=-1`` is not this: that value is how a
+    caller leaves the field out, and ``concur`` still refuses it."""
+    if actor not in here:
+        raise ReviewError(f"only an agent in the room can abstain: {actor!r} isn't")
+    if not item.options:
+        raise ReviewError(f"{item.label} has no options to abstain on")
+    if item.state != "open" and item.state not in OPEN_FINDING:
+        raise ReviewError(f"{item.label} is {item.state}: its options are settled")
 
 
 def forge(value: str) -> dict[str, Any] | None:
@@ -601,17 +631,18 @@ def handoff(
         if not who:
             return None
         concur_s = f'review(action="concur", item="{item.label}", recommend=<index>{pass_url})'
+        abstain_s = f'review(action="abstain", item="{item.label}"{pass_url})'
         stop = "" if item.title.endswith((".", "?", "!")) else "."  # a question usually ends in one
         mention = " ".join("@" + a for a in who)
         return who, (
             f"{on} {item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
-            f" or pick another option, {concur_s}. {show}"
+            f" or pick another option, {concur_s}, or abstain if you have no view, {abstain_s}. {show}"
         )
     if item.state == "raised":
         who = tuple(a for a in agents if a != actor)
         verb, then = f"raised: {item.title}", "concede or contest it"
         if item.options:  # its fix options are theirs to agree with too (#423)
-            then += ", and agree with its fix option or pick another (concur)"
+            then += ", and agree with its fix option, pick another, or abstain (concur or abstain)"
     elif item.state == "contested" and not item.insisted:
         # a contest is the raiser's to answer (#424): drop it, or insist with a reason, and only an
         # insisted finding is a person's. The reason itself is read on the board, not repeated here
@@ -741,11 +772,14 @@ def contested_line(item: Item, active: set[str], offline: Collection[str]) -> st
 
 def options_text(item: Item, present: Sequence[str]) -> str:
     """An item's options as an agent reads them: the recommended one first, each with its number
-    (what ``concur`` takes) and who is behind it, then who is still to agree. Empty for none."""
+    (what ``concur`` takes) and who is behind it, then who abstained and who is still to agree.
+    Empty for none."""
     if not item.options:
         return ""
     c = consensus(item, present)
     text = " | ".join(f"{n}. {item.options[n]}" + (f" ({c.notes[n]})" if c.notes[n] else "") for n in c.order)
+    if c.abstained:
+        text += f"; abstained: {names(c.abstained)}"
     if c.state == "split":
         text += "; the agents are split: no option is recommended"
     if c.waiting:

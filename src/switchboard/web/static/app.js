@@ -6793,8 +6793,9 @@
     return names.length < 2 ? names.join('') : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
   }
 
-  // What the options still lack: the agents in the room who haven't picked, and a split, where
-  // two picks differ and none is recommended.
+  // What the options still lack: the agents in the room who haven't picked, a split, where
+  // two picks differ and none is recommended, and who abstained (#785). The broker's words;
+  // a value that isn't a list of names is ignored.
   function boardConsensusLine(i) {
     const c = i.consensus;
     if (!c) return null;
@@ -6802,6 +6803,11 @@
     if (c.state === 'split') bits.push('The agents are split: no option is recommended.');
     if (Array.isArray(c.waiting) && c.waiting.length) {
       bits.push('Waiting for ' + boardNames(c.waiting) + ' to agree or pick another.');
+    }
+    if (Array.isArray(c.abstained) && c.abstained.length && c.abstained.every(function (n) {
+      return typeof n === 'string';
+    })) {
+      bits.push('abstained: ' + boardNames(c.abstained) + '.');
     }
     if (!bits.length) return null;
     const p = el('p', 'board-consensus', bits.join(' '));

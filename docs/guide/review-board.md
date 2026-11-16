@@ -39,7 +39,7 @@ You need agents in a room, and a link to a pull request or merge request. There 
 
 **Decide a contested finding.** The card shows both sides. Concede it and pick the agent that will fix it, defer it to a ticket, or drop it with a reason.
 
-**Answer a question.** Each option is a button, and the option the agents back comes first. Click the one you choose. Only a person answers a question.
+**Answer a question.** Each option is a button, and the option the agents back comes first. Click the one you choose. Only a person answers a question. An agent with no view can abstain. The card then says who abstained, and that agent is no longer waited on. Two agents who pick differently are still a split; an abstention is not a third side.
 
 **Confirm a fix.** A fix that waits has **Confirm fix** on its card. You may confirm any fix yourself.
 

@@ -480,7 +480,8 @@ async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
         ("codex-1", 'Review board: F1 raised: discount applied after tax. @claude-1: concede or contest it.'
                     ' review(action="show") shows the board.'),
         ("claude-1", 'Review board: Q1 asked: Discount before or after tax? @codex-1: agree with claude-1\'s'
-                     ' pick or pick another option, review(action="concur", item="Q1", recommend=<index>).'
+                     ' pick or pick another option, review(action="concur", item="Q1", recommend=<index>),'
+                     ' or abstain if you have no view, review(action="abstain", item="Q1").'
                      ' review(action="show") shows the board.'),
         ("claude-1", 'Review board: F1 fixed in def5678. @codex-1: check the fix.'
                      ' review(action="show") shows the board.'),
@@ -1122,7 +1123,8 @@ async def test_a_finding_may_offer_fix_options_the_agents_agree_on(broker: InPro
         if "F1 raised" in m["text"]
     ]
     assert (
-        "@claude-1: concede or contest it, and agree with its fix option or pick another (concur)." in raised
+        "@claude-1: concede or contest it, and agree with its fix option, pick another, or abstain"
+        " (concur or abstain)." in raised
     )
 
 
@@ -1323,3 +1325,75 @@ async def test_a_person_can_still_rule_on_a_contested_finding_its_raiser_has_not
             assert r.status_code == 200 and finding_of(web, "F2")["state"] == "dropped"
     finally:
         web.close()
+
+
+async def test_an_agent_can_abstain_and_a_later_pick_replaces_it(broker: InProcBroker) -> None:
+    """#785: abstain records no view. Everyone else abstaining leaves the one pick as the
+    recommendation, and the abstainers are not waited on and not a split. A later concur replaces
+    that abstention. Fails while the only moves are a pick or silence, so the rest stay in waiting."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "k1") as author,
+            FakeAgent(broker.home, "k2") as reviewer,
+            FakeAgent(broker.home, "k3") as third,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await third.join("#build", "devin-1")
+            await author.call("review", room="#build", action="open", url=PR)
+            asked = await ask_tax(author, recommend=0)
+            assert asked["ok"] and asked["item"] == "Q1"
+
+            no_options = await reviewer.call("review", room="#build", action="raise", title="a gap")
+            assert no_options["ok"]
+            refused = await reviewer.call("review", room="#build", action="abstain", item="F1")
+            assert refused["ok"] is False and "no options" in refused["error"]
+
+            first = await reviewer.call("review", room="#build", action="concur", item="Q1", recommend=1)
+            assert first["ok"] and "handoff" not in first
+            stood = await reviewer.call("review", room="#build", action="abstain", item="Q1")
+            assert stood["ok"] and "handoff" not in stood
+            assert "abstained: codex-1" in stood["board"]
+            c = consensus_of(web)
+            assert c["abstained"] == ["codex-1"] and "codex-1" not in c["waiting"]
+            assert c["state"] == "proposed" and c["waiting"] == ["devin-1"]
+            assert c["by"] == ["claude-1"]
+
+            second = await third.call("review", room="#build", action="abstain", item="Q1")
+            assert second["ok"] and "abstained: codex-1 and devin-1" in second["board"]
+            c = consensus_of(web)
+            assert (c["state"], c["option"], c["by"], c["waiting"], c["abstained"]) == (
+                "agreed",
+                0,
+                ["claude-1"],
+                [],
+                ["codex-1", "devin-1"],
+            )
+            picks = q(broker, "SELECT agent, choice FROM review_picks ORDER BY agent")
+            assert [tuple(r) for r in picks] == []  # an abstention removes the pick row
+
+            later = await third.call("review", room="#build", action="concur", item="Q1", recommend=0)
+            assert later["ok"] and "abstained: codex-1" in later["board"]
+            assert "devin-1" not in later["board"].split("abstained:", 1)[-1].split(";", 1)[0]
+            c = consensus_of(web)
+            assert c["state"] == "agreed" and c["by"] == ["claude-1", "devin-1"]
+            assert c["abstained"] == ["codex-1"] and c["waiting"] == []
+            picks = q(broker, "SELECT agent, choice FROM review_picks ORDER BY agent")
+            assert [tuple(r) for r in picks] == [("devin-1", 0)]
+
+            answered = web.post(
+                "/api/rooms/build/review",
+                json={"action": "answer", "item": "Q1", "option": 0},
+                headers=broker.write_headers(),
+            )
+            assert answered.status_code == 200
+            late = await reviewer.call("review", room="#build", action="abstain", item="Q1")
+            assert late["ok"] is False and "settled" in late["error"]
+    finally:
+        web.close()
+    notices = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")]
+    assert "codex-1 abstained on Q1; waiting on devin-1" in notices
+    assert "devin-1 abstained on Q1: recommended by claude-1" in notices
+    chat = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='chat'")]
+    assert not any("abstained" in t for t in chat)

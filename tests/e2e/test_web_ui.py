@@ -3292,6 +3292,30 @@ def test_a_question_marks_an_option_recommended_only_once_the_agents_agree(ui: U
     expect(page.locator("#board .board-detail button[data-option]")).to_have_count(0)
 
 
+def test_an_abstention_is_named_on_the_card_and_a_later_pick_replaces_it(ui: UI) -> None:
+    """#785: an agent with no view is named on the open card ("abstained: …") and is not still
+    waited on. The one remaining pick reads as the recommendation. A later pick drops the
+    abstention. Fails if the card keeps waiting on someone who abstained, or keeps the
+    abstention after they pick."""
+    slug = "e2e-board-abstain"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    page.click('#board .board-card[data-item="Q1"]')
+    detail = page.locator("#board .board-detail")
+    expect(detail.locator(".board-consensus")).to_have_text("Waiting for codex-1 to agree or pick another.")
+
+    ui.world.agent_call(room, "codex-1", "review", action="abstain", item="Q1")
+    expect(option_buttons(page).nth(0)).to_have_text("Before tax (recommended by claude-1)")
+    expect(detail.locator(".board-consensus")).to_have_text("abstained: codex-1.")
+
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
+    expect(option_buttons(page)).to_have_text(
+        ["Before tax (picked by claude-1)", "After tax (picked by codex-1)"]
+    )
+    expect(detail.locator(".board-consensus")).to_have_text("The agents are split: no option is recommended.")
+
+
 def test_the_option_the_agents_recommend_is_listed_first(ui: UI) -> None:
     """The recommended option moves to the top of the list whichever was asked first; the buttons
     still answer with their own option. Fails if the order is the order asked."""

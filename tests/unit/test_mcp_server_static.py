@@ -138,6 +138,9 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # yes was for exactly what the tool measures. The maintainer's yes, 2026-11-15, to "A new tool adds
     # about 100 characters to the tool list every agent sees on every turn, a bit more than the last two
     # options. Can I raise the cap by exactly what the new tool measures?": "Yes."
+    # #785 names `abstain` in the review description ("abstain, ", 9 characters) and shortens the
+    # lead-in by the same 9 ("One room's pull-request review boards." to "A room's pull-request
+    # boards."), so the list stays 4,649. The cap does not move.
     assert size == 4649, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
