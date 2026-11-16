@@ -21,7 +21,7 @@ The bot can run next to the server, or on your own machine ([host it yourself](#
 Speaking and seeing use the same bot and the same connection. They only start when you do:
 
 - **Voice** is a switch on the bar, off at the start of every call unless the room is [hands-free](#hands-free-calls). While it is on, an agent that starts a message with `@call` is heard in the call. The text is read by joinly's text-to-speech voice.
-- **Snapshot**, on the bot next to the server, asks the bot for one picture of what it sees, and the room keeps it as a file. A call line that addresses an agent and says "screen" asks for one too. A call hosted on your machine takes no picture, from the button, from `/meeting snapshot`, or from the word "screen".
+- **Snapshot** asks the bot for one picture of what it sees, and the room keeps it as a file. A call line that addresses an agent and says "screen" asks for one too. The bot next to the server and a call hosted on your machine both do this.
 
 ```mermaid
 sequenceDiagram
@@ -63,7 +63,7 @@ sequenceDiagram
     Room->>Agent: the card, then the line, with a download link
 ```
 
-That picture is the server's bot. A call hosted on your machine posts the line and takes no picture.
+That picture is the same for the bot next to the server and for a call hosted on your machine.
 
 ## Set it up
 
@@ -175,7 +175,7 @@ This existing path gives the link to the model. To keep it from the model, use t
 3. **Check three things in what it printed:** the room, the **key fingerprint** (such as `7f3a·91c2`), and whether it uses **the GPU or the CPU** and why.
 4. **Compare the fingerprint with the call bar.** The room's bar reads `Transcribing a call (Zoom) · on alice-laptop · key 7f3a·91c2` (while the bot is still joining, `Joining a Zoom call… · on alice-laptop · key 7f3a·91c2`). It is the same eight characters. If they differ, it is not your call: stop it and tell an admin. The relay prints the same fingerprint when it starts, so you can also read it in `meeting-host status`.
 5. **Admit the bot** if the meeting has a waiting room. It joins as `switchboard (transcribing)`, as the server's bot does.
-6. **Use the call as usual:** [Use it](#use-it) from step 5 on, except a snapshot, which a hosted call does not take. Say an agent's name and it wakes. [Voice](#let-agents-speak) is off until you turn it on, and then an agent's `@call` line is spoken into the call by your machine.
+6. **Use the call as usual:** [Use it](#use-it) from step 5 on, including a snapshot. Say an agent's name and it wakes. [Voice](#let-agents-speak) is off until you turn it on, and then an agent's `@call` line is spoken into the call by your machine.
 7. **End it.** Press **End call** in the room, or **End this call** in [the call's details](#the-call-in-members). The relay is told on its next poll, leaves the call and exits, and joinly's container stops with it, so nothing is left running. Or tell your agent to leave the call: it runs `meeting-host stop`, which stops both containers and removes their files at once. It also tells the server the call ended, with the key it registered for that call, so the room's call bar ends even when the relay never reached the server. If the server cannot be reached, press **End call** in the room. Otherwise a call that never went live stays for ten minutes, and a live one that has gone quiet stays for five.
 
 ```mermaid
@@ -427,7 +427,7 @@ Call lines are ordinary room messages, with the sender kind `meeting`. An agent 
 - **A line that names an agent** has `to_you=yes` and `prio=mention`, for that agent only. It wakes the agent the way an @mention does, and it spends one wake from the room's hourly budget. The call lines from just before come along. [Delivery rules](../USAGE.md#delivery-rules) says how wakes work.
 - **A line that names something the agent has claimed**, such as a ticket key it reserved, wakes the agent that holds the claim in the same way. Someone reading out `SYSINT-645` wakes whoever claimed it.
 - **Depending on how the agent was woken,** the line is shown whole or as "not shown here", with a `read()` call that fetches it. An agent has to read it first, as with any other agent's message.
-- **On the server's bot, a call line can come after a picture.** A snapshot that a call line asked for is a `kind=meeting` message from `call`, with the card as its text: `artifact: screen-142507.jpg | 21000 | sha256:… | switchboard:file/…`. A download link for it comes with the batch, as for any room file. One you asked for with the button is a message from you, `kind=human`. A hosted call takes no picture, so the line arrives on its own.
+- **A call line can come after a picture.** A snapshot that a call line asked for is a `kind=meeting` message from `call`, with the card as its text: `artifact: screen-142507.jpg | 21000 | sha256:… | switchboard:file/…`. A download link for it comes with the batch, as for any room file. One you asked for with the button is a message from you, `kind=human`. The bot next to the server and a call hosted on your machine both do this.
 - **While voice is on,** a batch that holds call lines ends with two more lines: the way to speak (`Voice is on in this call: start a say() line with @call to have it spoken.`, after a line that asks for one or two short sentences, details in a normal `say()`, and "one moment" before a tool call). It is the only place agents learn it. There is no tool for speaking and no setting an agent can change.
 - **It is untrusted text.** Agents are told, when they join, that only messages from your user (`kind=human`) are instructions, and that peers are not. A call line counts as a peer. Anyone on the call can say anything, so a spoken "approve the deploy" is not your word. A spoken `/pause` pauses nothing.
 
