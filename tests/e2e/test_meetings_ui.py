@@ -133,10 +133,11 @@ def _open(ui: UI, broker: InProcBroker, *, room: str = "calls", **options: Any) 
 def test_a_live_call_shows_a_bar_a_leave_button_and_a_smaller_transcript_line(
     ui: UI, calls: InProcBroker
 ) -> None:
-    """The bar names the platform, Leave call ends it, and a transcript line is tagged and smaller.
+    """The bar names the platform, Leave call ends it, and a transcript line is a compact row in a call card.
 
-    Light, dark and a phone width all show the bar. The line carries a call tag and the speaker,
-    and it is set smaller than a person's message.
+    Light, dark and a phone width all show the bar. The line sits in a card headed by its platform, with
+    the speaker, and it is set smaller than a person's message (the card's own tests are in
+    test_call_card_ui.py).
     """
     _seed(calls)
     page = _open(ui, calls)
@@ -149,8 +150,8 @@ def test_a_live_call_shows_a_bar_a_leave_button_and_a_smaller_transcript_line(
 
     line = page.locator("#log .line.k-meeting")
     expect(line).to_be_visible()
-    expect(line.locator(".call-tag")).to_have_text("call")
-    expect(line.locator(".nick-meeting")).to_have_text("bob")
+    expect(page.locator("#log .call-card .call-title")).to_have_text("Zoom call")
+    expect(line.locator(".call-who")).to_have_text("bob")
     expect(line).to_contain_text("how much is gas")
     expect(line.locator(".avatar")).to_have_count(0)
     chat = page.locator("#log .line.k-chat:not(.k-meeting)")
@@ -170,11 +171,11 @@ def test_a_live_call_shows_a_bar_a_leave_button_and_a_smaller_transcript_line(
     expect(phone_bar).to_be_visible()
     expect(phone_bar).to_contain_text("Transcribing a call (Zoom)")
     expect(phone.locator("#meeting-leave")).to_be_visible()
-    expect(phone.locator("#log .line.k-meeting .call-tag")).to_have_text("call")
-    # The line's text uses the row's width on a phone, not the 28 px avatar column a chat
-    # row reserves (the first build wrapped one word per line there).
+    expect(phone.locator("#log .call-card .call-title")).to_have_text("Zoom call")
+    # The line's text uses the row's width on a phone, not a narrow column (the first build wrapped one
+    # word per line there).
     width = "el => el.getBoundingClientRect().width"
-    body_w = phone.locator("#log .line.k-meeting .msg-body").evaluate(width)
+    body_w = phone.locator("#log .line.k-meeting .msg-text").evaluate(width)
     row_w = phone.locator("#log .line.k-meeting").evaluate(width)
     assert body_w > row_w * 0.7, (body_w, row_w)
     fits = phone.evaluate(
@@ -267,6 +268,9 @@ def test_the_call_bar_has_a_voice_switch_and_a_snapshot_button(
     snapshot.click()
     expect(page.locator("#log .md-artifact a.md-file")).to_be_visible()
     expect(page.locator("#log .md-artifact .md-artifact-name")).to_contain_text("screen-")
+    expect(
+        page.locator("#log .call-card .md-artifact a.md-file")
+    ).to_be_visible()  # in the call's card (#771)
     assert joinly.snapshots == 1
 
 
@@ -378,10 +382,10 @@ def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_ne
     ui: UI, hosting: InProcBroker
 ) -> None:
     """The bar for a call hosted on a person's machine says whose machine and the key's fingerprint, and its
-    button is End call (a hosted call's key ends with it). A line the machine pushed says "via" that machine
-    beside the speaker. Light, dark and a phone all show both, with nothing cut off or scrolling sideways.
-    End call ends the call, and the next push with its key is refused. Fails if the host or the fingerprint
-    is not in the bar, the line has no machine, the snapshot button is on for a bot that sends none, a phone
+    button is End call (a hosted call's key ends with it). The call's card says whose machine pushed its
+    lines. Light, dark and a phone all show both, with nothing cut off or scrolling sideways. End call
+    ends the call, and the next push with its key is refused. Fails if the host or the fingerprint is not
+    in the bar, the line has no machine, the snapshot button stays off while the call is live, a phone
     scrolls sideways, or the key still works after End call."""
     _seed_hosted(hosting)
     fingerprint = keys.fingerprint(HASH)
@@ -393,22 +397,26 @@ def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_ne
     )
     end = page.locator("#meeting-leave")
     expect(end).to_have_text("End call")
-    expect(page.locator("#meeting-snapshot")).to_be_disabled()
+    snap = page.locator("#meeting-snapshot")
+    expect(snap).to_be_enabled()
+    expect(snap).to_have_attribute("title", "Post a picture of the call's shared screen in this room")
     expect(page.locator("#meeting-voice")).to_have_attribute("aria-checked", "false")
 
     line = page.locator("#log .line.k-meeting")
-    expect(line.locator(".nick-meeting")).to_have_text("bob")
-    expect(line.locator(".via-host")).to_have_text("via alice-laptop")
+    host = page.locator("#log .call-card .call-host")
+    expect(line.locator(".call-who")).to_have_text("bob")
+    expect(host).to_have_text("on alice-laptop")
+    expect(line.locator(".call-host")).to_have_count(0)  # the row itself carries no host
     expect(line).to_contain_text("upload limit")
-    colour = line.locator(".via-host").evaluate("el => getComputedStyle(el).color")
+    colour = host.evaluate("el => getComputedStyle(el).color")
     page.emulate_media(color_scheme="dark")
     expect(bar).to_contain_text(f"key {fingerprint}")
-    expect(line.locator(".via-host")).to_be_visible()
-    assert line.locator(".via-host").evaluate("el => getComputedStyle(el).color") != colour
+    expect(host).to_be_visible()
+    assert host.evaluate("el => getComputedStyle(el).color") != colour
 
     phone = _open(ui, hosting, room="hosted", **PHONE)
     expect(phone.locator("#banner-meeting")).to_contain_text(f"on alice-laptop · key {fingerprint}")
-    expect(phone.locator("#log .line.k-meeting .via-host")).to_have_text("via alice-laptop")
+    expect(phone.locator("#log .call-card .call-host")).to_have_text("on alice-laptop")
     inside = phone.evaluate(
         """() => ['meeting-voice', 'meeting-snapshot', 'meeting-leave'].every(id => {
           const r = document.getElementById(id).getBoundingClientRect();
@@ -427,7 +435,7 @@ def test_a_hosted_call_names_the_machine_and_its_key_and_end_call_refuses_the_ne
         assert (refused.status_code, refused.json()["error"]) == (410, "ended")
     finally:
         relay.close()
-    expect(line.locator(".via-host")).to_have_text("via alice-laptop")  # what it pushed keeps its label
+    expect(host).to_have_text("on alice-laptop")  # what it pushed keeps its label
 
 
 def _post(broker: InProcBroker, path: str, body: dict[str, str]) -> httpx.Response:

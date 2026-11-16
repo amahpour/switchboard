@@ -75,7 +75,14 @@ class Run:
     """A relay on the test's loop, for the key ``KEY`` against the world's broker and a ``FakeJoinly``."""
 
     def __init__(
-        self, w: World, fake: FakeJoinly, *, link: str | None = LINK, key: str = KEY, join: bool = True
+        self,
+        w: World,
+        fake: FakeJoinly,
+        *,
+        link: str | None = LINK,
+        key: str = KEY,
+        join: bool = True,
+        advance_clock: bool = True,
     ):
         self.w, self.fake = w, fake
         self.slept: list[float] = []
@@ -85,7 +92,10 @@ class Run:
 
         async def sleep(seconds: float) -> None:
             self.slept.append(seconds)
-            w.clock.advance(seconds)
+            # A snapshot's ten seconds are the broker's clock. Moving it on every speech-poll pause
+            # would spend that window while the test is still waiting for the first picture.
+            if advance_clock:
+                w.clock.advance(seconds)
             await asyncio.sleep(0)
 
         self.relay = Relay(

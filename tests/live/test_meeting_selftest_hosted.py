@@ -17,8 +17,8 @@ Two tests:
    there), with one difference in how the bot gets there: step 1 is the host script, not ``/meeting
    <link>``. The scripted agent ``claude-1`` hears the call and answers as before. The hosting person's
    machine is a second agent session and the agent token the script registers with. The broker is
-   throwaway, and the second joinly is the test speaker. Step 5 is that a hosted call has no snapshot yet
-   (the room says so). In step 6 the containers must also be gone. The meeting-self-test skill makes the
+   throwaway, and the second joinly is the test speaker. Step 5 is a snapshot, the same check as the
+   server's bot. In step 6 the containers must also be gone. The meeting-self-test skill makes the
    Zoom meeting; **this test never makes or deletes one.**
 
 Where the bot runs (``SWITCHBOARD_SELFTEST_HOSTED``):
@@ -94,17 +94,13 @@ READY_S = 240.0  # joinly's start, in the container
 STOP_S = 60.0
 REMOTE_WAIT_S = 1800.0
 
-# The seven steps as a hosted bot has them: the same, but for where the bot comes from and what step 5 can do.
+# The seven steps as a hosted bot has them: the same, but for where the bot comes from and how it leaves.
 HOSTED_STEPS = {
     **base.STEPS,
     1: (
         "the host script starts the bot and the bar goes live",
         "meeting-host start with the link on stdin: the room's call bar is live on the {platform} call,"
         " and shows the fingerprint the script printed",
-    ),
-    5: (
-        "a hosted call has no snapshot yet, and says so",
-        "/meeting snapshot is answered with a sentence that says a hosted call has none, and posts no card",
     ),
     7: (
         "the bots leave and the containers stop",
@@ -305,9 +301,8 @@ async def test_a_hosted_bot_starts_and_stops_cleanly_without_a_call(tmp_home: Pa
 
 # ----------------------------------------------------------------------- 2: a real call, seven steps
 class HostedWorld(base.World):
-    """``World`` with step 1 done by the host script (or by a person on the other machine), step 5 asking
-    what a
-    hosted call does about a snapshot, and step 6 also looking at the containers."""
+    """``World`` with step 1 done by the host script (or by a person on the other machine), and step 6
+    also looking at the containers. Step 5 is the server bot's snapshot check."""
 
     def __init__(self, *a: Any, machine: Machine | None, token_file: Path | None, **kw: Any) -> None:
         super().__init__(*a, **kw)
@@ -390,14 +385,6 @@ class HostedWorld(base.World):
             True,
             f"state=live platform={self.link.platform} host={state.get('host')} key {shown}; {note}",
         )
-
-    async def snapshot(self) -> base.Outcome:
-        cursor = self.last_id()
-        r = self.command("/meeting snapshot")
-        said = selftest.scrub(r.text, self.pieces)
-        cards = [m for m in self.messages(cursor) if m.get("files")]
-        refused = "isn't available yet for a call hosted on a person's machine" in said
-        return base.Outcome(refused and not cards, (said or f"HTTP {r.status_code}")[:300])
 
     async def leave(self) -> base.Outcome:
         out = await super().leave()

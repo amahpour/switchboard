@@ -44,6 +44,7 @@ AGENT_PATHS = frozenset(
         "/mcp/meeting/host",
         "/mcp/meeting/push",
         "/mcp/meeting/speech",
+        "/mcp/meeting/snapshot",
         "/mcp/meeting/leave",
     }
 )

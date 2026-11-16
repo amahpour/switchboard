@@ -81,10 +81,14 @@ class Relay:
 class World:
     """A desktop broker on a ``FakeClock`` with the owner's web session and two rooms."""
 
-    def __init__(self, home: Path, clock: FakeClock, max_calls: int = 2) -> None:
+    def __init__(self, home: Path, clock: FakeClock, max_calls: int = 2, files_mb: int | None = None) -> None:
         cfg = Config(human_name="alice").replace(
             meeting=MeetingCfg(joinly_url="http://127.0.0.1:9/mcp/", max_calls=max_calls)
         )
+        if files_mb is not None:
+            from switchboard.config import FilesCfg
+
+            cfg = cfg.replace(files=FilesCfg(max_mb=files_mb))
         cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0, rate_limit_s=0.0)
         self.clock = clock
         self.b = InProcBroker(home, cfg, clock=clock).start()
@@ -610,7 +614,7 @@ def agent_token(w: World) -> str:
 
 
 async def test_a_call_key_opens_nothing_else_and_a_token_opens_neither_of_its_routes(world: World) -> None:
-    """The key is a bearer for the two routes and for nothing else: not ``/mcp`` (the tools), not the
+    """The key is a bearer for its own routes and for nothing else: not ``/mcp`` (the tools), not the
     listener, the session report, the hook routes or OpenCode's status, not the web API, not a person's
     session. Fails if the key is accepted on any other route."""
     w = world
@@ -783,7 +787,7 @@ async def test_a_member_of_another_machine_does_not_count(world: World) -> None:
 async def test_only_a_token_or_a_listener_key_opens_the_route_and_a_browser_never_does(world: World) -> None:
     """The route answers what the plugin's other scripts present and nothing else: no credential, a token that
     was never made or was revoked, a listener key that was never claimed or whose sign-in was revoked, a
-    call key (a key's one job is its two routes), a session cookie, and a request with an Origin (a browser's)
+    call key (a key's one job is its own routes), a session cookie, and a request with an Origin (a browser's)
     are all refused, as are the wrong methods and a body that is too big or is not an object. Fails if any of
     them registers a call."""
     w = world
@@ -797,7 +801,7 @@ async def test_only_a_token_or_a_listener_key_opens_the_route_and_a_browser_neve
             ("sbat_" + "x" * 43, 401, "unauthorized"),
             (made["token"], 401, "unauthorized"),  # revoked
             ("sbl_" + secrets.token_hex(32), 401, "unknown_key"),
-            (KEY, 401, "unauthorized"),  # a call key opens the call's two routes only
+            (KEY, 401, "unauthorized"),  # a call key opens the call's own routes only
             ("sbc_" + "0" * 63, 401, "unauthorized"),
         ):
             r = enroll(w.b, cred)
@@ -915,8 +919,8 @@ def bots_call(w: World, room: str, platform: str = "zoom") -> Any:
 
 async def test_a_room_has_one_source_for_its_call(world: World) -> None:
     """A room that the broker's own bot is following refuses a hosted call; ``/meeting <link>`` is refused in
-    a room that has a hosted one; and the commands that need the bot (a picture of the screen) say a hosted
-    call has none yet. Fails if a room can have two sources."""
+    a room that has a hosted one; a snapshot while the bot is still joining says it is not in the call yet;
+    and sharing a picture stays refused. Fails if a room can have two sources."""
     w = world
     a = Host(w.b)
     try:
@@ -935,7 +939,7 @@ async def test_a_room_has_one_source_for_its_call(world: World) -> None:
         status = w.command("/meeting")["text"]
         assert "transcribing a Zoom call, hosted on" in status
         snap = w.command("/meeting snapshot", expect=409)
-        assert "isn't available yet for a call hosted" in snap["message"]
+        assert "not in the call yet" in snap["message"]
         shared = w.command("/meeting share plan.png", expect=409)
         assert "isn't available yet for a call hosted" in shared["message"]
     finally:
