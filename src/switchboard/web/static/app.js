@@ -1204,26 +1204,133 @@
     return b;
   }
 
-  // A transcript line (#573): smaller than chat, tagged "call", with the speaker when joinly named one.
-  function meetingRow(r, m) {
-    const line = el('article', 'line k-chat k-meeting');
+  // ------------------------------------------------------------ call cards (#771, DESIGN.md §52)
+  // A stretch of call lines is one card in the log: a header (platform, live, Voice, the lines so far), compact
+  // rows, and, when the call is over, a closing line. A person's or an agent's chat message ends the card, and the
+  // next call line starts another. This is display only: the rows are the same messages, with the same ids.
+  const AT_CALL = /^\s*@call(?![A-Za-z0-9_-])[\s:,.;-]*/i;       // what the broker takes for an @call line (meeting/speech.py)
+  const SNAPSHOT_LINE = /^artifact: screen-\d{6}\.[a-z]+ \|/;      // the card a snapshot of the shared screen posts
+  const SPOKEN_MAX = 300;                                          // the broker speaks at most this much of a line
+
+  // A call row: the speaker, the text, the time; the id shows on hover. `kind` is 'line' (a transcript line),
+  // 'snap' (a snapshot's file card) or 'spoken' (an agent's @call line, in the agent's colour).
+  function callLineRow(r, m, kind) {
+    const line = el('div', 'line k-meeting call-row' + (kind === 'line' ? '' : ' call-' + kind));
     line.dataset.id = String(m.id);
-    line.dataset.from = m.from || 'call';
-    if (mentionsMe(m)) line.classList.add('mention');
-    const body = el('div', 'msg-body');
-    const head = el('div', 'msg-head');
-    head.append(el('span', 'call-tag', 'call'));
-    if (m.from && m.from !== 'call') head.append(el('span', 'nick nick-meeting', m.from));
-    // a line a call hosted on someone's machine pushed (§54) says whose machine heard it
-    if (typeof m.host === 'string' && m.host) head.append(el('span', 'via-host', 'via ' + m.host));
-    head.append(messageMeta(m, false));
-    body.append(head, mdBody(m.text, m.mentions, m.files));
-    line.append(body);
-    return withPin(line, r, m);
+    line.dataset.from = kind === 'line' ? (m.from || 'call') : label(m.from, m.host);
+    if (kind === 'spoken') line.classList.add('h-' + (HARNESS[m.harness] ? m.harness : 'unknown'));
+    if (mentionsMe(m)) line.classList.add('call-me');
+    const who = kind === 'line' ? (m.from && m.from !== 'call' ? m.from : '') : senderShown(m);
+    line.append(el('span', 'call-who', who));
+    if (kind === 'spoken') {
+      const said = String(m.text || '').replace(AT_CALL, '').replace(/\s+/g, ' ').trim();
+      const tag = el('span', 'call-spoken-tag', 'spoken');
+      tag.title = 'An @call line: spoken aloud when Voice is on. The whole message is in the chat below.';
+      line.append(tag, el('span', 'call-said', said.length > SPOKEN_MAX ? said.slice(0, SPOKEN_MAX - 1) + '…' : said));
+    } else {
+      line.append(mdBody(m.text, m.mentions, m.files));
+    }
+    const meta = el('span', 'call-meta');
+    meta.append(timeEl(m.ts, 'ts'), el('span', 'call-id', '#' + String(m.id)));
+    line.append(meta);
+    line.title = '#' + m.id;
+    return line;
+  }
+
+  // What a message is inside a call card, or null when it is a message of its own. `open` is the card just above
+  // it, `live` that it just arrived (so the room's open call is the one it belongs to).
+  function callPart(r, m, open, live) {
+    if (m.kind !== 'chat') return null;
+    if (m.sender_kind === 'meeting') return 'line';
+    const text = String(m.text || '');
+    const cur = live ? callOf(r) : null;
+    if (m.sender_kind === 'human' && SNAPSHOT_LINE.test(text) && (open || cur)) return 'snap';
+    // an agent's @call line is spoken only while Voice is on; a page loaded later can't tell, so it shows when the
+    // card is there
+    if (m.sender_kind === 'agent' && AT_CALL.test(text)) {
+      if (live) return cur && cur.call.voice === true ? 'spoken' : null;
+      return open ? 'spoken' : null;
+    }
+    return null;
+  }
+
+  function callCard() {
+    const card = el('section', 'call-card');
+    card.setAttribute('role', 'group');
+    card.setAttribute('aria-label', 'Call transcript');
+    card.dataset.lines = '0';
+    card.append(el('header', 'call-head'), el('div', 'call-rows'));
+    return card;
+  }
+
+  // put a row into `open`, or into a new card appended to `into`; returns the card
+  function placeInCard(r, m, part, open, into) {
+    let card = open;
+    if (!card) {
+      card = callCard();
+      into.append(card);
+    }
+    card.querySelector('.call-rows').append(callLineRow(r, m, part));
+    if (part === 'line') {
+      card.dataset.lines = String(Number(card.dataset.lines) + 1);
+      if (!card.dataset.t0) card.dataset.t0 = String(m.ts);
+      card.dataset.t1 = String(m.ts);
+      // a call hosted on a person's machine (§54) says whose machine heard its lines
+      if (!card.dataset.host && typeof m.host === 'string' && m.host) card.dataset.host = m.host;
+    }
+    return card;
+  }
+
+  function callMinutes(card) {
+    const secs = Number(card.dataset.t1) - Number(card.dataset.t0);
+    const n = Math.round((secs > 0 ? secs : 0) / 60);
+    return n < 1 ? 'under a minute' : plural(n, 'minute', 'minutes');
+  }
+
+  // Each card's header and closing line, from what the room's call is now: only the room's last card can be live,
+  // or be the one the call ended on. Run after rows are built, and whenever the call's settings change.
+  function syncCallCards(r) {
+    const log = $('log');
+    if (typeof log.querySelectorAll !== 'function') return;
+    const cards = Array.from(log.querySelectorAll('.call-card'));
+    if (!cards.length) return;
+    const windowed = !!(state.around && r && state.around.room === r.name);  // a window around a search hit
+    const cur = r && !windowed ? callOf(r) : null;
+    const known = !!(r && r.settings) && !windowed;
+    const seen = r && r.callSeen;
+    const last = cards[cards.length - 1];
+    for (const card of cards) {
+      const head = card.querySelector('.call-head');
+      const mine = card === last;
+      const live = mine && !!cur;
+      const platform = (live ? cur.call.platform : seen && seen.platform) || 'unknown';
+      const name = live ? cur.label : seen ? seen.label : '';
+      const bits = [callAvatar(platform, 'bar'), el('span', 'call-title', name ? name + ' call' : 'Call')];
+      if (live) {
+        const on = cur.call.state === 'live';
+        bits.push(el('span', 'call-live' + (on ? '' : ' joining'), on ? 'live' : 'joining'));
+        bits.push(el('span', 'call-voice' + (cur.call.voice === true ? ' on' : ''),
+          cur.call.voice === true ? 'Voice on' : 'Voice off'));
+      }
+      if (card.dataset.host) bits.push(el('span', 'call-host', 'on ' + card.dataset.host));
+      bits.push(el('span', 'call-count', plural(Number(card.dataset.lines), 'line', 'lines')));
+      head.replaceChildren(...bits);
+      card.classList.toggle('is-live', live);
+      let end = card.querySelector('.call-end');
+      const ended = mine && known && !cur && Number(card.dataset.lines) > 0;
+      if (ended && !end) {
+        end = el('footer', 'call-end');
+        card.append(end);
+      }
+      if (end && !ended) end.remove();
+      if (ended) {
+        end.textContent = 'The call ended. ' + plural(Number(card.dataset.lines), 'line', 'lines') + ', ' +
+          callMinutes(card) + '.';
+      }
+    }
   }
 
   function chatRow(r, m, prev) {
-    if (m.sender_kind === 'meeting') return meetingRow(r, m);
     const who = label(m.from, m.host);
     const line = el('article', 'line k-chat');
     line.dataset.id = String(m.id);
@@ -1335,6 +1442,7 @@
     if (!r) return;
     let lastDay = null;
     let prev = null;
+    let open = null;  // the call card the last row went into, until a message of any other kind
     const frag = document.createDocumentFragment();
     // a room opened at a search result shows the window around it, not its latest (#724, §58.5)
     for (const m of (state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
@@ -1343,11 +1451,18 @@
         frag.append(dayRow(m.ts));
         lastDay = k;
         prev = null;
+        open = null;
       }
-      frag.append(renderMsg(r, m, prev, false));
+      const part = callPart(r, m, open, false);
+      if (part) open = placeInCard(r, m, part, open, frag);
+      if (!part || part === 'spoken') {
+        frag.append(renderMsg(r, m, prev, false));
+        open = null;  // a chat message ends the card
+      }
       prev = m;
     }
     log.append(frag);
+    syncCallCards(r);
   }
 
   // The composer names the room it posts to; a rename changes that name under an open room (#316).
@@ -1423,7 +1538,11 @@
     const kids = log.children;
     const last = kids.length ? kids[kids.length - 1] : null;
     const above = !newDay && prev && last && last.dataset && last.dataset.id === String(prev.id) ? prev : null;
-    log.append(renderMsg(r, m, above, true));
+    const open = !newDay && last && last.classList && last.classList.contains('call-card') ? last : null;
+    const part = callPart(r, m, open, true);
+    if (part) placeInCard(r, m, part, open, log);
+    if (!part || part === 'spoken') log.append(renderMsg(r, m, above, true));
+    if (part) syncCallCards(r);
     if (m.kind === 'chat') updateRoomEmpty();
     if (stick) log.scrollTop = log.scrollHeight;
   }
@@ -1910,6 +2029,8 @@
     const band = $('banner-meeting');
     const cur = callOf(r);
     band.classList.toggle('hidden', !cur);
+    if (cur && r) r.callSeen = { platform: cur.call.platform, label: cur.label };  // what an ended call's card is named by
+    if (r && r.name === state.active) syncCallCards(r);
     if (!cur) return;
     const call = cur.call;
     const hosted = cur.hosted;
@@ -8296,7 +8417,7 @@
   function focusAroundTarget() {
     const a = state.around;
     if (!a) return;
-    const row = Array.from($('log').children).find(function (n) { return n.dataset && n.dataset.id === String(a.id); });
+    const row = $('log').querySelector('[data-id="' + String(Number(a.id)) + '"]');
     if (!row) return;
     row.classList.add('search-target');
     row.tabIndex = -1;

@@ -874,28 +874,88 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
   transition: background-color 200ms;
 }
 .line.k-chat > .avatar { align-self: start; }
-/* A transcript line (#573): smaller than a chat message, one column, a call tag.
-   Two classes, so the phone's .line.k-chat columns (a 28 px avatar slot) don't win. */
-.line.k-chat.k-meeting {
-  grid-template-columns: minmax(0, 1fr);
+/* A call as one transcript card (#771, DESIGN.md §52): a header, compact rows, and a closing line once the call is over.
+   A chat message ends the card, so the card is only ever call. Rows are smaller than chat, with no avatar. */
+.call-card {
+  flex-shrink: 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--pre-bg);
+  overflow: hidden;
+}
+.call-card.is-live { border-color: var(--accent); }
+.call-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chip-bg);
   font-size: calc(12px * var(--text-scale));
   color: var(--ink-2);
 }
-.call-tag {
+.call-title { font-weight: 600; }
+.call-live, .call-voice, .call-host, .call-count { font-size: calc(11px * var(--text-scale)); color: var(--muted-2); }
+.call-live {
   display: inline-flex;
   align-items: center;
-  height: 16px;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.call-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.call-live.joining::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+.call-voice.on { font-weight: 600; color: var(--ink-2); }
+.call-count { margin-left: auto; white-space: nowrap; }
+.call-rows { display: flex; flex-direction: column; padding: 2px 0; }
+.line.call-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0 8px;
+  padding: 3px 10px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--ink-2);
+  transition: background-color 200ms;
+}
+.call-who { flex: 0 0 auto; max-width: 9em; font-weight: 600; overflow-wrap: anywhere; }
+.call-who:empty { display: none; }
+.call-row .msg-text, .call-said { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+.call-row .msg-text > :first-child { margin-top: 0; }
+.call-meta { flex: 0 0 auto; display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+.call-meta .ts, .call-id { font-size: calc(10.5px * var(--text-scale)); color: var(--muted); }
+.call-id { opacity: 0; user-select: text; transition: opacity 120ms; }
+.call-row:hover .call-id, .call-row:focus-within .call-id, .call-row.flash .call-id, .call-row.search-target .call-id { opacity: 1; }
+.line.call-row.call-me { background: var(--mention-bg); }
+/* an agent's @call line: its colour down the left edge and on its name, and the word "spoken" */
+.line.call-spoken { box-shadow: inset 3px 0 0 var(--spk, var(--h-other-fg)); }
+.line.call-spoken .call-who { color: var(--spk, var(--ink-2)); }
+.line.call-spoken.h-claude { --spk: var(--h-claude-bg); }
+.line.call-spoken.h-opencode { --spk: var(--h-opencode-bg); }
+.call-spoken-tag {
+  flex: 0 0 auto;
   padding: 0 6px;
   border-radius: 8px;
   background: var(--chip-bg);
-  color: var(--muted);
+  color: var(--spk, var(--muted));
   font-size: calc(10.5px * var(--text-scale));
   font-weight: 600;
-  letter-spacing: .02em;
 }
-.nick-meeting { font-size: calc(12px * var(--text-scale)); font-weight: 600; color: var(--ink-2); }
-/* "via <machine>": whose machine heard a line that a hosted call pushed (§54) */
-.via-host { font-size: calc(11px * var(--text-scale)); color: var(--muted); overflow-wrap: anywhere; }
+.call-end {
+  padding: 5px 10px;
+  border-top: 1px solid var(--line);
+  font-size: calc(11.5px * var(--text-scale));
+  color: var(--muted);
+}
+@media (max-width: 760px) {
+  /* the text takes a row of its own under the speaker and the time, so a phone isn't left with a few words a line */
+  .line.call-row { flex-wrap: wrap; }
+  .call-row .msg-text, .call-said { flex: 1 1 100%; order: 3; }
+  .call-spoken-tag { order: 1; }
+  .call-meta { margin-left: auto; order: 2; }
+  .call-id { display: none; }
+}
 .line.cont { margin-top: -8px; }                /* 14 px row gap becomes 6 px */
 
 /* Selected agent (inspected) and messages that mention you: tinted bands with a bar. */
