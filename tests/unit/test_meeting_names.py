@@ -192,3 +192,60 @@ def test_an_echoed_lead_in_is_taken_out_of_the_line_and_the_real_words_are_kept(
     # two Claudes: the name right before the words decides, as it did
     two = match("Claude-1 switchboard Claude can you hear me?", ["claude-1", "claude-2"])
     assert two.outcome == "ambiguous" and two.heard == "Claude" and two.text == "Claude can you hear me?"
+
+
+def test_spacing_and_hyphens_do_not_matter_when_the_transcript_splits_a_name() -> None:
+    """ "widget board" is ``widgetboard-claude``; a bare "widgetboard" works when only one member starts
+    that way. Fails if names are compared with their spaces, or a split name matches nobody."""
+    members = ["widgetboard-claude", "alice-codex"]
+    assert match("Widget board Claude, are you there?", members).name == "widgetboard-claude"
+    assert match("widget board, are you there?", members).name == "widgetboard-claude"
+    assert match("Widgetboard, are you there?", members).name == "widgetboard-claude"
+    assert match("coral board claude one, hi", ["coralboard-claude-1"]).name == "coralboard-claude-1"
+    both = match("Widgetboard, hello", ["widgetboard-claude", "widgetboard-codex"])
+    assert both.outcome == "ambiguous" and set(both.names) == {"widgetboard-claude", "widgetboard-codex"}
+    # a name written as one run that was never a name, and half a word, still wake nobody
+    assert match("claudeone, hello", ["claude-1"]).outcome == "none"
+    assert match("widget, hello", members).outcome == "none"
+
+
+def test_a_name_anywhere_in_a_line_that_asks_for_something_wakes_that_member() -> None:
+    """The live miss (#761): "I want the Widgetboard Claude to tell me ..." woke nobody.
+    Fails if a request in the middle of a line is not an address."""
+    members = ["widgetboard-claude", "alice-codex"]
+    for line, who in [
+        ("I want the Widget board Claude to tell me about the plan", "widgetboard-claude"),
+        ("could you ask the widgetboard Claude to check the build", "widgetboard-claude"),
+        ("please tell alice codex to look at it", "alice-codex"),
+        ("so alice codex check the build", "alice-codex"),
+    ]:
+        got = match(line, members)
+        assert got.name == who and got.outcome == "one", line
+    assert match("can Claude one check the tests", ["claude-1", "bob-codex"]).name == "claude-1"
+    assert match("I want Claude one to fix it", ["claude-1"]).heard == "Claude one"
+
+
+def test_a_mention_that_asks_for_nothing_wakes_no_one() -> None:
+    """False wakes stay rare: past tense, reports and talk about an agent are not requests."""
+    members = ["claude-1", "codex-1"]
+    for line in [
+        "I asked Claude yesterday and he said no.",
+        "yes, Claude said that earlier",
+        "I told Claude to go away yesterday",
+        "the prices Claude mentioned",
+        "I think Claude one can do it",
+        "we have Claude one open in a tab",
+        "I want Claude one open in a tab",
+        "yesterday codex one was slow last week and claude one was fine",
+        "so Claude one said that earlier",
+    ]:
+        assert match(line, members).outcome == "none", line
+
+
+def test_an_ambiguous_name_inside_a_request_asks_who_and_a_hint_list_is_still_an_echo() -> None:
+    """The anywhere rule resolves like the start-of-line one, and leaves the echo rules alone."""
+    got = match("please ask Claude to check it", ["claude-1", "claude-2"])
+    assert got.outcome == "ambiguous" and set(got.names) == {"claude-1", "claude-2"}
+    room = ["claude-1", "codex-1"]
+    assert match("Claude Claude one Codex switchboard", room).echo
+    assert match("can Claude Claude one Codex switchboard", room).outcome == "none"
