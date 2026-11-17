@@ -1,3 +1,0 @@
-### Added
-
-- **Obvious secrets are cut out of a chat message before it is stored.** A key or token with a well-known prefix (`sk-`, `ghp_`, `github_pat_`, `AKIA`, `xox`, ...), `Bearer` and a long token, a private-key block, and `password=` or `token=` assignments with a value are replaced by `[redacted: <kind>]`, for a message you post and one an agent says, so they never reach the database, search, the page or another agent. You see a short note under your message, and an agent is told in the reply to `say`, what kind was removed (never the value). It is best effort: other secrets are posted as written, and messages already stored are not changed. See [Secrets in messages](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#secrets-in-messages).
