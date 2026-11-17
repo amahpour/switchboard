@@ -57,7 +57,8 @@ READ_JS = """() => {
     const initials = icon ? icon.textContent.trim() : '';
     let label = '', pic = '';
     if (icon && !initials) {
-      const img = icon.querySelector('img');
+      // Zoom's picture is the icon element itself (live, 2026-11-17); an <img> inside it is the fallback
+      const img = icon.tagName === 'IMG' ? icon : icon.querySelector('img');
       const from = [img && img.getAttribute('alt'), icon.getAttribute('aria-label'), icon.getAttribute('title'),
                     row && row.getAttribute('aria-label'), row && row.getAttribute('title')];
       label = (from.find((v) => v && v.trim()) || '').trim().slice(0, 80);
