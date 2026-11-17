@@ -4176,7 +4176,7 @@ def shoot_redact(browser: Any, out: Path, world: Any) -> None:
 
 def shoot_agents(browser: Any, out: Path, world: Any) -> None:
     """#815: Home's Agents section, with every state: one waiting for approval, one working and quiet for
-    40 minutes (possibly stuck), one working, some idle, one offline, across three rooms. The desktop in the
+    40 minutes (possibly stuck), one working, some idle, one offline, one not connected, across three rooms. The desktop in the
     light theme is the guide's picture (``guide-agents-light``); the dark theme and the phone are the previews."""
     from playwright.sync_api import expect
 
@@ -4203,6 +4203,17 @@ def shoot_agents(browser: Any, out: Path, world: Any) -> None:
 
     world.broker.on_loop(quiet)
 
+    def vanished() -> None:  # nobody has heard from it for three hours: not connected (#814)
+        st = world.broker.state
+        member = st.store.find_member(st.store.get_room("#build").id, "bench")
+        t = st.clock.now() - 3 * 3600
+        st.store.update_participant(
+            member.participant_id, status="offline", status_at=t, last_seen=t, last_say_at=t
+        )
+        st.hub.members_changed("#build")
+
+    world.broker.on_loop(vanished)
+
     def home(options: dict[str, Any], scheme: str) -> Any:
         ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme=scheme, **options)
         ctx.set_default_timeout(WAIT_MS)
@@ -4210,6 +4221,7 @@ def shoot_agents(browser: Any, out: Path, world: Any) -> None:
         sign_in(page, world.broker)
         expect(page.locator("#room-title")).to_have_text("Home")
         expect(page.locator("#home .agent-row")).not_to_have_count(0)
+        expect(page.locator("#home .agent-row.not_connected")).not_to_have_count(0)
         expect(page.locator("#home .agent-stuck")).not_to_have_count(0)
         page.evaluate("document.activeElement && document.activeElement.blur()")
         page.mouse.move(0, 0)
