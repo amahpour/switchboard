@@ -3456,6 +3456,35 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 }
 .home-row .hc-tile .ic { width: 16px; height: 16px; }
 .home-row.live { padding: 10px 12px; }
+/* The agents overview (#815): one row for each agent session, with its state, its words and its rooms */
+.agent-row { padding: 10px 12px; }
+.agent-row .hc-row { align-items: flex-start; }
+.agent-harness { margin-left: 8px; color: var(--muted); font-size: calc(12.5px * var(--text-scale)); }
+.agent-state { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.agent-chip {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px;
+  background: var(--chip-bg); color: var(--muted-2); font-size: calc(11.5px * var(--text-scale)); font-weight: 500;
+}
+.agent-chip.working { background: var(--chip-bg); color: var(--green); }
+.agent-chip.waiting { background: var(--amber-bg); color: var(--amber-ink); }
+.agent-chip.offline, .agent-chip.not_connected { color: var(--muted); }
+.agent-row.not_connected { opacity: .8; }
+.agent-stuck {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px;
+  background: var(--amber-bg); color: var(--amber-ink); font-size: calc(11.5px * var(--text-scale)); font-weight: 500;
+}
+.agent-line { font-size: calc(13px * var(--text-scale)); overflow-wrap: anywhere; }
+.agent-rooms { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.agent-room {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 2px 10px 2px 6px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg); color: var(--fg);
+  font: inherit; font-size: calc(12.5px * var(--text-scale)); cursor: pointer; max-width: 100%;
+}
+.agent-room:hover { background: var(--row-sel); }
+.agent-room .ic { width: 12px; height: 12px; color: var(--muted); flex-shrink: 0; }
+.agent-room span { overflow-wrap: anywhere; text-align: left; }
+.agent-summary { padding-top: 0; }
+@media (max-width: 760px) { .agent-room { min-height: 36px; } }
 .home-rowbtn {
   display: flex;
   align-items: center;

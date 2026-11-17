@@ -7965,6 +7965,55 @@
     return li;
   }
 
+  // ---- Agents (#815): every agent session the person can see, once, with the rooms they see it in
+  const AGENT_STATE = {
+    working: 'Working', idle: 'Idle', waiting: 'Waiting for approval', offline: 'Offline',
+    not_connected: 'Not connected',
+  };
+
+  function agentRow(a) {
+    const li = el('li', 'home-row agent-row ' + a.state + (a.stuck ? ' stuck' : ''));
+    li.dataset.agent = String(a.id);
+    const row = el('div', 'hc-row');
+    const body = el('div', 'hc-body');
+    const t = el('div', 'hc-title');
+    t.append(el('b', null, a.name), el('span', 'agent-harness', harnessOf(a.harness)[1]));
+    const where = [];
+    if (a.owner) where.push(a.owner + '’s');
+    where.push(a.host ? a.host : 'this machine');
+    const st = el('div', 'agent-state');
+    st.append(el('span', 'agent-chip ' + a.state, AGENT_STATE[a.state] || 'Idle'));
+    if (a.since && a.state === 'not_connected') st.append(el('span', 'hc-age', 'last heard'), homeAge(a.since, ' ago'));
+    else if (a.since) st.append(homeAge(a.since, ' in this state'));
+    if (a.stuck) st.append(el('span', 'agent-stuck', 'Possibly stuck: nothing heard for ' + waited(a.active_at)));
+    const sub = el('div', 'hc-sub', where.join(' · '));
+    body.append(t, st);
+    if (a.line) body.append(el('div', 'agent-line', a.line));
+    body.append(sub);
+    const rooms = el('div', 'agent-rooms');
+    for (const r of a.rooms) {
+      const go = btn('agent-room', null);
+      go.append(icon('chev-right'), el('span', null, r.room + (r.as ? ' (as ' + r.as + ')' : '')));
+      go.setAttribute('aria-label', 'Open ' + r.room);
+      go.addEventListener('click', function () { goToRoom(r.room); });
+      rooms.append(go);
+    }
+    body.append(rooms);
+    row.append(avatar(a.harness, 'agent', a.name, 'home-av'), body);
+    li.append(row);
+    return li;
+  }
+
+  function agentSummary(c) {
+    const parts = [];
+    if (c.waiting) parts.push(c.waiting + ' waiting for approval');
+    if (c.stuck) parts.push(c.stuck + ' possibly stuck');
+    parts.push(c.working + ' working', c.idle + ' idle');
+    if (c.offline) parts.push(c.offline + ' offline');
+    if (c.not_connected) parts.push(c.not_connected + ' not connected');
+    return parts.join(' · ');
+  }
+
   // ---- Rooms
   function roomSummary(r) {
     let last = null;
@@ -8009,7 +8058,7 @@
       const last = roomSummary(r);
       return { r: r, last: last, ts: last ? last.ts : 0 };
     }).sort(function (a, b) { return b.ts - a.ts || (a.r.name < b.r.name ? -1 : 1); });
-    const sig = JSON.stringify([d && { w: d.waiting, d: d.done, l: d.live },
+    const sig = JSON.stringify([d && { w: d.waiting, d: d.done, l: d.live, a: d.agents },
       rooms.map(function (x) { return [x.r.name, x.r.unread, x.r.quiet, x.last && x.last.id]; }), !!error]);
     if (!again && sig === homeSig && homeRefs) return;
     homeSig = sig;
@@ -8034,6 +8083,17 @@
         if (d.waiting_total > d.waiting.length) w.append(homeEmpty('And ' + (d.waiting_total - d.waiting.length) + ' more in your rooms.'));
       }
       frag.append(w);
+
+      const ag = homeSection(refs, 'agents', 'Agents', d.agents_total ? d.agents_total : null, false);
+      if (!d.agents || !d.agents.length) ag.append(homeEmpty('No agents in your rooms yet.'));
+      else {
+        ag.append(el('p', 'home-none agent-summary', agentSummary(d.agent_counts)));
+        const ul = el('ul', 'home-list rows');
+        for (const a of d.agents) ul.append(agentRow(a));
+        ag.append(ul);
+        if (d.agents_total > d.agents.length) ag.append(homeEmpty('And ' + (d.agents_total - d.agents.length) + ' more.'));
+      }
+      frag.append(ag);
 
       const dn = homeSection(refs, 'done', 'Done since you last looked', d.done.length ? d.done.length : null, false);
       if (d.done.length) {

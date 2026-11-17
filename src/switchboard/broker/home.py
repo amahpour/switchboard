@@ -19,6 +19,7 @@ import re
 from typing import Any
 
 from switchboard import reviews
+from switchboard.broker import agents_view
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
 from switchboard.models import Message, Room
@@ -381,4 +382,5 @@ def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str
         "done": done[:DONE_MAX],
         "done_total": len(done),
         "live": live[:LIVE_MAX],
+        **agents_view.build(state, rooms, now),  # every agent session, once, in the rooms they see (§55.9)
     }
