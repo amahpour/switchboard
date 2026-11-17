@@ -1,0 +1,3 @@
+### Changed
+
+- **A call line posts sooner after the speaker pauses, with captions.** The bot waited twice after Zoom's caption stopped changing: 2 s for the text to settle, then 2.5 s more before the line was posted. Now a sentence that ends in a full stop or question mark settles in 0.8 s, a speaker's sentences from one pause come out together, and the line posts 0.4 s later, so "Bob, what's the capital of France?" arrives as one line about a second or two after Zoom's caption stops. Whisper calls and a call hosted on your own machine are unchanged. The server's mounted `captions.py` must be updated to get this (the new sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)).

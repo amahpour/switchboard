@@ -591,3 +591,53 @@ async def test_a_platform_without_captions_is_refused_never_run_on_whisper_by_it
     command(b, f"/meeting {ZOOM}")
     await wait_until(lambda: meeting_rows(b) == 1 and open_calls(b) == 0)
     assert "not supported on this platform yet" in notices(b), notices(b)
+
+
+# ------------------------------------------------------------------ when a line is posted (#801)
+async def test_a_captions_call_posts_a_line_after_the_short_wait_and_a_whisper_call_after_the_long_one(
+    captions_broker: InProcBroker, joinly: FakeJoinly, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bridge builds its line assembler for the call's transcriber: captions wait `CAPTIONS_WALL_S`
+    (the reader already saw the pause), Whisper waits `WALL_S`. The two are set so far apart that only the
+    right one can post the line, with no sleeping to mean "by now". Fails if a captions call still waits
+    the long wall time."""
+    from switchboard.meeting import lines
+
+    monkeypatch.setattr(lines, "WALL_S", 600.0)
+    monkeypatch.setattr(lines, "CAPTIONS_WALL_S", 0.05)
+    command(captions_broker, f"/meeting {ZOOM}")
+    await wait_until(lambda: len(joinly.joins) == 1)
+    joinly.push([seg("Bob, what's the capital of France?", 0.0, 1.0)])
+    await wait_until(lambda: len(meeting_lines(captions_broker)) >= 1)
+
+
+async def test_a_whisper_call_keeps_the_long_wait(
+    broker: InProcBroker, joinly: FakeJoinly, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With Whisper the short captions wait is never used: set to a day, the line still posts after
+    `WALL_S`. Fails if a Whisper call is given the captions wait."""
+    from switchboard.meeting import lines
+
+    monkeypatch.setattr(lines, "WALL_S", 0.05)
+    monkeypatch.setattr(lines, "CAPTIONS_WALL_S", 86400.0)
+    command(broker, f"/meeting {ZOOM}")
+    await wait_until(lambda: len(joinly.joins) == 1)
+    joinly.push([seg("hello everyone", 0.0, 1.0)])
+    await wait_until(lambda: len(meeting_lines(broker)) >= 1)
+
+
+async def test_an_open_line_is_posted_when_its_wall_wait_ends_not_when_the_poll_sleep_does(
+    captions_broker: InProcBroker, joinly: FakeJoinly, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a segment arrives and nothing else changes, the listen loop used to sleep the whole `POLL_S` and
+    only then ask the assembler, so a 0.4 s wall wait was really about 3 s (#801). `POLL_S` is set to ten
+    minutes and the wall wait to 0.05 s: only a loop that sleeps no longer than the open line's remaining
+    wait can post the line. Fails with a timeout if it sleeps `POLL_S`."""
+    from switchboard.meeting import bridge, lines
+
+    monkeypatch.setattr(bridge, "POLL_S", 600.0)
+    monkeypatch.setattr(lines, "CAPTIONS_WALL_S", 0.05)
+    command(captions_broker, f"/meeting {ZOOM}")
+    await wait_until(lambda: len(joinly.joins) == 1)
+    joinly.push([seg("Bob, what's the capital of France?", 0.0, 1.0)])
+    await wait_until(lambda: len(meeting_lines(captions_broker)) >= 1, timeout=3.0)

@@ -350,3 +350,53 @@ def test_a_new_sentence_that_ends_like_the_last_one_sent_is_not_dropped() -> Non
     ]:
         out += [f.text for f in r.feed([(k, text)], t)]
     assert out == ["Claude, what's", "two plus two?", "Bob, what's two plus two?"]
+
+
+def test_a_sentence_ending_in_a_stop_settles_sooner_than_one_without() -> None:
+    """Text that ends a sentence is a pause after SENTENCE_QUIET_S (0.8 s); text with no stop keeps QUIET_S
+    (2 s). Fails if "?" waits the full two seconds or an unfinished sentence is cut at 0.8 s (#801)."""
+    ended = [(0, "Bob, what's the capital of France?")]
+    assert run([*ended, (0.7, ended[0][1])]) == []
+    assert run([*ended, (0.8, ended[0][1])]) == ["Bob, what's the capital of France?"]
+    open_ = [(0, "Bob, what's the capital of")]
+    assert run([*open_, (1.9, open_[0][1])]) == []
+    assert run([*open_, (2.0, open_[0][1])]) == ["Bob, what's the capital of"]
+
+
+def _held(reads: list[tuple[float, list[tuple[str, str]]]]) -> list[tuple[float, str, str]]:
+    """Run reads through FinalRule and PauseHold; what comes out, with the time it came out."""
+    rule, hold = cap.FinalRule(), cap.PauseHold()
+    out = []
+    for t, entries in reads:
+        for f in hold.step(rule.feed(entries, t), entries, t):
+            out.append((t, f.key, f.text))
+    return out
+
+
+def test_finished_sentences_are_held_until_the_speaker_pauses_and_come_out_as_one() -> None:
+    """Two sentences, the first final because the second began: nothing comes out then, and at the pause both
+    come out as one line. Fails if the first goes out alone (the bridge would post two lines, or wait for
+    more) (#801)."""
+    k = "|"
+    got = _held(
+        [
+            (0, [(k, "Bob, can you help?")]),
+            (0.5, [(k, "Bob, can you help? What is two")]),
+            (1.0, [(k, "Bob, can you help? What is two plus two?")]),
+            (1.5, [(k, "Bob, can you help? What is two plus two?")]),
+            (1.8, [(k, "Bob, can you help? What is two plus two?")]),
+        ]
+    )
+    assert got == [(1.8, k, "Bob, can you help? What is two plus two?")]
+
+
+def test_a_speaker_change_a_departure_and_a_long_run_release_what_is_held_at_once() -> None:
+    """Held sentences are released when another speaker's text changes, when their speaker leaves the box, and
+    after MAX_HOLD_S without a pause. Fails if a held line waits for a pause that the speaker never makes."""
+    a, b = "AB|x", "CD|y"
+    got = _held([(0, [(a, "One.")]), (0.5, [(a, "One. Two")]), (0.6, [(a, "One. Two"), (b, "Hi")])])
+    assert got == [(0.6, a, "One.")]
+    left = _held([(0, [(a, "One.")]), (0.5, [(a, "One. Two")]), (0.6, [(b, "Hi")])])
+    assert [(k, t) for _, k, t in left] == [(a, "One. Two")]
+    long_run = [(i * 0.5, [(a, " ".join(f"S{n}." for n in range(i + 1)))]) for i in range(40)]
+    assert _held(long_run)[0][0] < 9

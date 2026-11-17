@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 PAUSE_S = 2.0  # audio-clock gap that ends a line
 WALL_S = 2.5  # wall-clock silence that ends a line
+CAPTIONS_WALL_S = 0.4  # ... when captions were read: the pause was already seen (#801)
 CAP = 1000  # characters in one line
 
 
@@ -29,6 +30,13 @@ class Line:
     speaker: str | None
     start: float
     end: float
+
+
+def assembler_for(captions: bool) -> "Assembler":
+    """The assembler of a call: with captions the reader has already seen the speaker pause and sends the
+    sentences of one pause together, so it only waits long enough to collect that batch. Whisper's segments
+    arrive every few seconds, and keep ``WALL_S``."""
+    return Assembler(wall_s=CAPTIONS_WALL_S if captions else WALL_S)
 
 
 class Assembler:
@@ -76,6 +84,13 @@ class Assembler:
         if self._parts and self._last_wall is not None and now - self._last_wall >= self.wall_s:
             return [self._emit()]
         return []
+
+    def due_in(self, now: float) -> float | None:
+        """Seconds until ``poll`` would close the open line (0 when it is due), or None with nothing open. A
+        caller that sleeps between polls sleeps no longer than this, or a line waits out the sleep (#801)."""
+        if not self._parts or self._last_wall is None:
+            return None
+        return max(0.0, self._last_wall + self.wall_s - now)
 
     def flush(self) -> list[Line]:
         """The open line now. The call ended, so it does not wait out the pause."""

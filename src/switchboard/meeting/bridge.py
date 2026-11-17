@@ -34,7 +34,7 @@ from switchboard.meeting.joinly import (
     RESOURCE,
     SPEAK_TIMEOUT_S,
 )
-from switchboard.meeting.lines import Assembler, Line
+from switchboard.meeting.lines import Line, assembler_for
 from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import (
@@ -52,6 +52,7 @@ from switchboard.meeting.voices import voice_of
 
 log = logging.getLogger("switchboard.meeting")
 
+MIN_WAIT_S = 0.05  # the least the listen loop sleeps for an open line that is due: no spinning
 JOIN_TIMEOUT_S = 45.0
 SHARE_TIMEOUT_S = 40.0  # joinly waits about eight seconds for Zoom to answer, after it has drawn the picture
 
@@ -186,7 +187,7 @@ class MeetingBridge:
                 self._mark_live(room_id, captions)
                 live = self._live[room_id] = _Live(client, voices=takes_voice)
                 try:
-                    await self._listen(live, handler, room_id, stop, errors)
+                    await self._listen(live, handler, room_id, stop, errors, captions)
                 finally:
                     self._live.pop(room_id, None)
                     await self._stop_speech(live)
@@ -217,11 +218,17 @@ class MeetingBridge:
             self.state.service.notice_in(room_id, joinly.CAPTIONS_ON_NOTICE)
 
     async def _listen(
-        self, live: _Live, handler: joinly.Updates, room_id: int, stop: asyncio.Event, errors: list[str]
+        self,
+        live: _Live,
+        handler: joinly.Updates,
+        room_id: int,
+        stop: asyncio.Event,
+        errors: list[str],
+        captions: bool = False,
     ) -> None:
         client = live.client
         seen: set[tuple[Any, ...]] = set()
-        asm = Assembler()
+        asm = assembler_for(captions)
         queue: deque[Line] = deque()
         warned = False
         last = 0.0
@@ -249,7 +256,11 @@ class MeetingBridge:
             if queue and (not last or now - last >= LINE_GAP_S):
                 await self._post_line(room_id, queue.popleft(), live)
                 last = time.monotonic()
-            await joinly.wait_for(handler, stop, POLL_S if not queue else min(POLL_S, LINE_GAP_S))
+            timeout = POLL_S if not queue else min(POLL_S, LINE_GAP_S)
+            due = asm.due_in(time.monotonic())
+            if due is not None:  # the open line is posted when its wall wait ends, not when the sleep does
+                timeout = min(timeout, max(due, MIN_WAIT_S))
+            await joinly.wait_for(handler, stop, timeout)
         for line in asm.flush():
             queue.append(line)
         while queue:
