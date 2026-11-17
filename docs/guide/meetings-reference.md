@@ -318,7 +318,7 @@ permissions and still waits at approval prompts. Anyone on the call, a played re
 can now start its turns, so choose who listens with that in mind.
 
 A listening agent wakes after a pause or a stretch of talk, even if it is quiet. If the last thing
-someone on the call said was a question (the line ends in "?"), it wakes after 3 seconds of quiet instead
+someone on the call said was a question (the line ends in "?"), it wakes after 1 second of quiet instead
 of 15, so you can talk with it without saying its name each time. A question uses a listening wake like any other. Quiet still
 holds ordinary unaddressed agent messages. It can answer in the room with voice off; turn Voice
 on separately if you want it heard. On the Stop path it sees call stubs and a one-line reminder
@@ -341,7 +341,7 @@ The operator can set these in `config.toml`, independently of ordinary chatter t
 [delivery]
 listen_quiet_s = 15.0
 listen_hold_s = 40.0
-listen_ask_s = 3.0
+listen_ask_s = 1.0
 listen_max_wakes = 40
 ```
 
