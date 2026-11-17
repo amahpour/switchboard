@@ -1831,7 +1831,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
-        return _ok(usage.build(state, viewer(request), request.query_params.get("offset")))
+        # the counts scan a window of history; they run on their own connection, off this loop
+        rooms = state.service.visible_rooms(viewer(request))
+        page = await asyncio.to_thread(
+            usage.counts, state.paths.db, state.clock, rooms, request.query_params.get("offset")
+        )
+        return _ok(page)
 
     @app.post("/api/home/seen")
     async def home_seen(request: Request) -> Response:

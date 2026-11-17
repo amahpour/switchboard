@@ -1,9 +1,10 @@
 """What agents cost (DESIGN.md §61, #818): windows and the ranking, with no I/O.
 
 A wake is a ``kind='wake'`` batch. A post is an agent's chat message. The budget on the page
-is the room's current hourly budget and what it has left this hour. How often the budget ran
-out is the ``budget_exhausted`` events in the window: a wake the budget did not send is not a
-row, so it is not a count here. The caller decides which rooms are in the picture (§44).
+is the room's hourly rate and what it has left this hour, including a refill the next wake has
+not written yet (:func:`budget_left`). How often the budget ran out is the ``budget_exhausted``
+events in the window: a wake the budget did not send is not a row, so it is not a count here.
+The caller decides which rooms are in the picture (§44).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any
 from switchboard.models import Room, room_slug
 
 DAY_S = 86_400.0
+HOUR_S = 3600.0  # the same window Store.refill_budget writes when the next wake asks
 OFFSET_LIMIT = 14 * 60  # a real zone is within 14 hours of UTC; past that, the window is UTC
 _OFFSET_RE = re.compile(r"-?\d{1,4}\Z")
 
@@ -55,6 +57,26 @@ def window_starts(now: float, offset_min: object) -> tuple[float, float]:
     midnight = local - (local % DAY_S)
     today = midnight - off * 60.0
     return today, today - 6 * DAY_S
+
+
+def budget_left(per_hour: object, remaining: object, window_start: object, now: float) -> int:
+    """What is left this hour, from the stored window, without writing a refill.
+
+    The store refills only when the next wake asks. A room that spent the hour and then went
+    quiet would otherwise keep showing 0. Once ``now`` has reached ``window_start + 3600``,
+    that wake would set remaining to ``per_hour``, so the page shows the rate. Inside the
+    hour, what is stored is what is left. A window that is not a finite time shows the stored
+    remaining: an unrecognized value does not invent a full hour.
+    """
+    rate, left = _n(per_hour), _n(remaining)
+    if isinstance(window_start, bool) or not isinstance(window_start, (int, float)):
+        return left
+    start = float(window_start)
+    if start != start or start in (float("inf"), float("-inf")):
+        return left
+    if float(now) >= start + HOUR_S:
+        return rate
+    return left
 
 
 def _n(value: object) -> int:
@@ -180,7 +202,9 @@ def shape(
             "slug": room_slug(room.name),
             "private": bool(room.private),
             "budget_per_hour": _n(room.budget_per_hour),
-            "budget_remaining": _n(room.budget_remaining),
+            "budget_remaining": budget_left(
+                room.budget_per_hour, room.budget_remaining, room.budget_window_start, now
+            ),
             "wakes_today": box["wakes_today"],
             "wakes_week": box["wakes_week"],
             "posts_today": box["posts_today"],

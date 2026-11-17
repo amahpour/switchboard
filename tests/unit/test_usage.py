@@ -16,7 +16,7 @@ from conftest import FakeClock
 from switchboard import db
 from switchboard.models import Room, session_key
 from switchboard.store import Store
-from switchboard.usage import clamp_offset, parse_offset, shape, window_starts
+from switchboard.usage import budget_left, clamp_offset, parse_offset, shape, window_starts
 
 DAY = 86_400.0
 NOW = 1_800_000_000.0  # a fixed instant; the local day is derived, not assumed
@@ -166,7 +166,10 @@ def test_counts_match_the_stored_rows_over_the_fixed_window(store: Store) -> Non
     assert rooms["#build"]["posts_today"] == 2
     assert rooms["#build"]["posts_week"] == 3
     assert rooms["#build"]["budget_per_hour"] == 60
-    assert rooms["#build"]["budget_remaining"] == store.room_by_id(build.id).budget_remaining
+    # those wakes were stored without a refill, and the window they belong to has passed,
+    # so the page shows the rate the next wake would refill to, not the dry stored row
+    assert rooms["#build"]["budget_remaining"] == 60
+    assert store.room_by_id(build.id).budget_remaining < 60
     assert rooms["#build"]["exhausted_week"] == 1
     assert rooms["#quiet"] == {
         "name": "#quiet",
@@ -189,8 +192,92 @@ def test_counts_match_the_stored_rows_over_the_fixed_window(store: Store) -> Non
     assert (claude_row["posts_today"], claude_row["posts_week"]) == (1, 1)
     assert all(a["room"] != "#other" for a in page["agents"])
     assert "#other" not in rooms
-    # the future wake and the one before the week were still written, so the budget moved for them
-    assert isinstance(page["rooms"][0]["budget_remaining"], int)
+
+
+def test_the_usage_queries_search_the_window_indexes(store: Store) -> None:
+    """Opening the page must not scan every message and every batch. The plan searches
+    ``messages_agent_ts`` and ``batches_wake_created`` by the window's bounds. Without those
+    indexes the message query walks ``messages_room_id`` (every message in the room) and the
+    batch query scans ``batches``."""
+    room = store.create_room("#build", "alice", 40, 0)
+    mid = _agent(store, room.id, "claude-1")
+    asked = store.insert_message(
+        room.id, sender_name="alice", sender_kind="human", via="web", text="a question"
+    )
+    store.create_batch(mid, path="wait", kind="wake", counted=True, items=[(asked.id, 1)])
+    store.insert_message(
+        room.id,
+        sender_name="claude-1",
+        sender_kind="agent",
+        via="mcp",
+        text="a post",
+        sender_membership_id=mid,
+        sender_harness="claude",
+    )
+    store.add_event("budget_exhausted", room_id=room.id)
+    today, week = window_starts(NOW, 0)
+    seen: list[str] = []
+
+    def collect(sql: str) -> None:
+        if sql.lstrip().upper().startswith("SELECT"):
+            seen.append(sql)
+
+    store.con.set_trace_callback(collect)
+    try:
+        store.usage_wakes([room.id], since=week, today=today, until=NOW)
+        store.usage_posts([room.id], since=week, today=today, until=NOW)
+        store.usage_exhausted([room.id], since=week, until=NOW)
+    finally:
+        store.con.set_trace_callback(None)
+
+    def plan(fragment: str) -> list[str]:
+        sqls = [s for s in seen if fragment in s]
+        assert len(sqls) == 1, seen
+        return [r[3] for r in store.con.execute("EXPLAIN QUERY PLAN " + sqls[0])]
+
+    posts, wakes, exhausted = plan("FROM messages"), plan("FROM batches"), plan("FROM events")
+    assert any("messages_agent_ts" in ln and "ts>" in ln for ln in posts), posts
+    assert any("batches_wake_created" in ln and "created_at>" in ln for ln in wakes), wakes
+    assert any("events_kind_ts" in ln and "ts>" in ln for ln in exhausted), exhausted
+    assert not any(ln.startswith("SCAN") for ln in (*posts, *wakes, *exhausted)), (posts, wakes, exhausted)
+
+
+def test_a_quiet_hour_shows_the_budget_refilled(store: Store) -> None:
+    """The refill is written only when the next wake asks. A room that spent its hour and then
+    went quiet keeps ``budget_remaining`` at 0, so the page would say "0 of 40 left" for ever.
+    Once ``now`` reaches ``budget_window_start + 3600``, the page shows ``budget_per_hour``,
+    computed from those stored times, and it does not write the refill. Inside the hour it
+    still shows what is left, including 0."""
+    room = store.create_room("#build", "alice", 40, 0)
+    store.set_budget(room.id, 0)
+    start = room.budget_window_start
+
+    def page_at(t: float) -> int:
+        _at(store, t)
+        today, week = window_starts(t, 0)
+        got = shape(
+            [store.room_by_id(room.id)],
+            [],
+            [],
+            {},
+            now=t,
+            offset_min=0,
+            today_start=today,
+            week_start=week,
+        )
+        return got["rooms"][0]["budget_remaining"]
+
+    assert page_at(start + 3599) == 0
+    assert store.room_by_id(room.id).budget_remaining == 0  # the row is still dry
+    assert page_at(start + 3600) == 40
+    assert page_at(start + 7200) == 40  # a later hour refills to the rate, it does not stack
+    assert store.room_by_id(room.id).budget_remaining == 0  # still not written
+    assert store.room_by_id(room.id).budget_window_start == start
+    # a window that is not a finite time does not invent a full hour
+    assert budget_left(40, 0, None, NOW) == 0
+    assert budget_left(40, 3, True, NOW) == 3
+    assert budget_left(40, 3, float("nan"), NOW) == 3
+    assert budget_left(40, 0, float("inf"), NOW) == 0
 
 
 def test_ranking_is_noisiest_first_and_a_room_not_passed_is_dropped() -> None:
@@ -220,7 +307,7 @@ def test_ranking_is_noisiest_first_and_a_room_not_passed_is_dropped() -> None:
         paused_reason=None,
         budget_per_hour=30,
         budget_remaining=4,
-        budget_window_start=0,
+        budget_window_start=NOW,  # this hour is still open, so 4 left is what the page shows
         budget_notice_window=None,
         hop_count=0,
         hop_limit=0,

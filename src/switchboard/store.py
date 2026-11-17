@@ -3297,6 +3297,8 @@ class Store:
 
         ``today`` is how many of them fall on ``[today, until]``; ``week`` is the whole window.
         ``kind='wake'`` only (§8.3): a priority batch and a pull are not wakes, whatever their state.
+        ``batches_wake_created`` (schema 51) serves ``kind='wake'`` and the ``created_at`` bounds,
+        so a page open reads the window and not every batch ever stored.
         """
         ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
         if not ids:
@@ -3321,7 +3323,9 @@ class Store:
         self, room_ids: Sequence[int], *, since: float, today: float, until: float
     ) -> list[sqlite3.Row]:
         """Agent chat posted in ``[since, until]``, per sender. A person's message, a notice and a
-        call line are not an agent's post. ``today`` and ``week`` are the same split as ``usage_wakes``."""
+        call line are not an agent's post. ``today`` and ``week`` are the same split as ``usage_wakes``.
+        ``messages_agent_ts`` (schema 51) serves ``kind``, ``sender_kind``, ``room_id`` and the
+        ``ts`` bounds, so the read does not walk every message of the room."""
         ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
         if not ids:
             return []
