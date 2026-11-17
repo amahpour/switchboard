@@ -38,19 +38,32 @@ def test_asks_looks_only_at_the_end_of_the_line(text: str, expected: bool) -> No
     assert asks(text) is expected
 
 
+def test_the_default_wait_after_a_question_is_one_second() -> None:
+    """A question is answered after 1 s of room quiet by default (#801), 3 s before. Fails at 3.0, in the
+    broker's config or in the rule's own default."""
+    import inspect
+
+    from switchboard.config import DeliveryCfg
+    from switchboard.delivery import rules
+
+    assert DeliveryCfg().listen_ask_s == 1.0
+    for fn in (rules.chatter_due, rules.chatter_wakes_at):
+        assert inspect.signature(fn).parameters["listen_ask_s"].default == 1.0
+
+
 def test_a_question_wakes_after_listen_ask_s_and_a_statement_waits_for_listen_quiet_s(
     tmp_path: Path, clock: FakeClock
 ) -> None:
-    """Without the fast path both lines would wait 15 s; with it the question goes at 3 s."""
+    """Without the fast path both lines would wait 15 s; with it the question goes at 1 s."""
     w, call = call_world(tmp_path, clock, quiet_s=0, max_hold_s=1)
     _, m, sink = waiting(w)
     w.store.set_listen(m.id, True, call)
     line(w, call, "Where does the export code live?")
-    assert w.engine.wakes_at(m.id) == clock.now() + 3
-    clock.advance(2)
+    assert w.engine.wakes_at(m.id) == clock.now() + 1
+    clock.advance(0.5)
     w.actions += w.engine.tick()
     assert not woke(w, sink)
-    clock.advance(1)
+    clock.advance(0.5)
     w.actions += w.engine.tick()
     assert woke(w, sink) and "export code" in result(w, sink)["text"]
 
@@ -66,19 +79,19 @@ def test_a_question_wakes_after_listen_ask_s_and_a_statement_waits_for_listen_qu
 
 
 def test_the_ask_clock_is_room_quiet_since_the_latest_line(tmp_path: Path, clock: FakeClock) -> None:
-    """More talk after the question restarts the 3 s: the person is still speaking."""
+    """More talk after the question restarts the 1 s: the person is still speaking."""
     w, call = call_world(tmp_path, clock)
     _, m, sink = waiting(w)
     w.store.set_listen(m.id, True, call)
     line(w, call, "Is this ready?")
-    clock.advance(2)
+    clock.advance(0.8)
     line(w, call, "Well, I mean the second half.")
-    clock.advance(2)
+    clock.advance(0.8)
     w.actions += w.engine.tick()
     assert not woke(w, sink)
     # the question is still pending, so the short clock now runs from the later line
-    assert w.engine.wakes_at(m.id) == clock.now() + 1
-    clock.advance(1)
+    assert w.engine.wakes_at(m.id) == pytest.approx(clock.now() + 0.2)
+    clock.advance(0.2)
     w.actions += w.engine.tick()
     assert woke(w, sink)
 

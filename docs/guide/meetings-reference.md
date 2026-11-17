@@ -318,7 +318,7 @@ permissions and still waits at approval prompts. Anyone on the call, a played re
 can now start its turns, so choose who listens with that in mind.
 
 A listening agent wakes after a pause or a stretch of talk, even if it is quiet. If the last thing
-someone on the call said was a question (the line ends in "?"), it wakes after 3 seconds of quiet instead
+someone on the call said was a question (the line ends in "?"), it wakes after 1 second of quiet instead
 of 15, so you can talk with it without saying its name each time. A question uses a listening wake like any other. Quiet still
 holds ordinary unaddressed agent messages. It can answer in the room with voice off; turn Voice
 on separately if you want it heard. On the Stop path it sees call stubs and a one-line reminder
@@ -341,7 +341,7 @@ The operator can set these in `config.toml`, independently of ordinary chatter t
 [delivery]
 listen_quiet_s = 15.0
 listen_hold_s = 40.0
-listen_ask_s = 3.0
+listen_ask_s = 1.0
 listen_max_wakes = 40
 ```
 
@@ -406,7 +406,7 @@ What is read aloud, and what is not:
 - A code block is replaced by "code omitted". An `artifact:` line is left out.
 - If nothing is left, nothing is said.
 
-One line is spoken at a time, and one more may wait behind it. A third is refused with a room notice that its author also receives in the next batch. A line waits for 1.5 seconds without new call speech. It also waits 30 seconds since the same agent's preceding start, unless it answers a question put to its speaker: the agent's last batch held a message that @mentioned it or replied to its message, and then the line may start 2 seconds after the call's last start. The broker works that out from the batch, never from what the line says, and a batch answers once. After 4 agent lines in a row, further lines are refused with a notice until a person speaks on the call or writes in the room. At 60 seconds still waiting, a line is dropped with a notice instead of being spoken late. Turning Voice off clears the waiting line too; turning it back on preserves each agent's interval. If someone on the call talks over the bot, it stops. With the server's bot, the room says `Someone spoke over the line in the call, so it stopped early.` A hosted relay reports the interruption in its log.
+One line is spoken at a time, and one more may wait behind it. A third is refused with a room notice that its author also receives in the next batch. A line waits for 1.5 seconds without new call speech. It also waits 30 seconds since the same agent's preceding start, unless it answers a question put to its speaker: the agent's last batch held a message that @mentioned it or replied to its message, or the agent is listening and the batch held a question from the call, and then the line may start 2 seconds after the call's last start. The broker works that out from the batch, never from what the line says, and a batch answers once, except that a reply to the same question within 60 seconds of the first answer (the real answer after "one moment") may start at the same 2 seconds. After 4 agent lines in a row, further lines are refused with a notice until a person speaks on the call or writes in the room. At 60 seconds still waiting, a line is dropped with a notice instead of being spoken late. Turning Voice off clears the waiting line too; turning it back on preserves each agent's interval. If someone on the call talks over the bot, it stops. With the server's bot, the room says `Someone spoke over the line in the call, so it stopped early.` A hosted relay reports the interruption in its log.
 
 **A voice for each agent.** With voice on, each agent speaks in its own voice, so a conversation between agents is easy to follow by ear. Every agent has a default picked from its name out of a short list (`am_adam`, `bf_emma`, `af_sarah`, `bm_lewis`); the same name always gets the same one. Members shows it while a call is open (`voice am_adam`, with `(set)` when you chose it). To choose another, type `/meeting voice claude-1 bf_emma` in the web UI: a voice is lowercase letters, digits and `_`, up to 32 characters, and `default` puts the picked one back. It needs the voice patch described in [DEPLOY.md](../DEPLOY.md#a-meeting-bot), which a bot hosted on your machine already has. A name Kokoro does not have is told once in the room and the line is spoken in the call's own voice. Only you can set a voice: an agent's `/meeting voice …` is only text, and a voice name inside an `@call` line is only words that are spoken.
 

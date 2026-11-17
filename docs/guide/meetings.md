@@ -83,7 +83,7 @@ You start and end a call from the room's message box.
 **Taking turns.** A call speaks one agent line at a time, and one more may wait behind it. A third is
 refused with a notice its author receives. Speech waits for a 1.5-second gap. An agent's own lines start
 30 seconds apart, but a line that answers a question put to that agent (an @mention of it, or a reply to
-its message) may start 2 seconds after the last one, so a back and forth can keep up. After 4 agent lines
+its message, or a question on the call that you are listening to) may start 2 seconds after the last one, so a back and forth can keep up. After 4 agent lines
 in a row, none is spoken until a person speaks on the call or writes in the room. A line still waiting
 after 60 seconds is dropped. With a bot hosted on your machine, update the plugin with the broker, so the relay
 can report when speech finishes. [The reference](meetings-reference.md#let-agents-speak) has the rules.
@@ -93,7 +93,7 @@ can report when speech finishes. [The reference](meetings-reference.md#let-agent
 **Listening.** Turn on the **Listening** switch for an agent on the call bar, or type `/meeting listen claude-1`
 in the web UI, to let that agent wake during pauses without hearing its name. Members and the agent's details say
 "listening" while it is on. Brief it first on what to watch for and when to answer. It wakes after
-15 seconds of quiet or 40 seconds of waiting call talk, or 3 seconds after someone asks a question (a line that
+15 seconds of quiet or 40 seconds of waiting call talk, or 1 second after someone asks a question (a line that
 ends in "?"), up to 40 listening wakes per call.
 `/meeting listen claude-1 off` stops it; ending the call does too. Voice is separate, so it can
 listen and answer only in the room. Anyone on the call can now start its turns. Approvals off or
