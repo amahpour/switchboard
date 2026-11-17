@@ -3148,9 +3148,14 @@ last start (`ANSWER_INTERVAL_S`). **This loosens #694's "one spoken line per 30 
 named answer, by the maintainer's approval of 2026-11-10 on #713.** "Put to its speaker" is decided by
 the broker from rows, never from the line: `Store.question_batch` finds the agent's last batch and
 whether it holds a message that @mentioned the agent or replied to its own message (a claim-watch
-mention counts, as it does for delivery). `AgentService._post_say` marks the line `answering` when that
+mention counts, as it does for delivery). A question put to nobody counts too (#801): when the agent is
+listening to a call (§52.1), a call line of that batch that `rules.asks` recognises is a question put
+to it (`Store.listened_call_lines`). `AgentService._post_say` marks the line `answering` when that
 batch has not yet had an answer, so a batch answers once and a second line from it waits its 30
-seconds. An agent cannot mark its own line. What bounds the shorter wait: the cap below, the single
+seconds. One exception, for "one moment" (#801): an agent that used the batch's answer to say it needs a
+tool may answer once more, at the same 2 seconds, when that line replies (`reply_to`) to a message of the
+same batch and comes within 60 seconds of the first answer (`FOLLOW_UP_S`, `ANSWERS_PER_BATCH`). A
+third line, a line that replies to nothing in the batch, or a later one waits its 30 seconds. An agent cannot mark its own line. What bounds the shorter wait: the cap below, the single
 waiting line, the 60-second stale rule, the 90-second backstop, the room's wake budget and the person's
 Voice switch.
 

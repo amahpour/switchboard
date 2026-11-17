@@ -2584,6 +2584,35 @@ class Store:
         ).fetchone()
         return int(r[0]) if r else None
 
+    def batch_has_message(self, batch_id: int, message_id: int) -> bool:
+        """Whether this batch delivered that message (a reply to one of its lines, §52.2)."""
+        return (
+            self.con.execute(
+                "SELECT 1 FROM deliveries WHERE batch_id=? AND message_id=?", (batch_id, message_id)
+            ).fetchone()
+            is not None
+        )
+
+    def listened_call_lines(self, membership_id: int) -> tuple[int, list[str]] | None:
+        """The last batch's id and the texts of its lines from the call this member is listening to
+        (§52.1), or None when it isn't listening or the batch holds none. The caller decides which of
+        them ask (``rules.asks``): this stays SQL."""
+        r = self.con.execute(
+            "SELECT b.id FROM batches b WHERE b.membership_id=? AND b.id=("
+            " SELECT MAX(id) FROM batches WHERE membership_id=?)",
+            (membership_id, membership_id),
+        ).fetchone()
+        if r is None:
+            return None
+        rows = self.con.execute(
+            "SELECT m.text FROM deliveries d JOIN messages m ON m.id=d.message_id"
+            " JOIN memberships mb ON mb.id=d.membership_id"
+            " WHERE d.batch_id=? AND mb.listen=1 AND mb.listen_call_id IS NOT NULL"
+            " AND m.sender_kind='meeting' AND m.meeting_id=mb.listen_call_id ORDER BY m.id",
+            (int(r[0]),),
+        ).fetchall()
+        return (int(r[0]), [x[0] for x in rows]) if rows else None
+
     def mark_handled(self, membership_id: int) -> int:
         """say/pass: every in_context delivery of this member becomes handled.
 

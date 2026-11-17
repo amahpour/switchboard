@@ -296,3 +296,67 @@ async def test_hosted_refuses_a_voice_missing_that_is_not_a_boolean(world: World
     finally:
         await a.close()
         await other.close()
+
+
+async def hear_question(w: World, text: str) -> int:
+    """Push a call line, close it with a pause, and return its message id."""
+    w.relay.push([seg(text, 0, 1)])
+    w.relay.push([seg("thanks", 30, 31)])
+    w.tick(1.1)
+    await wait_until(lambda: len(w.call_lines()) >= 1)
+    return [m for m in w.call_lines() if m["text"] == text][0]["id"]
+
+
+async def test_a_listening_agent_answers_a_call_question_to_nobody_at_the_answer_gap(world: World) -> None:
+    """A call line that asks and names nobody is a question put to the agent listening to that call, so
+    its answer waits 2 s after the last start, not its own 30 s (#801). Fails if only a question that names
+    the agent, or replies to it, opens the 2 s door."""
+    w = world
+    a, other = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        w.command("/meeting listen codex-1")
+        await other.say("#build", "@call Hello.")
+        hello = poll(w)
+        poll(w, done=hello["speech_id"])
+        w.clock.advance(5)
+        await hear_question(w, "Can someone tell me what three plus three is?")
+        await other.read("#build")
+        await other.say("#build", "@call Six.")
+        w.clock.advance(3)  # past the quiet after the person spoke; still far from 30 s
+        assert poll(w)["lines"] == ["Six."]  # 5 s after its last start, not 30
+    finally:
+        await a.close()
+        await other.close()
+
+
+async def test_the_real_answer_after_a_one_moment_line_also_gets_the_answer_gap(world: World) -> None:
+    """A named question is answered by "one moment" (the batch's one answer), and the real answer replies to
+    the same question soon after: it gets the 2 s gap too, once. A line that does not reply to the batch,
+    or a third, waits 30 s. Fails if the follow-up waits 30 s after the holding line."""
+    w = world
+    a, other = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        await other.say("#build", "@call Hello.")
+        hello = poll(w)
+        poll(w, done=hello["speech_id"])
+        w.clock.advance(5)
+        alice_says(w, "@codex-1 what do you see on my screen?")
+        q = [m for m in w.messages() if m["text"].startswith("@codex-1")][-1]["id"]
+        await other.read("#build")
+        await other.say("#build", "@call One moment.", reply_to=q)
+        moment = poll(w)
+        assert moment["lines"] == ["One moment."]
+        poll(w, done=moment["speech_id"])
+        w.clock.advance(5)
+        await other.say("#build", "@call A blue window.", reply_to=q)
+        real = poll(w)
+        assert real["lines"] == ["A blue window."]
+        poll(w, done=real["speech_id"])
+        await other.say("#build", "@call And more.", reply_to=q)
+        w.clock.advance(5)
+        assert poll(w)["lines"] == []  # only one follow-up per batch
+    finally:
+        await a.close()
+        await other.close()

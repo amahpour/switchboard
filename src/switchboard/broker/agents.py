@@ -169,6 +169,12 @@ HOOK_EVENTS: dict[str, frozenset[str]] = {
 }
 
 
+# an agent that said "one moment" may answer a batch once more, if it replies to a line of that batch within
+# this long of its first answer (§52.2)
+ANSWERS_PER_BATCH = 2
+FOLLOW_UP_S = 60.0
+
+
 @dataclass
 class AgentConn:
     """Who is calling over HTTPS (§49.3), as far as the call says: the harness a client claims to be
@@ -259,8 +265,9 @@ class AgentService:
         self.record_dir = Path(rec) if rec and state.test_mode else None
         # membership id -> rate-limited says waiting their turn: (text, reply_to, file ids), oldest first
         self._queued_says: dict[int, deque[tuple[str, int | None, list[str]]]] = {}
-        # member id -> the last batch whose question an @call line answered (§52.2)
-        self._answered: dict[int, int] = {}
+        # member id -> (the last batch whose question an @call line answered, how many lines answered
+        # it, when the first did) (§52.2)
+        self._answered: dict[int, tuple[int, int, float]] = {}
 
     # ------------------------------------------------------------ plumbing
     @property
@@ -963,9 +970,25 @@ class AgentService:
         like any other (the delivery, the wake budget and the loop guard)."""
         now = self.state.clock.now()
         asked = self.store.question_batch(m.id)
-        answering = asked is not None and self._answered.get(m.id) != asked  # a batch answers once (§52.2)
+        if asked is None:
+            # a question put to nobody on the call this member listens to is put to it too (§52.1)
+            heard = self.store.listened_call_lines(m.id)
+            if heard is not None and any(rules.asks(t) for t in heard[1]):
+                asked = heard[0]
+        answering = False
         if asked is not None:
-            self._answered[m.id] = asked
+            seen = self._answered.get(m.id)
+            if seen is None or seen[0] != asked:
+                answering, self._answered[m.id] = True, (asked, 1, now)  # a batch answers once (§52.2)
+            elif (
+                seen[1] < ANSWERS_PER_BATCH
+                and now - seen[2] <= FOLLOW_UP_S
+                and reply_to is not None
+                and self.store.batch_has_message(asked, reply_to)
+            ):
+                # the real answer after a "one moment" line: it replies to a line of the same batch, soon
+                # after the first answer, and only once more (§52.2)
+                answering, self._answered[m.id] = True, (asked, seen[1] + 1, seen[2])
         self.store.mark_handled(m.id)
         self.store.update_participant(p.id, last_say_at=now)
         mentions = rules.parse_mentions(text, self.svc.mention_names(room))
