@@ -22,9 +22,14 @@ SPEAK_MAX = 300
 # What a batch with call lines carries while voice is on: the only place agents learn how to speak.
 # VOICE_HINT stays short (a test holds it under 90 characters); VOICE_STYLE says how, before it.
 VOICE_STYLE = (
-    "On a call, talk, don't read: after @call, one or two short sentences, no lists, tables, code or links."
-    ' Put details in a normal say() without @call. If you need a tool first, say "one moment" with @call.'
+    "On a call, talk, don't read: after @call, one or two short sentences, no lists, tables, code or links,"
+    ' then stop or offer more ("want the details?"). Put details in a normal say() without @call.'
+    ' If you need a tool first, say "one moment" with @call.'
 )
+# What is spoken in place of the part that is not (#761): a listener who hears a cut sentence-end and then
+# silence takes the line for finished. The pointer is its own short sentence, spoken after the kept ones, and
+# it is not counted in ``SPEAK_MAX``.
+SPOKEN_POINTER = "The rest is in the room."
 VOICE_HINT = "Voice is on in this call: start a say() line with @call to have it spoken."
 
 # ``@call`` at the start, and not the front of a longer name (``@call-1``, ``@calling``)
@@ -92,6 +97,19 @@ def speakable(text: str, limit: int = SPEAK_MAX, sentences: int = SPEAK_SENTENCE
             spoken += " " if spoken[-1] in ".!?:;" else ". "
         spoken += piece
     return _first_sentences(spoken.strip(), limit, sentences)
+
+
+def call_line(text: str) -> str:
+    """What a call speaks for an ``@call`` message's text: ``speakable``, and when it left something out
+    (more sentences or characters than the cap, or one sentence cut at a word) ``SPOKEN_POINTER`` after it, so
+    the listener knows there is more and where it is. "" when nothing is left to say, and the whole text when
+    it fits. The room always has the message as written."""
+    kept = speakable(text)
+    if not kept:
+        return ""
+    if speakable(text, limit=len(text) + len(kept) + 1, sentences=len(text) + 1) == kept:
+        return kept
+    return f"{kept} {SPOKEN_POINTER}"
 
 
 def split_sentences(text: str) -> list[str]:
