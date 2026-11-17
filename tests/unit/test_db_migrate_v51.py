@@ -1,4 +1,4 @@
-"""Schema 51 indexes the usage page's window on a real old database (DESIGN.md §61, #818)."""
+"""Schema 51 adds a room's opt-in to a review asked for by a posted link, to a real old database (§37.16)."""
 
 from __future__ import annotations
 
@@ -10,44 +10,38 @@ import pytest
 from switchboard import db
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
-INDEXES = ("messages_agent_ts", "batches_wake_created")
 
 
-def at_50(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_setting_defaults_off_and_old_rows_and_backup_survive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migrate the release fixture to 50 first, then on through the current schema. The new column's CHECK
+    holds, and every old room starts with the setting off. Fails if a room starts on, or a later step drops
+    the column."""
+    path = tmp_path / "old.db"
     with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
     with monkeypatch.context() as mp:
         mp.setattr(db, "SCHEMA_VERSION", 50)
-        db.open_db(path).close()
-
-
-def test_the_usage_indexes_are_added_and_match_a_fresh_schema(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A database at schema 50 has neither index. After the step both exist, their SQL matches a
-    fresh database, the messages are untouched, and the backup is still schema 50 without them.
-    Fails if the indexes are only in the fresh CREATE, or the migration drops rows."""
-    path = tmp_path / "old.db"
-    at_50(path, monkeypatch)
-    with sqlite3.connect(path) as before:
-        assert db.schema_version(before) == 50
-        for name in INDEXES:
-            assert before.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone() is None
-        total = before.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        old = db.open_db(path)
+        messages = [tuple(r) for r in old.execute("SELECT * FROM messages")]
+        rooms = old.execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
+        old.close()
+    assert rooms > 0
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 51
-    assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == total
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 52
+    assert [tuple(r) for r in con.execute("SELECT * FROM messages")] == messages
+    assert con.execute("SELECT COUNT(*) FROM rooms WHERE review_on_link=0").fetchone()[0] == rooms
     fresh = db.open_db(tmp_path / "fresh.db")
-    q = (
-        "SELECT name, sql FROM sqlite_master WHERE name IN"
-        " ('messages_agent_ts', 'batches_wake_created') ORDER BY name"
-    )
-    assert [tuple(r) for r in con.execute(q)] == [tuple(r) for r in fresh.execute(q)]
-    assert len(con.execute(q).fetchall()) == 2
+    assert [tuple(r) for r in con.execute("PRAGMA table_info(rooms)")] == [
+        tuple(r) for r in fresh.execute("PRAGMA table_info(rooms)")
+    ]
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute("UPDATE rooms SET review_on_link=2")
     assert db.integrity_ok(con) is None
+    assert list(con.execute("PRAGMA foreign_key_check")) == []
     with sqlite3.connect(path.with_name("old.db.v50.bak")) as backup:
         assert db.schema_version(backup) == 50
-        for name in INDEXES:
-            assert backup.execute("SELECT name FROM sqlite_master WHERE name=?", (name,)).fetchone() is None
+        assert "review_on_link" not in {r[1] for r in backup.execute("PRAGMA table_info(rooms)")}
     fresh.close()
     con.close()

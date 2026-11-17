@@ -399,6 +399,16 @@ class Store:
             )
             return cur.rowcount == 1
 
+    def set_room_review_on_link(self, room_id: int, on: bool) -> bool:
+        """Set whether an agent's new pull or merge request link asks for a review (§37.16, #816). True
+        when that changed it."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE rooms SET review_on_link=? WHERE id=? AND review_on_link!=?",
+                (int(on), room_id, int(on)),
+            )
+            return cur.rowcount == 1
+
     def set_budget(self, room_id: int, remaining: int) -> Room:
         if remaining < 0:
             raise ValueError("budget must be >= 0")
@@ -3297,7 +3307,7 @@ class Store:
 
         ``today`` is how many of them fall on ``[today, until]``; ``week`` is the whole window.
         ``kind='wake'`` only (§8.3): a priority batch and a pull are not wakes, whatever their state.
-        ``batches_wake_created`` (schema 51) serves ``kind='wake'`` and the ``created_at`` bounds,
+        ``batches_wake_created`` (schema 52) serves ``kind='wake'`` and the ``created_at`` bounds,
         so a page open reads the window and not every batch ever stored.
         """
         ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
@@ -3324,7 +3334,7 @@ class Store:
     ) -> list[sqlite3.Row]:
         """Agent chat posted in ``[since, until]``, per sender. A person's message, a notice and a
         call line are not an agent's post. ``today`` and ``week`` are the same split as ``usage_wakes``.
-        ``messages_agent_ts`` (schema 51) serves ``kind``, ``sender_kind``, ``room_id`` and the
+        ``messages_agent_ts`` (schema 52) serves ``kind``, ``sender_kind``, ``room_id`` and the
         ``ts`` bounds, so the read does not walk every message of the room."""
         ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
         if not ids:

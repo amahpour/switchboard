@@ -3633,7 +3633,9 @@
       }
     } else if (f.t === 'members') {
       if (!r) return;
+      const heldBefore = r.members;
       r.members = f.members || [];
+      notifyApprovals(r, heldBefore, r.members);
       if (f.room === state.active) {
         renderBuddies();
         updateRoomEmpty();
@@ -4214,6 +4216,53 @@
     });
     // Fields belong in the scrolling content; the bar stays at its foot.
     panel.querySelector('.settings-panel-content').append(names, nameLabel, nameInput, nameNote);
+    buildNotifySetting(panel.querySelector('.settings-panel-content'));
+  }
+
+  // Settings → Profile → Notifications (#723): the on/off, and the browser's own permission prompt from this click
+  function buildNotifySetting(box) {
+    box.append(el('h3', null, 'Notifications'),
+      el('p', 'fine', 'While this tab is hidden, your browser shows a notification when something needs you: a message to you,'
+        + ' a review that needs your call, or an agent waiting for your approval. Clicking it opens the item.'
+        + ' Nothing is sent to anyone: the browser draws it. This is for this browser only.'));
+    const row = el('label', 'check-row');
+    const box1 = el('input');
+    box1.type = 'checkbox';
+    box1.id = 'settings-notify';
+    row.append(box1, el('span', null, 'Show notifications when this tab is hidden'));
+    const status = el('p', 'fine');
+    status.id = 'settings-notify-status';
+    box.append(row, status);
+    function show() {
+      if (!notifySupported()) {
+        box1.disabled = true;
+        status.textContent = 'This browser can\u2019t show notifications here.';
+        return;
+      }
+      box1.checked = notifyOn() && Notification.permission === 'granted';
+      status.textContent = Notification.permission === 'denied'
+        ? 'Notifications are blocked for this site. Allow them in the browser\u2019s site settings, then turn this on.' : '';
+    }
+    box1.addEventListener('change', async function () {
+      let want = box1.checked;
+      if (want && Notification.permission === 'default') {
+        let got = 'denied';
+        try { got = await Notification.requestPermission(); } catch (e) { /* denied */ }
+        want = got === 'granted';
+      } else if (want) {
+        want = Notification.permission === 'granted';
+      }
+      try {
+        const res = await api('PUT', '/api/me/notify', { on: want });
+        state.me.notify = res.notify;
+      } catch (e) {
+        show();
+        status.textContent = String(e.message || e);
+        return;
+      }
+      show();
+    });
+    show();
   }
 
   function buildSettingsAppearance(panel) {
@@ -7365,6 +7414,75 @@
     }, state.homeTimerMs);
   }
 
+  // ---------------------------------------------------- browser notifications (#723, level 1)
+  // When something needs this person and this tab is hidden, the browser shows its own notification. It is local:
+  // the page already holds what waits on the person (Home) and each room's members, and the browser draws the
+  // notification itself, so nothing is sent to anyone. The permission is asked only from a click in Settings.
+  // The on/off is per person and kept by the broker (`notify` in /api/me; the page keeps no storage of its own); the
+  // permission stays the browser's, so on a browser that never granted it nothing shows. A notification names who, where and what kind in a line, and clicking it opens the item.
+  const NOTIFY_MAX = 60;  // a notification line is cut: what an agent wrote is untrusted text
+  const notified = new Set();  // what this page has already shown or has taken as the starting point
+  let notifyPrimed = false;
+
+  function notifyOn() { return !!(state.me && state.me.notify === true); }
+
+  function notifySupported() { return typeof Notification === 'function'; }
+
+  function notifyReady() { return notifySupported() && Notification.permission === 'granted' && notifyOn(); }
+
+  function notifyShow(key, title, body, go, live) {
+    if (notified.has(key)) return;
+    notified.add(key);
+    title = String(title).slice(0, NOTIFY_MAX * 2);
+    body = String(body).slice(0, NOTIFY_MAX);
+    if ((!live && !notifyPrimed) || !document.hidden || !notifyReady()) return;
+    let n;
+    try {
+      n = new Notification(title, { body: body, tag: key });
+    } catch (e) { return; }
+    n.onclick = function () {
+      try { window.focus(); } catch (e) { /* ignore */ }
+      n.close();
+      go();
+    };
+  }
+
+  // Home's waiting list: a question or @mention to this person, a review board that needs their call. The first
+  // list the page gets is the starting point (what already waited is not news), later ones notify once per item.
+  function notifyHome(waiting) {
+    const list = Array.isArray(waiting) ? waiting : [];
+    for (const c of list) {
+      if (c.kind === 'question') {
+        notifyShow('q:' + c.slug + ':' + c.id, (c.from || 'Someone') + ' needs you in ' + c.room,
+          'A message for you', function () { goToRoom(c.room, function () { setTimeout(function () { jumpTo(c.id); }, 0); }); });
+      } else if (c.kind === 'board') {
+        notifyShow('b:' + c.url + ':' + c.ts, 'A review needs your call in ' + c.room,
+          plural(c.need || 1, 'item', 'items') + ' on the board', function () { goToRoom(c.room); });
+      }
+    }
+    notifyPrimed = true;
+  }
+
+  // An agent of this person that has just started waiting on an approval prompt: only the page's members frames
+  // know it. News is a change, so it is judged against the members this page held before the frame: one already
+  // waiting then (a tab reloaded while a prompt is open) is not news, and neither is a room whose members the
+  // page did not have yet. Its owner is this person, or unknown on a broker with one person.
+  let notifyApprovalSeq = 0;  // each new prompt is its own item, so the next one is news
+
+  function notifyApprovals(r, before, members) {
+    if (!before.length) return;
+    const alone = !state.everyone || state.everyone.length <= 1;
+    for (const m of members) {
+      if (m.status !== 'waiting-approval') continue;
+      const was = before.find(function (x) { return x.name === m.name && (x.host || '') === (m.host || ''); });
+      if (!was || was.status === 'waiting-approval') continue;
+      const mine = m.owner ? m.owner === (state.me || {}).human : alone;
+      if (!mine) continue;
+      notifyShow('a:' + r.name + ':' + m.name + ':' + (m.host || '') + ':' + notifyApprovalSeq++,
+        m.name + ' is waiting for your approval in ' + r.name,
+        'Approve it in its own window', function () { goToRoom(r.name); }, true);
+    }
+  }
   async function loadHome() {
     const seq = ++state.homeSeq;
     if (state.seenWait.size) await Promise.allSettled(Array.from(state.seenWait));  // a room just opened is read first
@@ -7377,6 +7495,7 @@
     }
     if (seq !== state.homeSeq) return;
     state.homeData = data;
+    notifyHome(data.waiting);
     state.homeSkew = typeof data.now === 'number' ? data.now - Date.now() / 1000 : 0;
     renderHomeNav();
     if (state.home) renderHome();
