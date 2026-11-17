@@ -66,7 +66,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, board, build_info, db, ref_links
-from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people
+from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people, usage
 from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
@@ -1822,6 +1822,15 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if w is None or w.must_reset:
             return unauthorized()
         return _ok(home.build(state, w.name, w.person_id, w.is_admin))
+
+    # What agents cost (§61, #818): wakes delivered and messages agents posted, per agent and
+    # per room, for the open rooms this person can see. A read; the same gate as the room list.
+    @app.get("/api/usage")
+    async def usage_page(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        return _ok(usage.build(state, viewer(request), request.query_params.get("offset")))
 
     @app.post("/api/home/seen")
     async def home_seen(request: Request) -> Response:

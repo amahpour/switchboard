@@ -815,6 +815,7 @@ def chatter_due(..., addressed_only=False):                # hold_s = unaddresse
 - Mid-turn priority (`hook_ctx`, `hook_ups`) and explicit pulls are not counted.
 - At 0, only wakes that contain a human item go through (and are still counted). A `budget_exhausted` event and a warn notice go out once per window.
 - `/budget n` sets `remaining=n`. The interpretation (fixed window, n = what remains) is an assumption (§0).
+- What a person can see of this over time is §61: wakes delivered and messages agents posted, per agent and per room. It reads these rows. It does not add one.
 
 ### 8.4 Rate limit and stale says (`agent.say`)
 `rules.check_rate_limit` rejects a say when `now - p.last_say_at < 10 s`, **unless**:
@@ -3995,3 +3996,24 @@ An agent could join only a room whose name it already knew, so "join the room ab
 **The form.** Settings → Links, admins only, rows of a pattern box, an address box and Remove; Add a rule; Save, which shows what the server said when it refuses. On a phone the address sits under the pattern.
 
 **Tests.** `tests/unit/test_ref_link_rules.py` (what is refused and why, the row limit), `tests/unit/test_web_ref_links.py` (in node: the link, no rule no link, words, encoding, `$` handling, rules the page won't trust, the caps, pathological input), `tests/integration/test_ref_links.py` (the routes, admin only, all or nothing, nothing from a room message, stored rows checked again), `tests/e2e/test_ref_links_ui.py` (the form and a rendered link, desktop and phone, light and dark).
+
+## 61. What agents cost (#818)
+
+The sidebar's **Usage** page shows, for each open room a person can see and each agent in it, how many times the agent was woken and how many messages it posted, today and over the last 7 days, and the wake budget that room is running against. It is a read of rows the broker already stores, the same idea as Home (§55): no new table, no new event, and nothing written when the page is opened.
+
+**What a number is.**
+
+- A **wake** is a `batches` row with `kind='wake'` whose `created_at` falls in the window (§8.3). Every state counts: the budget is spent when the batch is inserted. A priority batch and a pull are not wakes. A message handed over inside a wake is not counted again.
+- A **message** is an agent's chat: `messages.kind='chat'` and `sender_kind='agent'`. A person's message, a join or leave, a notice and a call line are not.
+- The **budget** is the room's current `budget_per_hour` and `budget_remaining` (what is left this hour, §8.3). It is not a reconstruction of an earlier hour.
+- **The budget ran out** is a `budget_exhausted` event in the window. The engine writes that once in an hour when the budget hits zero. A wake the budget did not send is not stored, so the page does not invent a count of those.
+
+**The window.** Today is the local calendar day, from local midnight to now. The last 7 days are the seven local days ending today, today included. The browser sends its offset as minutes east of UTC (`GET /api/usage?offset=`). The value has to be an optional minus and one to four digits, and it has to sit inside ±14 hours. Anything else, including a blank, is UTC. An unrecognized value fails closed to that window, never to all of history. `src/switchboard/usage.py` is that arithmetic and the ranking, with no I/O.
+
+**Who sees it.** The rooms are `RoomService.visible_rooms` (§44): every public room, and a private room only for its people. A viewer the session cannot name fails closed to the public rooms. A closed room is not on the page. `switchboard report` already reads one room, including a closed one (§12.6), and this page does not add a report mode. The answer carries no message text and no session id.
+
+**The order.** Noisiest first: more wakes in the 7 days, then more posts, then the name. A room with nothing in the window is still listed, so its budget shows. An agent with no wake and no post in the window is left out. The same screen name in one room, differing only by case, is one agent; the casing shown is the one on the larger count. A different host is a different row.
+
+**The page.** **Usage** is the sidebar row under Home. Its address is `#/usage`, so a room named `#usage` still opens from `#usage`. The rows are buttons: Enter or a click opens that room. On a phone the four figures stack in one column and the buttons are at least 44 px tall. Search can cover the page and closes back to it. The page says it does not measure tokens or dollars, and it never sends a model or a model override (§11).
+
+**Tests.** `tests/unit/test_usage.py` (the windows, the counts against stored rows on a `FakeClock`, a room the caller did not pass dropped, two casings summed). `tests/integration/test_usage_page.py` (a private room's counts for a member and not for anyone else, a session required, a bad offset read as UTC). `tests/e2e/test_usage_ui.py` (the figures, light and dark, the phone, no sideways scroll, Enter opens the room).

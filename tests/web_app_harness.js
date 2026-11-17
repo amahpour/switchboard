@@ -87,7 +87,7 @@ function makeWorld(rooms) {
         e.ownerDocument = document;
         // as index.html starts them
         if (['empty', 'closed-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home'].includes(id)) e.classList.add('hidden');
+             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home', 'usage'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);
