@@ -95,6 +95,7 @@ from switchboard.files import (
     new_file_id as new_part_id,
 )
 from switchboard.models import InvalidName, normalize_room
+from switchboard.redact import notice as redact_notice
 from switchboard.reviews import ReviewError
 from switchboard.store import Conflict
 
@@ -2112,10 +2113,18 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             if not isinstance(text, str):
                 raise ServiceError("bad_request", "text is required")
             state.service.room_for(slug, viewer(request))
+            removed: list[str] = []
             msg = state.service.human_say(
-                slug, text, via="web", person=(w.name, w.person_id), reply_to=body.get("reply_to")
+                slug,
+                text,
+                via="web",
+                person=(w.name, w.person_id),
+                reply_to=body.get("reply_to"),
+                redacted=removed,
             )
-            return _ok({"id": msg.id})
+            return _ok(
+                {"id": msg.id, **({"redacted": removed, "note": redact_notice(removed)} if removed else {})}
+            )
         except ServiceError as e:
             return _svc_err(e)
 
