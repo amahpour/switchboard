@@ -1182,7 +1182,8 @@ class AgentService:
         return {"status_line": line}
 
     def claim(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
-        """Advisory outside work, per room: only its member may renew or release it (§47)."""
+        """Advisory outside work: only its member may renew or release it (§47). A key is one name across
+        every room of the broker (#817), so a claim on one another session holds in any room is refused."""
         _p, m, room = self._member(conn, params)
         try:
             key = claims.normalize_key(params.get("key"))
@@ -1192,7 +1193,18 @@ class AgentService:
             raise ServiceError("bad_request", str(e)) from None
         decision = self.store.move_claim(room.id, m.id, key, ttl, note)
         if decision.action == "held":
-            raise ServiceError("conflict", f"{key} is claimed by {decision.holder}")
+            there = self.store.room_by_id(decision.room_id) if decision.room_id else None
+            seen = there is not None and self.svc.visible(there, self.svc.host_person(conn.agent.host))
+            raise ServiceError(
+                "conflict",
+                claims.refusal_text(
+                    key,
+                    decision.holder,
+                    envelope._word(decision.host) if decision.host else "",
+                    there.name if seen and there is not None else None,
+                    here=not decision.room_id,
+                ),
+            )
         if decision.action == "limit":
             raise ServiceError("bad_request", f"a member can hold at most {claims.MEMBER_MAX} claims")
         self.state.hub.members_changed(room.name)

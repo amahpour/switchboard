@@ -116,3 +116,82 @@ def test_stored_claim_expires_and_ends_with_its_membership(tmp_path: Path) -> No
     store.end_membership(b.id, "session_end")
     assert store.claims_for_room(room.id) == []
     assert store.move_claim(room.id, a.id, "build", 60).action == "acquired"
+
+
+def test_a_key_held_in_another_room_refuses_a_new_claim_and_names_where() -> None:
+    """#817: the second session claims the same key from another room. The pure rule is given that room's
+    claims on the key (``elsewhere``) and refuses with the holder, its room and its device; at the exact
+    deadline the key is free again, and the case is the same in upper case. Fails if a claim in room B
+    succeeds over room A's, loses where the holder is, or holds past its deadline."""
+    clock = FakeClock()
+    there = claims.Claim("SYS-645", 9, "claude-1", clock.now() + 30, "editing", room_id=4, host="laptop")
+    refused = claims.decide((), 2, "sys-645", 60, clock.now(), "", (there,))
+    assert refused.action == "held" and refused.holder == "claude-1"
+    assert refused.room_id == 4 and refused.host == "laptop" and refused.expires_at == there.expires_at
+    clock.advance(30)
+    assert claims.decide((), 2, "sys-645", 60, clock.now(), "", (there,)).action == "acquired"
+
+
+def test_a_claim_the_member_already_holds_is_never_asked_about_other_rooms() -> None:
+    """A renewal and a release of the member's own claim ignore ``elsewhere`` (a duplicate that existed
+    before the key spanned rooms must not lock its own holder out), and a different key is
+    untouched. Fails if renewing a held key is refused because another room also holds it, or an unrelated key is."""
+    clock = FakeClock()
+    mine = claims.Claim("a", 1, "claude-1", clock.now() + 60)
+    other = claims.Claim("a", 7, "codex-1", clock.now() + 60, room_id=3, host="box")
+    assert claims.decide((mine,), 1, "a", 120, clock.now(), "", (other,)).action == "renewed"
+    assert claims.decide((mine,), 1, "a", 0, clock.now(), "", (other,)).action == "released"
+    assert claims.decide((), 1, "b", 60, clock.now(), "", (other,)).action == "acquired"
+    assert (
+        claims.decide((), 1, "a", 0, clock.now(), "", (other,)).action == "released"
+    )  # releasing nothing is fine
+
+
+def test_the_refusal_names_the_room_only_when_the_asker_can_see_it() -> None:
+    """A private room's name and holder go only to someone in it (§44): in the same room the sentence is
+    the one it always was, in another room it has the holder, device and room, and a room the asker
+    can't see is only
+    'held elsewhere'. Fails if the hidden room's name or holder leaks into the refusal."""
+    assert claims.refusal_text("k", "claude-1", "", None, True) == "k is claimed by claude-1"
+    named = claims.refusal_text("k", "claude-1", "laptop", "#build", False)
+    assert named == "k is claimed by claude-1@laptop in #build"
+    assert claims.refusal_text("k", "claude-1", "", "#build", False) == "k is claimed by claude-1 in #build"
+    hidden = claims.refusal_text("k", "claude-1", "laptop", None, False)
+    assert hidden == "k is held elsewhere on this broker"
+    assert "claude-1" not in hidden and "laptop" not in hidden
+
+
+def test_the_store_asks_other_rooms_but_not_the_same_session(tmp_path: Path) -> None:
+    """``Store.move_claim`` makes the key one name across rooms: a second session's claim is refused with the
+    holder's room and device, the same session in a second room is one holder and may claim there too, an
+    expired or ended claim blocks nobody, and a release frees it. Fails if a claim in room B succeeds beside
+    room A's, a session blocks itself, or a stale row blocks."""
+    clock = FakeClock()
+    st = Store(db.open_db(tmp_path / "c.db"), clock)
+    a = st.create_room("#a", "alice", 60, 10)
+    b = st.create_room("#b", "alice", 60, 10)
+
+    def member(room_id: int, harness: str, host: str, name: str) -> tuple[int, int]:
+        key = session_key(harness, host, name)
+        p = st.upsert_participant(harness, key, status="idle", tier="mcp-only", host=host)
+        return p.id, st.create_membership(room_id, p.id, name).id
+
+    p1, m1 = member(a.id, "claude", "laptop", "claude-1")
+    p2, m2 = member(b.id, "codex", "box", "codex-1")
+    assert st.move_claim(a.id, m1, "SYS-645", 120).action == "acquired"
+    refused = st.move_claim(b.id, m2, "sys-645", 120)
+    assert refused.action == "held" and refused.holder == "claude-1"
+    assert refused.room_id == a.id and refused.host == "laptop"
+    # the same session in another room is one holder
+    twin = st.create_membership(b.id, p1, "claude-1")
+    assert st.move_claim(b.id, twin.id, "SYS-645", 120).action == "acquired"
+    assert st.move_claim(a.id, m1, "SYS-645", 0).action == "released"
+    assert st.move_claim(b.id, twin.id, "SYS-645", 0).action == "released"
+    # expiry, then the end of the holder's membership, free it
+    assert st.move_claim(a.id, m1, "k", 30).action == "acquired"
+    clock.advance(30)
+    assert st.move_claim(b.id, m2, "k", 30).action == "acquired"
+    assert st.move_claim(a.id, m1, "k", 30).action == "held"
+    st.end_membership(m2, "leave")
+    assert st.move_claim(a.id, m1, "k", 30).action == "acquired"
+    assert p2

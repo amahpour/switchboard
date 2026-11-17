@@ -394,3 +394,21 @@ async def test_a_capped_wait_says_what_was_asked_and_an_uncapped_one_does_not() 
     assert got["capped_from"] == srv.WAIT_ASKED_MAX and got["cap_s"] == 110
     assert f"capped from {srv.WAIT_ASKED_MAX} s" in got["text"]
     assert st.calls[-1][1]["timeout_s"] == 110
+
+
+def test_the_claim_skill_is_the_same_file_in_the_three_plugins_and_says_what_a_claim_is() -> None:
+    """#817: the nudge to claim before writing is one skill, the same bytes where a plugin loads skills from
+    ``skills/`` (Claude Code, Codex, Cursor). It names the tool both ways Cursor lists it, says a claim is
+    advice (no lock), and says what a refusal gives. Fails if the three copies drift, the Cursor name is
+    lost, or
+    the skill promises a lock."""
+    root = Path(__file__).resolve().parents[2]
+    bodies = [
+        (root / "plugins" / name / "skills" / "claim" / "SKILL.md").read_bytes()
+        for name in ("claude", "codex", "cursor")
+    ]
+    assert bodies[0] == bodies[1] == bodies[2]
+    text = bodies[0].decode()
+    assert "name: claim" in text and "switchboard_claim" in text
+    assert "advice and nothing more" in text and "does not lock" in text
+    assert "before the first write" in text.lower() and "held elsewhere" in text
