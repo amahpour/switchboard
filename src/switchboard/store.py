@@ -58,6 +58,8 @@ OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # of ``delete_room``'s result. Participants are never deleted.
 ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
 STATUS_LINE_STALE_S = 30 * 60
+# Enough time for a broker rollout and a client retry, with short-lived receipts.
+SAY_KEY_TTL_S = 5 * 60
 # a meeting error is a short phrase. A link or a Zoom passcode never lands in the row (§52).
 _MEETING_SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
 
@@ -317,6 +319,7 @@ class Store:
         ("pins", "pins WHERE room_id=?", 1),
         ("home_seen", "home_seen WHERE room_id=?", 1),
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
+        ("say_keys", f"say_keys WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
@@ -399,6 +402,16 @@ class Store:
             )
             return cur.rowcount == 1
 
+    def set_room_review_on_link(self, room_id: int, on: bool) -> bool:
+        """Set whether an agent's new pull or merge request link asks for a review (§37.16, #816). True
+        when that changed it."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE rooms SET review_on_link=? WHERE id=? AND review_on_link!=?",
+                (int(on), room_id, int(on)),
+            )
+            return cur.rowcount == 1
+
     def set_budget(self, room_id: int, remaining: int) -> Room:
         if remaining < 0:
             raise ValueError("budget must be >= 0")
@@ -468,6 +481,7 @@ class Store:
         sender_person_id: int | None = None,
         deliver_notice: bool = False,
         meeting_id: int | None = None,
+        say_key_hash: str | None = None,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -484,11 +498,16 @@ class Store:
         is a human to every agent, so it changes nothing about the deliveries.
         ``meeting_id`` identifies the call whose source supplied a line (§52, §54): the line is stored
         with it, and the call's count of lines goes up in the same transaction.
+        ``say_key_hash`` records an authenticated member's retry receipt in that same transaction (§8.4).
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
         if deliver_notice and (kind != "notice" or sender_kind != "system"):
             raise ValueError("only a system notice may be delivered")
+        if say_key_hash is not None and (
+            sender_membership_id is None or sender_kind != "agent" or kind != "chat"
+        ):
+            raise ValueError("only an agent's chat message can have a say key")
         skip = {int(x) for x in skip_memberships}
         now = self.clock.now()
         mentions_l = sorted({m.lower() for m in mentions})
@@ -515,6 +534,16 @@ class Store:
                 ),
             )
             mid = cur.lastrowid
+            if say_key_hash is not None:
+                receipt = self.con.execute(
+                    "INSERT INTO say_keys(membership_id, key_hash, message_id, expires_at) VALUES(?,?,?,?)"
+                    " ON CONFLICT(membership_id, key_hash) DO UPDATE"
+                    " SET message_id=excluded.message_id, expires_at=excluded.expires_at"
+                    " WHERE say_keys.expires_at <= ?",
+                    (sender_membership_id, say_key_hash, mid, now + SAY_KEY_TTL_S, now),
+                )
+                if receipt.rowcount != 1:
+                    raise Conflict("this say key already has a post")
             if meeting_id is not None:
                 self.con.execute("UPDATE meetings SET lines_pushed=lines_pushed+1 WHERE id=?", (meeting_id,))
             if kind == "chat":
@@ -561,6 +590,18 @@ class Store:
         msg = self.get_message(mid)
         assert msg is not None
         return msg
+
+    def say_key_message(self, membership_id: int, key_hash: str) -> int | None:
+        """Find the first post for a member's key while its receipt is still live."""
+        row = self.con.execute(
+            "SELECT message_id FROM say_keys WHERE membership_id=? AND key_hash=? AND expires_at>?",
+            (membership_id, key_hash, self.clock.now()),
+        ).fetchone()
+        return int(row[0]) if row is not None else None
+
+    def say_key_purge(self) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM say_keys WHERE expires_at<=?", (self.clock.now(),))
 
     # --------------------------------------------------------------- meetings (§52)
     def insert_meeting(self, room_id: int, *, started_by: str, platform: str) -> Meeting:
@@ -1004,6 +1045,20 @@ class Store:
         }
         return member_rows, claim_rows, counts
 
+    def agent_sessions(self) -> list[sqlite3.Row]:
+        """Every active membership with its session's state and clock facts, in one query, for the agents
+        overview (§55.9): the status and its line, when it last changed state, and its newest signs of life
+        (``last_seen``, ``last_say_at``, ``hooks_seen_at``). Rows that already exist, across every room (the
+        caller keeps the rooms a person may see); nothing is written. Like ``live_agents``, it leaves out what
+        ``members`` works out for one room's pane (queues, claims, the engine's parked state), because a
+        build for fifty rooms asks for this once and not once for each room."""
+        return self.con.execute(
+            "SELECT m.id AS membership_id, m.room_id, m.participant_id, m.screen_name, p.harness, p.status,"
+            " p.status_at, p.status_line, p.status_line_at, p.host, p.last_seen, p.last_say_at,"
+            " p.hooks_seen_at FROM memberships m JOIN participants p ON p.id=m.participant_id"
+            " WHERE m.left_at IS NULL ORDER BY m.room_id, m.joined_at, m.id"
+        ).fetchall()
+
     def meetings_ended_since(self, since: float) -> list[Meeting]:
         """Calls that ended at or after ``since``, in any room (the caller filters by who may see)."""
         rows = self.con.execute(
@@ -1083,6 +1138,8 @@ class Store:
             " p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
+            " MAX(COALESCE(p.last_seen, 0), COALESCE(p.status_at, 0),"
+            "   COALESCE(p.last_say_at, 0)) AS heard_at,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -1111,6 +1168,7 @@ class Store:
                 queued=r["queued"],
                 inflight=r["inflight"],
                 host=r["host"],
+                heard_at=r["heard_at"] or None,
                 status_line=r["status_line"],
                 status_line_at=r["status_line_at"],
                 status_line_stale=bool(
@@ -3286,6 +3344,83 @@ class Store:
                 f"UPDATE review_items SET {cols} WHERE id=?",
                 (state, self.clock.now(), *fields.values(), item_id),
             )
+
+    # ------------------------------------------------------- usage (§61, #818)
+    # A read of the rows that already exist: wake batches, agent chat, and the times the
+    # budget ran out. Nothing is written, and a wake the budget never sent is not a row.
+    def usage_wakes(
+        self, room_ids: Sequence[int], *, since: float, today: float, until: float
+    ) -> list[sqlite3.Row]:
+        """Wake batches created in ``[since, until]``, per agent in those rooms.
+
+        ``today`` is how many of them fall on ``[today, until]``; ``week`` is the whole window.
+        ``kind='wake'`` only (§8.3): a priority batch and a pull are not wakes, whatever their state.
+        ``batches_wake_created`` (schema 52) serves ``kind='wake'`` and the ``created_at`` bounds,
+        so a page open reads the window and not every batch ever stored.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        return list(
+            self.con.execute(
+                "SELECT m.room_id AS room_id, m.screen_name AS name, p.harness AS harness,"
+                " p.host AS host,"
+                " SUM(CASE WHEN b.created_at >= ? THEN 1 ELSE 0 END) AS today, COUNT(*) AS week"
+                " FROM batches b"
+                " JOIN memberships m ON m.id = b.membership_id"
+                " JOIN participants p ON p.id = m.participant_id"
+                " WHERE b.kind = 'wake' AND b.created_at >= ? AND b.created_at <= ?"
+                f" AND m.room_id IN ({marks})"
+                " GROUP BY m.room_id, m.screen_name, p.harness, p.host",
+                (today, since, until, *ids),
+            )
+        )
+
+    def usage_posts(
+        self, room_ids: Sequence[int], *, since: float, today: float, until: float
+    ) -> list[sqlite3.Row]:
+        """Agent chat posted in ``[since, until]``, per sender. A person's message, a notice and a
+        call line are not an agent's post. ``today`` and ``week`` are the same split as ``usage_wakes``.
+        ``messages_agent_ts`` (schema 52) serves ``kind``, ``sender_kind``, ``room_id`` and the
+        ``ts`` bounds, so the read does not walk every message of the room."""
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        return list(
+            self.con.execute(
+                "SELECT room_id AS room_id, sender_name AS name,"
+                " COALESCE(sender_harness, '') AS harness, COALESCE(sender_host, '') AS host,"
+                " SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS today, COUNT(*) AS week"
+                " FROM messages"
+                " WHERE kind = 'chat' AND sender_kind = 'agent' AND ts >= ? AND ts <= ?"
+                f" AND room_id IN ({marks})"
+                " GROUP BY room_id, sender_name, COALESCE(sender_harness, ''),"
+                " COALESCE(sender_host, '')",
+                (today, since, until, *ids),
+            )
+        )
+
+    def usage_exhausted(self, room_ids: Sequence[int], *, since: float, until: float) -> dict[int, int]:
+        """How many times each room recorded ``budget_exhausted`` in ``[since, until]``.
+
+        That event is written once in a window when the budget runs out (§8.3). It is not a count
+        of the wakes that were held back: those are never stored.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        rows = self.con.execute(
+            "SELECT room_id AS room_id, COUNT(*) AS n FROM events"
+            " WHERE kind = 'budget_exhausted' AND room_id IS NOT NULL"
+            " AND ts >= ? AND ts <= ?"
+            f" AND room_id IN ({marks})"
+            " GROUP BY room_id",
+            (since, until, *ids),
+        )
+        return {int(r["room_id"]): int(r["n"]) for r in rows}
 
     # ------------------------------------------------------------------ report (§12.5, §12.6; #167)
     # Read-only queries behind `switchboard report` (report.py), on its own query-only

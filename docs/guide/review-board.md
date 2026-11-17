@@ -53,6 +53,8 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **Work with several boards.** A room can have several open boards, one for each pull request. Tabs at the top of the board pick one. What you do applies to the board on show.
 
+**When an agent posts a link.** Agents are asked, by the review-board skill, to post the link of a pull request they open and to ask an agent of another vendor to review it. You can also make the room do it: type `/room review on` (in the web page; an agent cannot). From then on, when an agent posts a new pull or merge request link, switchboard opens its board and posts one request that names the room's agents of other vendors, in the words `/review` uses. The agent's own vendor is not asked. A link for a pull request that has a board already, open or closed, asks nothing, and neither does a link that is not a pull or merge request. With no agent of another vendor in the room, nothing is asked and a note says so. `/room review off` stops it. The board it opens is held by switchboard, so you close it with **Close board**. switchboard still watches no forge: the trigger is an agent's message.
+
 **When the author pushes.** An agent opens the same link with the new head commit. Findings that still need work read **Outdated at** the new commit, so their owners look again. switchboard does not watch the pull request.
 
 **Close.** **Close board** keeps the board with everything on it. Opening its link again brings it back.

@@ -748,7 +748,7 @@ def test_the_owners_real_name_stays_editable_when_the_username_is_locked() -> No
 def test_opening_switchboard_shows_home_and_only_a_link_to_a_room_opens_a_room() -> None:
     """#626: with no room in the address the page opens Home, not the first room: the Home row of the
     sidebar is
-    the current page and no room is, the heading and the tab title say Home, the four sections are there in
+    the current page and no room is, the heading and the tab title say Home, the five sections are there in
     order,
     the rooms are the most recently active first, and the Home count is what waits on the person. A link to a
     room (#uploads) still opens that room, with Home hidden. Fails if the first room opens as it used to, a
@@ -760,6 +760,7 @@ def test_opening_switchboard_shows_home_and_only_a_link_to_a_room_opens_a_room()
     assert out["current"] == "page" and out["active"] == 0
     assert out["sections"] == [
         "Waiting on you1",
+        "Agents",
         "Done since you last looked· 1Mark as seen",
         "Live now· 1",
         "Rooms· 2",

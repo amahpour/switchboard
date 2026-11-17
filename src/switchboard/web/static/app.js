@@ -77,7 +77,12 @@
     // name -> { name, slug, id, createdAt, lastId, msgs: [], members: [], settings: {},
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
+    ncOpen: false,     // the Members group "Not connected (n)" is unfolded (#814)
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
+    usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
+    usageData: null,   // the last GET /api/usage
+    usageError: null,  // a failed refresh keeps usageData and says why
+    usageSeq: 0,       // only the newest answer is drawn
     homeData: null,    // the last GET /api/home
     homeSeq: 0,        // only the newest answer is applied
     homeTimer: null,
@@ -449,6 +454,9 @@
   // "Today, 14:02" / "Yesterday, 09:10" / "Mon, Sep 28, 14:02"
   function dayTime(ts) { return dayLabel(ts) + ', ' + hhmm(ts); }
 
+  // "14:02" for today, else with the date: a session last heard from three weeks ago must not read "14:02"
+  function seenAt(ts) { return dayKey(ts) === dayKey(Date.now() / 1000) ? hhmm(ts) : dayTime(ts); }
+
   function timeEl(ts, cls) {
     const t = el('time', cls, hhmm(ts));
     const d = new Date(ts * 1000);
@@ -542,6 +550,7 @@
     plus: 'M8 3v10M3 8h10',
     // the Home page (#626): a house; and a board's three columns, for a review-board card
     home: 'M2.5 7.5 8 3l5.5 4.5M4 6.7V13h8V6.7M6.7 13V9.5h2.6V13',
+    usage: 'M3 13V8M8 13V3M13 13V6M2 13.5h12',  // three bars: Usage (#818)
     board: rr(2, 2.5, 12, 11, 1.5) + 'M6 2.5v11M10 2.5v11',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
@@ -743,9 +752,15 @@
     return a;
   }
 
-  function statusKey(m) { return m.parked ? 'parked' : m.status; }
+  // Not connected (#814, §49.14): no wait open and quiet for too long; the broker says since when it was last heard
+  function notConnected(m) { return Number.isFinite(m.not_connected_since); }
 
-  function statusWord(m) { return m.parked ? 'Parked' : (STATUS_WORD[m.status] || m.status || ''); }
+  function statusKey(m) { return notConnected(m) ? 'notconnected' : m.parked ? 'parked' : m.status; }
+
+  function statusWord(m) {
+    if (notConnected(m)) return 'Not connected';
+    return m.parked ? 'Parked' : (STATUS_WORD[m.status] || m.status || '');
+  }
 
   function withDot(av, m) {
     const d = el('span', 'dot s-' + statusKey(m));
@@ -1604,7 +1619,10 @@
   function updateTitle() {
     let unread = 0;
     state.rooms.forEach(function (r) { if (r.name !== state.active) unread += r.unread; });
-    const base = state.searchOn ? 'switchboard — Search' : state.home ? 'switchboard — Home' : state.active ? 'switchboard — ' + state.active : 'switchboard';
+    const base = state.searchOn ? 'switchboard — Search'
+      : state.usage ? 'switchboard — Usage'
+      : state.home ? 'switchboard — Home'
+      : state.active ? 'switchboard — ' + state.active : 'switchboard';
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
     const heading = $('room-title');
@@ -1613,6 +1631,13 @@
       $('room-sub').textContent = searchStatusText();
       const g = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
       if (g) g.setAttribute('d', SEARCH_PATH);
+      return;
+    }
+    if (state.usage) {
+      heading.textContent = 'Usage';
+      $('room-sub').textContent = 'Today and the last 7 days';
+      const usageGlyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
+      if (usageGlyph) usageGlyph.setAttribute('d', ICONS.usage);
       return;
     }
     if (state.home) {
@@ -1648,7 +1673,7 @@
   }
 
   function memberRow(m) {
-    const li = el('li', 'member');
+    const li = el('li', 'member' + (notConnected(m) ? ' nc' : ''));
     li.dataset.name = m.name;
     const b = btn('m-open');
     b.dataset.name = m.name;
@@ -1663,7 +1688,7 @@
     nameLine.append(b);
     const flag = approvalsFlag(m, true);
     if (flag) nameLine.append(flag);
-    let st = statusWord(m) + ' · ' + harnessOf(m.harness)[1];
+    let st = statusWord(m) + (notConnected(m) ? ' since ' + seenAt(m.not_connected_since) : '') + ' · ' + harnessOf(m.harness)[1];
     if (m.queued) st += ' · ' + m.queued + ' queued';
     // the hold on agents' chatter (#137): when those messages wake it, unless you wake it first
     if (m.wakes_at) st += ' · wakes at ' + hhmm(m.wakes_at);
@@ -1747,7 +1772,26 @@
     if (!members.length) {
       list.append(el('li', 'member-empty', 'Nobody yet. Ask an agent to join ' + (state.active || 'a room') + '.'));
     }
-    for (const m of members) list.append(memberRow(m));
+    // Not connected members fold into a group at the bottom, the newest heard from first (#814, §49.14)
+    const here = members.filter(function (m) { return !notConnected(m); });
+    const gone = members.filter(notConnected).sort(function (a, b) { return b.not_connected_since - a.not_connected_since; });
+    for (const m of here) list.append(memberRow(m));
+    if (gone.length) {
+      const ins = state.inspect;
+      const holds = !!ins && ins.room === state.active && gone.some(function (m) { return m.name === ins.name; });
+      const open = state.ncOpen || holds;  // the one being inspected stays in view
+      const head = el('li', 'member-group');
+      const toggle = btn('member-group-toggle' + (open ? ' open' : ''));
+      toggle.id = 'nc-group';
+      toggle.dataset.focus = 'nc-group';
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.append(icon('chev-right'), el('span', null, 'Not connected (' + gone.length + ')'));
+      toggle.title = 'Agents with no wait open that have not been heard from for a while';
+      toggle.addEventListener('click', function () { state.ncOpen = !open; renderBuddies(); });
+      head.append(toggle);
+      list.append(head);
+      if (open) for (const m of gone) list.append(memberRow(m));
+    }
     const nextStatus = members.filter(function (m) {
       return m.status_line && !statusLineStale(m) && m._statusDeadline !== undefined;
     }).map(function (m) { return m._statusDeadline - performance.now(); });
@@ -2188,6 +2232,7 @@
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
     if (state.home) leaveHome();
+    if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
     if (state.active !== name) {
@@ -2507,7 +2552,8 @@
     const flag = approvalsFlag(m);
     if (flag) nameH.append(flag);
     refs.name = nameH;
-    const since = has(dm.status_at) && !m.parked ? ' since ' + hhmm(dm.status_at) : '';
+    const since = notConnected(m) ? ' since ' + seenAt(m.not_connected_since)
+      : has(dm.status_at) && !m.parked ? ' since ' + hhmm(dm.status_at) : '';
     const chips = el('div', 'insp-chips');
     chips.append(tierChip(m), hostChip(m, true));
     if (m.held) {
@@ -2559,6 +2605,11 @@
         ' It wakes on call talk nobody addressed to it, and what it hears can make it act without asking.'
         + ' Turn listening off in the call bar if you did not mean this.',
       ]));
+    }
+    if (notConnected(m)) {
+      notes.push(note('amber', 'info', 'Not connected', [' It has no wait open and has not been heard from since '
+        + seenAt(m.not_connected_since) + ', so it is probably gone (a closed terminal, a sleeping laptop). It does not count for @here or @everyone,'
+        + ' and a message to it is kept for if it comes back. It clears by itself on its next call. Remove it to take it out of the room.']));
     }
     if (m.parked) {
       const pokeCmd = 'read ' + r.name + ' and go back to wait()';
@@ -2627,7 +2678,7 @@
     }
     fact(dl, 'Joined', has(dm.joined_at) ? dayTime(dm.joined_at) : '—');
     const what = dm.last_seen_what === 'seen' ? 'status' : dm.last_seen_what;
-    fact(dl, 'Last seen', has(dm.last_seen) ? hhmm(dm.last_seen) + (what ? ' · ' + what : '') : '—');
+    fact(dl, 'Last seen', has(dm.last_seen) ? seenAt(dm.last_seen) + (what ? ' · ' + what : '') : '—');
     const queued = m.queued || 0;
     const queueList = el('ol', 'insp-queue' + (ui.queueOpen && queued ? '' : ' hidden'));
     queueList.id = 'insp-queue';
@@ -2795,6 +2846,29 @@
       focusNear(at, name);
     });
     refs.kick = kick;
+    // A member that is not connected can be removed by its person, or by an admin: it may join again (#814)
+    let remove = null;
+    if (notConnected(m)) {
+      remove = btn('btn-danger-ghost');
+      remove.id = 'insp-remove';
+      remove.dataset.focus = 'remove';
+      remove.title = 'Remove ' + m.name + ': it is not connected. It can join again.';
+      remove.append(icon('kick'), 'Remove ' + m.name);
+      remove.addEventListener('click', async function () {
+        if (!await confirmDialog('Remove ' + m.name + '?', 'It is not connected. It leaves every room it is in and its claims are released. It can join again.', 'Remove', true)) return;
+        const name = m.name;
+        try {
+          const at = r.members.indexOf(m);
+          await api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/members/' + encodeURIComponent(name) + '/remove', {});
+          closeInspector(false);
+          focusNear(at, name);  // the next members frame removes the row; focus its neighbour now
+        } catch (e) {
+          ui.removeError = String(e.message || e);
+          renderInspector();
+        }
+      });
+      refs.remove = remove;
+    }
     const fine = el('p', 'fine');
     fine.append('Same as ');
     if (wake) fine.append(el('code', null, '/wake'), ', ');
@@ -2802,7 +2876,17 @@
       el('code', null, '/hold'), ', ', el('code', null, '/quiet'), ', ',
       el('code', null, '/catchup'), ' and ', el('code', null, '/kick'), ' in the composer.'
     );
-    actions.append(menu, row, kick, fine);
+    if (remove) {
+      actions.append(menu, row, remove, kick);
+      if (ui.removeError) {
+        const bad = el('p', 'fine bad', ui.removeError);
+        bad.id = 'insp-remove-error';
+        actions.append(bad);
+      }
+      actions.append(fine);
+    } else {
+      actions.append(menu, row, kick, fine);
+    }
 
     body.replaceChildren(id);
     if (notes.length) body.append(attn);
@@ -3205,7 +3289,7 @@
     r.members.forEach(function (m, i) {
       const info = matchInfo(m.name, query);
       if (!info) return;
-      scored.push({ m: m, rank: info.rank, i: i, online: !!m.status && m.status !== 'offline', seen: lastSpokeAt(r, m) });
+      scored.push({ m: m, rank: info.rank, i: i, online: !!m.status && m.status !== 'offline' && !notConnected(m), seen: lastSpokeAt(r, m) });
     });
     scored.sort(function (a, b) {
       if (a.rank !== b.rank) return a.rank - b.rank;
@@ -3617,7 +3701,9 @@
       }
     } else if (f.t === 'members') {
       if (!r) return;
+      const heldBefore = r.members;
       r.members = f.members || [];
+      notifyApprovals(r, heldBefore, r.members);
       if (f.room === state.active) {
         renderBuddies();
         updateRoomEmpty();
@@ -4198,6 +4284,53 @@
     });
     // Fields belong in the scrolling content; the bar stays at its foot.
     panel.querySelector('.settings-panel-content').append(names, nameLabel, nameInput, nameNote);
+    buildNotifySetting(panel.querySelector('.settings-panel-content'));
+  }
+
+  // Settings → Profile → Notifications (#723): the on/off, and the browser's own permission prompt from this click
+  function buildNotifySetting(box) {
+    box.append(el('h3', null, 'Notifications'),
+      el('p', 'fine', 'While this tab is hidden, your browser shows a notification when something needs you: a message to you,'
+        + ' a review that needs your call, or an agent waiting for your approval. Clicking it opens the item.'
+        + ' Nothing is sent to anyone: the browser draws it. This is for this browser only.'));
+    const row = el('label', 'check-row');
+    const box1 = el('input');
+    box1.type = 'checkbox';
+    box1.id = 'settings-notify';
+    row.append(box1, el('span', null, 'Show notifications when this tab is hidden'));
+    const status = el('p', 'fine');
+    status.id = 'settings-notify-status';
+    box.append(row, status);
+    function show() {
+      if (!notifySupported()) {
+        box1.disabled = true;
+        status.textContent = 'This browser can\u2019t show notifications here.';
+        return;
+      }
+      box1.checked = notifyOn() && Notification.permission === 'granted';
+      status.textContent = Notification.permission === 'denied'
+        ? 'Notifications are blocked for this site. Allow them in the browser\u2019s site settings, then turn this on.' : '';
+    }
+    box1.addEventListener('change', async function () {
+      let want = box1.checked;
+      if (want && Notification.permission === 'default') {
+        let got = 'denied';
+        try { got = await Notification.requestPermission(); } catch (e) { /* denied */ }
+        want = got === 'granted';
+      } else if (want) {
+        want = Notification.permission === 'granted';
+      }
+      try {
+        const res = await api('PUT', '/api/me/notify', { on: want });
+        state.me.notify = res.notify;
+      } catch (e) {
+        show();
+        status.textContent = String(e.message || e);
+        return;
+      }
+      show();
+    });
+    show();
   }
 
   function buildSettingsAppearance(panel) {
@@ -4618,6 +4751,63 @@
     state.agentTokenBusy = false;
     renderSettingsAgents(body);
     loadAgentTokens();
+    if (state.me && state.me.can_set_icons) buildNotConnectedSetting(panel);
+  }
+
+  // An admin's setting (#814, §49.14): after how many days not connected a session is removed from its rooms.
+  // It only ends the session, not the person's agent token, and the agent can join again.
+  function buildNotConnectedSetting(panel) {
+    panel.append(el('h3', null, 'Agents that are not connected'),
+      el('p', 'fine', 'An agent with no wait open that has not been heard from for a while shows as not connected.'
+        + ' After this many days it is removed from its rooms. It can join again, and its token is not touched.'));
+    const row = el('div', 'settings-files');
+    const label = el('label', 'settings-label', 'Remove after');
+    label.setAttribute('for', 'settings-nc-days');
+    const days = el('input');
+    days.type = 'number';
+    days.id = 'settings-nc-days';
+    days.min = '1';
+    days.max = '365';
+    days.value = '3';
+    const neverRow = el('label', 'check-row');
+    const never = el('input');
+    never.type = 'checkbox';
+    never.id = 'settings-nc-never';
+    neverRow.append(never, el('span', null, 'Never remove them on a schedule'));
+    const status = el('p', 'fine');
+    status.id = 'settings-nc-status';
+    const save = btn('btn btn-primary', 'Save');
+    save.id = 'settings-nc-save';
+    row.append(label, days, el('span', null, 'days'));
+    panel.append(row, neverRow, status, save);
+    function apply(n) {
+      never.checked = n === 0;
+      days.disabled = n === 0;
+      if (n !== 0) days.value = String(n);
+    }
+    never.addEventListener('change', function () { days.disabled = never.checked; status.textContent = ''; });
+    days.addEventListener('input', function () { status.textContent = ''; });
+    api('GET', '/api/settings/not-connected').then(function (res) { apply(res.days); }, function (e) {
+      status.textContent = String(e.message || e);
+      status.classList.add('bad');
+    });
+    save.addEventListener('click', async function () {
+      const next = never.checked ? 0 : Number(days.value);
+      if (next !== 0 && (!Number.isInteger(next) || next < 1 || next > 365)) {
+        status.textContent = 'Choose 1 to 365 days, or never.';
+        status.classList.add('bad');
+        return;
+      }
+      status.classList.remove('bad');
+      try {
+        const res = await api('PUT', '/api/settings/not-connected', { days: next });
+        apply(res.days);
+        status.textContent = 'Saved.';
+      } catch (e) {
+        status.textContent = String(e.message || e);
+        status.classList.add('bad');
+      }
+    });
   }
 
   function loadAgentTokens() {
@@ -7258,6 +7448,7 @@
 
   function showHome() {
     if (!state.rooms.size) return;
+    if (state.usage) leaveUsage();
     if (state.searchOn) closeSearch(false);
     if (state.around) { state.around = null; resetSearch(); }
     const was = state.home;
@@ -7348,6 +7539,75 @@
     }, state.homeTimerMs);
   }
 
+  // ---------------------------------------------------- browser notifications (#723, level 1)
+  // When something needs this person and this tab is hidden, the browser shows its own notification. It is local:
+  // the page already holds what waits on the person (Home) and each room's members, and the browser draws the
+  // notification itself, so nothing is sent to anyone. The permission is asked only from a click in Settings.
+  // The on/off is per person and kept by the broker (`notify` in /api/me; the page keeps no storage of its own); the
+  // permission stays the browser's, so on a browser that never granted it nothing shows. A notification names who, where and what kind in a line, and clicking it opens the item.
+  const NOTIFY_MAX = 60;  // a notification line is cut: what an agent wrote is untrusted text
+  const notified = new Set();  // what this page has already shown or has taken as the starting point
+  let notifyPrimed = false;
+
+  function notifyOn() { return !!(state.me && state.me.notify === true); }
+
+  function notifySupported() { return typeof Notification === 'function'; }
+
+  function notifyReady() { return notifySupported() && Notification.permission === 'granted' && notifyOn(); }
+
+  function notifyShow(key, title, body, go, live) {
+    if (notified.has(key)) return;
+    notified.add(key);
+    title = String(title).slice(0, NOTIFY_MAX * 2);
+    body = String(body).slice(0, NOTIFY_MAX);
+    if ((!live && !notifyPrimed) || !document.hidden || !notifyReady()) return;
+    let n;
+    try {
+      n = new Notification(title, { body: body, tag: key });
+    } catch (e) { return; }
+    n.onclick = function () {
+      try { window.focus(); } catch (e) { /* ignore */ }
+      n.close();
+      go();
+    };
+  }
+
+  // Home's waiting list: a question or @mention to this person, a review board that needs their call. The first
+  // list the page gets is the starting point (what already waited is not news), later ones notify once per item.
+  function notifyHome(waiting) {
+    const list = Array.isArray(waiting) ? waiting : [];
+    for (const c of list) {
+      if (c.kind === 'question') {
+        notifyShow('q:' + c.slug + ':' + c.id, (c.from || 'Someone') + ' needs you in ' + c.room,
+          'A message for you', function () { goToRoom(c.room, function () { setTimeout(function () { jumpTo(c.id); }, 0); }); });
+      } else if (c.kind === 'board') {
+        notifyShow('b:' + c.url + ':' + c.ts, 'A review needs your call in ' + c.room,
+          plural(c.need || 1, 'item', 'items') + ' on the board', function () { goToRoom(c.room); });
+      }
+    }
+    notifyPrimed = true;
+  }
+
+  // An agent of this person that has just started waiting on an approval prompt: only the page's members frames
+  // know it. News is a change, so it is judged against the members this page held before the frame: one already
+  // waiting then (a tab reloaded while a prompt is open) is not news, and neither is a room whose members the
+  // page did not have yet. Its owner is this person, or unknown on a broker with one person.
+  let notifyApprovalSeq = 0;  // each new prompt is its own item, so the next one is news
+
+  function notifyApprovals(r, before, members) {
+    if (!before.length) return;
+    const alone = !state.everyone || state.everyone.length <= 1;
+    for (const m of members) {
+      if (m.status !== 'waiting-approval') continue;
+      const was = before.find(function (x) { return x.name === m.name && (x.host || '') === (m.host || ''); });
+      if (!was || was.status === 'waiting-approval') continue;
+      const mine = m.owner ? m.owner === (state.me || {}).human : alone;
+      if (!mine) continue;
+      notifyShow('a:' + r.name + ':' + m.name + ':' + (m.host || '') + ':' + notifyApprovalSeq++,
+        m.name + ' is waiting for your approval in ' + r.name,
+        'Approve it in its own window', function () { goToRoom(r.name); }, true);
+    }
+  }
   async function loadHome() {
     const seq = ++state.homeSeq;
     if (state.seenWait.size) await Promise.allSettled(Array.from(state.seenWait));  // a room just opened is read first
@@ -7360,6 +7620,7 @@
     }
     if (seq !== state.homeSeq) return;
     state.homeData = data;
+    notifyHome(data.waiting);
     state.homeSkew = typeof data.now === 'number' ? data.now - Date.now() / 1000 : 0;
     renderHomeNav();
     if (state.home) renderHome();
@@ -7721,6 +7982,55 @@
     return li;
   }
 
+  // ---- Agents (#815): every agent session the person can see, once, with the rooms they see it in
+  const AGENT_STATE = {
+    working: 'Working', idle: 'Idle', waiting: 'Waiting for approval', offline: 'Offline',
+    not_connected: 'Not connected',
+  };
+
+  function agentRow(a) {
+    const li = el('li', 'home-row agent-row ' + a.state + (a.stuck ? ' stuck' : ''));
+    li.dataset.agent = String(a.id);
+    const row = el('div', 'hc-row');
+    const body = el('div', 'hc-body');
+    const t = el('div', 'hc-title');
+    t.append(el('b', null, a.name), el('span', 'agent-harness', harnessOf(a.harness)[1]));
+    const where = [];
+    if (a.owner) where.push(a.owner + '’s');
+    where.push(a.host ? a.host : 'this machine');
+    const st = el('div', 'agent-state');
+    st.append(el('span', 'agent-chip ' + a.state, AGENT_STATE[a.state] || 'Idle'));
+    if (a.since && a.state === 'not_connected') st.append(el('span', 'hc-age', 'last heard'), homeAge(a.since, ' ago'));
+    else if (a.since) st.append(homeAge(a.since, ' in this state'));
+    if (a.stuck) st.append(el('span', 'agent-stuck', 'Possibly stuck: nothing heard for ' + waited(a.active_at)));
+    const sub = el('div', 'hc-sub', where.join(' · '));
+    body.append(t, st);
+    if (a.line) body.append(el('div', 'agent-line', a.line));
+    body.append(sub);
+    const rooms = el('div', 'agent-rooms');
+    for (const r of a.rooms) {
+      const go = btn('agent-room', null);
+      go.append(icon('chev-right'), el('span', null, r.room + (r.as ? ' (as ' + r.as + ')' : '')));
+      go.setAttribute('aria-label', 'Open ' + r.room);
+      go.addEventListener('click', function () { goToRoom(r.room); });
+      rooms.append(go);
+    }
+    body.append(rooms);
+    row.append(avatar(a.harness, 'agent', a.name, 'home-av'), body);
+    li.append(row);
+    return li;
+  }
+
+  function agentSummary(c) {
+    const parts = [];
+    if (c.waiting) parts.push(c.waiting + ' waiting for approval');
+    if (c.stuck) parts.push(c.stuck + ' possibly stuck');
+    parts.push(c.working + ' working', c.idle + ' idle');
+    if (c.offline) parts.push(c.offline + ' offline');
+    if (c.not_connected) parts.push(c.not_connected + ' not connected');
+    return parts.join(' · ');
+  }
+
   // ---- Rooms
   function roomSummary(r) {
     let last = null;
@@ -7765,7 +8075,7 @@
       const last = roomSummary(r);
       return { r: r, last: last, ts: last ? last.ts : 0 };
     }).sort(function (a, b) { return b.ts - a.ts || (a.r.name < b.r.name ? -1 : 1); });
-    const sig = JSON.stringify([d && { w: d.waiting, d: d.done, l: d.live },
+    const sig = JSON.stringify([d && { w: d.waiting, d: d.done, l: d.live, a: d.agents },
       rooms.map(function (x) { return [x.r.name, x.r.unread, x.r.quiet, x.last && x.last.id]; }), !!error]);
     if (!again && sig === homeSig && homeRefs) return;
     homeSig = sig;
@@ -7790,6 +8100,17 @@
         if (d.waiting_total > d.waiting.length) w.append(homeEmpty('And ' + (d.waiting_total - d.waiting.length) + ' more in your rooms.'));
       }
       frag.append(w);
+
+      const ag = homeSection(refs, 'agents', 'Agents', d.agents_total ? d.agents_total : null, false);
+      if (!d.agents || !d.agents.length) ag.append(homeEmpty('No agents in your rooms yet.'));
+      else {
+        ag.append(el('p', 'home-none agent-summary', agentSummary(d.agent_counts)));
+        const ul = el('ul', 'home-list rows');
+        for (const a of d.agents) ul.append(agentRow(a));
+        ag.append(ul);
+        if (d.agents_total > d.agents.length) ag.append(homeEmpty('And ' + (d.agents_total - d.agents.length) + ' more.'));
+      }
+      frag.append(ag);
 
       const dn = homeSection(refs, 'done', 'Done since you last looked', d.done.length ? d.done.length : null, false);
       if (d.done.length) {
@@ -8289,6 +8610,7 @@
 
   function searchFocusBack() {
     if (state.active) $('input').focus();
+    else if (state.usage) $('usage').focus();
     else if (state.home) $('home').focus();
   }
 
@@ -8788,8 +9110,12 @@
     if (names.length) hello(names);
     if (!state.active && !state.home && state.rooms.size) {
       // a link to a room (#build) opens that room; opening switchboard itself opens Home (#626)
-      const want = '#' + decodeURIComponent(location.hash.replace(/^#/, ''));
+      // #/usage is the usage page. A room may be named #usage (its link is #usage), so the page
+      // takes the slash and a room of that name still opens.
+      const raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+      const want = '#' + raw;
       if (state.rooms.has(want)) selectRoom(want);
+      else if (raw === '/usage') showUsage();
       else showHome();
     } else {
       if (pruned) history.replaceState(null, '', location.pathname);  // nothing left to point at
@@ -8802,6 +9128,180 @@
     }
     if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
     return fresh;
+  }
+
+  // ----------------------------------------------------------- usage (#818, §61)
+  // A read of stored rows when the page is opened. Clicking Usage again asks once more.
+  // Nothing here refetches on a room frame: the numbers are a window, not a live meter.
+  function leaveUsage() {
+    if (!state.usage) return;
+    state.usage = false;
+    state.usageSeq += 1;  // an answer still on its way is not drawn
+    $('app').classList.remove('usage-open');
+    $('usage').classList.add('hidden');
+    unsetAttr($('usage-nav'), 'aria-current');
+  }
+
+  function zoneOffset() {
+    // minutes east of UTC. A value the page cannot read is UTC, which the broker also
+    // uses for an offset it does not recognize.
+    try {
+      if (typeof Date !== 'function') return 0;
+      const m = new Date().getTimezoneOffset();
+      if (typeof m !== 'number' || !Number.isFinite(m)) return 0;
+      const east = -Math.trunc(m);
+      if (east < -840 || east > 840) return 0;
+      return east;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function whole(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.floor(n);
+  }
+
+  function countLine(prefix, wakes, posts) {
+    return prefix + ': ' + plural(wakes, 'wake', 'wakes') + ', ' + plural(posts, 'message', 'messages');
+  }
+
+  function usageJump(name) {
+    const shown = String(name).replace(/^#/, '');
+    if (!state.rooms.has(name)) return el('span', 'usage-name', shown);
+    const b = btn('usage-jump', shown);
+    b.setAttribute('data-room', name);
+    b.setAttribute('aria-label', 'Open ' + name);
+    b.addEventListener('click', function () {
+      setNav(false);
+      selectRoom(name);
+    });
+    return b;
+  }
+
+  function usageCounts(row) {
+    const today = el('span', 'usage-counts', countLine('Today', whole(row.wakes_today), whole(row.posts_today)));
+    const week = el('span', 'usage-counts', countLine('7 days', whole(row.wakes_week), whole(row.posts_week)));
+    return [today, week];
+  }
+
+  function renderUsage() {
+    const root = $('usage');
+    root.replaceChildren();
+    const lead = el('p', 'usage-lead');
+    lead.textContent = 'Wakes handed to each agent, and the messages they posted, today and over the last 7 days. '
+      + 'Today is included in the 7 days. The budget is the wakes the room has left this hour. '
+      + 'This page does not measure tokens or dollars.';
+    root.append(lead);
+    const data = state.usageData;
+    if (!data) {
+      const p = el('p', 'usage-none', state.usageError || 'Loading…');
+      p.setAttribute('role', 'status');
+      root.append(p);
+      return;
+    }
+    if (state.usageError) {
+      const p = el('p', 'usage-none', state.usageError);
+      p.setAttribute('role', 'status');
+      root.append(p);
+    }
+    root.append(el('h2', 'usage-h', 'Rooms'));
+    root.append(el('p', 'usage-note', 'Noisiest first. The budget is what is left this hour.'));
+    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    if (!rooms.length) root.append(el('p', 'usage-none', 'No open rooms.'));
+    else {
+      const list = el('ol', 'usage-list');
+      list.id = 'usage-rooms';
+      for (const room of rooms) {
+        const name = typeof room.name === 'string' ? room.name : '';
+        const li = el('li');
+        const row = el('div', 'usage-row');
+        const who = el('div', 'usage-name');
+        who.append(usageJump(name));
+        const budget = el('span', 'usage-budget', whole(room.budget_remaining) + ' of '
+          + whole(room.budget_per_hour) + ' left this hour');
+        row.append(who, budget, ...usageCounts(room));
+        const ran = whole(room.exhausted_week);
+        if (ran > 0) {
+          row.append(el('p', 'usage-ranout', ran === 1
+            ? 'The budget ran out once in these 7 days.'
+            : 'The budget ran out ' + ran + ' times in these 7 days.'));
+        }
+        li.append(row);
+        list.append(li);
+      }
+      root.append(list);
+    }
+    root.append(el('h2', 'usage-h', 'Agents'));
+    root.append(el('p', 'usage-note', 'Noisiest first. One row per agent in a room.'));
+    const agents = Array.isArray(data.agents) ? data.agents : [];
+    if (!agents.length) {
+      root.append(el('p', 'usage-none', 'No agent was woken, and none posted, in the last 7 days.'));
+    } else {
+      const list = el('ol', 'usage-list');
+      list.id = 'usage-agents';
+      for (const agent of agents) {
+        const li = el('li');
+        const row = el('div', 'usage-row');
+        const who = el('div', 'usage-name', label(agent.name || '', agent.host || '')
+          + ' · ' + harnessOf(agent.harness)[1]);
+        const room = el('div', 'usage-name');
+        room.append(usageJump(typeof agent.room === 'string' ? agent.room : ''));
+        row.append(who, room, ...usageCounts(agent));
+        li.append(row);
+        list.append(li);
+      }
+      root.append(list);
+    }
+  }
+
+  function showUsage() {
+    if (!state.rooms.size) return;
+    if (state.searchOn) closeSearch(false);
+    if (state.around) { state.around = null; resetSearch(); }
+    if (state.inspect) closeInspector(false);
+    closePop();
+    if (state.home) leaveHome();
+    if (state.active) markRoomSeen(state.rooms.get(state.active), false);
+    state.usage = true;
+    closeWhiteboard();
+    state.active = null;
+    state.boardOpen = false;
+    state.boardSel = null;
+    $('app').classList.add('usage-open');
+    $('app').classList.remove('sheet-open');
+    $('app').classList.remove('home-open');
+    $('usage').classList.remove('hidden');
+    if (location.hash !== '#/usage') history.replaceState(null, '', '#/usage');
+    renderTabs();
+    renderLog();
+    renderBuddies();
+    renderStatus();
+    renderBoard();
+    updateTitle();
+    unsetAttr($('home-nav'), 'aria-current');
+    $('usage-nav').setAttribute('aria-current', 'page');
+    renderUsage();
+    loadUsage();
+    setNav(false);
+  }
+
+  async function loadUsage() {
+    const seq = ++state.usageSeq;
+    let data;
+    try {
+      data = await api('GET', '/api/usage?offset=' + encodeURIComponent(String(zoneOffset())));
+    } catch (e) {
+      if (seq !== state.usageSeq || !state.usage) return;
+      state.usageError = String((e && e.message) || 'Could not load usage');
+      renderUsage();
+      return;
+    }
+    if (seq !== state.usageSeq || !state.usage) return;
+    state.usageData = data;
+    state.usageError = null;
+    renderUsage();
   }
 
   async function boot() {
@@ -8819,6 +9319,11 @@
       setNav(false);
       showHome();
       $('home').focus();
+    });
+    $('usage-nav').addEventListener('click', function () {
+      setNav(false);
+      showUsage();
+      $('usage').focus();
     });
     keepLogPinned();
     try {

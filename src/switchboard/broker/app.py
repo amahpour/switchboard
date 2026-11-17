@@ -464,6 +464,7 @@ async def _maintenance(state: BrokerState) -> None:
         try:
             db.checkpoint(state.store.con)
             state.store.web_session_purge()
+            state.store.say_key_purge()
             state.login_tokens.purge()
             state.used_challenges.purge()
             now = state.clock.now()

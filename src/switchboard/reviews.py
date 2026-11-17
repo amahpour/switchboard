@@ -526,6 +526,57 @@ def commit_url(f: dict[str, Any] | None, sha: str) -> str | None:
     return f"{f['base']}/-/commit/{sha}"
 
 
+_LINK_RE = re.compile(r"https?://[^\s<>\"'`()\[\]]+")
+MAX_LINKS_PER_MESSAGE = 3
+
+
+def canonical_url(value: str) -> str:
+    """The one address of the pull or merge request ``value`` names, whatever tab or suffix it was copied
+    with (``/pull/7/files``, ``/-/merge_requests/7/diffs``): ``https://github.com/o/r/pull/7`` or the
+    GitLab host's ``…/-/merge_requests/7``. Empty when it names neither (§37.16)."""
+    f = forge(value)
+    if f is None:
+        return ""
+    return (
+        f"{f['base']}/pull/{f['number']}"
+        if f["kind"] == "github"
+        else f"{f['base']}/-/merge_requests/{f['number']}"
+    )
+
+
+def trusted_forge(url: str, boards: Sequence[str]) -> bool:
+    """May switchboard ask for a review of ``url`` on its own (§37.16)? A GitHub pull request, always; a
+    merge request only on a host the room already has a board on (``boards``: the room's boards' addresses),
+    since GitLab can be on any host and an agent could otherwise name one that is not the room's. Any other
+    host is a person's to open with ``/review``."""
+    f = forge(url)
+    if f is None:
+        return False
+    if f["kind"] == "github":
+        return True
+    host = urlsplit(url).netloc.lower()
+    for board in boards:
+        g = forge(board)
+        if g is not None and g["kind"] == "gitlab" and urlsplit(board).netloc.lower() == host:
+            return True
+    return False
+
+
+def pr_links(text: str, limit: int = MAX_LINKS_PER_MESSAGE) -> list[str]:
+    """The distinct pull or merge request links in ``text``, as ``canonical_url`` makes them, in the
+    order written, at most ``limit``: what an agent's message points at (§37.16). Only a link ``forge``
+    recognises counts; any other link, and a word that only looks like one, is ignored. Trailing
+    punctuation is not part of a link."""
+    out: list[str] = []
+    for m in _LINK_RE.finditer(text):
+        url = canonical_url(m.group(0).rstrip(".,;:!?*_"))
+        if url and url not in out:
+            out.append(url)
+            if len(out) >= limit:
+                break
+    return out
+
+
 def ref(f: dict[str, Any] | None) -> str:
     """A pull request's or merge request's short name, ``#7`` or ``!7``, built from the checked
     number alone; empty when the URL names neither. Safe in a person's message (#177)."""

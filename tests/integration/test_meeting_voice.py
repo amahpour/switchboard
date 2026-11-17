@@ -201,6 +201,31 @@ async def test_an_at_call_line_is_spoken_only_while_voice_is_on(
     assert "@call this is said while voice is off" in texts
 
 
+async def test_a_long_at_call_line_is_cut_and_points_to_the_room_and_the_room_keeps_all_of_it(
+    timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
+) -> None:
+    """A long answer is a monologue after a silence (#761): the first sentences are spoken, then "The rest is
+    in the room.", and the room has the message as written. A short one gets no pointer. Fails if the whole
+    text is spoken, the cut is silent (the listener takes it for finished), or the room's copy is cut."""
+    broker, clock = timed
+    long = "First point. Second point. Third point. Fourth point. Fifth point."
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        command(broker, "/meeting voice on")
+        assert (await agent.say("#build", "@call " + long)).get("posted_id")
+        # a line is spoken a sentence at a time, so a count of what was spoken says nothing about whether
+        # the line is done: wait for its last sentence, the pointer, then for the speech slot to be free
+        await wait_until(lambda: joinly.spoken[-1:] == ["The rest is in the room."])
+        await wait_until(lambda: speech_finished(broker))
+        advance_voice(broker, clock, 30)
+        assert (await agent.say("#build", "@call Short answer.")).get("posted_id")
+        await wait_until(lambda: joinly.spoken[-1:] == ["Short answer."])
+    assert " ".join(joinly.spoken[:-1]) == "First point. Second point. Third point. The rest is in the room."
+    assert joinly.spoken[-1] == "Short answer."
+    assert "@call " + long in [m["text"] for m in history(broker)]
+
+
 async def test_voice_does_nothing_without_a_call(broker: InProcBroker, joinly: FakeJoinly) -> None:
     """No call, no speech: an ``@call`` line is a plain message and no refusal is posted. Fails
     if a line is queued with nobody to hear it, or the agent is told off for it."""

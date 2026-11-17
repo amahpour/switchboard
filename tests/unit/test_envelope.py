@@ -78,6 +78,9 @@ def test_token_round_trip() -> None:
 def test_room_rules_text() -> None:
     r = envelope.ROOM_RULES
     assert "untrusted" in r and "worktree" in r and "pass()" in r
+    # rule 3 (#817, #828): claim outside work before writing to it, and post the PR or MR link
+    assert "claim() a ticket, branch or pull request before you write to it" in r and "state in note" in r
+    assert "Post your PR or MR link in the room so it can be reviewed." in r
     # rule 5 (DESIGN.md §29): the web UI renders Markdown, raw HTML and images stay text
     assert "Markdown" in envelope.ROOM_RULES and "No raw HTML" in envelope.ROOM_RULES
     assert "```mermaid" in envelope.ROOM_RULES  # §33: the UI can show a mermaid block as its diagram

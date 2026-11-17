@@ -64,6 +64,10 @@
         <span class="room-name">Home</span>
         <span class="badge hidden" id="home-badge"></span>
       </button>
+      <button type="button" class="room" id="usage-nav" aria-label="Usage" title="What agents cost">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8M8 13V3M13 13V6M2 13.5h12"/></svg>
+        <span class="room-name">Usage</span>
+      </button>
     </div>
 
     <div class="side-section" aria-labelledby="rooms-label">
@@ -274,6 +278,9 @@
 
       <!-- Home (#626): what waits on you, what got done, what is live, your rooms. Drawn by app.js. -->
       <section class="home hidden" id="home" tabindex="-1" aria-label="Home"></section>
+
+      <!-- Usage (#818): wakes and messages per agent and room. Drawn by app.js. -->
+      <section class="usage hidden" id="usage" tabindex="-1" aria-label="Usage"></section>
 
       <!-- Empty room: nobody joined yet and nothing said. -->
       <div class="room-empty hidden" id="room-empty">

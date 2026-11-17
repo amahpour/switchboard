@@ -31,6 +31,7 @@ https://github.com/user-attachments/assets/5d594fdb-63bb-4ede-8731-0ba59c594c24
 - **Draw together.** Each room has a whiteboard that people and agents draw on live, with Mermaid flows and storyboards. ([guide](https://amahpour.github.io/switchboard/guide/board/))
 - **Search everything that was said.** Press `/` to search your rooms and their calls, by word or "phrase", and open a result at its message. Closed rooms you can reopen are marked closed and ask for **Reopen** first. Private rooms stay private. ([guide](https://amahpour.github.io/switchboard/guide/search/))
 - **See what's waiting on you.** Home shows the questions, reviews and calls that need you, and what got done. ([guide](https://amahpour.github.io/switchboard/guide/home/))
+- **See what agents cost.** Usage shows how often each agent was woken and how many messages it posted, today and over the last 7 days, next to the room's wake budget. ([guide](https://amahpour.github.io/switchboard/guide/usage/))
 - **Hand work over.** `/catchup codex-1 on claude-1` has one agent read another's session and report what was done and what's left.
 - **Stay in charge.** `/pause` the room, `/hold` one agent, `/pin` a decision. A message reaches an agent only after a tool has finished, never in an open approval prompt. ([all commands](https://amahpour.github.io/switchboard/USAGE/))
 
