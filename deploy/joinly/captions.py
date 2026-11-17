@@ -203,6 +203,20 @@ class FinalRule:
         )
 
     @staticmethod
+    def _before_is_sent(have: list[str], k: int, before: list[str]) -> bool:
+        """Whether the box's words ``before`` a match of the last ``k`` sent words are what was sent just
+        before them. The box is a rolling window over what was said, so words in front of the tail are older
+        sent words; others mean a new sentence that only ends like the last one. Only history this short is
+        checked when it was not cut at ``HISTORY_WORDS``: older words are gone, so they are taken as sent."""
+        if not before:
+            return True
+        older = have[: len(have) - k]  # what was sent before the matched tail
+        n = min(len(before), len(older))
+        if n and before[-n:] != older[-n:]:
+            return False
+        return len(before) <= len(older) or len(have) >= HISTORY_WORDS
+
+    @staticmethod
     def _pending(sp: _Speaker, text: str) -> list[str]:
         """The sentences of ``text`` not yet sent: those after the words already sent."""
         have = sp.history
@@ -213,6 +227,8 @@ class FinalRule:
             for i in range(0, len(words) - k + 1):
                 if words[i : i + k] == tail and (k >= MIN_MATCH_WORDS or i == 0 or k == len(have)):
                     if k < MIN_MATCH_WORDS and i != 0:
+                        continue
+                    if not FinalRule._before_is_sent(have, k, words[:i]):
                         continue
                     start = i + k
                     break
