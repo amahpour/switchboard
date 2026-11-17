@@ -1010,6 +1010,13 @@ class AgentService:
             sender_host=p.host or None,
             file_ids=file_ids or (),
         )
+        if room.review_on_link:
+            # a new pull or merge request link here may ask for a review, when a person turned that on
+            # (§37.16): it can never fail the say that is already posted
+            try:
+                self.state.boards.on_agent_say(room, m.screen_name, msg.text)
+            except Exception:
+                log.exception("asking for a review of a posted link failed in %s", room.name)
         if self.state.meetings is not None:
             # an "@call" line is spoken in the room's live call while a person has voice on (§52);
             # otherwise this does nothing. It never waits: a task in the bridge does the speaking.

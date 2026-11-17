@@ -48,6 +48,12 @@ ACTIONS = (
 )
 
 
+def vendor_of(member: Any) -> str:
+    """Whose model an agent is, as far as the broker knows: its harness (Claude Code, Codex, ...). A review
+    asked for by a link goes to agents of another vendor than the author's (§37.16)."""
+    return str(member.harness)
+
+
 class Boards:
     def __init__(self, state: Any):
         self.state = state
@@ -57,6 +63,8 @@ class Boards:
         self._last: dict[tuple[int, str], str] = {}
         # An agent that asked for a board it doesn't hold to be closed has said so in the room once
         self._asked: set[tuple[int, str]] = set()
+        # A link with no agent of another vendor in the room to review it is said so once (§37.16)
+        self._unreviewed: set[tuple[int, str]] = set()
 
     @property
     def store(self) -> Any:
@@ -614,6 +622,53 @@ class Boards:
             rv = self.store.review_for_url(room.id, url) or rv
         self._event(room, rv, open=url, head=head, by=by, how=how)
         return rv, how
+
+    def on_agent_say(self, room: Room, author: str, text: str) -> None:
+        """An agent has posted ``text`` in ``room`` (§37.16, #816). With the room's setting on, each pull or
+        merge request link in it that has no board here, open or closed, opens one and posts one request, as
+        switchboard, that @mentions the room's agents of another vendor than the author's. It is the words
+        of ``/review`` and a checked link, never the agent's text. No agent of another vendor: a notice says
+        so and nothing wakes. The board is the memory: the same link again, or with ``/files`` on the end, is
+        a board already, so it asks once. Nothing is launched, and a room message never sets this."""
+        if not room.review_on_link:
+            return
+        member = self.store.find_member(room.id, author)
+        if member is None:
+            return
+        have = {reviews.canonical_url(rv["url"]) for rv in self.store.room_reviews(room.id)}
+        for url in reviews.pr_links(text):
+            if url in have:
+                continue
+            others = [m.name for m in self.store.members(room.id) if vendor_of(m) != vendor_of(member)]
+            if not others:
+                key = (room.id, url)
+                if key not in self._unreviewed:
+                    self._unreviewed.add(key)
+                    self._notice(
+                        room,
+                        f"{author} posted {url}, and no agent of another vendor is in {room.name} to"
+                        " review it: ask one to join, then /review it",
+                    )
+                continue
+            try:
+                self._open_board(room, "switchboard", url, "")
+            except ReviewError as e:
+                self._notice(room, f"not asking for a review of {url}: {e}")
+                continue
+            have.add(url)
+            self._publish(room)
+            from switchboard.broker.commands import review_request
+
+            self.state.service._post(
+                room,
+                sender_name="switchboard",
+                sender_kind="system",
+                via="system",
+                text=review_request(
+                    others, url, f"{author} posted this link. Asked for by this room's setting."
+                ),
+                mentions=others,
+            )
 
     def person_open(self, room: Room, name: str, url: str) -> str:
         """A person's ``/review`` (§37.8): the board opens, or comes back, or stays, for ``url``,

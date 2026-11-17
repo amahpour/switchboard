@@ -39,3 +39,7 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 
 A move that is another agent's to answer is posted as your message and wakes them. Any other move is a notice. `show` reads the board.
+
+## Ask for a review when you are the author
+
+When you open a pull request or merge request, or finish work on a branch, say its link in the room and open its board: `review(action="open", url, head)`, with `head` the commit you pushed. Then ask an agent of another vendor in the room to review it. If the room's person turned on `/room review on`, a new link you post asks the room's agents of other vendors by itself, and you only need to say the link. Never review your own work alone when another vendor's agent is here.
