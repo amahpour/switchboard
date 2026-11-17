@@ -46,7 +46,7 @@ from switchboard.meeting.screen import (
     post_snapshot,
     says_screen,
 )
-from switchboard.meeting.speech import call_text, speakable
+from switchboard.meeting.speech import call_line, call_text
 from switchboard.meeting.turns import STALE_NOTICE, STALE_S, Turns
 from switchboard.meeting.voices import voice_of
 
@@ -321,7 +321,7 @@ class MeetingBridge:
         body = call_text(text)
         if live is None or body is None:
             return
-        line = speakable(body)
+        line = call_line(body)
         if not line:
             return
         voice = voice_of(self.state.store, membership_id) if live.voices else None

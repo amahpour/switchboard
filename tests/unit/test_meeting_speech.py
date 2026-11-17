@@ -24,7 +24,9 @@ from switchboard.meeting.screen import NoFrame, frame_from, image_kind, says_scr
 from switchboard.meeting.speech import (
     SPEAK_MAX,
     SPEAK_SENTENCES,
+    SPOKEN_POINTER,
     VOICE_STYLE,
+    call_line,
     call_text,
     speakable,
     split_sentences,
@@ -178,9 +180,9 @@ def test_a_full_stop_inside_a_number_a_name_or_an_abbreviation_is_not_a_sentence
 def test_the_style_guidance_is_short_and_says_what_to_do() -> None:
     """The agent is told to speak one or two short sentences, keep lists, code and links out,
     put details in a normal say() and say "one moment" before a tool call."""
-    for part in ("one or two short sentences", "no lists", "normal say()", "one moment"):
+    for part in ("one or two short sentences", "no lists", "normal say()", "one moment", "offer more"):
         assert part in VOICE_STYLE
-    assert len(VOICE_STYLE) < 260
+    assert len(VOICE_STYLE) < 260  # a pin: it is in every batch with call lines while voice is on (249 now)
 
 
 def test_a_cut_does_not_leave_a_dangling_comma() -> None:
@@ -370,3 +372,33 @@ def test_call_is_a_reserved_name() -> None:
     """``@call`` must never be a member's name, or a message to that agent would also be a
     spoken line. Fails if it is left off the reserved list."""
     assert "call" in RESERVED_NAMES
+
+
+# ------------------------------------------------- the pointer to the room (#761)
+
+
+def test_a_message_that_fits_is_spoken_whole_and_with_no_pointer() -> None:
+    """Fails if a short answer gets "the rest is in the room" (there is no rest), or is changed."""
+    assert call_line("Yes, it is green.") == "Yes, it is green."
+    assert call_line("One. Two. Three.") == "One. Two. Three."  # exactly the cap: all of it is spoken
+    assert call_line("  \n ") == "" and call_line("```\nx\n```") == "code omitted"
+
+
+def test_a_cut_message_is_spoken_to_the_cap_and_then_says_the_rest_is_in_the_room() -> None:
+    """Sentences past the cap, a text past the characters, and one sentence cut at a word all leave something
+    in the room only, so each ends with the pointer, which is not counted in the cap. Fails if the cut is
+    silent, or the pointer is added to what was not cut, or it counts against SPEAK_MAX."""
+    by_sentences = call_line("One. Two. Three. Four.")
+    assert by_sentences == "One. Two. Three. " + SPOKEN_POINTER
+    by_characters = call_line(("word " * 30).strip() + ". " + ("more " * 30).strip() + ".")
+    assert by_characters.endswith(SPOKEN_POINTER) and by_characters.count(SPOKEN_POINTER) == 1
+    assert len(by_characters) <= SPEAK_MAX + 1 + len(SPOKEN_POINTER) + 1
+    one_long = call_line("a" * 40 + " " + "b" * (SPEAK_MAX + 20))
+    assert one_long.endswith(SPOKEN_POINTER)
+
+
+def test_the_pointer_is_one_short_sentence_of_its_own() -> None:
+    """It is spoken as a sentence (one more in the line's own sentence-by-sentence speech), so it must be one
+    and short. Fails if it grows into a paragraph or stops being a sentence."""
+    assert split_sentences(SPOKEN_POINTER) == [SPOKEN_POINTER]
+    assert len(SPOKEN_POINTER) < 40 and SPOKEN_POINTER.endswith(".")

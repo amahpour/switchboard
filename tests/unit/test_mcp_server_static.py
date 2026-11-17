@@ -412,3 +412,21 @@ def test_the_claim_skill_is_the_same_file_in_the_three_plugins_and_says_what_a_c
     assert "name: claim" in text and "switchboard_claim" in text
     assert "advice and nothing more" in text and "does not lock" in text
     assert "before the first write" in text.lower() and "held elsewhere" in text
+
+
+def test_the_talk_on_a_call_skill_is_the_same_file_in_the_three_plugins_and_teaches_a_voice() -> None:
+    """#761: how to sound on a call is one skill, the same bytes where a plugin loads skills from `skills/`.
+    It says one or two short sentences, details in the room, and what the cut does, and keeps to what an agent
+    may do (a person turns voice on). Fails if the copies drift, the style is lost, or it grows past a
+    page."""
+    root = Path(__file__).resolve().parents[2]
+    bodies = [
+        (root / "plugins" / name / "skills" / "talk-on-a-call" / "SKILL.md").read_bytes()
+        for name in ("claude", "codex", "cursor")
+    ]
+    assert bodies[0] == bodies[1] == bodies[2]
+    text = bodies[0].decode()
+    assert "name: talk-on-a-call" in text and "@call" in text
+    assert "one or two short sentences" in text.lower() and "normal `say()` without `@call`" in text
+    assert "The rest is in the room." in text and "a person turns voice on" in text
+    assert len(text) < 1800
