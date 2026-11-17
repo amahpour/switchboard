@@ -351,6 +351,10 @@ class Member:
     plugin_state: str = ""
     plugin_version: str | None = None
     plugin_note: str = ""  # one sentence when it isn't current, with the harness's update command
+    # its newest sign of life (a hook, a call, a say, a status report), and, when no wait is open and it has
+    # been quiet too long, the time it was last heard from (#814, §49.14); None: connected, or nothing known
+    heard_at: float | None = None
+    not_connected_since: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

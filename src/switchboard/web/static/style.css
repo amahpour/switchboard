@@ -3732,3 +3732,16 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   .around-btn { min-height: 44px; padding: 0 14px; }
   .search-kbd { display: none; }
 }
+
+/* Not connected (#814): a hollow grey dot, a dimmer row, and a fold at the bottom of Members */
+.dot.s-notconnected { background: var(--pane-bg); box-shadow: inset 0 0 0 1.5px var(--muted); }
+.member.nc { opacity: 0.72; }
+.member-group { list-style: none; margin: 6px 0 0; padding: 0; }
+.member-group-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px;
+  background: none; border: 0; border-radius: 6px; cursor: pointer; text-align: left;
+  font: inherit; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; color: var(--muted);
+}
+.member-group-toggle:hover { background: var(--hover, rgba(127, 127, 127, 0.12)); }
+.member-group-toggle svg { width: 12px; height: 12px; transition: transform 0.12s; }
+.member-group-toggle.open svg { transform: rotate(90deg); }

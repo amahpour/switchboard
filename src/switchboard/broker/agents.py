@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from switchboard import claims, envelope, search
 from switchboard.broker.restarts import RESTART_MESSAGE
-from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError
+from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError, when_text
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
 from switchboard.models import (
@@ -73,6 +73,9 @@ ENDED_WHY = {
     "unreachable": "the server took its machine for unreachable",
     "removed": "its machine was removed",
     "token revoked": "its agent token was revoked",
+    # a person removed it, or the cleanup did; ``http_ended`` says how long when it knows (#814, §49.14)
+    "not_connected": "it was not connected, so it was removed: join again",
+    "removed_not_connected": "it was not connected, so your user removed it: join again",
 }
 
 WAIT_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
@@ -315,6 +318,9 @@ class AgentService:
     def wakes_at(self, membership_id: int) -> float | None:
         return self.engine.wakes_at(membership_id)
 
+    def not_connected_for(self, participant_id: int, status: str, heard_at: float | None) -> float | None:
+        return self.engine.not_connected_for(participant_id, status, heard_at)
+
     # ======================================================== membership
     def _session_key(self, mc: AgentConn, thread_id: str | None) -> str:
         """This harness's session key for a call on the token's device (§6.3): Codex's thread, Claude
@@ -381,6 +387,7 @@ class AgentService:
         if credential_error is not None:
             raise ServiceError("unauthorized", credential_error)
         self.svc.note_plugin(p, conn.agent.plugin_header)
+        self.run(self.engine.touch(p))  # any call is proof it is there (#814, §49.14)
         if next_call:
             self.run(self.engine.before_call(p))
             p = self.store.get_participant(p.id) or p
@@ -401,6 +408,9 @@ class AgentService:
             return None
         room = self.store.room_by_id(m.room_id)
         why = ENDED_WHY.get(m.left_reason or "", f"it ended ({m.left_reason})")
+        if m.left_reason == "not_connected":
+            days = self.engine.not_connected_end_days()
+            why = f"it was not connected for {days} day{'s' if days != 1 else ''}: join again"
         when = time.strftime("%H:%M UTC", time.gmtime(m.left_at))
         return (
             f"[switchboard] {m.screen_name} is no longer in {room.name if room else 'its room'}: {why},"
@@ -663,6 +673,8 @@ class AgentService:
                 bits.append("quiet=yes")
             if x.parked:
                 bits.append("parked=yes")
+            if x.not_connected_since:  # gone for now: nobody to answer (#814, §49.14)
+                bits.append(f"not_connected_since={when_text(x.not_connected_since)}")
             if x.away:
                 bits.append(f"away={sanitize(x.away, 80)}")
             if x.plugin_note:
@@ -928,6 +940,11 @@ class AgentService:
         }
         if share:
             posted["share"] = share
+        gone = self.svc.not_connected_notes(
+            room, msg.mentions
+        )  # an @mention of a member that isn't there (#814)
+        if gone:
+            posted["note"] = " ".join(gone)
         return self._with_redaction(posted, kinds)
 
     @staticmethod
