@@ -18,6 +18,7 @@ from typing import Any
 
 from switchboard import db
 from switchboard.broker.auth import WebOrigin
+from switchboard.broker.restarts import BrokerServer
 from switchboard.config import Config
 from switchboard.mcp.client import BrokerDown, RpcError, call_sync, ping
 from switchboard.paths import Paths, test_mode_refusal
@@ -220,7 +221,7 @@ def run_foreground(
         app = create_app(
             paths, cfg, default_peer_policy(cfg, test_trust_uds), test_mode, port=actual, web_origin=origin
         )
-        server = uvicorn.Server(
+        server = BrokerServer(
             uvicorn.Config(
                 app,
                 access_log=False,
@@ -232,7 +233,8 @@ def run_foreground(
                 server_header=False,
                 date_header=False,
                 proxy_headers=False,
-            )
+            ),
+            app.state.broker,
         )
         app.state.broker.shutdown_cb = lambda: setattr(server, "should_exit", True)
         if announce:

@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from switchboard import claims, envelope, search
+from switchboard.broker.restarts import RESTART_MESSAGE
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError, when_text
 from switchboard.delivery import rules
 from switchboard.envelope import TOKEN_RE, clean, sanitize
@@ -270,6 +271,7 @@ class AgentService:
         self.record_dir = Path(rec) if rec and state.test_mode else None
         # membership id -> rate-limited says waiting their turn: (text, reply_to, file ids), oldest first
         self._queued_says: dict[int, deque[tuple[str, int | None, list[str]]]] = {}
+        self._say_timers: dict[int, asyncio.TimerHandle] = {}
         # member id -> (the last batch whose question an @call line answered, how many lines answered
         # it, when the first did) (§52.2)
         self._answered: dict[int, tuple[int, int, float]] = {}
@@ -831,6 +833,8 @@ class AgentService:
         }
 
     def say(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        if self.state.draining:
+            raise ServiceError("restarting", RESTART_MESSAGE)
         p, m, room = self._member(conn, params)
         text = params.get("text")
         if not isinstance(text, str):
@@ -960,11 +964,23 @@ class AgentService:
         )
 
     def _schedule_say(self, membership_id: int, delay: float) -> None:
-        asyncio.get_running_loop().call_later(max(delay, 0.0), self._post_queued_say, membership_id)
+        self._say_timers[membership_id] = asyncio.get_running_loop().call_later(
+            max(delay, 0.0), self._post_queued_say, membership_id
+        )
 
-    def _post_queued_say(self, membership_id: int) -> None:
+    def flush_queued_says(self) -> None:
+        """Post accepted says before shutdown, bypassing only their remaining rate-limit delay."""
+        for handle in self._say_timers.values():
+            handle.cancel()
+        self._say_timers.clear()
+        for membership_id in list(self._queued_says):
+            while self._queued_says.get(membership_id):
+                self._post_queued_say(membership_id, flushing=True)
+
+    def _post_queued_say(self, membership_id: int, *, flushing: bool = False) -> None:
         """Post the oldest queued say of this member once the rate limit allows, then schedule the
         next. Dropped, not posted, if the member left (or its room closed) meanwhile."""
+        self._say_timers.pop(membership_id, None)
         queue = self._queued_says.get(membership_id)
         if not queue:
             self._queued_says.pop(membership_id, None)
@@ -972,23 +988,23 @@ class AgentService:
         m = self.store.get_membership(membership_id)
         p = self.store.get_participant(m.participant_id) if m is not None else None
         room = self.store.room_by_id(m.room_id) if m is not None else None
-        if m is None or p is None or room is None or not m.active:
+        if m is None or p is None or room is None or room.closed or not m.active:
             log.info("dropped %d queued say(s) of membership %d: it ended", len(queue), membership_id)
             if self.state.attachments is not None:
                 for _text, _reply, ids in queue:
                     self.state.attachments.drop(ids)
             self._queued_says.pop(membership_id, None)
             return
-        wait = self._say_wait(p)
+        wait = None if flushing else self._say_wait(p)
         if wait is not None:
             self._schedule_say(membership_id, wait)
             return
         text, reply_to, file_ids = queue.popleft()
         target = self.store.get_message(reply_to) if reply_to is not None else None
         self._post_say(p, m, room, text, reply_to if target is not None else None, file_ids)
-        if queue:
+        if queue and not flushing:
             self._schedule_say(membership_id, self.cfg.delivery.rate_limit_s)
-        else:
+        elif not queue:
             self._queued_says.pop(membership_id, None)
 
     def _post_say(
@@ -1139,6 +1155,8 @@ class AgentService:
         return text + "\n" + notes if notes else text
 
     async def wait(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        if self.state.draining:
+            return {"status": "restarting"}
         p, m, room = self._member(conn, params)
         caps = self.engine.adapter(p).caps(p)
         timeout = rules.clamp_wait(params.get("timeout_s"), caps.wait_cap_s)
@@ -1216,7 +1234,8 @@ class AgentService:
         return {"status_line": line}
 
     def claim(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
-        """Advisory outside work, per room: only its member may renew or release it (§47)."""
+        """Advisory outside work: only its member may renew or release it (§47). A key is one name across
+        every room of the broker (#817), so a claim on one another session holds in any room is refused."""
         _p, m, room = self._member(conn, params)
         try:
             key = claims.normalize_key(params.get("key"))
@@ -1226,7 +1245,18 @@ class AgentService:
             raise ServiceError("bad_request", str(e)) from None
         decision = self.store.move_claim(room.id, m.id, key, ttl, note)
         if decision.action == "held":
-            raise ServiceError("conflict", f"{key} is claimed by {decision.holder}")
+            there = self.store.room_by_id(decision.room_id) if decision.room_id else None
+            seen = there is not None and self.svc.visible(there, self.svc.host_person(conn.agent.host))
+            raise ServiceError(
+                "conflict",
+                claims.refusal_text(
+                    key,
+                    decision.holder,
+                    envelope._word(decision.host) if decision.host else "",
+                    there.name if seen and there is not None else None,
+                    here=not decision.room_id,
+                ),
+            )
         if decision.action == "limit":
             raise ServiceError("bad_request", f"a member can hold at most {claims.MEMBER_MAX} claims")
         self.state.hub.members_changed(room.name)
@@ -1248,6 +1278,8 @@ class AgentService:
         engine's: status, confirmations, and (only where the harness's table allows it, §7.3) context,
         or a Stop hook held until a message comes."""
         inert: dict[str, Any] = {"out": None}
+        if self.state.draining:
+            return {"out": None, "ended": "restarting"}
         if harness not in HOOK_EVENTS or event not in HOOK_EVENTS[harness]:
             return inert
         if self.engine.adapter_for(harness).test_only and not self.state.test_mode:

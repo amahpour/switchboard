@@ -1127,6 +1127,10 @@ class Engine:
         """Open parks of this session resolve with no continuation (``{}``)."""
         return [self._close_sink(s, None, reason) for s in self.sinks.parks_for(participant_id)]
 
+    def close_for_restart(self) -> list[Action]:
+        """End open waits and parks without offering or confirming any message (§15)."""
+        return [self._close_sink(s, {"status": "restarting"}, "restart") for s in self.sinks.open_sinks()]
+
     def _close_sink(self, sink: Sink, result: dict[str, Any] | None, reason: str) -> Action:
         s = self.sinks.close(sink.id, result, reason)
         if s is not None:
