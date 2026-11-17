@@ -35,6 +35,8 @@ def test_open_creates_full_schema_with_wal(tmp_path: Path) -> None:
         "memberships_active_name",
         "memberships_active_part",
         "messages_room_id",
+        "messages_agent_ts",
+        "batches_wake_created",
         "deliveries_open",
         "events_kind_ts",
         "room_board_changes_room",

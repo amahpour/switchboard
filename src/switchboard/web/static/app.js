@@ -79,6 +79,10 @@
     rooms: new Map(),
     ncOpen: false,     // the Members group "Not connected (n)" is unfolded (#814)
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
+    usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
+    usageData: null,   // the last GET /api/usage
+    usageError: null,  // a failed refresh keeps usageData and says why
+    usageSeq: 0,       // only the newest answer is drawn
     homeData: null,    // the last GET /api/home
     homeSeq: 0,        // only the newest answer is applied
     homeTimer: null,
@@ -546,6 +550,7 @@
     plus: 'M8 3v10M3 8h10',
     // the Home page (#626): a house; and a board's three columns, for a review-board card
     home: 'M2.5 7.5 8 3l5.5 4.5M4 6.7V13h8V6.7M6.7 13V9.5h2.6V13',
+    usage: 'M3 13V8M8 13V3M13 13V6M2 13.5h12',  // three bars: Usage (#818)
     board: rr(2, 2.5, 12, 11, 1.5) + 'M6 2.5v11M10 2.5v11',
     archive: 'M2 3.5h12v3H2zM3 6.5v6h10v-6M6.5 9h3',
     server: rr(2.5, 3, 11, 4.5, 1.2) + rr(2.5, 8.5, 11, 4.5, 1.2) + 'M5 5.25h.01M5 10.75h.01',
@@ -1614,7 +1619,10 @@
   function updateTitle() {
     let unread = 0;
     state.rooms.forEach(function (r) { if (r.name !== state.active) unread += r.unread; });
-    const base = state.searchOn ? 'switchboard — Search' : state.home ? 'switchboard — Home' : state.active ? 'switchboard — ' + state.active : 'switchboard';
+    const base = state.searchOn ? 'switchboard — Search'
+      : state.usage ? 'switchboard — Usage'
+      : state.home ? 'switchboard — Home'
+      : state.active ? 'switchboard — ' + state.active : 'switchboard';
     document.title = (unread ? '(' + unread + ') ' : '') + base;
     const r = activeRoom();
     const heading = $('room-title');
@@ -1623,6 +1631,13 @@
       $('room-sub').textContent = searchStatusText();
       const g = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
       if (g) g.setAttribute('d', SEARCH_PATH);
+      return;
+    }
+    if (state.usage) {
+      heading.textContent = 'Usage';
+      $('room-sub').textContent = 'Today and the last 7 days';
+      const usageGlyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
+      if (usageGlyph) usageGlyph.setAttribute('d', ICONS.usage);
       return;
     }
     if (state.home) {
@@ -2217,6 +2232,7 @@
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
     if (state.home) leaveHome();
+    if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
     if (state.active !== name) {
@@ -7432,6 +7448,7 @@
 
   function showHome() {
     if (!state.rooms.size) return;
+    if (state.usage) leaveUsage();
     if (state.searchOn) closeSearch(false);
     if (state.around) { state.around = null; resetSearch(); }
     const was = state.home;
@@ -8593,6 +8610,7 @@
 
   function searchFocusBack() {
     if (state.active) $('input').focus();
+    else if (state.usage) $('usage').focus();
     else if (state.home) $('home').focus();
   }
 
@@ -9092,8 +9110,12 @@
     if (names.length) hello(names);
     if (!state.active && !state.home && state.rooms.size) {
       // a link to a room (#build) opens that room; opening switchboard itself opens Home (#626)
-      const want = '#' + decodeURIComponent(location.hash.replace(/^#/, ''));
+      // #/usage is the usage page. A room may be named #usage (its link is #usage), so the page
+      // takes the slash and a room of that name still opens.
+      const raw = decodeURIComponent(location.hash.replace(/^#/, ''));
+      const want = '#' + raw;
       if (state.rooms.has(want)) selectRoom(want);
+      else if (raw === '/usage') showUsage();
       else showHome();
     } else {
       if (pruned) history.replaceState(null, '', location.pathname);  // nothing left to point at
@@ -9106,6 +9128,180 @@
     }
     if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
     return fresh;
+  }
+
+  // ----------------------------------------------------------- usage (#818, §61)
+  // A read of stored rows when the page is opened. Clicking Usage again asks once more.
+  // Nothing here refetches on a room frame: the numbers are a window, not a live meter.
+  function leaveUsage() {
+    if (!state.usage) return;
+    state.usage = false;
+    state.usageSeq += 1;  // an answer still on its way is not drawn
+    $('app').classList.remove('usage-open');
+    $('usage').classList.add('hidden');
+    unsetAttr($('usage-nav'), 'aria-current');
+  }
+
+  function zoneOffset() {
+    // minutes east of UTC. A value the page cannot read is UTC, which the broker also
+    // uses for an offset it does not recognize.
+    try {
+      if (typeof Date !== 'function') return 0;
+      const m = new Date().getTimezoneOffset();
+      if (typeof m !== 'number' || !Number.isFinite(m)) return 0;
+      const east = -Math.trunc(m);
+      if (east < -840 || east > 840) return 0;
+      return east;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  function whole(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.floor(n);
+  }
+
+  function countLine(prefix, wakes, posts) {
+    return prefix + ': ' + plural(wakes, 'wake', 'wakes') + ', ' + plural(posts, 'message', 'messages');
+  }
+
+  function usageJump(name) {
+    const shown = String(name).replace(/^#/, '');
+    if (!state.rooms.has(name)) return el('span', 'usage-name', shown);
+    const b = btn('usage-jump', shown);
+    b.setAttribute('data-room', name);
+    b.setAttribute('aria-label', 'Open ' + name);
+    b.addEventListener('click', function () {
+      setNav(false);
+      selectRoom(name);
+    });
+    return b;
+  }
+
+  function usageCounts(row) {
+    const today = el('span', 'usage-counts', countLine('Today', whole(row.wakes_today), whole(row.posts_today)));
+    const week = el('span', 'usage-counts', countLine('7 days', whole(row.wakes_week), whole(row.posts_week)));
+    return [today, week];
+  }
+
+  function renderUsage() {
+    const root = $('usage');
+    root.replaceChildren();
+    const lead = el('p', 'usage-lead');
+    lead.textContent = 'Wakes handed to each agent, and the messages they posted, today and over the last 7 days. '
+      + 'Today is included in the 7 days. The budget is the wakes the room has left this hour. '
+      + 'This page does not measure tokens or dollars.';
+    root.append(lead);
+    const data = state.usageData;
+    if (!data) {
+      const p = el('p', 'usage-none', state.usageError || 'Loading…');
+      p.setAttribute('role', 'status');
+      root.append(p);
+      return;
+    }
+    if (state.usageError) {
+      const p = el('p', 'usage-none', state.usageError);
+      p.setAttribute('role', 'status');
+      root.append(p);
+    }
+    root.append(el('h2', 'usage-h', 'Rooms'));
+    root.append(el('p', 'usage-note', 'Noisiest first. The budget is what is left this hour.'));
+    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    if (!rooms.length) root.append(el('p', 'usage-none', 'No open rooms.'));
+    else {
+      const list = el('ol', 'usage-list');
+      list.id = 'usage-rooms';
+      for (const room of rooms) {
+        const name = typeof room.name === 'string' ? room.name : '';
+        const li = el('li');
+        const row = el('div', 'usage-row');
+        const who = el('div', 'usage-name');
+        who.append(usageJump(name));
+        const budget = el('span', 'usage-budget', whole(room.budget_remaining) + ' of '
+          + whole(room.budget_per_hour) + ' left this hour');
+        row.append(who, budget, ...usageCounts(room));
+        const ran = whole(room.exhausted_week);
+        if (ran > 0) {
+          row.append(el('p', 'usage-ranout', ran === 1
+            ? 'The budget ran out once in these 7 days.'
+            : 'The budget ran out ' + ran + ' times in these 7 days.'));
+        }
+        li.append(row);
+        list.append(li);
+      }
+      root.append(list);
+    }
+    root.append(el('h2', 'usage-h', 'Agents'));
+    root.append(el('p', 'usage-note', 'Noisiest first. One row per agent in a room.'));
+    const agents = Array.isArray(data.agents) ? data.agents : [];
+    if (!agents.length) {
+      root.append(el('p', 'usage-none', 'No agent was woken, and none posted, in the last 7 days.'));
+    } else {
+      const list = el('ol', 'usage-list');
+      list.id = 'usage-agents';
+      for (const agent of agents) {
+        const li = el('li');
+        const row = el('div', 'usage-row');
+        const who = el('div', 'usage-name', label(agent.name || '', agent.host || '')
+          + ' · ' + harnessOf(agent.harness)[1]);
+        const room = el('div', 'usage-name');
+        room.append(usageJump(typeof agent.room === 'string' ? agent.room : ''));
+        row.append(who, room, ...usageCounts(agent));
+        li.append(row);
+        list.append(li);
+      }
+      root.append(list);
+    }
+  }
+
+  function showUsage() {
+    if (!state.rooms.size) return;
+    if (state.searchOn) closeSearch(false);
+    if (state.around) { state.around = null; resetSearch(); }
+    if (state.inspect) closeInspector(false);
+    closePop();
+    if (state.home) leaveHome();
+    if (state.active) markRoomSeen(state.rooms.get(state.active), false);
+    state.usage = true;
+    closeWhiteboard();
+    state.active = null;
+    state.boardOpen = false;
+    state.boardSel = null;
+    $('app').classList.add('usage-open');
+    $('app').classList.remove('sheet-open');
+    $('app').classList.remove('home-open');
+    $('usage').classList.remove('hidden');
+    if (location.hash !== '#/usage') history.replaceState(null, '', '#/usage');
+    renderTabs();
+    renderLog();
+    renderBuddies();
+    renderStatus();
+    renderBoard();
+    updateTitle();
+    unsetAttr($('home-nav'), 'aria-current');
+    $('usage-nav').setAttribute('aria-current', 'page');
+    renderUsage();
+    loadUsage();
+    setNav(false);
+  }
+
+  async function loadUsage() {
+    const seq = ++state.usageSeq;
+    let data;
+    try {
+      data = await api('GET', '/api/usage?offset=' + encodeURIComponent(String(zoneOffset())));
+    } catch (e) {
+      if (seq !== state.usageSeq || !state.usage) return;
+      state.usageError = String((e && e.message) || 'Could not load usage');
+      renderUsage();
+      return;
+    }
+    if (seq !== state.usageSeq || !state.usage) return;
+    state.usageData = data;
+    state.usageError = null;
+    renderUsage();
   }
 
   async function boot() {
@@ -9123,6 +9319,11 @@
       setNav(false);
       showHome();
       $('home').focus();
+    });
+    $('usage-nav').addEventListener('click', function () {
+      setNav(false);
+      showUsage();
+      $('usage').focus();
     });
     keepLogPinned();
     try {

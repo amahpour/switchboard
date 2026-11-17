@@ -4,4 +4,4 @@
 
 ### Upgrading
 
-- Schema 53 adds a small table of say retry receipts (the number skips 52, which another change takes). The database is backed up first, as for any schema change.
+- Schema 53 adds a small table of say retry receipts. The database is backed up first, as for any schema change.

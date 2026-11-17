@@ -3345,6 +3345,83 @@ class Store:
                 (state, self.clock.now(), *fields.values(), item_id),
             )
 
+    # ------------------------------------------------------- usage (§61, #818)
+    # A read of the rows that already exist: wake batches, agent chat, and the times the
+    # budget ran out. Nothing is written, and a wake the budget never sent is not a row.
+    def usage_wakes(
+        self, room_ids: Sequence[int], *, since: float, today: float, until: float
+    ) -> list[sqlite3.Row]:
+        """Wake batches created in ``[since, until]``, per agent in those rooms.
+
+        ``today`` is how many of them fall on ``[today, until]``; ``week`` is the whole window.
+        ``kind='wake'`` only (§8.3): a priority batch and a pull are not wakes, whatever their state.
+        ``batches_wake_created`` (schema 52) serves ``kind='wake'`` and the ``created_at`` bounds,
+        so a page open reads the window and not every batch ever stored.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        return list(
+            self.con.execute(
+                "SELECT m.room_id AS room_id, m.screen_name AS name, p.harness AS harness,"
+                " p.host AS host,"
+                " SUM(CASE WHEN b.created_at >= ? THEN 1 ELSE 0 END) AS today, COUNT(*) AS week"
+                " FROM batches b"
+                " JOIN memberships m ON m.id = b.membership_id"
+                " JOIN participants p ON p.id = m.participant_id"
+                " WHERE b.kind = 'wake' AND b.created_at >= ? AND b.created_at <= ?"
+                f" AND m.room_id IN ({marks})"
+                " GROUP BY m.room_id, m.screen_name, p.harness, p.host",
+                (today, since, until, *ids),
+            )
+        )
+
+    def usage_posts(
+        self, room_ids: Sequence[int], *, since: float, today: float, until: float
+    ) -> list[sqlite3.Row]:
+        """Agent chat posted in ``[since, until]``, per sender. A person's message, a notice and a
+        call line are not an agent's post. ``today`` and ``week`` are the same split as ``usage_wakes``.
+        ``messages_agent_ts`` (schema 52) serves ``kind``, ``sender_kind``, ``room_id`` and the
+        ``ts`` bounds, so the read does not walk every message of the room."""
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        return list(
+            self.con.execute(
+                "SELECT room_id AS room_id, sender_name AS name,"
+                " COALESCE(sender_harness, '') AS harness, COALESCE(sender_host, '') AS host,"
+                " SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS today, COUNT(*) AS week"
+                " FROM messages"
+                " WHERE kind = 'chat' AND sender_kind = 'agent' AND ts >= ? AND ts <= ?"
+                f" AND room_id IN ({marks})"
+                " GROUP BY room_id, sender_name, COALESCE(sender_harness, ''),"
+                " COALESCE(sender_host, '')",
+                (today, since, until, *ids),
+            )
+        )
+
+    def usage_exhausted(self, room_ids: Sequence[int], *, since: float, until: float) -> dict[int, int]:
+        """How many times each room recorded ``budget_exhausted`` in ``[since, until]``.
+
+        That event is written once in a window when the budget runs out (§8.3). It is not a count
+        of the wakes that were held back: those are never stored.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        rows = self.con.execute(
+            "SELECT room_id AS room_id, COUNT(*) AS n FROM events"
+            " WHERE kind = 'budget_exhausted' AND room_id IS NOT NULL"
+            " AND ts >= ? AND ts <= ?"
+            f" AND room_id IN ({marks})"
+            " GROUP BY room_id",
+            (since, until, *ids),
+        )
+        return {int(r["room_id"]): int(r["n"]) for r in rows}
+
     # ------------------------------------------------------------------ report (§12.5, §12.6; #167)
     # Read-only queries behind `switchboard report` (report.py), on its own query-only
     # connection (``db.connect_query_only``), which the report never migrates: a report must

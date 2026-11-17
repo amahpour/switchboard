@@ -35,6 +35,7 @@ nav = [
   { "Guides" = [
     { "Home" = "guide/home.md" },
     { "Agents" = "guide/agents.md" },
+    { "What agents cost" = "guide/usage.md" },
     { "Search" = "guide/search.md" },
     { "Meetings" = "guide/meetings.md" },
     { "Meetings: reference" = "guide/meetings-reference.md" },
