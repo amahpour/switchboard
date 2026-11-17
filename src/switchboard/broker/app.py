@@ -37,6 +37,7 @@ from switchboard.broker.passkeys import (
 )
 from switchboard.broker.passwords import SignInLimiter
 from switchboard.broker.peer import AllowAllHumans, PeerPolicy, ProcessPeerPolicy
+from switchboard.broker.restarts import RestartGate
 from switchboard.broker.reviews import Boards
 from switchboard.broker.room_board import RoomBoard
 from switchboard.broker.rpc import RpcServer
@@ -85,6 +86,8 @@ class BrokerState:
     backups: Backups | None = None
     files_swept: float = 0.0  # when the retention sweep last ran (broker clock)
     shutdown_cb: Callable[[], None] | None = None
+    draining: bool = False
+    restart_event: asyncio.Event = field(default_factory=asyncio.Event)
     recovery: dict[str, int] = field(default_factory=dict)
     tasks: list[asyncio.Task[Any]] = field(default_factory=list)
     # the owner of a hosted broker (DESIGN.md §31): passkeys work behind a public URL that is a
@@ -161,6 +164,15 @@ class BrokerState:
             self.shutdown_cb()
         else:  # pragma: no cover
             log.warning("shutdown requested but no shutdown callback is set")
+
+    def begin_shutdown(self) -> None:
+        """End waits before draining HTTP, then store every accepted queued say (§15, #823)."""
+        if self.draining:
+            return
+        self.draining = True
+        self.restart_event.set()
+        self.runner.execute(self.engine.close_for_restart())
+        self.agents.flush_queued_says()
 
 
 def default_peer_policy(cfg: Config, test_trust_uds: bool = False) -> PeerPolicy:
@@ -308,6 +320,7 @@ def create_app(
         try:
             yield
         finally:
+            state.begin_shutdown()  # also covers callers that drive the lifespan without BrokerServer
             if state.backups is not None:
                 await state.backups.close()
             # a live call leaves the meeting before anything else is torn down (§52)
@@ -351,6 +364,7 @@ def create_app(
     web.install(app, state)
     state.agent_http = agent_http.install(app, state)
     call_http.install(app, state)
+    app.add_middleware(RestartGate, state=state)
     # Added last = outermost: SecurityHeaders wraps the guard's own 421/403 replies.
     app.add_middleware(HostOriginGuard, origin=web_origin)
     app.add_middleware(SecurityHeaders, origin=web_origin)
