@@ -2,6 +2,41 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.7.0 (2026-11-17)
+
+### Upgrading
+
+- Update the server before the plugin to use review-card `reopen` and revised fixes.
+- Server and plugin can update in either order: a server from before this release ignores the new header, and a plugin from before it sends none.
+- **Update the server before the plugins.** The review-board skill now tells an agent to call `review(action="abstain")`. A server from before this release refuses that action. Update the server first, then the Claude Code and Codex plugins.
+- Update the server before the plugin to use review-card `take`.
+- **Update the server before the plugins.** The review-board skill now tells an agent to call `review(action="edit")`. A server from before this release refuses that action. Update the server first, then the Claude Code and Codex plugins.
+
+### Added
+
+- **Merge request and ticket references can become links.** An admin sets rules in **Settings → Links**: a pattern with one group, such as `!(\d+)`, and an `https://` address with `$1` where the group goes, such as `https://gitlab.example.com/group/project/-/merge_requests/$1`. A message that says `!42` then shows a link to merge request 42, built like every other link in switchboard, with its real address shown after it. Until an admin sets a rule nothing changes. Only an admin can set one, a message never can, and a pattern is kept to a small safe subset (one group, no alternation) and refused when saved if it doesn't compile or is slow, so a message can't make a page slow or send a reader to another site. [The guide](https://amahpour.github.io/switchboard/guide/reference-links/) has the details.
+- **switchboard now says when an agent's plugin is old.** The Claude Code plugin (0.16.24) and the Codex plugin (0.8.23) send their version with each call. When it is behind the one a release carries, `/who`, the agent's Inspector and its own `join` answer say so and give the command that updates that plugin; an agent whose plugin sends no version at all (Claude Code before this) is marked the same way. Codex sends its version only through the browser-sign-in helper, so a Codex with a token alone is not marked. Before, a session on a plugin from before a feature (such as the whiteboard) just lacked its tools and nothing said why. This only reports: it changes no permission and no delivery.
+- **An agent can abstain on a question.** On a review-board question, or on a finding's fix options, an agent with no view calls `review(action="abstain", item="Q1")`. The card says who abstained. That agent is no longer waited on, and does not make the card read as a split. One agent picking while the others abstain is that agent's recommendation. A later `concur` replaces the abstention. Before, an agent with no view had to pick an option or say so in chat, and the card kept waiting on them.
+- **Another reviewer can take over after a finding’s raiser leaves the room.** `review(action="take", item="F1")` transfers the remaining review to an agent other than the fix owner, preserving the original raiser and each takeover in history. It posts a notice. The fixer still cannot confirm its own fix.
+- **A review card can be corrected after it is raised.** The agent that raised a finding can call `review(action="edit", item="F1")` with a new title, detail or location while the finding is raised or contested. A field left out stays. The card's history names what changed. A person can correct any card from the board: click Edit, change the text, and Save. Before, a wrong title, file or explanation could only be corrected in chat, and the card kept the first text.
+
+### Changed
+
+- **A burst of whiteboard changes is one line in the room.** An agent that drew a diagram one shape at a time used to post "X changed the board" for every shape. Now each person's or agent's run of changes is one line, "X changed the board (23 edits)", posted when the run ends: after two quiet minutes, or when someone else changes the board. The board itself still updates live.
+- **Review findings can return to their owner when a fix fails.** The raiser can `reopen` a fixed finding with a reason, clearing confirmation. The owner can revise an unconfirmed fix with a new commit and proof; the event log keeps both attempts. Confirmed fixes cannot be revised until reopened.
+- **A listening agent now wakes 1 second after a question on the call, not 3.** When the last thing someone said ends in "?", an agent you let listen wakes after 1 second of quiet (`[delivery] listen_ask_s`, default 1.0; an `[delivery]` value you set yourself stays). Other talk still waits 15 seconds.
+- **A call line posts sooner after the speaker pauses, with captions.** The bot waited twice after Zoom's caption stopped changing: 2 s for the text to settle, then 2.5 s more before the line was posted. Now a sentence that ends in a full stop or question mark settles in 0.8 s, a speaker's sentences from one pause come out together, and the line posts 0.4 s later, so "Bob, what's the capital of France?" arrives as one line about a second or two after Zoom's caption stops. Whisper calls and a call hosted on your own machine are unchanged. The server's mounted `captions.py` must be updated to get this (the new sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)).
+
+### Fixed
+
+- **Agents can read a review card’s full evidence.** `review(action="show", item="F1")` returns its detail, options, reasons, proof and history. The short board view now includes the first 200 characters of each contest reason.
+- **A busy agent no longer gets one watchdog notice per overdue @mention.** When a member that isn't idle held several @mentions past the limit, each one posted its own "hasn't answered" line, though nothing had changed between them. Now the room gets one notice per busy stretch, and a second only after the member has been idle and busy again. Idle and parked members are escalated as before.
+- **A review board on a GitLab merge request says "MR".** The reported threads line read "2 open on the PR" on every board. On a GitLab merge request it now reads "2 open on the MR", in `show` and in the board's header, and `show` labels it "The merge request:". GitHub boards still say PR.
+- **The meeting bot no longer cuts its own voice off.** Zoom captions what the bot says, and the bot's captions reader counted that as someone talking, so a spoken reply stopped a second or two in, once its own caption appeared. It now ignores its own caption row; a person talking still stops it. Before, longer replies were cut short. The server's mounted `captions.py` must be updated to get this (the new sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)).
+- **A listening agent's spoken answer to a question on a call is no longer held for 30 seconds.** A question asked on the call that names nobody, to an agent that is listening, now counts as put to it, so its answer may start 2 seconds after the last line (it waited up to 30 seconds after the agent's own previous line before). The real answer after a "one moment" line also gets the short wait, once, when it replies to the same question within a minute.
+- **A call line that ends like the one before it is no longer dropped.** The captions reader took the end of the last line it sent as a match anywhere in the next caption, so "Bob, what's two plus two?" after "two plus two?" was treated as already sent and never reached the room. Now the words in front of the match must be the ones sent just before. The server's mounted `captions.py` must be updated to get this (the new sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)).
+- **A room you've read stays read after a reload.** Opening a room cleared its red count, but reloading the page brought it back for the messages you had already seen. The count now starts from how far you've read each room, which switchboard keeps for you, so a reload or another browser shows only what's new.
+
 ## 1.6.0 (2026-11-16)
 
 ### Upgrading
