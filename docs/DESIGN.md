@@ -3685,6 +3685,18 @@ The page posts the mark with the newest id it holds for a room (`r.lastId`) when
 
 ---
 
+### 55.9 Browser notifications, level 1 (#723)
+
+The maintainer's 2026-11-16 idea on #723 is the browser's own permission prompt as the first line of defense; this is its first level, a page that is open in a background tab. No new server push channel and no service worker: the page already holds what waits on a person (`GET /api/home`'s `waiting`, refreshed by the frames of §55.6) and each room's members (the `members` frame), so the browser's `Notification` is enough. A service worker would be needed only to reach a browser with every tab closed (Web Push, level 2, through the browser vendor's relay: a choice for the person, not a default). Nothing is sent outside the person's own browser, the CSP and the static lint are unchanged, and the broker stores nothing new.
+
+- **Asked from a click.** `Notification.requestPermission()` is called only from the change handler of Settings → Profile → Notifications, never on load (browsers refuse that). The on/off is per person and kept by the broker in one `broker_settings` row (`notify:<person>`, `PUT /api/me/notify` with `{"on": true}`, and `notify` in `GET /api/me`), because the page keeps no storage of its own (the static lint bans `localStorage`). It is not a preference column, so there is no schema change and the preferences allowlist is untouched. The permission itself stays the browser's: another browser asks again, and one that never granted it shows nothing whatever the row says.
+- **What notifies.** An item newly in Home's `waiting` (a question card, keyed by room and message; a review board card, keyed by its board and time), and an agent of this person that enters `waiting-approval` (judged against the members the page held before the members frame, so a prompt already open when the tab was reloaded, or a room the page had no members for, is not news; each new prompt is its own item). Its owner is this person, or unknown on a broker with one person. The first Home list after the page opens is the starting point: what already waited is not news.
+- **Only while hidden, once, and never the words.** `document.hidden` must be true. Each key notifies once per page. The title says who and where ("scout needs you in #build"); there is no body of the message, because what an agent wrote is untrusted text and a notification can be seen by anyone near the screen.
+- **A click opens the item:** it focuses the window and goes to the room, at the message for a question.
+- **Not in this level:** the later channels (email, a webhook, a text), "got it" ending them, a notification for an agent's request to reach its person, and any push with the tab closed.
+
+Tests: `tests/e2e/test_notifications_ui.py` with the browser's `Notification` stubbed.
+
 ## 56. A room's whiteboard (#656)
 
 One whiteboard per room, shared by whoever can see the room. This section covers storage, merge, the agent tool and the sandboxed drawing pane (#657). Mermaid conversion and the storyboard play view are §56.9 (#658). Nothing here fetches a service or runs a browser: the elements are Excalidraw's own shape, the page renders them, and the broker builds agent shapes itself.
