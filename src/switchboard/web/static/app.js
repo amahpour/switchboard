@@ -1521,8 +1521,10 @@
     if (r.msgs.length > MAX_LINES) r.msgs.splice(0, r.msgs.length - MAX_LINES);
     if (r.name !== state.active) {
       // a person's message counts only when it's another person's @mention of you (#418) or
-      // @humans (#138); otherwise a person's messages are left out, as they were before (#109)
-      if (m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m))) {
+      // @humans (#138); otherwise a person's messages are left out, as they were before (#109).
+      // What this person already read (the broker's mark, §55.8) never counts again.
+      const unseen = m.id > (r.seenId || 0);
+      if (unseen && m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
         else r.quiet = true;                     // other agent chatter: a quiet marker, no number
       }
@@ -7288,7 +7290,7 @@
     r.seenSent = upto;
     const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
     state.seenWait.add(p);
-    p.then(function () {}, function () { if (r.seenSent === upto) r.seenSent = 0; }).then(function () {
+    p.then(function () { r.seenId = Math.max(r.seenId || 0, upto); }, function () { if (r.seenSent === upto) r.seenSent = 0; }).then(function () {
       state.seenWait.delete(p);
       if (refresh && state.homeData && !state.home) loadHome();
     });
@@ -8764,6 +8766,11 @@
       r.pins = Array.isArray(l.pins) ? l.pins : [];  // the room's pinned messages (#292)
       r.private = !!l.private;  // seen only by its people (§44)
       r.people = Array.isArray(l.people) ? l.people : null;
+      // how far this person has read the room, on any browser (§55.8): older messages the history replays
+      // don't count toward the badge again, and the page doesn't post a mark it already has
+      const seen = typeof l.seen === 'number' && l.seen > 0 ? l.seen : 0;
+      r.seenId = Math.max(r.seenId || 0, seen);
+      r.seenSent = Math.max(r.seenSent || 0, seen);
     }
     const was = state.active;
     const pruned = was !== null && gone.has(was);  // a replaced active room counts as pruned

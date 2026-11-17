@@ -1804,12 +1804,14 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     async def list_rooms(request: Request) -> Response:
         if session(request) is None:
             return unauthorized()
-        return _ok(
-            {
-                "rooms": state.service.rooms(viewer(request)),
-                "closed": len(state.service.closed_room_dicts(viewer(request))),
-            }
-        )
+        rooms = state.service.rooms(viewer(request))
+        # how far this person has read each room (§55.8): the page counts its red badge from there, so a
+        # reload doesn't bring back what they already opened
+        w = who(request)
+        marks = state.store.home_seen_marks(state.service.person_key(w.person_id)) if w is not None else {}
+        for r in rooms:
+            r["seen"] = marks.get(r["id"], 0)
+        return _ok({"rooms": rooms, "closed": len(state.service.closed_room_dicts(viewer(request)))})
 
     # The home page (§55, #626): what waits on this person across their rooms, what got done since
     # they last looked, and what is live. A read of what is stored, for the one person asking;

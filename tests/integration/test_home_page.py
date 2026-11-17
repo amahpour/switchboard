@@ -283,6 +283,25 @@ def test_a_seen_mark_is_the_signed_in_persons_own_for_a_room_they_can_see(
     assert rows == 1  # bob's one mark in #build; the probe of #secret stored nothing
 
 
+def test_the_room_list_carries_each_persons_own_seen_mark(
+    team: tuple[InProcBroker, Browser, Browser],
+) -> None:
+    """``/api/rooms`` gives each room the signed-in person's mark, so a reloaded page counts its badge from
+    there and not from the replayed history; 0 where they never read it. Fails while the listing has no
+    mark (the badge came back after a reload), or shows one person's mark to another."""
+    b, alice, bob = team
+    q = agent_says(b, "#build", "@alice look?", ["alice"])
+
+    def seen(who: Browser) -> int:
+        rooms = {r["name"]: r for r in who.get("/api/rooms").json()["rooms"]}
+        return int(rooms["#build"]["seen"])
+
+    assert seen(alice) == seen(bob) == 0
+    assert alice.post("/api/rooms/build/seen", {"id": q}).status_code == 200
+    assert seen(alice) == q
+    assert seen(bob) == 0
+
+
 def seed_board(b: InProcBroker) -> int:
     def run() -> int:
         store = b.state.store
