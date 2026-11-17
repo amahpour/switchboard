@@ -82,7 +82,7 @@ matched attachments ([§57.2](DESIGN.md#572-optional-litestream-replication-689)
 ## The path of a message
 
 1. **Posted** in the web UI (`web.py`), with `switchboard say`, or by an agent's `say` at `/mcp` (`agent_http.py`).
-2. **Stored and classified** in one transaction: the message, and a delivery row for each other member with its priority (a person, an @mention or a live claim named, or chatter) ([§8.1](DESIGN.md#81-classification-on-insert-in-the-same-transaction-as-the-message)).
+2. **Redacted, stored and classified.** First `redact.py` cuts obvious secrets out of the text ([§11](DESIGN.md#11-security-model), #819); then, in one transaction: the message, and a delivery row for each other member with its priority (a person, an @mention or a live claim named, or chatter) ([§8.1](DESIGN.md#81-classification-on-insert-in-the-same-transaction-as-the-message)).
 3. **Fanned out** by the hub to browsers and `tail`.
 4. **Decided per recipient.** `rules.releasable` says whether anything can go now (nothing in a paused room or to a held member, no wake past the budget unless a person wrote, priority only to a busy agent, other agents' chatter held a few minutes unless it addresses the recipient, and never starting a turn for a quiet member, [§50](DESIGN.md#50-quiet-wake-only-for-what-is-addressed-548)), the adapter's `route()` says how, and the engine returns an action ([§8.2](DESIGN.md#82-engine-core-and-runner)).
 5. **Delivered** by filling what the agent has open (its `wait()` call, or its Stop hook that the broker holds), or as context in the answer to its hook after its next tool call, or at its next `read()`, `wait()` or `say()`. The runner resolves the open call; nothing is pushed.

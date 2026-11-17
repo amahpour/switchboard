@@ -6357,7 +6357,7 @@
     const path = '/api/rooms/' + encodeURIComponent(r.slug);
     try {
       if (text.startsWith('//')) {
-        await api('POST', path + '/say', { text: text.slice(1) });
+        noteRedacted(await api('POST', path + '/say', { text: text.slice(1) }));
       } else if (text.startsWith('/')) {
         const verb = text.split(/\s+/)[0];
         const res = await api('POST', path + '/command', { text: text });
@@ -6374,7 +6374,7 @@
       } else {
         const body = { text: text };
         if (opts && opts.reply_to !== undefined) body.reply_to = opts.reply_to;
-        await api('POST', path + '/say', body);
+        noteRedacted(await api('POST', path + '/say', body));
         // "/catchup" or "/review" inside a sentence is only text to the agents: say how to run it
         const inline = /(^|\s)\/(catchup|review)\b/i.exec(text);
         if (inline && inline[2].toLowerCase() === 'review') renderLocal('/review', false, REVIEW_HINT);
@@ -6385,6 +6385,12 @@
       renderLocal(String(e.message || e), true);
       return false;
     }
+  }
+
+  // #819: the broker cut an obvious secret out of what was just posted; say so under it (the kinds, never the value)
+  function noteRedacted(res) {
+    if (res && Array.isArray(res.redacted) && res.redacted.length && typeof res.note === 'string')
+      renderLocal('Posted, with a secret removed', false, res.note);
   }
 
   // queue a send behind the ones in flight; resolves to whether it went out
