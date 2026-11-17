@@ -83,7 +83,14 @@ def test_one_session_is_listed_once_with_each_room_it_is_in_and_its_state(
         "claude",
         False,
     )
-    assert got["agent_counts"] == {"waiting": 0, "working": 1, "idle": 1, "offline": 0, "stuck": 0}
+    assert got["agent_counts"] == {
+        "waiting": 0,
+        "working": 1,
+        "idle": 1,
+        "offline": 0,
+        "not_connected": 0,
+        "stuck": 0,
+    }
 
 
 def test_a_person_never_sees_an_agent_that_is_only_in_rooms_they_cannot_see(
@@ -99,7 +106,14 @@ def test_a_person_never_sees_an_agent_that_is_only_in_rooms_they_cannot_see(
     assert names(got) == ["both-1"] and got["agents_total"] == 1
     assert [r["room"] for r in got["agents"][0]["rooms"]] == ["#build"]
     assert "#secret" not in str(got) and "hidden-1" not in str(got) and "private plan" not in str(got)
-    assert got["agent_counts"] == {"waiting": 0, "working": 0, "idle": 1, "offline": 0, "stuck": 0}
+    assert got["agent_counts"] == {
+        "waiting": 0,
+        "working": 0,
+        "idle": 1,
+        "offline": 0,
+        "not_connected": 0,
+        "stuck": 0,
+    }
     mine = overview(admin)
     assert sorted(names(mine)) == ["both-1", "hidden-1"]
     assert [r["room"] for r in next(a for a in mine["agents"] if a["name"] == "both-1")["rooms"]] == [
@@ -164,3 +178,31 @@ def test_an_agent_that_left_the_room_leaves_the_overview(
 
     b.on_loop(leave)
     assert overview(bob)["agents"] == []
+
+
+def test_a_session_nobody_has_heard_from_is_shown_as_not_connected_with_when_it_was_last_heard(
+    team: tuple[InProcBroker, Browser, Browser, FakeClock],
+) -> None:
+    """The engine's rule for a session that vanished (no wait open, nothing heard for 30 minutes idle or 2
+    hours busy, §49.14) shows here as its own state, sorted last, with the time it was last heard, and is
+    never "possibly stuck" however long a busy one was quiet. Fails if a vanished session still reads as
+    working or idle, or the time is the time it changed state."""
+    b, admin, bob, clock = team
+    gone = agent(b, "gone-idle", ["#build"], status="idle")
+    away = agent(b, "gone-busy", ["#build"], status="busy")
+    here = agent(b, "here", ["#build"], status="idle")
+    heard = clock.now()
+    clock.advance(2 * 3600 + 60)
+    b.on_loop(lambda: b.state.store.update_participant(gone, last_seen=heard + 60))  # the later sign
+    b.on_loop(lambda: b.state.store.update_participant(away, last_seen=heard))
+
+    b.on_loop(lambda: b.state.store.update_participant(here, last_seen=clock.now(), status_at=clock.now()))
+    got = overview(bob)
+    assert [(a["name"], a["state"]) for a in got["agents"]] == [
+        ("here", "idle"),
+        ("gone-idle", "not_connected"),  # heard last, so first among them
+        ("gone-busy", "not_connected"),
+    ]
+    by = {a["name"]: a for a in got["agents"]}
+    assert by["gone-idle"]["since"] == heard + 60 and not by["gone-busy"]["stuck"]
+    assert got["agent_counts"]["not_connected"] == 2 and got["agent_counts"]["stuck"] == 0

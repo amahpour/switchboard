@@ -392,6 +392,13 @@ def test_the_agents_overview_lists_each_session_marks_a_stuck_one_links_its_room
     expect(row).to_contain_text("porting the cart totals")
     expect(row.locator(".agent-stuck")).to_contain_text("Possibly stuck")
     expect(row.locator(".agent-room")).to_have_count(1)
+    vanished = f"vanished-{tag}"
+    plant_agent(w, w.build, vanished, "idle", quiet_for_s=3 * 3600)  # nobody has heard from it for 3 hours
+    page.reload()
+    expect(page.locator("#home .agent-row", has_text=vanished).locator(".agent-chip")).to_have_text(
+        "Not connected"
+    )
+    expect(page.locator("#home .agent-row", has_text=vanished)).to_contain_text("last heard")
     both = page.locator("#home .agent-row", has_text=two)
     expect(both).to_have_count(1)  # one session, one row
     expect(both.locator(".agent-room")).to_have_count(2)  # and a button for each room

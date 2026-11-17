@@ -71,6 +71,8 @@ TURN_BOUNDARY_EVENTS = frozenset({"UserPromptSubmit", "Stop", "SessionStart", "S
 CONFIRMING_EVENTS = frozenset({"PostToolUse", "UserPromptSubmit"})
 MAX_READ = 50
 WAIT_PRE_FRESH_S = 30.0  # a wait()'s PreToolUse is at most this much older than the call
+TOUCH_MIN_S = 15.0  # a call or a wait re-stamps ``last_seen`` at most this often (#814)
+NC_SWEEP_S = 30.0  # how often the tick looks for sessions that became not connected (#814)
 # statuses a stop continuation (or a Devin re-arm) set; undone if no hook ever follows
 STOP_BUSY_SRCS = frozenset({"stop:followup", "stop:block", "stop:rearm"})
 TIMER_EXPIRIES = frozenset({"no_ack", "no_hook", "backstop"})  # expiries no hook caused
@@ -146,6 +148,11 @@ class Engine:
         # sessions the tick then took offline for it, which any later hook brings back
         self.wait_drops: dict[int, float] = {}
         self.gone_by_drop: set[int] = set()
+        # Not connected (#814, §49.14): the sessions the last sweep found with no wait open and nothing
+        # heard for too long, so a change shows in Members without a message to carry it; and when the
+        # sweep last ran. Memory only: the state itself is worked out from stored times and the open sinks.
+        self.not_connected: set[int] = set()
+        self.nc_swept_at: float = 0.0
         # Sessions the broker knows it gave the standing guidance in full (#543): at their join(), or in a
         # full SessionStart reminder. Only these may be given the pointer instead. Memory only, so a
         # restart (every upgrade) makes it unknown and the next reminder is full again; a session that
@@ -1070,6 +1077,7 @@ class Engine:
             conn_id=conn_id,
         )
         self.wait_drops.pop(p.id, None)  # it called wait() again: it is alive (#448)
+        out += self.touch(p)
         pre = self.wait_calls.pop(p.id, None)
         if pre is not None and now - pre[1] <= WAIT_PRE_FRESH_S:
             sink.meta["tool_use_id"] = pre[0]  # the PreToolUse of this very wait() call (Devin)
@@ -1111,6 +1119,7 @@ class Engine:
             conn_id=conn_id,
         )
         self._event("park", participant_id=p.id, secs=round(float(secs), 1))
+        out += self.touch(p)
         out += self.evaluate_participant(p.id)
         return sink, out + self._snap(m2.room_id for m2 in ms)
 
@@ -1118,10 +1127,17 @@ class Engine:
         """Open parks of this session resolve with no continuation (``{}``)."""
         return [self._close_sink(s, None, reason) for s in self.sinks.parks_for(participant_id)]
 
+    def close_for_restart(self) -> list[Action]:
+        """End open waits and parks without offering or confirming any message (§15)."""
+        return [self._close_sink(s, {"status": "restarting"}, "restart") for s in self.sinks.open_sinks()]
+
     def _close_sink(self, sink: Sink, result: dict[str, Any] | None, reason: str) -> Action:
         s = self.sinks.close(sink.id, result, reason)
         if s is not None:
             p = self.store.get_participant(s.participant_id)
+            if p is not None and p.active:
+                # a wait that ends (its round, or its connection) is the last time it was there (#814)
+                self.store.update_participant(p.id, last_seen=self.now())
             if p is not None and self.adapter(p).sink_status and p.status == "idle" and p.active:
                 self.store.set_status(p.id, "busy", "sink")
         return ResolveSink(sink.id, result or {"status": "cancelled"})
@@ -1167,6 +1183,80 @@ class Engine:
         if self.adapter(p).wait_drop_means_gone():
             self.wait_drops[p.id] = self.now()
         return []
+
+    # ================================================== not connected (#814, §49.14)
+    def not_connected_for(self, participant_id: int, status: str, heard_at: float | None) -> float | None:
+        """When the session was last heard from, if it is not connected: no wait open (``rules.
+        not_connected_since`` has the numbers). The one place that joins stored times to the open sinks."""
+        return rules.not_connected_since(
+            status, heard_at, self.sinks.open_for(participant_id) is not None, self.now()
+        )
+
+    def not_connected_since(self, p: Participant) -> float | None:
+        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.status_at, p.last_say_at))
+
+    def touch(self, p: Participant) -> list[Action]:
+        """A call from the session, or a wait of its opening or closing: proof it is there. Stored at most
+        every ``TOUCH_MIN_S`` (a hook already writes ``last_seen``). Clears not connected at once."""
+        now = self.now()
+        was = p.id in self.not_connected
+        if not was and p.last_seen is not None and now - p.last_seen < TOUCH_MIN_S:
+            return []
+        self.store.update_participant(p.id, last_seen=now)
+        return self._connected_again(p.id) if was else []
+
+    def _connected_again(self, participant_id: int) -> list[Action]:
+        self.not_connected.discard(participant_id)
+        return self._snap(m.room_id for m in self.store.participant_memberships(participant_id))
+
+    def not_connected_end_days(self) -> int:
+        """The admin's setting: days not connected before a session is ended; 0 is never."""
+        raw = self.store.setting_get(rules.NOT_CONNECTED_END_KEY)
+        try:
+            return rules.clamp_end_days(int(raw)) if raw is not None else rules.NOT_CONNECTED_END_DAYS
+        except ValueError:
+            return rules.NOT_CONNECTED_END_DAYS
+
+    def not_connected_sweep(self, now: float) -> list[Action]:
+        """Every ``NC_SWEEP_S``: show who just became not connected or connected again (Members changes
+        by time, not by a message), and end a session that has been not connected for the admin's days,
+        the way a kick ends it but without blocking its return: it joins again (#814)."""
+        if now - self.nc_swept_at < NC_SWEEP_S:
+            return []
+        self.nc_swept_at = now
+        out: list[Action] = []
+        end_days = self.not_connected_end_days()
+        current: dict[int, float] = {}
+        for p in self.store.joined_participants():
+            since = self.not_connected_since(p)
+            if since is None:
+                continue
+            if rules.not_connected_expired(since, now, end_days):
+                out += self._end_not_connected(p, end_days)
+                continue
+            current[p.id] = since
+        changed = set(current) ^ self.not_connected
+        self.not_connected = set(current)
+        for pid in sorted(changed):
+            out += self._snap(m.room_id for m in self.store.participant_memberships(pid))
+        return out
+
+    def _end_not_connected(self, p: Participant, days: int) -> list[Action]:
+        out: list[Action] = []
+        self.not_connected.discard(p.id)
+        for m in self.store.end_participant(p.id, "not_connected"):
+            out += self.on_membership_ended(m.id, "not_connected")
+            out.append(
+                Notice(
+                    m.room_id,
+                    "info",
+                    f"{m.screen_name} was removed: not connected for {days} day{'s' if days != 1 else ''}."
+                    " It can join again.",
+                )
+            )
+            out.append(Snapshot(m.room_id))
+        self._event("not_connected_end", participant_id=p.id, days=days)
+        return out
 
     def subagent_tool_ran(self, p: Participant) -> list[Action]:
         """A tool finished inside a subagent of the session (#472). A subagent's hooks settle nothing for
@@ -1398,6 +1488,8 @@ class Engine:
         p = self.store.update_participant(p.id, **upd)
         self.rearm_busy.pop(p.id, None)  # a hook came: the re-arm (if any) was acted on
         self.wait_drops.pop(p.id, None)  # a hook came: whatever dropped its wait() is alive (#448)
+        if p.id in self.not_connected:
+            out += self._connected_again(p.id)  # a hook is the proof it is there (#814)
         revived = p.id in self.gone_by_drop and p.status == "offline"
         self.gone_by_drop.discard(p.id)
         # A hook of a prompt that started a background subagent may be the subagent's
@@ -1877,6 +1969,7 @@ class Engine:
                 self.wait_drops.pop(pid, None)
                 self.gone_by_drop.add(pid)
                 out += self.set_status(wp, "offline", "wait:dropped")
+        out += self.not_connected_sweep(now)
         out += self.watchdog(now)
         for mid in self.store.memberships_with_pending():
             out += self.evaluate(mid)

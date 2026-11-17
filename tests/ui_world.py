@@ -483,6 +483,28 @@ class UIWorld:
 
         b.on_loop(update)
 
+    def set_member_heard(self, room: str, name: str, seconds_ago: float) -> None:
+        """Make a joined agent look last heard from ``seconds_ago`` ago, the way a session that went quiet
+        does (#814): its last-seen, status and say times move back, and the Members frame is published
+        again. It must hold no wait: ``add_agents`` joins scripted agents that wait for nothing."""
+        b = self.broker
+
+        def update() -> None:
+            from switchboard import db
+
+            st = b.state
+            s = st.store
+            member = s.find_member(s.get_room(room).id, name)
+            then = st.clock.now() - seconds_ago
+            with db.tx(s.con):
+                s.con.execute(
+                    "UPDATE participants SET last_seen=?, status_at=?, last_say_at=NULL WHERE id=?",
+                    (then, then, member.participant_id),
+                )
+            st.hub.members_changed(room)
+
+        b.on_loop(update)
+
     def set_member_harness(self, room: str, name: str, harness: str) -> None:
         """Make a scripted agent (joined by ``add_agents``) a session of ``harness``, for the screens only, as
         the seeding does for #build's four: its participant row and the harness its messages carry are

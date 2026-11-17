@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from switchboard.delivery import rules
 from switchboard.envelope import clean
 from switchboard.models import Room
 from switchboard.store import STATUS_LINE_STALE_S
@@ -23,7 +24,7 @@ STUCK_S = (
 LINE_MAX = 200
 AGENTS_MAX = 100
 # what the page shows first: what needs a person, then what may be stuck, then the rest
-STATE_ORDER = {"waiting": 0, "working": 1, "idle": 2, "offline": 3}
+STATE_ORDER = {"waiting": 0, "working": 1, "idle": 2, "offline": 3, "not_connected": 4}
 
 
 def state_of(status: str) -> str:
@@ -69,6 +70,7 @@ def build(state: Any, rooms: list[Room], now: float) -> dict[str, Any]:
         room = by_id.get(row["room_id"])
         if room is not None:
             held.setdefault(row["participant_id"], []).append((room, row))
+    delivery = state.service.delivery
     owners: dict[tuple[str, int], str | None] = {}
     agents: list[dict[str, Any]] = []
     for pid, in_rooms in held.items():
@@ -78,6 +80,15 @@ def build(state: Any, rooms: list[Room], now: float) -> dict[str, Any]:
             owners[key] = state.service.agent_owner(first["host"], room)
         st = state_of(first["status"])
         active = last_active(dict(first), first["status_line_at"])
+        gone = None
+        if delivery is not None:  # the same call the Members pane's rows make (§49.14), for this session
+            gone = delivery.not_connected_for(
+                pid,
+                first["status"],
+                rules.heard_at(first["last_seen"], first["status_at"], first["last_say_at"]),
+            )
+        if gone is not None:
+            st = "not_connected"  # a session that vanished keeps its last state; it is shown as not there
         agents.append(
             {
                 "id": pid,
@@ -86,7 +97,7 @@ def build(state: Any, rooms: list[Room], now: float) -> dict[str, Any]:
                 "owner": owners[key],
                 "host": first["host"],
                 "state": st,
-                "since": first["status_at"],
+                "since": gone if gone is not None else first["status_at"],  # not connected: last heard
                 "line": clean(first["status_line"] or "")[:LINE_MAX],
                 "line_at": first["status_line_at"],
                 "active_at": active,

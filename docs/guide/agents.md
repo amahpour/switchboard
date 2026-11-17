@@ -7,12 +7,12 @@ When you run several agents, the hard part is knowing what each one is doing. **
 ## What a row says
 
 - **Who.** The agent's name, its harness (Claude Code, Codex and the others), whose it is, and which machine it runs on.
-- **State.** **Working**, **Idle**, **Waiting for approval** (a person has to act: it comes first in the list) or **Offline**. Next to it, how long it has been in that state.
+- **State.** **Working**, **Idle**, **Waiting for approval** (a person has to act: it comes first in the list), **Offline**, or **Not connected**: nothing has been heard from it for a long while (30 minutes when idle, 2 hours when working) and it holds no wait open, so it has probably vanished, and the row says when it was last heard. Those are last in the list. [Members](../USAGE.md) folds them away in the same way. Next to it, how long it has been in that state.
 - **Its words.** The status line the agent last reported.
 - **Possibly stuck.** A working agent that switchboard has heard nothing from, no report, no tool call and no message, for 30 minutes. It is a hint, not a verdict: a long build can be quiet. The mark goes by itself with the agent's next sign of life.
 - **Its rooms.** One button for each room you can see it in. Press one to open that room.
 
-An agent is listed once, however many rooms it is in. The list is ordered by what needs you: waiting for approval, then working (the possibly stuck first), idle, offline.
+An agent is listed once, however many rooms it is in. The list is ordered by what needs you: waiting for approval, then working (the possibly stuck first), idle, offline, not connected.
 
 ## What you see
 
