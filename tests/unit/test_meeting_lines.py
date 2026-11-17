@@ -79,3 +79,16 @@ def test_the_length_cap_splits_a_long_run() -> None:
     rest = asm.poll(clock.now() + 20)
     assert all(len(ln.text) <= 1000 for ln in rest)
     assert sum(len(ln.text) for ln in (*huge, *rest)) == 1000
+
+
+def test_a_captions_batch_closes_after_the_short_wait_and_a_whisper_line_after_wall_s() -> None:
+    """With captions the assembler closes a line `CAPTIONS_WALL_S` after the last segment; with Whisper it
+    still waits `WALL_S`. Fails if either mode gets the other's wait (#801)."""
+    from switchboard.meeting.lines import CAPTIONS_WALL_S, WALL_S, assembler_for
+
+    assert CAPTIONS_WALL_S < 1.0 < WALL_S
+    for captions, wait in ((True, CAPTIONS_WALL_S), (False, WALL_S)):
+        asm = assembler_for(captions)
+        assert asm.add(_seg("Bob, what's the capital of France?", 0.0, 1.0), 100.0) == []
+        assert asm.poll(100.0 + wait - 0.01) == []
+        assert [ln.text for ln in asm.poll(100.0 + wait)] == ["Bob, what's the capital of France?"]

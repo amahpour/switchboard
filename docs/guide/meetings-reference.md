@@ -630,7 +630,7 @@ With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven st
 
 - Join waits up to 45 seconds. Leaving waits up to 5.
 - The transcript is fetched every 3 seconds.
-- A line ends after 2.0 seconds of pause in the audio, 2.5 seconds of quiet on the clock, a change of speaker, or 1,000 characters.
+- A line ends after 2.0 seconds of pause in the audio, 2.5 seconds of quiet on the clock, a change of speaker, or 1,000 characters. When the bot reads captions, the quiet on the clock is 0.4 seconds, because the caption reader has already waited for the speaker to pause (about 0.8 seconds after a sentence that ends in a full stop or question mark, 2 seconds otherwise).
 - At most one line a second is posted, and at most 50 wait.
 - The hint list holds at most 100 names.
 - A spoken line is at most 3 sentences and 300 characters. One can be queued or being spoken, after a 1.5-second gap and at least 30 seconds after the previous start. Waiting expires at 60 seconds. Speech may take up to 3 minutes before it is given up.

@@ -34,7 +34,7 @@ from switchboard.meeting.joinly import (
     RESOURCE,
     SPEAK_TIMEOUT_S,
 )
-from switchboard.meeting.lines import Assembler, Line
+from switchboard.meeting.lines import Line, assembler_for
 from switchboard.meeting.links import PLATFORM_LABEL
 from switchboard.meeting.names import hotwords
 from switchboard.meeting.screen import (
@@ -186,7 +186,7 @@ class MeetingBridge:
                 self._mark_live(room_id, captions)
                 live = self._live[room_id] = _Live(client, voices=takes_voice)
                 try:
-                    await self._listen(live, handler, room_id, stop, errors)
+                    await self._listen(live, handler, room_id, stop, errors, captions)
                 finally:
                     self._live.pop(room_id, None)
                     await self._stop_speech(live)
@@ -217,11 +217,17 @@ class MeetingBridge:
             self.state.service.notice_in(room_id, joinly.CAPTIONS_ON_NOTICE)
 
     async def _listen(
-        self, live: _Live, handler: joinly.Updates, room_id: int, stop: asyncio.Event, errors: list[str]
+        self,
+        live: _Live,
+        handler: joinly.Updates,
+        room_id: int,
+        stop: asyncio.Event,
+        errors: list[str],
+        captions: bool = False,
     ) -> None:
         client = live.client
         seen: set[tuple[Any, ...]] = set()
-        asm = Assembler()
+        asm = assembler_for(captions)
         queue: deque[Line] = deque()
         warned = False
         last = 0.0

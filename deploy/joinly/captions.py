@@ -20,6 +20,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 QUIET_S = 2.0  # a caption that has not changed for this long is final (the issue's rule)
+SENTENCE_QUIET_S = 0.8  # ... or this long when it ends a sentence (. ? !): a pause, #801 (a starting point)
+MAX_HOLD_S = 8.0  # finished sentences are held for the speaker's pause no longer than this
 POLL_S = 0.25  # how often the caption box is read
 BOX_GONE_S = 6.0  # a box missing this long after it was on: turn captions on again
 REENABLE_GAP_S = 30.0  # ... and not more often than this
@@ -145,6 +147,7 @@ class Final:
     text: str
     t_start: float
     t_end: float
+    paused: bool = False  # finalised because the speaker paused or left, not because the next sentence began
 
 
 @dataclass
@@ -162,8 +165,9 @@ class FinalRule:
     (``HISTORY_WORDS`` of them) and are never sent again, whether the window scrolled or a sentence without a
     full stop grew. The clock is an argument: no ``time`` call, so a test steps it."""
 
-    def __init__(self, quiet_s: float = QUIET_S) -> None:
+    def __init__(self, quiet_s: float = QUIET_S, sentence_quiet_s: float = SENTENCE_QUIET_S) -> None:
         self.quiet_s = quiet_s
+        self.sentence_quiet_s = min(sentence_quiet_s, quiet_s)
         self._by_key: dict[str, _Speaker] = {}
 
     def feed(self, entries: list[tuple[str, str]], now: float) -> list[Final]:
@@ -178,12 +182,18 @@ class FinalRule:
                 if not sp.last_text or not self._pending(sp, sp.last_text):
                     sp.first_at = now
                 sp.last_text, sp.changed_at = text, now
-            out += self._finals(key, sp, now, quiet=now - sp.changed_at >= self.quiet_s)
+            out += self._finals(key, sp, now, quiet=self._settled(sp, now))
         for key, sp in self._by_key.items():  # gone from the box: what is left will not be revised
             if key not in present and sp.last_text:
                 out += self._finals(key, sp, now, quiet=True)
                 sp.last_text = ""
         return out
+
+    def _settled(self, sp: _Speaker, now: float) -> bool:
+        """A pause: no change for ``quiet_s``, or for the shorter ``sentence_quiet_s`` when the text ends a
+        sentence (a speaker who has finished one and stopped does not need two seconds to be sure of)."""
+        idle = now - sp.changed_at
+        return idle >= self.quiet_s or (idle >= self.sentence_quiet_s and ends_sentence(sp.last_text))
 
     def flush(self, now: float) -> list[Final]:
         """The call is over: everything pending is final."""
@@ -258,10 +268,51 @@ class FinalRule:
             if not w:
                 continue
             sp.history = (sp.history + w)[-HISTORY_WORDS:]
-            out.append(Final(key, s, sp.first_at, now))
+            out.append(Final(key, s, sp.first_at, now, paused=quiet))
         if out:
             sp.first_at = now
         return out
+
+
+class PauseHold:
+    """Holds each speaker's finished sentences until that speaker pauses, then gives them out together as one
+    ``Final`` (#801), so the bridge posts one line a moment after the pause and not a second wait later. A
+    sentence final only because the next began is held; one final because the speaker paused or left (or the
+    call ended) releases everything held for that key with it. Another speaker's text changing releases it at
+    once (the first one has stopped), and nothing is held longer than ``MAX_HOLD_S``. The clock is an
+    argument."""
+
+    def __init__(self, max_hold_s: float = MAX_HOLD_S) -> None:
+        self.max_hold_s = max_hold_s
+        self._held: dict[str, list[Final]] = {}
+        self._texts: dict[str, str] = {}
+
+    def step(self, finals: list[Final], entries: list[tuple[str, str]], now: float) -> list[Final]:
+        changed = {k for k, t in entries if self._texts.get(k) != " ".join(t.split())}
+        self._texts = {k: " ".join(t.split()) for k, t in entries}
+        out: list[Final] = []
+        for f in finals:
+            held = self._held.setdefault(f.key, [])
+            held.append(f)
+            if f.paused:
+                out.append(self._merge(self._held.pop(f.key)))
+        for key in list(self._held):
+            held = self._held[key]
+            if now - held[0].t_end >= self.max_hold_s or (changed - {key}):
+                out.append(self._merge(self._held.pop(key)))
+        return out
+
+    def flush(self) -> list[Final]:
+        out = [self._merge(h) for h in self._held.values() if h]
+        self._held = {}
+        return out
+
+    @staticmethod
+    def _merge(held: list[Final]) -> Final:
+        first, last = held[0], held[-1]
+        return Final(
+            first.key, " ".join(f.text for f in held), first.t_start, last.t_end, paused=last.paused
+        )
 
 
 # --------------------------------------------------------------------------------- joinly's three parts
@@ -312,6 +363,7 @@ class CaptionsTranscriptionController:
         self._decided = asyncio.Event()
         self.status: dict[str, Any] = {"ok": None, "reason": "pending"}
         self._rule = FinalRule()
+        self._hold = PauseHold()
         self._participants: list[str] = []
         self._looked_at = float("-inf")
         self._lookup_failures = 0
@@ -437,7 +489,7 @@ class CaptionsTranscriptionController:
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
             with contextlib.suppress(Exception):
-                self._emit(self._rule.flush(time.monotonic()))
+                self._emit(self._hold.step(self._rule.flush(time.monotonic()), [], 0.0) + self._hold.flush())
             raise
         except Exception:
             logger.exception("captions: reading stopped")
@@ -454,7 +506,7 @@ class CaptionsTranscriptionController:
             if isinstance(it, dict)
         ]
         self._sample_active(entries)
-        finals = self._rule.feed(entries, now)
+        finals = self._hold.step(self._rule.feed(entries, now), entries, now)
         if finals:
             await self._dump_buttons()
             await self._look_up(now, {f.key.split("|", 1)[0] for f in finals})
