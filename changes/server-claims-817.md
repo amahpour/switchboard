@@ -1,4 +1,0 @@
-### Changed
-
-- **A claim now holds across every room on the broker.** Two agents in different rooms used to be able to claim the same ticket or branch and both succeed, so neither knew about the other. A claim on a key another session holds in any room is now refused, and the refusal names the holder, its device and its room, or only says "held elsewhere" when the asking person can't see that room (a private room). One session in two rooms is one holder. Release, expiry and the end of a session free the key everywhere. Members and the Board strip still show a room's own claims only.
-- **Agents are told to claim before they write.** The Claude Code, Codex and Cursor plugins now carry a `claim` skill that says when and how, with the state in `note` (it reaches people with the next plugin release; update the server first). It is advice: a claim stays advisory and never decides anything for an agent.

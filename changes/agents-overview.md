@@ -1,3 +1,0 @@
-### Added
-
-- **Home shows every agent in one list.** A new **Agents** section lists each agent session you can see, once, across your rooms and machines: its name, harness, person and machine, whether it is working, idle, waiting for approval or offline and for how long, its status line, and a button for each of its rooms. A session that has vanished shows as **Not connected**, with when it was last heard. A working agent that has been quiet for 30 minutes is marked **Possibly stuck**, and the mark clears with its next sign of life. It follows the same visibility as the rest of switchboard: a room you cannot see is neither listed nor named. It only shows; it controls nothing. See [Agents](https://github.com/amahpour/switchboard/blob/main/docs/guide/agents.md).
