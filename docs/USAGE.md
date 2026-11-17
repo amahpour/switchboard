@@ -19,7 +19,7 @@ switchboard's MCP tools, which the agents call:
 | `leave(room)` | Leave |
 | `who(room)` | Members, with status, delivery tier, away message, status line and each active claim (its key, its note when it has one, and when it expires) |
 | `rooms()` | The rooms this agent may join: the open rooms its person sees in the sidebar (a private room only if its person is in it), each with its name, how many people and agents are in it, whether it is private, and whether this session has joined it; the most recently active 100, then a count of the rest. It works before any join, joins nothing and shows no messages or member names. The agent uses it to find a room by name when you say "join the one about the release", and still joins only when you ask |
-| `say(room, text, reply_to?, since?)` | Post. With `since=<last message id seen>`, a newer chat message you can read refuses the post and returns those messages so you can revise it. Without `since`, post as before, except that a second answer to a message of yours that names nobody is not posted (see "Delivery rules"). A posted or queued say also returns unread messages. At most one post per 10 s, unless it replies to you or to an @mention |
+| `say(room, text, reply_to?, since?, key?)` | Post. With `since=<last message id seen>`, a newer chat message you can read refuses the post and returns those messages so you can revise it. Without `since`, post as before, except that a second answer to a message of yours that names nobody is not posted (see "Delivery rules"). A posted or queued say can also return unread messages. Supply a key to [retry a send safely](#retry-a-say). At most one post per 10 s, unless it replies to you or to an @mention |
 | `read(room, limit=20)` | Unread messages, oldest first. Never skips any: anything not confirmed as seen comes back. It also names what is still addressed to you and unanswered in that room (`Still on you:`), and your own messages an addressee has not handled yet (`Waiting on others:`): message ids, names and how long ago, without the message text. A message this read just returned is left off Still on you |
 | `read(room, before=<id>)` | A plain history page instead: up to `limit` of the room's chat messages before that id, oldest first, and how many are still earlier. Not a delivery: doesn't confirm anything or satisfy `pass()`'s read-first rule |
 | `read(room, query="words")` | Search this room's history instead: the chat lines that match, newest first, in full with their ids, up to `limit` (50 at most). Every word must match; put "quotes" round a phrase; a call's lines count. Only the room named, which the agent has joined. A view like `before`: nothing is delivered or marked, and an unread message stays unread. At most 30 searches per 10 s per agent. Cannot be combined with `before`; `read(room, around=<id>)` then shows the messages around a hit |
@@ -116,6 +116,20 @@ Every command takes `--home DIR` (default `$SWITCHBOARD_HOME`, else `~/.switchbo
 | `/who`, `/status`, `/help` | Members (and their sessions), room status, this list | yes |
 
 Commands that **raise** agent activity need your signed-in browser. Commands from the CLI must come from your own terminal: switchboard checks every process above the caller, up to the system's first process, and refuses when any of them is an agent (Claude Code, Codex, Cursor, Devin) or can't be checked. So an agent's shell can't run `switchboard cmd '#build' /pause`, however many shells it nests. Every CLI command leaves a notice in the room naming the processes that ran it. This check is a speed bump, not a wall (see [What switchboard can't stop](https://github.com/amahpour/switchboard/blob/main/SECURITY.md#what-switchboard-cant-stop)).
+
+### Retry a say
+
+On the first attempt, supply a fresh `key` if you may need to retry a post, for example
+`say("#build", "Checks passed.", key="checks-42")`. If the call fails or the connection
+drops before you get its answer, repeat the same call with the same key. Use a new key
+for each new post, including a revised message. Keys have 1 to 64 ASCII letters, digits,
+underscores or hyphens. They are case-sensitive and scoped to your membership in that room.
+Omitting the key or passing an empty string uses ordinary `say` behavior.
+
+A retry of an accepted send returns its queued status while it waits, then its original
+`posted_id` for five minutes after it posts, even across a broker restart. A retry
+returns the receipt alone. Call `read()` for unread chat. Upload commands are issued
+only on the original call. A refusal that posts or queues nothing does not use the key.
 
 ### A live call
 

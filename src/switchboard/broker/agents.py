@@ -19,6 +19,7 @@ engine's actions through the runner.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -234,6 +235,16 @@ def name_reserved_text(name: str, room: str, code: str | None, why: str | None =
 
 # a rate-limited say() waits its turn (§8.4); a burst past this many per member is refused
 MAX_QUEUED_SAYS = 3
+SAY_KEY_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+@dataclass(frozen=True)
+class QueuedSay:
+    text: str
+    reply_to: int | None
+    file_ids: list[str]
+    key_hash: str | None
+    receipt: dict[str, Any]
 
 
 def _model_ok(model: Any) -> bool:
@@ -266,8 +277,8 @@ class AgentService:
         self._models: dict[int, str] = {}  # participant id -> last model recorded
         rec = os.environ.get("SWITCHBOARD_RECORD_PAYLOADS")
         self.record_dir = Path(rec) if rec and state.test_mode else None
-        # membership id -> rate-limited says waiting their turn: (text, reply_to, file ids), oldest first
-        self._queued_says: dict[int, deque[tuple[str, int | None, list[str]]]] = {}
+        # membership id -> rate-limited says waiting their turn, oldest first
+        self._queued_says: dict[int, deque[QueuedSay]] = {}
         self._say_timers: dict[int, asyncio.TimerHandle] = {}
         # member id -> (the last batch whose question an @call line answered, how many lines answered
         # it, when the first did) (§52.2)
@@ -302,12 +313,13 @@ class AgentService:
         self.run(self.engine.on_command(room.id, name, membership_id))
 
     def on_membership_ended(self, membership_id: int, reason: str) -> None:
+        self._discard_queued_says(membership_id)
         self.run(self.engine.on_membership_ended(membership_id, reason))
 
     def on_memberships_ended(self, membership_ids: list[int], reason: str) -> None:
         """Several at once (``/close``, §28.3): the engine per membership."""
         for mid in membership_ids:
-            self.run(self.engine.on_membership_ended(mid, reason))
+            self.on_membership_ended(mid, reason)
 
     def parked_reason(self, membership_id: int) -> str | None:
         return self.engine.parked_reason(membership_id)
@@ -622,7 +634,7 @@ class AgentService:
         p, m, room = self._member(conn, params)
         self.store.end_membership(m.id, "leave")
         self.store.add_event("leave", room_id=room.id, membership_id=m.id, participant_id=p.id)
-        self.run(self.engine.on_membership_ended(m.id, "leave"))
+        self.on_membership_ended(m.id, "leave")
         self.svc._post(
             room,
             sender_name=m.screen_name,
@@ -823,7 +835,19 @@ class AgentService:
     def say(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         if self.state.draining:
             raise ServiceError("restarting", RESTART_MESSAGE)
-        p, m, room = self._member(conn, params)
+        key = params.get("key", "")
+        if not isinstance(key, str) or (key and not SAY_KEY_RE.fullmatch(key)):
+            raise ServiceError(
+                "bad_request", "key must be 1 to 64 ASCII letters, digits, underscores or hyphens"
+            )
+        key_hash = hashlib.sha256(key.encode("ascii")).hexdigest() if key else None
+        p, m, room = self._member(conn, params, next_call=key_hash is None)
+        if key_hash is not None:
+            replay = self._say_replay(m.id, key_hash)
+            if replay is not None:
+                return replay
+            self.run(self.engine.before_call(p))
+            p = self.store.get_participant(p.id) or p
         text = params.get("text")
         if not isinstance(text, str):
             raise ServiceError("bad_request", "text is required")
@@ -903,21 +927,24 @@ class AgentService:
                     "note": f"{len(queue)} of your messages already wait to be posted: this one wasn't",
                     **unread,
                 }
-            queue.append((text, reply_to, file_ids))
-            wait = retry + (len(queue) - 1) * self.cfg.delivery.rate_limit_s
+            wait = retry + len(queue) * self.cfg.delivery.rate_limit_s
+            receipt = self._with_redaction(
+                {
+                    "posted_id": None,
+                    "queued": True,
+                    "post_in_s": round(wait, 1),
+                    "note": f"rate limited: it's posted for you in about {wait:.0f} s; don't send it again",
+                },
+                kinds,
+            )
+            queue.append(QueuedSay(text, reply_to, file_ids, key_hash, receipt))
             if len(queue) == 1:
                 self._schedule_say(m.id, retry)
-            queued = {
-                "posted_id": None,
-                "queued": True,
-                "post_in_s": round(wait, 1),
-                "note": f"rate limited: it's posted for you in about {wait:.0f} s; don't send it again",
-                **unread,
-            }
+            queued = {**receipt, **unread}
             if share:
                 queued["share"] = share
-            return self._with_redaction(queued, kinds)
-        msg = self._post_say(p, m, room, text, reply_to, file_ids)
+            return queued
+        msg = self._post_say(p, m, room, text, reply_to, file_ids, key_hash=key_hash)
         utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50, before_id=msg.id)
         self.run(acts)
         posted = {
@@ -929,6 +956,17 @@ class AgentService:
         if share:
             posted["share"] = share
         return self._with_redaction(posted, kinds)
+
+    def _say_replay(self, membership_id: int, key_hash: str) -> dict[str, Any] | None:
+        """Return only the posting receipt. Unread batches and upload grants belong to the first call."""
+        empty_unread = {"unread_text": None, "batch_id": None, "count": 0}
+        posted_id = self.store.say_key_message(membership_id, key_hash)
+        if posted_id is not None:
+            return {"posted_id": posted_id, **empty_unread}
+        for entry in self._queued_says.get(membership_id, ()):
+            if entry.key_hash == key_hash:
+                return {**entry.receipt, **empty_unread}
+        return None
 
     @staticmethod
     def _with_redaction(result: dict[str, Any], kinds: list[str]) -> dict[str, Any]:
@@ -960,6 +998,18 @@ class AgentService:
             while self._queued_says.get(membership_id):
                 self._post_queued_say(membership_id, flushing=True)
 
+    def _discard_queued_says(self, membership_id: int) -> None:
+        """Release a former member's pending keys before its row ID can be reused."""
+        timer = self._say_timers.pop(membership_id, None)
+        if timer is not None:
+            timer.cancel()
+        queue = self._queued_says.pop(membership_id, None)
+        if queue:
+            log.info("dropped %d queued say(s) of membership %d: it ended", len(queue), membership_id)
+            if self.state.attachments is not None:
+                for entry in queue:
+                    self.state.attachments.drop(entry.file_ids)
+
     def _post_queued_say(self, membership_id: int, *, flushing: bool = False) -> None:
         """Post the oldest queued say of this member once the rate limit allows, then schedule the
         next. Dropped, not posted, if the member left (or its room closed) meanwhile."""
@@ -972,19 +1022,17 @@ class AgentService:
         p = self.store.get_participant(m.participant_id) if m is not None else None
         room = self.store.room_by_id(m.room_id) if m is not None else None
         if m is None or p is None or room is None or room.closed or not m.active:
-            log.info("dropped %d queued say(s) of membership %d: it ended", len(queue), membership_id)
-            if self.state.attachments is not None:
-                for _text, _reply, ids in queue:
-                    self.state.attachments.drop(ids)
-            self._queued_says.pop(membership_id, None)
+            self._discard_queued_says(membership_id)
             return
         wait = None if flushing else self._say_wait(p)
         if wait is not None:
             self._schedule_say(membership_id, wait)
             return
-        text, reply_to, file_ids = queue.popleft()
-        target = self.store.get_message(reply_to) if reply_to is not None else None
-        self._post_say(p, m, room, text, reply_to if target is not None else None, file_ids)
+        entry = queue.popleft()
+        target = self.store.get_message(entry.reply_to) if entry.reply_to is not None else None
+        self._post_say(
+            p, m, room, entry.text, target.id if target else None, entry.file_ids, key_hash=entry.key_hash
+        )
         if queue and not flushing:
             self._schedule_say(membership_id, self.cfg.delivery.rate_limit_s)
         elif not queue:
@@ -998,6 +1046,8 @@ class AgentService:
         text: str,
         reply_to: int | None,
         file_ids: list[str] | None = None,
+        *,
+        key_hash: str | None = None,
     ) -> Message:
         """Post an agent's say: what it had pending counts as answered, and the message goes out
         like any other (the delivery, the wake budget and the loop guard)."""
@@ -1042,6 +1092,7 @@ class AgentService:
             mentions=mentions,
             sender_host=p.host or None,
             file_ids=file_ids or (),
+            say_key_hash=key_hash,
         )
         if self.state.meetings is not None:
             # an "@call" line is spoken in the room's live call while a person has voice on (§52);
@@ -1388,7 +1439,7 @@ class AgentService:
                 continue
             n += 1
             for m in self.store.end_participant(p.id, why):
-                self.run(self.engine.on_membership_ended(m.id, why))
+                self.on_membership_ended(m.id, why)
                 room = self.store.room_by_id(m.room_id)
                 if room is not None:
                     self.svc._post(

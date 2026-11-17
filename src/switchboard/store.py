@@ -58,6 +58,8 @@ OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # of ``delete_room``'s result. Participants are never deleted.
 ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
 STATUS_LINE_STALE_S = 30 * 60
+# Enough time for a broker rollout and a client retry, with short-lived receipts.
+SAY_KEY_TTL_S = 5 * 60
 # a meeting error is a short phrase. A link or a Zoom passcode never lands in the row (§52).
 _MEETING_SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
 
@@ -317,6 +319,7 @@ class Store:
         ("pins", "pins WHERE room_id=?", 1),
         ("home_seen", "home_seen WHERE room_id=?", 1),
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
+        ("say_keys", f"say_keys WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
         ("memberships", "memberships WHERE room_id=?", 1),
@@ -468,6 +471,7 @@ class Store:
         sender_person_id: int | None = None,
         deliver_notice: bool = False,
         meeting_id: int | None = None,
+        say_key_hash: str | None = None,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -484,11 +488,16 @@ class Store:
         is a human to every agent, so it changes nothing about the deliveries.
         ``meeting_id`` identifies the call whose source supplied a line (§52, §54): the line is stored
         with it, and the call's count of lines goes up in the same transaction.
+        ``say_key_hash`` records an authenticated member's retry receipt in that same transaction (§8.4).
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
         if deliver_notice and (kind != "notice" or sender_kind != "system"):
             raise ValueError("only a system notice may be delivered")
+        if say_key_hash is not None and (
+            sender_membership_id is None or sender_kind != "agent" or kind != "chat"
+        ):
+            raise ValueError("only an agent's chat message can have a say key")
         skip = {int(x) for x in skip_memberships}
         now = self.clock.now()
         mentions_l = sorted({m.lower() for m in mentions})
@@ -515,6 +524,16 @@ class Store:
                 ),
             )
             mid = cur.lastrowid
+            if say_key_hash is not None:
+                receipt = self.con.execute(
+                    "INSERT INTO say_keys(membership_id, key_hash, message_id, expires_at) VALUES(?,?,?,?)"
+                    " ON CONFLICT(membership_id, key_hash) DO UPDATE"
+                    " SET message_id=excluded.message_id, expires_at=excluded.expires_at"
+                    " WHERE say_keys.expires_at <= ?",
+                    (sender_membership_id, say_key_hash, mid, now + SAY_KEY_TTL_S, now),
+                )
+                if receipt.rowcount != 1:
+                    raise Conflict("this say key already has a post")
             if meeting_id is not None:
                 self.con.execute("UPDATE meetings SET lines_pushed=lines_pushed+1 WHERE id=?", (meeting_id,))
             if kind == "chat":
@@ -561,6 +580,18 @@ class Store:
         msg = self.get_message(mid)
         assert msg is not None
         return msg
+
+    def say_key_message(self, membership_id: int, key_hash: str) -> int | None:
+        """Find the first post for a member's key while its receipt is still live."""
+        row = self.con.execute(
+            "SELECT message_id FROM say_keys WHERE membership_id=? AND key_hash=? AND expires_at>?",
+            (membership_id, key_hash, self.clock.now()),
+        ).fetchone()
+        return int(row[0]) if row is not None else None
+
+    def say_key_purge(self) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM say_keys WHERE expires_at<=?", (self.clock.now(),))
 
     # --------------------------------------------------------------- meetings (§52)
     def insert_meeting(self, room_id: int, *, started_by: str, platform: str) -> Meeting:

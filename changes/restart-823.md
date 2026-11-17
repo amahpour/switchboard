@@ -4,4 +4,4 @@
 
 ### Known limitations
 
-- Automatic recovery still needs per-harness verification: old MCP sessions must be initialized again, and an existing listening round can be refused before a fresh hook reports the session. A crash can lose says queued only in memory, and retrying a say whose answer was lost can still post it twice (#823).
+- Automatic recovery still needs per-harness verification. Old MCP sessions must be initialized again, and an existing listening round can be refused before a fresh hook reports the session. A crash can lose says queued only in memory (#823).

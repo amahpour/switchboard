@@ -143,7 +143,9 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # ("edit, ", 6) and pays for it in the lead-in: "PR boards. action:" becomes "PRs and MRs:", which
     # names GitLab's merge requests too, so the list stays 4,644. The cap does not move. No new field:
     # edit uses title, detail and where.
-    assert size == 4644, size
+    # #823 adds only the optional say key (+37). The maintainer approved the measured increase
+    # on 2026-11-17: "Yes to all three".
+    assert size == 4681, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
