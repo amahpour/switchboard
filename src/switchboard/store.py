@@ -1163,12 +1163,29 @@ class Store:
         ).fetchall()
         return [claims.Claim(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
+    def claims_elsewhere(
+        self, room_id: int, participant_id: int, key_norm: str, now: float
+    ) -> list[claims.Claim]:
+        """Active claims on ``key_norm`` held in other rooms by other sessions (#817): what a new claim of
+        this room's member must not collide with. A session in two rooms is one holder, so its own
+        claims in another room are left out. Each carries its room and the holder's device."""
+        rows = self.con.execute(
+            "SELECT c.key, c.membership_id, m.screen_name, c.expires_at, c.note, c.room_id, p.host"
+            " FROM claims c JOIN memberships m ON m.id=c.membership_id"
+            " JOIN participants p ON p.id=m.participant_id"
+            " WHERE c.key_norm=? AND c.room_id!=? AND m.participant_id!=? AND c.expires_at>?"
+            " AND m.left_at IS NULL ORDER BY c.expires_at",
+            (key_norm, room_id, participant_id, now),
+        ).fetchall()
+        return [claims.Claim(r[0], r[1], r[2], r[3], r[4], r[5], r[6] or "") for r in rows]
+
     def move_claim(
         self, room_id: int, membership_id: int, key: str, ttl: int, note: str = ""
     ) -> claims.Decision:
         """Apply the pure policy in one transaction; expired or ended claims cannot block.
 
-        ``note`` is already cleaned. Empty on a renewal keeps the stored note.
+        ``note`` is already cleaned. Empty on a renewal keeps the stored note. A key is one name across
+        every room (#817): another session's live claim on it in another room refuses a new claim.
         """
         now = self.clock.now()
         key_norm = key.casefold()
@@ -1178,7 +1195,18 @@ class Store:
                 " (SELECT id FROM memberships WHERE left_at IS NOT NULL)",
                 (now,),
             )
-            decision = claims.decide(self.claims_for_room(room_id), membership_id, key, ttl, now, note)
+            mine = self.con.execute(
+                "SELECT participant_id FROM memberships WHERE id=?", (membership_id,)
+            ).fetchone()
+            decision = claims.decide(
+                self.claims_for_room(room_id),
+                membership_id,
+                key,
+                ttl,
+                now,
+                note,
+                self.claims_elsewhere(room_id, mine[0], key_norm, now) if mine is not None else [],
+            )
             if decision.action == "acquired":
                 self.con.execute(
                     "INSERT INTO claims(room_id,key_norm,key,membership_id,expires_at,note)"

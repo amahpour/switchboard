@@ -53,6 +53,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.server.middleware import Middleware
 from fastmcp.tools.base import ToolResult
@@ -72,6 +73,7 @@ from switchboard.broker.hook_replies import (
     reply_for,
 )
 from switchboard.broker.oauth import challenge
+from switchboard.broker.restarts import RESTART_MESSAGE, RETRY_AFTER_S
 from switchboard.broker.service import ServiceError
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
@@ -564,6 +566,10 @@ class HttpTools:
             log.info("a %s client closed its %s hook's request: its park is closed", c.harness, event)
             agents.run(self.state.engine.close_conn_sinks(c.conn.id))
             return "{}"
+        if res.get("ended") == "restarting":
+            # MCP already sent its SSE headers: an HTTP status cannot be replaced mid-stream.
+            # A tool error ends the hook without inventing a hook-output shape (§7.3).
+            raise ToolError(RESTART_MESSAGE)
         if c.harness == "test":
             # the scripted test agent (§9.6; a test-mode broker only) reads the engine's own answer,
             # not a shape of the table, so a test sees the text and the batch it was given
@@ -615,6 +621,13 @@ class HttpTools:
             return {"ok": False, "error": e.message, "code": e.code}
         except TimeoutError:
             return {"ok": False, "error": "switchboard took too long to answer", "code": "timeout"}
+        if res.get("status") == "restarting":
+            return {
+                "ok": False,
+                "code": "restarting",
+                "error": RESTART_MESSAGE,
+                "retry_after_s": RETRY_AFTER_S,
+            }
         return {"ok": True, **res}
 
     @staticmethod
@@ -1085,6 +1098,14 @@ class CommandHook:
         res = await agents.http_hook(
             conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
         )
+        if res.get("ended") == "restarting":
+            await _reply(
+                send,
+                503,
+                {"error": "restarting", "message": RESTART_MESSAGE},
+                (b"retry-after", str(RETRY_AFTER_S).encode()),
+            )
+            return
         reply = reply_for(harness, event, res.get("out")) or {}
         await _reply(send, 200, reply)
         if reply:
@@ -1296,6 +1317,14 @@ class Listener:
         finally:
             watch.cancel()
         out = res.get("out")
+        if res.get("ended") == "restarting":
+            await _reply(
+                send,
+                503,
+                {"error": "restarting", "message": RESTART_MESSAGE},
+                (b"retry-after", str(RETRY_AFTER_S).encode()),
+            )
+            return
         text = out.get("text") if isinstance(out, dict) and out.get("kind") == "continue" else None
         if not isinstance(text, str) or not text:
             if res.get("ended") in LISTEN_AGAIN:
