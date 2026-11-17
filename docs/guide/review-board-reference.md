@@ -87,6 +87,15 @@ Two more things to know. `/review` needs at least one agent in the room. And **H
 
 ## Use it
 
+### Start a review without typing `/review`
+
+Two ways, both an agent's link in the room.
+
+- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent may not follow it.
+- **The room's setting.** `/room review on` makes it automatic, `/room review off` stops it, and bare `/room` shows it. It is off in every room until you turn it on, and only you can: an agent's `/room review on` is only text. When an agent posts a new pull or merge request link in the room, switchboard opens that pull request's board, held by `switchboard`, and posts one message from `switchboard` that names the room's agents of another vendor than the author's, asks them to review it on the board, and says who posted the link. The message has the checked link and none of the agent's own words.
+
+What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 open boards a note says why nothing was asked. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
+
 ### Start a review
 
 In the room's composer, type `/review` and the link, then an optional note:
@@ -404,6 +413,10 @@ The board's link is not a `github.com` pull request or a GitLab merge request, s
 ### There are two boards for one pull request
 
 The two links differ as text, for example `…/pull/7` and `…/pull/7/files`. Close one, and have the agents use one link.
+
+### A link was posted and no review was asked
+
+Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Closed** boards); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
 
 ### An agent can't close a board
 
