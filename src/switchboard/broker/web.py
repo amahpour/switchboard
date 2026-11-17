@@ -81,6 +81,7 @@ from switchboard.broker.passwords import (
     verify_password,
 )
 from switchboard.broker.service import ServiceError
+from switchboard.delivery import rules
 from switchboard.files import (
     FILE_ID_RE,
     Spool,
@@ -2063,6 +2064,19 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    # Remove a member that is not connected (#814, §49.14): a person on their own agents, an admin on any.
+    @app.post("/api/rooms/{slug}/members/{name}/remove")
+    async def member_remove(request: Request, slug: str, name: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            room = state.service.room_for(slug, viewer(request))
+            gone = state.service.remove_not_connected(room, name, w.person_id, w.is_admin, w.name)
+            return _ok({"removed": gone})
+        except ServiceError as e:
+            return _svc_err(e)
+
     # The call's details (§54): the room's open call as the one person looking may see it, with whether they
     # may end it. A GET for the same reason as the Inspector's (and one more): the settings frame goes to
     # everyone in the room, and what this viewer may do can't ride in it. It writes nothing and publishes
@@ -2174,6 +2188,17 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return None, _err(403, "forbidden", "only an admin sets how long files are kept")
         return w, None
 
+    def _not_connected_admin(request: Request) -> tuple[people.Who | None, JSONResponse | None]:
+        """When not-connected sessions are removed is an admin's setting (the owner, on a desktop broker)."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return None, unauthorized()
+        if not w.is_admin:
+            return None, _err(
+                403, "forbidden", "only an admin sets when agents that are not connected are removed"
+            )
+        return w, None
+
     def _links_admin(request: Request) -> tuple[people.Who | None, JSONResponse | None]:
         """Reference links are an admin's setting (the owner, on a desktop broker)."""
         w = who(request)
@@ -2205,6 +2230,31 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             days = state.attachments.set_retention(body.get("days"))
         except ValueError as e:
             return _err(400, "bad_request", str(e))
+        return _ok({"days": days})
+
+    @app.get("/api/settings/not-connected")
+    async def not_connected_settings_get(request: Request) -> Response:
+        """Days not connected before a session is removed (#814, §49.14): an admin's setting."""
+        _w, no = _not_connected_admin(request)
+        if no is not None:
+            return no
+        return _ok({"days": state.engine.not_connected_end_days()})
+
+    @app.put("/api/settings/not-connected")
+    async def not_connected_settings_put(request: Request) -> Response:
+        _w, no = _not_connected_admin(request)
+        if no is not None:
+            return no
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        days = body.get("days")
+        if set(body) != {"days"} or days != rules.clamp_end_days(days, default=-1):
+            return _err(
+                400, "bad_request", f"days is 1 to {rules.NOT_CONNECTED_END_DAYS_MAX}, or 0 for never"
+            )
+        state.store.setting_set(rules.NOT_CONNECTED_END_KEY, str(days))
         return _ok({"days": days})
 
     @app.get("/api/settings/links")

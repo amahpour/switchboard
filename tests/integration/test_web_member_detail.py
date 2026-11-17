@@ -62,6 +62,7 @@ MEMBER_KEYS = {
     "status_src",
     "last_seen",
     "last_seen_what",
+    "not_connected_since",  # when it was last heard from, if it is not connected (#814), else None
 }
 
 

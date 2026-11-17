@@ -13,7 +13,7 @@ import logging
 import os
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -110,6 +110,8 @@ class DeliveryHooks(Protocol):
     def parked_reason(self, membership_id: int) -> str | None: ...
 
     def wakes_at(self, membership_id: int) -> float | None: ...
+
+    def not_connected_for(self, participant_id: int, status: str, heard_at: float | None) -> float | None: ...
 
 
 def _hhmmss(ts: float | None) -> str:
@@ -210,6 +212,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "plugin_state": m.plugin_state,
         "plugin_version": m.plugin_version,
         "plugin_note": m.plugin_note,
+        # when it was last heard from, if it is not connected: no wait open, quiet too long (#814, §49.14)
+        "not_connected_since": m.not_connected_since,
     }
 
 
@@ -242,6 +246,11 @@ def _num(v: Any) -> int | float | None:
 def _text(v: Any, cap: int) -> str | None:
     """A free-form string from event data or the participant row: scrubbed and capped."""
     return clean(_safe(v))[:cap] if isinstance(v, str) else None
+
+
+def when_text(ts: float) -> str:
+    """A time for a sentence the broker writes, in UTC with the weekday: ``Tue 14:02 UTC``."""
+    return time.strftime("%a %H:%M UTC", time.gmtime(ts))
 
 
 def _sender_label(name: str, host: str | None) -> str:
@@ -657,7 +666,15 @@ class RoomService:
             why = self.delivery.parked_reason(m.membership_id)
             if why:
                 m = dataclasses.replace(m, parked=True, parked_reason=why)
-            out.append(dataclasses.replace(m, wakes_at=self.delivery.wakes_at(m.membership_id)))
+            out.append(
+                dataclasses.replace(
+                    m,
+                    wakes_at=self.delivery.wakes_at(m.membership_id),
+                    not_connected_since=self.delivery.not_connected_for(
+                        m.participant_id, m.status, m.heard_at
+                    ),
+                )
+            )
         return out
 
     def member_detail(self, room_name: str, name: str) -> dict[str, Any]:
@@ -1213,7 +1230,8 @@ class RoomService:
             # Expanding mentions with the targets' own names is the whole mechanism -- see
             # rules.broadcast_targets for why no other delivery rule needs to change.
             members = [(m.name, m.status) for m in self.store.members(room.id)]
-            mentions = sorted(set(mentions) | set(broadcast_targets(broadcast, members)) | {broadcast})
+            gone = self.not_connected_members(room)
+            mentions = sorted(set(mentions) | set(broadcast_targets(broadcast, members, gone)) | {broadcast})
         if mentions_humans(text):
             # Addresses every person in the room, never an agent (issue #138): the literal
             # word is the whole mechanism -- it can never match a real agent's screen name
@@ -1231,6 +1249,8 @@ class RoomService:
             skip_memberships=skip,
             sender_person_id=person[1] if person is not None else None,
         )
+        for note in self.not_connected_notes(room, mentions):
+            self.post_notice(room, note, level="warn")
         before = room.hop_count
         if before:
             self.hub.room_settings(room.name, self.settings(room))
@@ -1239,6 +1259,28 @@ class RoomService:
             if calls is not None:
                 calls.person_posted(room.id)  # a person wrote: the run of agent lines on a call ends (§52.2)
         return msg
+
+    def not_connected_members(self, room: Room) -> dict[str, float]:
+        """Lower-cased screen name -> when it was last heard from, for the room's members that are not
+        connected now (#814, §49.14). Empty before the engine exists."""
+        return {
+            m.name.lower(): m.not_connected_since for m in self.member_rows(room.id) if m.not_connected_since
+        }
+
+    def not_connected_notes(self, room: Room, mentions: Iterable[str]) -> list[str]:
+        """One sentence for each @mentioned member that is not connected: the message is kept and reaches it
+        if it comes back, but nobody should wait on it silently (#814). For the sender, a person or agent."""
+        gone = self.not_connected_members(room)
+        notes: list[str] = []
+        for name in dict.fromkeys(n.lower() for n in mentions):
+            since = gone.get(name)
+            if since is not None:
+                shown = next((m.name for m in self.store.members(room.id) if m.name.lower() == name), name)
+                notes.append(
+                    f"{shown} hasn't been connected since {when_text(since)}. Your message is kept, and it"
+                    " gets it if it comes back; don't wait on it."
+                )
+        return notes
 
     def mention_names(self, room: Room) -> list[str]:
         """Names an @mention can address: active members, plus the human (for UI highlighting;
@@ -1455,6 +1497,36 @@ class RoomService:
             text=f"was kicked by {self.cfg.human_name}",
             sender_host=member.host or None,
         )
+
+    def remove_not_connected(
+        self, room: Room, name: str, person_id: int | None, is_admin: bool, by: str
+    ) -> str:
+        """Remove a member that is not connected (#814, §49.14): its session leaves every room it is in and
+        its claims are released, as a kick does, but it may join again. A person may on their own agents,
+        an admin on anyone's; a member that is connected is refused (use /kick). Returns its screen name."""
+        n = name.strip().lower().lstrip("@")
+        m = next((x for x in self.member_rows(room.id) if x.name.lower() == n), None)
+        if m is None:
+            raise ServiceError("not_found", f"{n} is not in {room.name}")
+        if m.not_connected_since is None:
+            raise ServiceError("conflict", f"{m.name} is connected: Remove is for agents that are not")
+        if not is_admin and self.host_person(m.host) != self.person_key(person_id):
+            raise ServiceError(
+                "forbidden", f"{m.name} is not your agent: only its person or an admin removes it"
+            )
+        ended = self.store.end_participant(m.participant_id, "removed_not_connected")
+        for em in ended:
+            if self.delivery is not None:
+                self.delivery.on_membership_ended(em.id, "removed_not_connected")
+            er = self.store.room_by_id(em.room_id)
+            if er is not None:
+                self.post_notice(
+                    er,
+                    f"{em.screen_name} was removed by {by}:"
+                    f" not connected since {when_text(m.not_connected_since)}.",
+                )
+                self.hub.members_changed(er.name)
+        return m.name
 
     def command(self, name: str, text: str, actor: Actor) -> dict[str, Any]:
         room = self.room(name)
