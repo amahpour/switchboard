@@ -56,6 +56,7 @@ opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and th
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
+agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
@@ -91,6 +92,9 @@ once there are two people; the Inspector naming the owner and the device, #496),
 quiet-inspector-{light,dark,phone-light} and quiet-members-{light,dark,phone-light} (an agent a person
 quieted with the Inspector's Quiet button: the quiet chip and Unquiet, then the agent's line in Members,
 #548),
+not-connected-members-{light,dark,phone-light} and not-connected-inspector-{light,dark,phone-light} (the
+"Not connected (n)" group open in Members, and the Inspector of an agent in it with Remove, #814),
+notifications-{off,on}-{light,dark,phone-light} (Settings, Profile, Notifications, #723),
 claim-board-{light,dark,phone-light} (the room's Board strip open under the Pins strip, listing every active
 claim with its holder, note and expiry) and claim-board-members-{light,dark,phone-light} (the note on the
 holder's claim line in Members, #545),
@@ -606,6 +610,93 @@ def shoot_claims(browser: Any, out: Path, world: Any) -> None:
                 shot(page, out, f"claims-{stage}-{theme}.png")
             finally:
                 ctx.close()
+
+
+def shoot_not_connected(browser: Any, out: Path, world: Any) -> None:
+    """Agents that are not connected (#814): Members with the group open, and the Inspector of one of them."""
+    from playwright.sync_api import expect
+
+    room = "#ops-gone"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1", "cursor-1", "devin-1"))
+    for name, harness in (
+        ("claude-1", "claude"),
+        ("codex-1", "codex"),
+        ("cursor-1", "cursor"),
+        ("devin-1", "devin"),
+    ):
+        world.set_member_harness(room, name, harness)
+    # a joined scripted agent is busy until it waits, and a busy one gets 2 hours: three hours is gone
+    world.set_member_heard(room, "codex-1", 3 * 3600)
+    world.set_member_heard(room, "cursor-1", 50 * 3600)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            if theme == "phone-light":
+                page.click("#buddy-toggle")
+            expect(page.locator("#nc-group")).to_contain_text("Not connected (2)")
+            page.click("#nc-group")
+            expect(page.locator('#buddy-list .member[data-name="cursor-1"]')).to_be_visible()
+            settle(page)
+            shot(page, out, f"not-connected-members-{theme}.png")
+            page.click('#buddy-list .member[data-name="cursor-1"] .m-open')
+            expect(page.locator("#insp-remove")).to_be_visible()
+            settle(page)
+            shot(page, out, f"not-connected-inspector-{theme}.png")
+        finally:
+            ctx.close()
+
+
+def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
+    """Browser notifications (#723): Settings, Profile, Notifications, off and on. The notification itself is
+    drawn by the browser and is not in a page screenshot, so the fake Notification here only grants."""
+    from playwright.sync_api import expect
+
+    stub = (
+        "class N { static requestPermission() { N.permission = 'granted'; return Promise.resolve('granted'); } }"
+        " N.permission = 'default'; window.Notification = N;"
+    )
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_init_script(stub)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            if not page.locator("#me-settings").is_visible():
+                page.click("#rooms-toggle")
+            page.click("#me-settings")
+            row = page.locator("#settings-row-profile")
+            if row.is_visible():
+                row.click()
+            box = page.locator("#settings-notify")
+            box.scroll_into_view_if_needed()
+            expect(box).to_be_visible()
+            settle(page)
+            shot(page, out, f"notifications-off-{theme}.png")
+            box.check()
+            expect(box).to_be_checked()
+            settle(page)
+            shot(page, out, f"notifications-on-{theme}.png")
+        finally:
+            ctx.close()
 
 
 def shoot_board(browser: Any, out: Path, world: Any) -> None:
@@ -4083,7 +4174,80 @@ def shoot_redact(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_agents(browser: Any, out: Path, world: Any) -> None:
+    """#815: Home's Agents section, with every state: one waiting for approval, one working and quiet for
+    40 minutes (possibly stuck), one working, some idle, one offline, one not connected, across three rooms. The desktop in the
+    light theme is the guide's picture (``guide-agents-light``); the dark theme and the phone are the previews."""
+    from playwright.sync_api import expect
+
+    world.create_room("#uploads")
+    world.add_agents("#uploads", ("claude-1", "codex-1"))
+    world.create_room("#ship")
+    world.add_agents("#ship", ("codex-1",))
+    world.set_member_status("#build", "claude-1", "waiting-approval")
+    world.set_member_status("#build", "codex-1", "busy")
+    world.set_member_status("#build", "bench", "offline")
+    world.set_member_status("#uploads", "claude-1", "busy")
+    world.set_member_status("#uploads", "codex-1", "idle")
+    world.agent_status("#uploads", "claude-1", "Reviewing the upload fix")
+    world.agent_status("#ship", "codex-1", "Waiting on CI for the release branch")
+
+    def quiet() -> None:
+        st = world.broker.state
+        member = st.store.find_member(st.store.get_room("#ship").id, "codex-1")
+        t = st.clock.now() - 40 * 60
+        st.store.update_participant(
+            member.participant_id, status="busy", status_at=t, last_seen=t, status_line_at=t
+        )
+        st.hub.members_changed("#ship")
+
+    world.broker.on_loop(quiet)
+
+    def vanished() -> None:  # nobody has heard from it for three hours: not connected (#814)
+        st = world.broker.state
+        member = st.store.find_member(st.store.get_room("#build").id, "bench")
+        t = st.clock.now() - 3 * 3600
+        st.store.update_participant(
+            member.participant_id, status="offline", status_at=t, last_seen=t, last_say_at=t
+        )
+        st.hub.members_changed("#build")
+
+    world.broker.on_loop(vanished)
+
+    def home(options: dict[str, Any], scheme: str) -> Any:
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme=scheme, **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        expect(page.locator("#room-title")).to_have_text("Home")
+        expect(page.locator("#home .agent-row")).not_to_have_count(0)
+        expect(page.locator("#home .agent-row.not_connected")).not_to_have_count(0)
+        expect(page.locator("#home .agent-stuck")).not_to_have_count(0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        return page
+
+    for name, options, scheme in (
+        (
+            "guide-agents-light",
+            {"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5},
+            "light",
+        ),
+        ("agents-dark", {"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5}, "dark"),
+        ("agents-phone-light", PHONE, "light"),
+        ("agents-phone-dark", PHONE, "dark"),
+    ):
+        page = home(options, scheme)
+        try:
+            page.locator("#home-h-agents").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, name + ".png")
+        finally:
+            page.context.close()
+
+
 ONLY: dict[str, Any] = {
+    "agents": shoot_agents,
     "redact": shoot_redact,
     "backups": shoot_backups,
     "home": shoot_home,
@@ -4093,6 +4257,8 @@ ONLY: dict[str, Any] = {
     "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
+    "not_connected": shoot_not_connected,
+    "notifications": shoot_notifications,
     "real_names": shoot_real_names,
     "admin_names": shoot_admin_names,
     "admins": shoot_admins,
@@ -4205,6 +4371,8 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_link_card(browser, out, world)  # a room of its own, after the others
             shoot_quiet(browser, out, world)  # quiets a #build agent for a moment: last in this world
             shoot_claim_board(browser, out, world)  # a room of its own, after that
+            shoot_not_connected(browser, out, world)  # a room of its own too
+            shoot_notifications(browser, out, world)  # Settings only
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)

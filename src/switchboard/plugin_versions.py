@@ -19,7 +19,7 @@ HEADER_MAX = 32  # a longer value is no version: nothing past it is looked at
 VERSION_RE = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 
 # release.py rewrites the PINNED line (and nothing else in this file) to match the plugin manifests
-PINNED = {"claude": "0.16.29", "codex": "0.8.28"}
+PINNED = {"claude": "0.16.32", "codex": "0.8.31"}
 
 # how a person updates each plugin (DESIGN.md §49.5), the same words everywhere
 UPDATE = {

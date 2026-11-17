@@ -144,6 +144,7 @@ class Room:
     private: bool = False  # seen only by its people (§44, #74)
     call_voice: bool = False  # every call here starts with Voice on (§52.3)
     call_listen: bool = False  # every agent here listens on calls (§52.3)
+    review_on_link: bool = False  # an agent's new PR or MR link asks for a review (§37.16, #816)
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> "Room":
@@ -166,6 +167,7 @@ class Room:
             private=bool(r["private"]) if "private" in r.keys() else False,
             call_voice=bool(r["call_voice"]) if "call_voice" in r.keys() else False,
             call_listen=bool(r["call_listen"]) if "call_listen" in r.keys() else False,
+            review_on_link=bool(r["review_on_link"]) if "review_on_link" in r.keys() else False,
         )
 
     @property
@@ -349,6 +351,10 @@ class Member:
     plugin_state: str = ""
     plugin_version: str | None = None
     plugin_note: str = ""  # one sentence when it isn't current, with the harness's update command
+    # its newest sign of life (a hook, a call, a say, a status report), and, when no wait is open and it has
+    # been quiet too long, the time it was last heard from (#814, §49.14); None: connected, or nothing known
+    heard_at: float | None = None
+    not_connected_since: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

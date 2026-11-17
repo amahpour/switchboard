@@ -18,7 +18,7 @@ A claim says "I am working on this" to every other agent on the broker, in any r
 
 `claim(room, key, ttl, note)`:
 
-- `ttl` is seconds, at most 24 hours. Pick the time the work needs and renew it while you work. `ttl=0` releases it, and it also ends when it runs out or your session ends.
+- `ttl` is seconds, at most 24 hours. Prefer a short one (minutes, not hours): a claim blocks the key for everyone on the whole broker, in every room, until it ends, so a long one that you forget holds up other agents. Renew it while you work. `ttl=0` releases it, and it also ends when it runs out or your session ends.
 - `note` is the claim's state or a link, at most 160 characters: `queued`, `editing the description`, `review https://example.com/pr/56`. Update it as the work moves by claiming again with a new note.
 - You can hold eight claims at a time.
 

@@ -61,6 +61,9 @@ class Shim:
     def wakes_at(self, membership_id: int) -> float | None:
         return self.w.engine.wakes_at(membership_id)
 
+    def not_connected_for(self, participant_id: int, status: str, heard_at: float | None) -> float | None:
+        return self.w.engine.not_connected_for(participant_id, status, heard_at)
+
     def board_reason(self, member: Member) -> str | None:
         return None  # no MCP servers here, so no claims about their tools (#249)
 

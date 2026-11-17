@@ -173,6 +173,9 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     per_step += [3]  # 47: listening and its per-call counter (#697)
     per_step += [2]  # 48: a room's hands-free call settings (#697)
     per_step += [1]  # 49: the voice pinned for a member on calls (#713)
+    per_step += [0]  # 50: the search index (#735) has no ALTER
+    per_step += [1]  # 51: a room's review-on-link setting (#816)
+    per_step += [1]  # 53: say_keys, the retry receipts (#823; 52 is another pull request's, #829)
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)

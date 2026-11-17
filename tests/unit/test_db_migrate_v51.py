@@ -1,4 +1,4 @@
-"""Schema 51 stores say retry receipts (DESIGN.md §8.4)."""
+"""Schema 51 adds a room's opt-in to a review asked for by a posted link, to a real old database (§37.16)."""
 
 from __future__ import annotations
 
@@ -12,32 +12,35 @@ from switchboard import db
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 
 
-def test_retry_receipt_table_matches_fresh_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An upgrade keeps all schema 50 rows and starts with an empty, indexed receipt table."""
+def test_the_setting_defaults_off_and_old_rows_and_backup_survive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Migrate the release fixture to 50 first, then check the new column, its CHECK, and that every old room
+    starts with the setting off (nothing in an existing room changes). Fails if a room starts with it on."""
     path = tmp_path / "old.db"
-    old = sqlite3.connect(path)
-    try:
+    with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
-    finally:
-        old.close()
     with monkeypatch.context() as mp:
         mp.setattr(db, "SCHEMA_VERSION", 50)
-        before = db.open_db(path)
-        counts = db.row_counts(before, db.tables_of(50))
-        before.close()
-    upgraded = db.open_db(path)
+        old = db.open_db(path)
+        messages = [tuple(r) for r in old.execute("SELECT * FROM messages")]
+        rooms = old.execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
+        old.close()
+    assert rooms > 0
+    con = db.open_db(path)
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 53
+    assert [tuple(r) for r in con.execute("SELECT * FROM messages")] == messages
+    assert con.execute("SELECT COUNT(*) FROM rooms WHERE review_on_link=0").fetchone()[0] == rooms
     fresh = db.open_db(tmp_path / "fresh.db")
-    backup = db.connect(path.with_name("old.db.v50.bak"), readonly=True)
-    try:
-        query = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='say_keys' ORDER BY name"
-        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 51
+    assert [tuple(r) for r in con.execute("PRAGMA table_info(rooms)")] == [
+        tuple(r) for r in fresh.execute("PRAGMA table_info(rooms)")
+    ]
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute("UPDATE rooms SET review_on_link=2")
+    assert db.integrity_ok(con) is None
+    assert list(con.execute("PRAGMA foreign_key_check")) == []
+    with sqlite3.connect(path.with_name("old.db.v50.bak")) as backup:
         assert db.schema_version(backup) == 50
-        assert db.row_counts(upgraded, db.TABLES) == {**counts, "say_keys": 0}
-        assert [tuple(r) for r in upgraded.execute(query)] == [tuple(r) for r in fresh.execute(query)]
-        assert len(upgraded.execute(query).fetchall()) >= 2  # table and expiry index
-        assert not backup.execute(query).fetchall()
-        assert db.integrity_ok(upgraded) is None
-    finally:
-        backup.close()
-        upgraded.close()
-        fresh.close()
+        assert "review_on_link" not in {r[1] for r in backup.execute("PRAGMA table_info(rooms)")}
+    fresh.close()
+    con.close()

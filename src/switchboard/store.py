@@ -402,6 +402,16 @@ class Store:
             )
             return cur.rowcount == 1
 
+    def set_room_review_on_link(self, room_id: int, on: bool) -> bool:
+        """Set whether an agent's new pull or merge request link asks for a review (§37.16, #816). True
+        when that changed it."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE rooms SET review_on_link=? WHERE id=? AND review_on_link!=?",
+                (int(on), room_id, int(on)),
+            )
+            return cur.rowcount == 1
+
     def set_budget(self, room_id: int, remaining: int) -> Room:
         if remaining < 0:
             raise ValueError("budget must be >= 0")
@@ -1035,6 +1045,20 @@ class Store:
         }
         return member_rows, claim_rows, counts
 
+    def agent_sessions(self) -> list[sqlite3.Row]:
+        """Every active membership with its session's state and clock facts, in one query, for the agents
+        overview (§55.9): the status and its line, when it last changed state, and its newest signs of life
+        (``last_seen``, ``last_say_at``, ``hooks_seen_at``). Rows that already exist, across every room (the
+        caller keeps the rooms a person may see); nothing is written. Like ``live_agents``, it leaves out what
+        ``members`` works out for one room's pane (queues, claims, the engine's parked state), because a
+        build for fifty rooms asks for this once and not once for each room."""
+        return self.con.execute(
+            "SELECT m.id AS membership_id, m.room_id, m.participant_id, m.screen_name, p.harness, p.status,"
+            " p.status_at, p.status_line, p.status_line_at, p.host, p.last_seen, p.last_say_at,"
+            " p.hooks_seen_at FROM memberships m JOIN participants p ON p.id=m.participant_id"
+            " WHERE m.left_at IS NULL ORDER BY m.room_id, m.joined_at, m.id"
+        ).fetchall()
+
     def meetings_ended_since(self, since: float) -> list[Meeting]:
         """Calls that ended at or after ``since``, in any room (the caller filters by who may see)."""
         rows = self.con.execute(
@@ -1114,6 +1138,8 @@ class Store:
             " p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
+            " MAX(COALESCE(p.last_seen, 0), COALESCE(p.status_at, 0),"
+            "   COALESCE(p.last_say_at, 0)) AS heard_at,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -1142,6 +1168,7 @@ class Store:
                 queued=r["queued"],
                 inflight=r["inflight"],
                 host=r["host"],
+                heard_at=r["heard_at"] or None,
                 status_line=r["status_line"],
                 status_line_at=r["status_line_at"],
                 status_line_stale=bool(

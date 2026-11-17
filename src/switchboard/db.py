@@ -26,7 +26,8 @@ records when a call went live and lets an admin upload the icon of each platform
 each person has seen of each room and which board cards they set aside, for the home page (§55.8);
 46 adds room whiteboards (§56); 47 adds membership listening and its per-call wake count (§52.1);
 48 adds a room's hands-free call settings (§52.3); 49 (#713) adds the voice a person pinned for a member
-on calls (§52.6); 50 adds the full-text chat index (§58); 51 adds say retry receipts (§8.4).
+on calls (§52.6); 50 adds the full-text chat index (§58); 51 adds a room's review-on-link setting (§37.16);
+53 adds say retry receipts (§8.4).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -47,7 +48,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 51
+SCHEMA_VERSION = 53
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -65,7 +66,8 @@ CREATE TABLE rooms(
   private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
   renamed_from TEXT NOT NULL DEFAULT '[]',
   call_voice INTEGER NOT NULL DEFAULT 0 CHECK(call_voice IN (0, 1)),
-  call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)));
+  call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)),
+  review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1)));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -1076,7 +1078,14 @@ V49_TO_V50 = (
 )
 
 
-# Both fresh databases and the migration use these statements.
+# v50 -> v51 (#816, DESIGN.md §37.16): a room's opt-in: an agent's new pull request link asks for a review.
+V50_TO_V51 = (
+    "ALTER TABLE rooms ADD COLUMN review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1))",
+    "UPDATE meta SET value='51' WHERE key='schema_version'",
+)
+
+
+# Both fresh databases and the migration use these statements (#823, DESIGN.md §8.4).
 SAY_KEYS_DDL = (
     "CREATE TABLE say_keys("
     " membership_id INTEGER NOT NULL REFERENCES memberships(id),"
@@ -1086,7 +1095,9 @@ SAY_KEYS_DDL = (
     " PRIMARY KEY(membership_id, key_hash)) WITHOUT ROWID",
     "CREATE INDEX say_keys_expires ON say_keys(expires_at)",
 )
-V50_TO_V51 = (*SAY_KEYS_DDL, "UPDATE meta SET value='51' WHERE key='schema_version'")
+# v51 -> v53: the retry receipts. Schema 52 is taken by another pull request (#829); a step may skip a number,
+# so this one goes straight to 53 and the one that lands second only has to add its own 52 -> 53 step.
+V51_TO_V53 = (*SAY_KEYS_DDL, "UPDATE meta SET value='53' WHERE key='schema_version'")
 
 
 class MigrationStep(NamedTuple):
@@ -1157,7 +1168,8 @@ def _steps(frm: int) -> list[MigrationStep]:
         47: MigrationStep(48, V47_TO_V48, ()),
         48: MigrationStep(49, V48_TO_V49, ()),
         49: MigrationStep(50, V49_TO_V50, ()),
-        50: MigrationStep(51, V50_TO_V51, ("say_keys",)),
+        50: MigrationStep(51, V50_TO_V51, ()),
+        51: MigrationStep(53, V51_TO_V53, ("say_keys",)),
     }
     out = []
     v = frm
@@ -1206,8 +1218,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V44_TABLES
     if version == 45:
         return V45_TABLES
-    if version <= 50:
-        return V50_TABLES
+    if version <= 52:
+        return V50_TABLES  # 51 added a column, no table; 52 is another pull request's (#829)
     return TABLES
 
 
