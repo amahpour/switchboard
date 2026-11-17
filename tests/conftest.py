@@ -332,6 +332,7 @@ class InProcBroker:
 
         from switchboard.broker.app import create_app
         from switchboard.broker.daemon import loopback_listener
+        from switchboard.broker.restarts import BrokerServer
 
         tcp = loopback_listener(self.port)  # the broker's own socket; a restart keeps its port (and Origin)
         self.port = tcp.getsockname()[1]
@@ -346,7 +347,7 @@ class InProcBroker:
             clock=self.clock,
             web_origin=origin,
         )
-        self.server = uvicorn.Server(
+        self.server = BrokerServer(
             uvicorn.Config(
                 self.app,
                 access_log=False,
@@ -354,7 +355,8 @@ class InProcBroker:
                 log_config=None,
                 lifespan="on",
                 ws_ping_interval=None,
-            )
+            ),
+            self.app.state.broker,
         )
         self.app.state.broker.shutdown_cb = lambda: setattr(self.server, "should_exit", True)
 

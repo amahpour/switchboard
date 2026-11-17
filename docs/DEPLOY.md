@@ -473,6 +473,38 @@ Pin switchboard's releases by tag rather than `:latest`, so an upgrade happens w
 
 The CPU digest on the CUDA tag, or the other way round, is a different image. Do not copy one digest onto the other.
 
+### During a restart
+
+A single broker is unavailable while its replacement starts. Allow about 60 seconds for a
+rollout, and give SIGTERM enough time to finish graceful shutdown. The broker ends its open
+waits before draining HTTP requests and posts accepted rate-limited says before closing the
+database. Their remaining rate-limit delay is skipped; the three-post cap per member still
+applies. A crash or SIGKILL can still lose says that were only queued in memory.
+
+- **Web UI:** shows **Reconnecting…**, reconnects automatically and catches up from its last
+  message id. Keep the page open; no reload is needed. There is currently no final give-up timer.
+- **Claude Code's listener:** an open listening round ends with HTTP 503 and `Retry-After: 1`.
+  Its shell and Windows implementations already retry an unreachable broker or a 429, 500,
+  502, 503 or 504, starting at 1 second and doubling to a maximum 60 seconds between attempts.
+  After a long listening round it retries immediately. These retries have no two-minute
+  give-up limit, but a non-retryable refusal such as HTTP 409 ends the current listener.
+  Startup marks sessions offline; an existing listener's later round can therefore receive
+  409 before a fresh hook reports the session. Automatic recovery across that transition
+  still needs the live checks in #823.
+- **MCP tools and Stop hooks:** an open MCP stream already has HTTP 200 headers. A waiting
+  `wait()` therefore ends with `code: restarting` and `retry_after_s: 1`; an open MCP Stop hook
+  ends with a tool error saying to try again in a minute. New requests get HTTP 503. Transport
+  session ids are held in memory: after startup an old id gets 404 and the MCP client must
+  initialize a new session. The participant's room memberships and pending messages survive.
+- **Cursor and Devin:** Cursor's HTTP park ends with 503, but its hook script does not retry
+  that request itself. Devin's `wait()` uses the MCP behavior above. Automatic recovery of
+  each harness, including Codex's day-long Stop wait and Devin's 130-second dropped-wait
+  liveness window, still needs the live checks tracked in #823. Do not assume a guaranteed
+  reconnect or a common give-up deadline across all clients yet.
+
+A `say` whose answer was lost after it was stored can still be duplicated if resent. Optional
+retry keys and automatic client recovery are separate parts of #823.
+
 ## Backups
 
 `switchboard backup` copies a live database with SQLite's backup API. The broker keeps running:

@@ -31,6 +31,10 @@ class Claim:
     holder: str
     expires_at: float
     note: str = ""
+    # where it is held, for a claim another room's member holds on the same key (#817); the room's own
+    # claims carry 0 and no host, since the caller already knows them
+    room_id: int = 0
+    host: str = ""
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,8 @@ class Decision:
     holder: str = ""
     expires_at: float = 0.0
     note: str = ""
+    room_id: int = 0  # the room of a claim that is held in another room (#817); 0: this room
+    host: str = ""  # the holder's device, when it is held in another room
 
 
 def normalize_key(value: object) -> str:
@@ -72,12 +78,25 @@ def normalize_ttl(value: object) -> int:
     return min(value, TTL_MAX_S)
 
 
-def decide(held: Sequence[Claim], member_id: int, key: str, ttl: int, now: float, note: str = "") -> Decision:
+def decide(
+    held: Sequence[Claim],
+    member_id: int,
+    key: str,
+    ttl: int,
+    now: float,
+    note: str = "",
+    elsewhere: Sequence[Claim] = (),
+) -> Decision:
     """Choose a move from active claims at ``now``; no I/O and no hidden time source.
 
     ``note`` is already cleaned. Empty on a renewal keeps the stored note; a non-empty
     one replaces it. Release drops the row, so the note goes with it. Another member's
     note is ignored with the refusal.
+
+    ``elsewhere`` are the claims on the same key held in other rooms by other sessions (#817: a
+    key holds across every room of the broker). A new claim on a key one of them holds is refused
+    (``held``, with that claim's room and device), the same as a claim another member of this room
+    holds. A renewal or a release of a claim this member already holds never asks them.
     """
     active = [c for c in held if c.expires_at > now]
     existing = next((c for c in active if c.key.casefold() == key.casefold()), None)
@@ -88,9 +107,34 @@ def decide(held: Sequence[Claim], member_id: int, key: str, ttl: int, now: float
     if existing is not None:
         kept = note if note else existing.note
         return Decision("renewed", holder=existing.holder, expires_at=now + ttl, note=kept)
+    other = next(
+        (
+            c
+            for c in sorted(elsewhere, key=lambda c: c.expires_at)
+            if c.expires_at > now and c.key.casefold() == key.casefold()
+        ),
+        None,
+    )
+    if other is not None:
+        return Decision(
+            "held", holder=other.holder, expires_at=other.expires_at, room_id=other.room_id, host=other.host
+        )
     if sum(c.membership_id == member_id for c in active) >= MEMBER_MAX:
         return Decision("limit")
     return Decision("acquired", expires_at=now + ttl, note=note)
+
+
+def refusal_text(key: str, holder: str, host: str, room: str | None, here: bool) -> str:
+    """The sentence a refused claim is answered with (#817). ``here``: the holder is in this room, and the
+    refusal names it as it always did. Held in another room: that room and the holder's device when the
+    caller's person can see the room (``room`` is its name), else only that it is held elsewhere, so a
+    private room's name and members are never given to someone outside it (§44)."""
+    if here:
+        return f"{key} is claimed by {holder}"
+    if room is None:
+        return f"{key} is held elsewhere on this broker"
+    who = f"{holder}@{host}" if host else holder
+    return f"{key} is claimed by {who} in {room}"
 
 
 # ------------------------------------------------------------------- watching (#541, §8.1)
