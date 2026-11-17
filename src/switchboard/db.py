@@ -26,7 +26,9 @@ records when a call went live and lets an admin upload the icon of each platform
 each person has seen of each room and which board cards they set aside, for the home page (§55.8);
 46 adds room whiteboards (§56); 47 adds membership listening and its per-call wake count (§52.1);
 48 adds a room's hands-free call settings (§52.3); 49 (#713) adds the voice a person pinned for a member
-on calls (§52.6).
+on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room's opt-in so an agent's
+new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
+agent chat and wake batches (§61).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -47,7 +49,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 51
+SCHEMA_VERSION = 52
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -122,6 +124,7 @@ CREATE TABLE messages(
   meeting_id INTEGER REFERENCES meetings(id));
 CREATE INDEX messages_room_id ON messages(room_id, id);
 CREATE INDEX messages_meeting ON messages(meeting_id) WHERE meeting_id IS NOT NULL;
+CREATE INDEX messages_agent_ts ON messages(room_id, ts) WHERE kind='chat' AND sender_kind='agent';
 
 CREATE TABLE batches(
   id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id),
@@ -133,6 +136,7 @@ CREATE TABLE batches(
   state TEXT NOT NULL DEFAULT 'offered' CHECK(state IN ('offered','confirmed','expired','cancelled')),
   created_at REAL NOT NULL, posted_at REAL, confirmed_at REAL, expired_at REAL, expire_reason TEXT,
   turn_start_at REAL, first_action_at REAL, evidence TEXT);
+CREATE INDEX batches_wake_created ON batches(created_at) WHERE kind='wake';
 
 CREATE TABLE deliveries(
   membership_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
@@ -1083,6 +1087,17 @@ V50_TO_V51 = (
 )
 
 
+# v51 -> v52 (#818, DESIGN.md §61): the usage page reads agent chat and wake batches inside the
+# last 7 days. Without these, that read walks every message of the visible rooms and every batch.
+# The partial indexes are the window: room and time for agent chat, time for a wake. The predicates
+# in Store.usage_posts and Store.usage_wakes are what let SQLite use them.
+V51_TO_V52 = (
+    "CREATE INDEX messages_agent_ts ON messages(room_id, ts) WHERE kind='chat' AND sender_kind='agent'",
+    "CREATE INDEX batches_wake_created ON batches(created_at) WHERE kind='wake'",
+    "UPDATE meta SET value='52' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1152,6 +1167,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         48: MigrationStep(49, V48_TO_V49, ()),
         49: MigrationStep(50, V49_TO_V50, ()),
         50: MigrationStep(51, V50_TO_V51, ()),
+        51: MigrationStep(52, V51_TO_V52, ()),
     }
     out = []
     v = frm

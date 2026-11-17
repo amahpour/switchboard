@@ -15,8 +15,9 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 def test_the_setting_defaults_off_and_old_rows_and_backup_survive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Migrate the release fixture to 50 first, then check the new column, its CHECK, and that every old room
-    starts with the setting off (nothing in an existing room changes). Fails if a room starts with it on."""
+    """Migrate the release fixture to 50 first, then on through the current schema. The new column's CHECK
+    holds, and every old room starts with the setting off. Fails if a room starts on, or a later step drops
+    the column."""
     path = tmp_path / "old.db"
     with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
@@ -28,7 +29,7 @@ def test_the_setting_defaults_off_and_old_rows_and_backup_survive(
         old.close()
     assert rooms > 0
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 51
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 52
     assert [tuple(r) for r in con.execute("SELECT * FROM messages")] == messages
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE review_on_link=0").fetchone()[0] == rooms
     fresh = db.open_db(tmp_path / "fresh.db")

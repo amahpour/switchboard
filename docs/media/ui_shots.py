@@ -4141,6 +4141,61 @@ def shoot_review_edit(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_usage(browser: Any, out: Path, world: Any) -> None:
+    """#818, what agents cost: the sidebar's Usage page over the seeded rooms. The light desktop
+    picture is the guide's (``guide-usage-light``); dark and the phone are the pull request's."""
+    from playwright.sync_api import expect
+
+    def plant() -> None:
+        # one counted wake, with every member held and offline so the running engine does not add more
+        store = world.broker.state.store
+        room = store.get_room("#build")
+        assert room is not None
+        members = [m for m in store.room_memberships(room.id) if m.left_at is None]
+        target = next(m for m in members if m.screen_name == "claude-1")
+        for m in members:
+            store.set_held(m.id, True)
+            store.set_status(m.participant_id, "offline", "test")
+        msg = store.insert_message(
+            room.id, sender_name="alice", sender_kind="human", via="web", text="how far did the build get?"
+        )
+        store.create_batch(target.id, path="wait", kind="wake", counted=True, items=[(msg.id, 1)])
+
+    world.broker.on_loop(plant)
+
+    def open_usage(options: dict[str, Any], scheme: str) -> Any:
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme=scheme, **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        nav = page.locator("#usage-nav")
+        if not nav.is_visible():
+            page.click("#rooms-toggle")
+        nav.click()
+        expect(page.locator("#room-title")).to_have_text("Usage", timeout=WAIT_MS)
+        expect(page.locator("#usage-rooms")).to_be_visible()
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        return page
+
+    page = open_usage({"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5}, "light")
+    try:
+        shot(page, out, "guide-usage-light.png")
+    finally:
+        page.context.close()
+    page = open_usage({"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5}, "dark")
+    try:
+        shot(page, out, "usage-dark.png")
+    finally:
+        page.context.close()
+    for scheme in ("light", "dark"):
+        page = open_usage(PHONE, scheme)
+        try:
+            shot(page, out, f"usage-phone-{scheme}.png")
+        finally:
+            page.context.close()
+
+
 def shoot_redact(browser: Any, out: Path, world: Any) -> None:
     """#819: a person pastes a token. On a build that redacts, the line holds the marker and a note under it
     names the kind; on one that does not, the token is posted as written. Same steps, so the pictures made on
@@ -4251,6 +4306,7 @@ ONLY: dict[str, Any] = {
     "redact": shoot_redact,
     "backups": shoot_backups,
     "home": shoot_home,
+    "usage": shoot_usage,
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
     "review_edit": shoot_review_edit,
