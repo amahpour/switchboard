@@ -1544,6 +1544,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # what a new room this person creates would start with, and where it comes
                 # from (#131): shown in Settings beside the budget/hop-limit defaults
                 "wake_defaults": state.service.wake_defaults(w.person_id),
+                # browser notifications on or off for this person (#723, §55.9)
+                "notify": state.store.setting_get(notify_key(w.person_id)) == "1",
             }
         )
         # Slide the browser cookie along with the server-side session.
@@ -1753,6 +1755,27 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             )
             icons_changed(state)
         return _ok({"removed": removed})
+
+    def notify_key(person_id: int | None) -> str:
+        """The broker_settings row that holds one person's notifications choice (0: the owner)."""
+        return f"notify:{0 if person_id is None else person_id}"
+
+    @app.put("/api/me/notify")
+    async def set_notify(request: Request) -> Response:
+        """Browser notifications on or off for the signed-in person (#723, §55.9). The page asks the browser
+        for permission from the click that sends this; the broker only keeps the choice, so it follows the
+        person to another browser, where the browser asks again. It changes nothing for an agent."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if set(body) != {"on"} or not isinstance(body["on"], bool):
+            return _err(400, "bad_request", "on must be true or false")
+        state.store.setting_set(notify_key(w.person_id), "1" if body["on"] else "0")
+        return _ok({"notify": body["on"]})
 
     @app.put("/api/me/preferences")
     async def set_preferences(request: Request) -> Response:

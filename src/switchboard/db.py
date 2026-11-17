@@ -47,7 +47,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 50
+SCHEMA_VERSION = 51
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -65,7 +65,8 @@ CREATE TABLE rooms(
   private INTEGER NOT NULL DEFAULT 0 CHECK(private IN (0, 1)),
   renamed_from TEXT NOT NULL DEFAULT '[]',
   call_voice INTEGER NOT NULL DEFAULT 0 CHECK(call_voice IN (0, 1)),
-  call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)));
+  call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)),
+  review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1)));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -1075,6 +1076,13 @@ V49_TO_V50 = (
 )
 
 
+# v50 -> v51 (#816, DESIGN.md §37.16): a room's opt-in: an agent's new pull request link asks for a review.
+V50_TO_V51 = (
+    "ALTER TABLE rooms ADD COLUMN review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1))",
+    "UPDATE meta SET value='51' WHERE key='schema_version'",
+)
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1143,6 +1151,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         47: MigrationStep(48, V47_TO_V48, ()),
         48: MigrationStep(49, V48_TO_V49, ()),
         49: MigrationStep(50, V49_TO_V50, ()),
+        50: MigrationStep(51, V50_TO_V51, ()),
     }
     out = []
     v = frm

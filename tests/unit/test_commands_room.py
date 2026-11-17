@@ -1,4 +1,4 @@
-"""/room: a room's hands-free call settings are a person's (#697, DESIGN.md §52.3). Parsing and roles."""
+"""/room: a room's settings are a person's (#697, DESIGN.md §52.3; #816, §37.16). Parsing and roles."""
 
 from __future__ import annotations
 
@@ -14,13 +14,24 @@ from switchboard.broker.commands import Actor, CommandError, check_role, parse_c
         ("/room", ()),
         ("/room voice on", ("voice", "on")),
         ("/room LISTEN Off", ("listen", "off")),
+        ("/room review ON", ("review", "on")),
     ],
 )
-def test_room_parses_only_the_two_settings(text: str, args: tuple[str, ...]) -> None:
+def test_room_parses_only_its_three_settings(text: str, args: tuple[str, ...]) -> None:
     assert parse_command(text).args == args
 
 
-@pytest.mark.parametrize("text", ["/room voice", "/room speak on", "/room voice 1", "/room listen on now"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "/room voice",
+        "/room speak on",
+        "/room voice 1",
+        "/room listen on now",
+        "/room review",
+        "/room review maybe",
+    ],
+)
 def test_room_refuses_anything_else(text: str) -> None:
     with pytest.raises(CommandError):
         parse_command(text)
@@ -32,7 +43,14 @@ def test_changing_a_setting_needs_a_web_session_and_reading_does_not() -> None:
     (an agent is never a command caller at all) can do anything."""
     r = room()
     assert required_role(parse_command("/room"), r) == "human_cli"
-    for text in ("/room voice on", "/room voice off", "/room listen on", "/room listen off"):
+    for text in (
+        "/room voice on",
+        "/room voice off",
+        "/room listen on",
+        "/room listen off",
+        "/room review on",
+        "/room review off",
+    ):
         cmd = parse_command(text)
         assert required_role(cmd, r) == "human"
         check_role(cmd, r, Actor(role="human", via="web"))

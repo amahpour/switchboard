@@ -399,6 +399,16 @@ class Store:
             )
             return cur.rowcount == 1
 
+    def set_room_review_on_link(self, room_id: int, on: bool) -> bool:
+        """Set whether an agent's new pull or merge request link asks for a review (§37.16, #816). True
+        when that changed it."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE rooms SET review_on_link=? WHERE id=? AND review_on_link!=?",
+                (int(on), room_id, int(on)),
+            )
+            return cur.rowcount == 1
+
     def set_budget(self, room_id: int, remaining: int) -> Room:
         if remaining < 0:
             raise ValueError("budget must be >= 0")

@@ -339,6 +339,7 @@ class RoomService:
             "meeting": self.meeting_state(room),
             # the room's hands-free calls (§52.3): shown to everyone in the room, so nobody is surprised
             "hands_free": {"voice": room.call_voice, "listen": room.call_listen},
+            "review_on_link": room.review_on_link,  # an agent's new PR link asks for a review (§37.16)
         }
 
     def room_dict(self, room: Room) -> dict[str, Any]:
