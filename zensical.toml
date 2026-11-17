@@ -63,6 +63,7 @@ nav = [
     { "Research: transcript review" = "research/transcript-review.md" },
     { "Research: the proof rule" = "research/proof-rule.md" },
     { "Research: file sharing" = "research/file-sharing.md" },
+    { "Research: say retry keys" = "research/say-key-823.md" },
   ] },
 ]
 
