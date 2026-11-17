@@ -36,7 +36,9 @@ _QUOTES = "\"'“”‘’"
 _TERMINAL = ".?!…。？！"
 
 BOX = ".live-transcription-subtitle__box"
-# one entry for each speaker the box shows: the avatar's initials and colour, and the text beside it
+# one entry for each speaker the box shows: the avatar's initials and colour, the text beside it, and (#810)
+# the name label of an avatar with a picture (no initials): the picture's alt, or aria-label or title on the
+# icon or the row; and, only for a row with no initials, its markup (cut), for the one-time diagnostic
 READ_JS = """() => {
   const box = document.querySelector('.live-transcription-subtitle__box');
   if (!box) return null;
@@ -44,9 +46,19 @@ READ_JS = """() => {
   for (const it of box.querySelectorAll('.live-transcription-subtitle__item')) {
     const row = it.parentElement;
     const icon = row ? row.querySelector('.zmu-data-selector-item__icon') : null;
-    out.push({i: icon ? icon.textContent.trim() : '',
+    const initials = icon ? icon.textContent.trim() : '';
+    let label = '';
+    if (icon && !initials) {
+      const img = icon.querySelector('img');
+      const from = [img && img.getAttribute('alt'), icon.getAttribute('aria-label'), icon.getAttribute('title'),
+                    row && row.getAttribute('aria-label'), row && row.getAttribute('title')];
+      label = (from.find((v) => v && v.trim()) || '').trim().slice(0, 80);
+    }
+    out.push({i: initials,
               c: icon ? getComputedStyle(icon).backgroundColor : '',
-              t: it.textContent});
+              n: label,
+              t: it.textContent,
+              h: initials ? '' : [icon, row].map((e) => (e ? e.outerHTML.slice(0, 1500) : '')).join('\\u0000')});
   }
   return out;
 }"""
@@ -124,6 +136,67 @@ def initials_of(name: str) -> set[str]:
 
 
 SELF = "\0self"  # the bot's own voice: never a call line
+
+
+def norm_name(name: str) -> str:
+    return " ".join(name.casefold().split())
+
+
+def key_parts(key: str) -> tuple[str, str]:
+    """The initials and the name label an entry key holds: ``initials|colour|label``. The label is in the key so
+    two speakers with pictures (no initials) are two keys, not one."""
+    parts = key.split("|", 2)
+    return parts[0], (parts[2] if len(parts) > 2 else "")
+
+
+def speaker_for_label(label: str, participants: list[str], own_name: str) -> str | None:
+    """The participant a picture's name label belongs to (#810). The label is a claim Zoom's page makes, so it
+    counts only when it is, ignoring case and spacing, exactly one participant's name (or the bot's own: ``SELF``).
+    No match, or two people with that name, and the line has no speaker: never guessed."""
+    want = norm_name(label[:80])
+    if not want:
+        return None
+    if want == norm_name(own_name):
+        return SELF
+    names = {p for p in participants if p and norm_name(p) == want}
+    return next(iter(names)) if len(names) == 1 else None
+
+
+_TAG = re.compile(r"<[^>]*(?:>|$)")
+_ATTR = re.compile(r"([^\s=/\"'<>]+)(?:\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+))?")
+
+
+def redact_markup(html: str, limit: int = 600) -> str:
+    """``html`` for a log (#810): tag names, attribute names and class names are kept; every other attribute
+    value and all text become their length, so the markup shows where Zoom puts a name and the log holds none.
+    Cut to ``limit`` characters."""
+
+    def tag(m: re.Match[str]) -> str:
+        body = m.group(0)[1:].rstrip(">").strip()
+        if body.startswith(("/", "!")):
+            return "<" + body.split()[0] + ">" if body.split() else "<>"
+        closing = body.endswith("/")
+        parts = body.rstrip("/").strip().split(None, 1)
+        name = parts[0] if parts else ""
+        attrs = []
+        for a in _ATTR.finditer(parts[1] if len(parts) > 1 else ""):
+            val = a.group(2)
+            if val is None:
+                attrs.append(a.group(1))
+                continue
+            inner = val[1:-1] if val[:1] in "\"'" and len(val) >= 2 else val
+            attrs.append(f'{a.group(1)}="{inner if a.group(1) == "class" else f"[{len(inner)}]"}"')
+        return "<" + " ".join([name, *attrs]) + ("/" if closing else "") + ">"
+
+    out, pos = [], 0
+    for m in _TAG.finditer(html):
+        if m.start() > pos and html[pos : m.start()].strip():
+            out.append(f"[{len(html[pos : m.start()].strip())}]")
+        out.append(tag(m))
+        pos = m.end()
+    if pos < len(html) and html[pos:].strip():
+        out.append(f"[{len(html[pos:].strip())}]")
+    return "".join(out)[:limit]
 
 
 def speaker_for(initials: str, participants: list[str], own_name: str) -> str | None:
@@ -368,7 +441,11 @@ class CaptionsTranscriptionController:
         self._looked_at = float("-inf")
         self._lookup_failures = 0
         self._seen_text: dict[str, str] = {}
-        self._active: dict[str, dict[str, int]] = {}  # initials -> who the call showed as speaking meanwhile
+        # initials (or, with a picture and no initials, the label) -> who the call showed as speaking meanwhile
+        self._active: dict[str, dict[str, int]] = {}
+        self._active_samples = 0
+        self._active_named = 0
+        self._icon_logged = False
         self._dumped = False
         self._clock: Any = None
         self._transcript: Any = None
@@ -488,6 +565,11 @@ class CaptionsTranscriptionController:
                     self._no_speech.set() if quiet else self._no_speech.clear()
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
+            logger.info(
+                "captions: active_speaker was named in %d of %d samples of a changing caption",
+                self._active_named,
+                self._active_samples,
+            )
             with contextlib.suppress(Exception):
                 self._emit(self._hold.step(self._rule.flush(time.monotonic()), [], 0.0) + self._hold.flush())
             raise
@@ -497,19 +579,29 @@ class CaptionsTranscriptionController:
                 self._decide(False, "no_box")
 
     def _is_own_key(self, key: str) -> bool:
-        return speaker_for(key.split("|", 1)[0], self._participants, self._bot) == SELF
+        return self._name_for(*key_parts(key)) == SELF
 
     async def _take(self, items: list[dict[str, Any]], now: float) -> None:
-        entries = [
-            (f"{str(it.get('i', ''))[:8]}|{str(it.get('c', ''))[:40]}", str(it.get("t", ""))[:4000])
-            for it in items
-            if isinstance(it, dict)
-        ]
+        entries = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            ini = str(it.get("i", ""))[:8]
+            label = " ".join(str(it.get("n", "") if not ini else "").replace("|", " ").split())[:80]
+            entries.append((f"{ini}|{str(it.get('c', ''))[:40]}|{label}", str(it.get("t", ""))[:4000]))
+            if not ini and not self._icon_logged and it.get("h"):
+                self._icon_logged = True  # once a call: where Zoom puts the name of a speaker with a picture
+                icon, _, row = str(it["h"]).partition("\0")
+                logger.info(
+                    "captions: a row with no initials; icon %s; row %s",
+                    redact_markup(icon),
+                    redact_markup(row),
+                )
         self._sample_active(entries)
         finals = self._hold.step(self._rule.feed(entries, now), entries, now)
         if finals:
             await self._dump_buttons()
-            await self._look_up(now, {f.key.split("|", 1)[0] for f in finals})
+            await self._look_up(now, {key_parts(f.key) for f in finals})
         self._emit(finals)
 
     def _sample_active(self, entries: list[tuple[str, str]]) -> None:
@@ -519,13 +611,33 @@ class CaptionsTranscriptionController:
         for key, text in entries:
             if text != self._seen_text.get(key):
                 self._seen_text[key] = text
+                self._active_samples += 1
                 if isinstance(name, str) and name:
-                    counts = self._active.setdefault(key.split("|", 1)[0], {})
+                    self._active_named += 1
+                    counts = self._active.setdefault(self._active_id(*key_parts(key)), {})
                     counts[name[:80]] = counts.get(name[:80], 0) + 1
 
-    def _name_for(self, initials: str) -> str | None:
+    @staticmethod
+    def _active_id(initials: str, label: str) -> str:
+        return initials.strip().upper() if initials.strip() else ("\0" + norm_name(label) if label else "")
+
+    def _name_for(self, initials: str, label: str = "") -> str | None:
         """The speaker for ``initials``: the participant list's one match, else the name the call showed as
-        speaking most while the caption changed, if its initials are these. Never a guess."""
+        speaking most while the caption changed, if its initials are these. Never a guess.
+
+        A picture has no initials (#810), so a row with only a ``label`` is named by it only when the label is
+        exactly one participant's name; and when the list cannot be read, only when it is also the name the
+        call's own active-speaker detection showed most while that row changed. A label that is neither
+        (Zoom's "avatar", say) names no one."""
+        if not initials.strip():
+            if not label:
+                return None
+            who = speaker_for_label(label, self._participants, self._bot)
+            if who is not None or self._participants:
+                return who
+            counts = self._active.get(self._active_id("", label)) or {}
+            top = max(counts.items(), key=lambda kv: kv[1])[0] if counts else ""
+            return top if top and norm_name(top) == norm_name(label) else None
         who = speaker_for(initials, self._participants, self._bot)
         if who is not None:
             return who
@@ -536,10 +648,10 @@ class CaptionsTranscriptionController:
             break
         return None
 
-    async def _look_up(self, now: float, wanted: set[str]) -> None:
+    async def _look_up(self, now: float, wanted: set[tuple[str, str]]) -> None:
         """The participant list, when a speaker's initials do not map yet. Not more often than ``LOOKUP_GAP_S``
         because asking opens Zoom's participant panel."""
-        unknown = [i for i in wanted if self._name_for(i) is None]
+        unknown = [w for w in wanted if self._name_for(*w) is None]
         if not unknown or now - self._looked_at < LOOKUP_GAP_S or self._provider is None:
             return
         if self._lookup_failures >= 2:  # the panel can't be opened here: the active speaker is the way
@@ -578,11 +690,12 @@ class CaptionsTranscriptionController:
 
         end = self._clock.now_s
         for f in finals:
-            initials = f.key.split("|", 1)[0]
-            who = self._name_for(initials)
+            initials, label = key_parts(f.key)
+            who = self._name_for(initials, label)
             logger.info(
-                "captions: line from initials %r as %s (%d participants known)",
+                "captions: line from initials %r%s as %s (%d participants known)",
                 initials,
+                " with a name label" if label else "",
                 "the bot itself" if who == SELF else repr(who),
                 len(self._participants),
             )

@@ -1,0 +1,3 @@
+### Fixed
+
+- **A caption line from someone with a profile picture is no longer always from "call".** Zoom shows no initials for them, so the bot had nothing to match to the participant list. It now also reads a name label from the avatar and uses it only when it is exactly one participant's name (or, when the participant list can't be read, the name the call's own speaker detection shows); otherwise the line still has no speaker, never a guess. The bot's log also records, once per call, where Zoom puts that label (with no text or values), and how often the call named an active speaker. The server's mounted `captions.py` must be updated (the new sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)).
