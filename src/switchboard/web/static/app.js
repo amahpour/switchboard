@@ -4227,12 +4227,22 @@
         ? 'Notifications are blocked for this site. Allow them in the browser\u2019s site settings, then turn this on.' : '';
     }
     box1.addEventListener('change', async function () {
-      if (!box1.checked) { notifySet(false); show(); return; }
-      let got = Notification.permission;
-      if (got === 'default') {
-        try { got = await Notification.requestPermission(); } catch (e) { got = 'denied'; }
+      let want = box1.checked;
+      if (want && Notification.permission === 'default') {
+        let got = 'denied';
+        try { got = await Notification.requestPermission(); } catch (e) { /* denied */ }
+        want = got === 'granted';
+      } else if (want) {
+        want = Notification.permission === 'granted';
       }
-      notifySet(got === 'granted');
+      try {
+        const res = await api('PUT', '/api/me/notify', { on: want });
+        state.me.notify = res.notify;
+      } catch (e) {
+        show();
+        status.textContent = String(e.message || e);
+        return;
+      }
       show();
     });
     show();
@@ -7384,20 +7394,13 @@
   // When something needs this person and this tab is hidden, the browser shows its own notification. It is local:
   // the page already holds what waits on the person (Home) and each room's members, and the browser draws the
   // notification itself, so nothing is sent to anyone. The permission is asked only from a click in Settings.
-  // The on/off is per person in this browser (the permission is the browser's, so a server setting would say
-  // nothing about it). A notification names who, where and what kind in a line, and clicking it opens the item.
-  const NOTIFY_KEY = 'switchboard.notify.';
+  // The on/off is per person and kept by the broker (`notify` in /api/me; the page keeps no storage of its own); the
+  // permission stays the browser's, so on a browser that never granted it nothing shows. A notification names who, where and what kind in a line, and clicking it opens the item.
   const NOTIFY_MAX = 60;  // a notification line is cut: what an agent wrote is untrusted text
   const notified = new Set();  // what this page has already shown or has taken as the starting point
   let notifyPrimed = false;
 
-  function notifyOn() {
-    try { return localStorage.getItem(NOTIFY_KEY + ((state.me || {}).human || '')) === '1'; } catch (e) { return false; }
-  }
-
-  function notifySet(on) {
-    try { localStorage.setItem(NOTIFY_KEY + ((state.me || {}).human || ''), on ? '1' : '0'); } catch (e) { /* private window */ }
-  }
+  function notifyOn() { return !!(state.me && state.me.notify === true); }
 
   function notifySupported() { return typeof Notification === 'function'; }
 
