@@ -30,6 +30,7 @@ from switchboard.broker.hub import Subscriber
 from switchboard.broker.peer import Peer, PeerPolicy
 from switchboard.broker.service import ServiceError
 from switchboard.models import LOCAL_HOST
+from switchboard.redact import notice as redact_notice
 
 if TYPE_CHECKING:  # pragma: no cover
     from switchboard.broker.app import BrokerState
@@ -441,8 +442,9 @@ def build_methods(state: "BrokerState") -> dict[str, MethodSpec]:
         return {"room": room.name, "rules": room.rules_text}
 
     async def human_say(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
-        msg = svc().human_say(_str(p, "room"), _str(p, "text"), via="cli")
-        return {"id": msg.id}
+        removed: list[str] = []
+        msg = svc().human_say(_str(p, "room"), _str(p, "text"), via="cli", redacted=removed)
+        return {"id": msg.id, **({"redacted": removed, "note": redact_notice(removed)} if removed else {})}
 
     async def human_command(conn: Conn, p: dict[str, Any]) -> dict[str, Any]:
         return svc().command(_str(p, "room"), _str(p, "text"), actor_for(conn))

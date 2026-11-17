@@ -4405,3 +4405,18 @@ def test_two_boards_fit_a_phone(ui: UI, scheme: str) -> None:
     page.click('#board .board-card[data-item="Q1"]')
     expect(page.locator("#board .board-detail")).to_be_visible()
     no_horizontal_scroll(page)
+
+
+def test_a_posted_secret_is_removed_and_the_page_says_what_kind_under_the_message(ui: UI) -> None:
+    """#819: a person pastes a token. The posted line holds the marker, never the token, and a short note
+    under it names the kind (never the value). Fails if the page shows the token, or posts it with no word
+    to the sender."""
+    token = "ghp" + "_" + "aB3" * 12
+    page = ui.open()
+    page.fill("#input", f"deploy with {token} now")
+    page.keyboard.press("Enter")
+    expect(page.locator("#log .line.k-chat", has_text="[redacted: github token]")).to_have_count(1)
+    note = page.locator("#log .line.local", has_text="secret removed")
+    expect(note).to_have_count(1)
+    expect(note.locator(".cmd-out")).to_contain_text("github token")
+    assert token not in page.locator("#log").inner_text()

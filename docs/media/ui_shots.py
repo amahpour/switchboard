@@ -56,6 +56,7 @@ opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and th
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
+redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -4104,7 +4105,41 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_redact(browser: Any, out: Path, world: Any) -> None:
+    """#819: a person pastes a token. On a build that redacts, the line holds the marker and a note under it
+    names the kind; on one that does not, the token is posted as written. Same steps, so the pictures made on
+    ``main`` and on the branch are the before and the after (light, dark and the phone)."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    token = "ghp" + "_" + "aB3" * 12  # made up: not a real credential
+    for suffix, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#deploys-" + suffix
+        world.create_room(room)
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.fill("#input", "deploy with " + token + " now")
+            page.keyboard.press("Enter")
+            expect(page.locator("#log .line.k-chat", has_text="deploy with")).to_have_count(1)
+            settle(page)
+            shot(page, out, "redact-" + suffix + ".png")
+        finally:
+            ctx.close()
+
+
 ONLY: dict[str, Any] = {
+    "redact": shoot_redact,
     "backups": shoot_backups,
     "home": shoot_home,
     "usage": shoot_usage,

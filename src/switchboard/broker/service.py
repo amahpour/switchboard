@@ -53,6 +53,7 @@ from switchboard.models import (
     normalize_room,
     tier_label,
 )
+from switchboard.redact import redact
 from switchboard.report import _safe
 from switchboard.store import Ambiguous, Conflict, NotFound, Store, StoreError
 
@@ -1183,8 +1184,11 @@ class RoomService:
         skip: tuple[int, ...] = (),
         person: tuple[str, int | None] | None = None,
         reply_to: int | None = None,
+        redacted: list[str] | None = None,
     ) -> Message:
-        """A message from a human. Posted literally, never parsed as a command.
+        """A message from a human. Posted literally, never parsed as a command. Obvious secrets in it are cut
+        out first (``redact``, #819); ``redacted``, when given, is filled with the kinds removed so the caller
+        can tell the sender.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
         and id (None: the owner); by default the owner, ``human_name``. An ``@here``/
@@ -1204,6 +1208,13 @@ class RoomService:
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        # after the length check, so no text over the limit is searched; a marker can make the text a little
+        # longer than what it replaced, and that is not a reason to refuse it (#819)
+        text, kinds = redact(text)
+        if kinds:
+            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
+            if redacted is not None:
+                redacted.extend(kinds)
         self.reply_target(room, reply_to)
         mentions = parse_mentions(text, self.mention_names(room))
         broadcast = parse_broadcast(text)

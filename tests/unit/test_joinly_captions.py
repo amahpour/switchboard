@@ -400,3 +400,218 @@ def test_a_speaker_change_a_departure_and_a_long_run_release_what_is_held_at_onc
     assert [(k, t) for _, k, t in left] == [(a, "One. Two")]
     long_run = [(i * 0.5, [(a, " ".join(f"S{n}." for n in range(i + 1)))]) for i in range(40)]
     assert _held(long_run)[0][0] < 9
+
+
+# ------------------------------------------------------------------ a speaker with a picture (#810)
+def _speakers_of(c: Any, keys: list[str]) -> list[Any]:
+    ts = Transcript()
+    c._clock, c._transcript, c._events = Clock(), ts, Bus()
+    c._emit([cap.Final(k, "Hello there", 0.0, 1.0) for k in keys])
+    return [s.speaker for s in ts.segments]
+
+
+def test_a_row_with_a_picture_and_a_label_is_the_one_participant_with_that_name(joinly_types: None) -> None:
+    """A picture has no initials; Zoom may put the name on the image. The label names the speaker when it is
+    exactly one participant (case and spacing aside). Fails if such a row stays "call" (no speaker), or if the
+    label of the bot itself is posted as a line."""
+    c = controller(Page([None]))
+    c._participants = ["Alice Brown", "bob smith"]
+    assert _speakers_of(c, ["|rgb(1, 1, 1)|alice  brown", "|rgb(1, 1, 1)|switchboard (transcribing)"]) == [
+        "Alice Brown"
+    ]  # the second is the bot's own voice: dropped
+
+
+def test_two_speakers_with_pictures_are_two_keys_and_two_names() -> None:
+    """Both rows have empty initials and the same colour; only the label tells them apart. Fails if the key
+    leaves the label out (the two would be one speaker, and their text one line)."""
+    rule = cap.FinalRule()
+    a, b = "|rgb(1, 1, 1)|alice brown", "|rgb(1, 1, 1)|bob smith"
+    out = rule.feed([(a, "One."), (b, "Two.")], 0) + rule.feed([(a, "One."), (b, "Two.")], 2.1)
+    assert sorted((f.key, f.text) for f in out) == [(a, "One."), (b, "Two.")]
+    assert [cap.key_parts(f.key)[1] for f in out] == ["alice brown", "bob smith"]
+
+
+async def test_a_picture_row_key_holds_its_label_and_a_row_with_initials_does_not(
+    joinly_types: None,
+) -> None:
+    """`_take` puts the label in the key only for a row with no initials, cut to 80 characters with the key's
+    separator removed. Fails if a label is trusted next to real initials, is not cut, or can split the key."""
+    c = controller(Page([None]))
+    seen: list[list[tuple[str, str]]] = []
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    await c._take(
+        [
+            {"i": "", "c": "rgb(1, 1, 1)", "n": "al|ice " + "x" * 200, "t": "hi"},
+            {"i": "BS", "c": "rgb(2, 2, 2)", "n": "someone else", "t": "yo"},
+        ],
+        0.0,
+    )
+    keys = [k for k, _ in seen[0]]
+    assert cap.key_parts(keys[0]) == ("", ("al ice " + "x" * 200)[:80])
+    assert keys[1] == "BS|rgb(2, 2, 2)||"
+
+
+def test_a_label_that_matches_nobody_or_two_people_names_no_one(joinly_types: None) -> None:
+    """The label is a claim: "Profile picture" or a name no one has is not a speaker, and a name two people
+    share is not guessed. Fails if either line gets a speaker."""
+    c = controller(Page([None]))
+    c._participants = ["alice brown", "Alice Brown", "bob smith"]
+    assert _speakers_of(c, ["|c|alice brown", "|c|Profile picture", "|c|carol"]) == [None, None, None]
+
+
+def test_with_no_participant_list_the_label_counts_only_when_the_active_speaker_is_that_name(
+    joinly_types: None,
+) -> None:
+    """The panel could not be read (no list). A label alone is not trusted, since it may be "avatar"; it
+    counts when the call's own active-speaker name, sampled while that row changed, is the same name. Fails
+    if a label is used with no support, or if an active speaker with another name is used for the row."""
+    c = controller(Page([None]))
+    plat = c._provider._platform_controller
+    key = "|rgb(1, 1, 1)|alice brown"
+    plat.active_speaker = None
+    c._sample_active([(key, "Hello")])
+    assert c._name_for(*cap.key_parts(key)) is None  # a label nothing supports
+    plat.active_speaker = "Carol"
+    c._sample_active([(key, "Hello there")])
+    assert c._name_for(*cap.key_parts(key)) is None  # the call shows someone else
+    plat.active_speaker = "Alice Brown"
+    for t in ("Hello there you", "Hello there you all"):
+        c._sample_active([(key, t)])
+    assert c._name_for(*cap.key_parts(key)) == "Alice Brown"  # the most named is the label's name now
+
+
+def test_markup_is_logged_with_its_names_and_classes_but_no_text_or_attribute_values() -> None:
+    """The diagnostic shows where Zoom puts a name without the name: tag, attribute and class names stay;
+    text and every other attribute value become their length. Fails if "Alice Brown" or a src survives."""
+    html = (
+        '<div class="zmu-data-selector-item__icon bg-1" aria-label="Alice Brown" title=\'Alice\'>'
+        '<img alt="Alice Brown" src="https://example.com/a.png">Alice Brown</div>'
+    )
+    got = cap.redact_markup(html)
+    assert "Alice" not in got and "example.com" not in got
+    assert got == (
+        '<div class="zmu-data-selector-item__icon bg-1" aria-label="[11]" title="[5]">'
+        '<img alt="[11]" src="[25]">[11]</div>'
+    )
+    assert len(cap.redact_markup("<p>" * 500)) == 600
+
+
+async def test_a_row_without_initials_is_logged_once_per_call_and_the_active_speaker_count_at_the_end(
+    joinly_types: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """For the live check: once, the redacted markup of a row with no initials; at the end, how often the
+    call's active speaker was named. Fails if the log repeats, holds the name, or lacks the count."""
+    caplog.set_level("INFO", logger=cap.logger.name)
+    c = controller(Page([None]))
+    c._provider._platform_controller.active_speaker = "Alice Brown"
+    row = {
+        "i": "",
+        "c": "x",
+        "n": "",
+        "t": "hi",
+        "h": '<span class="icon"><img alt="Alice Brown"></span>\0<div>Alice</div>',
+    }
+    await c._take([row], 0.0)
+    await c._take([{**row, "t": "hi there"}], 1.0)
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert text.count("a row with no initials") == 1
+    assert '<img alt="[11]">' in text and "Alice" not in text
+    c._clock, c._transcript, c._events = Clock(), Transcript(), Bus()
+    task = asyncio.create_task(c._run())
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert "active_speaker was named in 2 of 2 samples" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+# ------------------------------------------------- a picture with no name on the row (#810, found live)
+PIC_A, PIC_B = "a" * 12, "b" * 12
+
+
+def _pic_key(pic: str, colour: str = "rgb(1, 1, 1)") -> str:
+    return f"|{colour}||{pic}"
+
+
+def _sample(c: Any, key: str, active: str | None, n: int) -> None:
+    c._provider._platform_controller.active_speaker = active
+    for i in range(n):
+        c._sample_active([(key, f"words {i} {key}")])
+
+
+def test_a_picture_row_with_no_name_is_named_by_the_active_speaker_when_it_always_agrees(
+    joinly_types: None,
+) -> None:
+    """Live, a speaker with a picture had no name on the row, no list could be read, and the call's active
+    speaker was named in 7 of 7 samples. Fails if that row stays "call" (no speaker): the old `_name_for`
+    returned None for a row with no initials and no label before looking at the counts."""
+    c = controller(Page([None]))
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 7)
+    assert _speakers_of(c, [_pic_key(PIC_A)]) == ["Alice Brown"]
+
+
+def test_too_few_samples_or_a_split_count_name_no_one(joinly_types: None) -> None:
+    """Two samples are too few, and 3 against 2 is not sure enough (80% is the bar). Fails if a thin or split
+    count names someone: the name would be a guess."""
+    c = controller(Page([None]))
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 2)
+    _sample(c, _pic_key(PIC_B), "Alice Brown", 3)
+    _sample(c, _pic_key(PIC_B), "Carol", 2)
+    assert _speakers_of(c, [_pic_key(PIC_A), _pic_key(PIC_B)]) == [None, None]
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 1)  # 3 of 3 now
+    assert _speakers_of(c, [_pic_key(PIC_A)]) == ["Alice Brown"]
+
+
+def test_the_bots_own_name_never_names_a_picture_row(joinly_types: None) -> None:
+    """The active speaker can be the bot itself (its own voice). Fails if a picture row is named with the
+    bot's name, or dropped as the bot's own voice on that evidence (it would silence a person)."""
+    c = controller(Page([None]))
+    own = c._bot
+    assert own
+    _sample(c, _pic_key(PIC_A), own.upper(), 9)
+    assert _speakers_of(c, [_pic_key(PIC_A)]) == [None]
+    assert not c._is_own_key(_pic_key(PIC_A))
+
+
+def test_two_pictures_and_a_picture_and_initials_never_share_counts(joinly_types: None) -> None:
+    """Counts are kept for each picture id, apart from every other picture and from any initials. Fails if
+    two people with pictures are given one name, or a row with initials "AB" adds to a picture's counts."""
+    c = controller(Page([None]))
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 4)
+    _sample(c, _pic_key(PIC_B), "Bob Smith", 4)
+    _sample(c, "AB|rgb(1, 1, 1)||", "Zed", 9)
+    assert _speakers_of(c, [_pic_key(PIC_A), _pic_key(PIC_B), _pic_key(PIC_A, "rgb(9, 9, 9)")]) == [
+        "Alice Brown",
+        "Bob Smith",
+        "Alice Brown",
+    ]  # the colour is not the picture: the id is
+    assert c._active_id("", "", PIC_A) != c._active_id("", "", PIC_B) != c._active_id("AB", "", PIC_A)
+    assert set(c._active) == {c._active_id("", "", PIC_A), c._active_id("", "", PIC_B), "AB"}
+
+
+async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id(
+    joinly_types: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The row's markup (with the avatar's src) reaches Python for the one-time diagnostic, and the id is
+    all the key keeps. Fails if the address, or a name, shows in any log record, or the key holds more than
+    12 hex digits of the id (or an id for a row that has initials)."""
+    caplog.set_level("DEBUG", logger=cap.logger.name)
+    src = "https://example.com/avatar/secret-person-123.png"
+    c = controller(Page([None]))
+    seen: list[list[tuple[str, str]]] = []
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    row = {
+        "i": "",
+        "c": "x",
+        "n": "",
+        "p": PIC_A + "ff",
+        "t": "hi",
+        "h": f'<span><img alt="" src="{src}"></span>\0<div/>',
+    }
+    await c._take([row, {**row, "i": "AB"}], 0.0)
+    assert [cap.key_pic(k) for k, _ in seen[0]] == [PIC_A, ""]
+    text = "\n".join(r.getMessage() + str(r.args) for r in caplog.records)
+    assert "secret-person" not in text and "example.com" not in text
+    assert 'src="[' in text  # the diagnostic still ran, with the value as a length
+    c._clock, c._transcript, c._events = Clock(), Transcript(), Bus()
+    c._emit([cap.Final(seen[0][0][0], "hi", 0.0, 1.0)])
+    assert "secret-person" not in "\n".join(r.getMessage() for r in caplog.records)
