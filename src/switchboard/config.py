@@ -50,7 +50,7 @@ class DeliveryCfg:
     listen_quiet_s: float = 15.0
     listen_hold_s: float = 40.0
     # a person's question on the call wakes a listener after this much room quiet (§52.1)
-    listen_ask_s: float = 3.0
+    listen_ask_s: float = 1.0
     listen_max_wakes: int = 40
     # chatter that doesn't address an idle agent waits this long before it wakes it (#137,
     # DESIGN.md §8.2): just inside a 5-minute prompt cache. 0: the quiet period, as before 0.29

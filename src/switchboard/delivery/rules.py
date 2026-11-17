@@ -238,7 +238,7 @@ def chatter_due(
     listening_call: int | None = None,
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
-    listen_ask_s: float = 3.0,
+    listen_ask_s: float = 1.0,
 ) -> bool:
     """Chatter goes out once the room has been quiet for ``quiet_s``, or the oldest
     item has waited ``max_hold_s``.
@@ -293,7 +293,7 @@ def chatter_wakes_at(
     room: Room | None = None,
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
-    listen_ask_s: float = 3.0,
+    listen_ask_s: float = 1.0,
 ) -> float | None:
     """Next ordinary chatter hold or listening deadline, using the same clocks as chatter_due."""
     eligible = [d for d in pending if d.notified_at is None]
@@ -362,7 +362,7 @@ def releasable(
     listening_call: int | None = None,
     listen_quiet_s: float = 15.0,
     listen_hold_s: float = 40.0,
-    listen_ask_s: float = 3.0,
+    listen_ask_s: float = 1.0,
     voice_loop: bool = False,
 ) -> Release | None:
     """What may go out to one member now (DESIGN.md §8.2), or None.
