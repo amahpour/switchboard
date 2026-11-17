@@ -610,6 +610,7 @@ def shoot_claims(browser: Any, out: Path, world: Any) -> None:
             finally:
                 ctx.close()
 
+
 def shoot_not_connected(browser: Any, out: Path, world: Any) -> None:
     """Agents that are not connected (#814): Members with the group open, and the Inspector of one of them."""
     from playwright.sync_api import expect
