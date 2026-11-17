@@ -537,6 +537,34 @@ def test_room_badges_count_only_what_is_addressed_to_you(ui: UI) -> None:
     expect(page).to_have_title(f"switchboard — #{room}")
 
 
+def test_an_opened_room_has_no_badge_after_a_reload(ui: UI) -> None:
+    """Opening a room marks it read on the broker (§55.8, #663), so a reload must not bring its red
+    badge back. Fails while the page rebuilds the count from the history it replays on load and
+    ignores that mark: the old @mention counted again."""
+    room = "e2e-unread-reload"
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("scout",))
+    page = ui.open("build")
+    tab = page.locator(f'#tabs .room[data-room="#{room}"]')
+    ui.world.agent_say(f"#{room}", "scout", f"@{TEST_HUMAN} can you take a look?")
+    expect(tab.locator(".badge")).to_have_text("1")
+
+    with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok):
+        tab.click()  # read it: the page tells the broker
+    page.locator('#tabs .room[data-room="#build"]').click()  # and move on
+    expect(tab.locator(".badge")).to_have_count(0)
+
+    page.reload()
+    tab = page.locator(f'#tabs .room[data-room="#{room}"]')
+    expect(tab).to_be_visible()
+    # a new line that isn't addressed to alice: once its quiet dot shows, the room's replayed history
+    # (which comes first) has been counted too
+    ui.world.agent_say(f"#{room}", "scout", "the sweep is green")
+    expect(tab.locator(".dot, .badge")).to_have_count(1)
+    expect(tab.locator(".badge")).to_have_count(0)
+    expect(tab.locator(".dot")).to_have_count(1)
+
+
 def test_focus_mode_collapses_agent_chat_and_restores_on_toggle_off(ui: UI) -> None:
     """Issue #99: Focus collapses an agent chat message not addressed to alice (the same
     addressedToMe check as the room badges, #109) to one line; a reply to her own message stays
