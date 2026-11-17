@@ -90,6 +90,7 @@ once there are two people; the Inspector naming the owner and the device, #496),
 quiet-inspector-{light,dark,phone-light} and quiet-members-{light,dark,phone-light} (an agent a person
 quieted with the Inspector's Quiet button: the quiet chip and Unquiet, then the agent's line in Members,
 #548),
+notifications-{off,on}-{light,dark,phone-light} (Settings, Profile, Notifications, #723),
 claim-board-{light,dark,phone-light} (the room's Board strip open under the Pins strip, listing every active
 claim with its holder, note and expiry) and claim-board-members-{light,dark,phone-light} (the note on the
 holder's claim line in Members, #545),
@@ -605,6 +606,44 @@ def shoot_claims(browser: Any, out: Path, world: Any) -> None:
                 shot(page, out, f"claims-{stage}-{theme}.png")
             finally:
                 ctx.close()
+
+
+def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
+    """Browser notifications (#723): Settings, Profile, Notifications, off and on. The notification itself is
+    drawn by the browser and is not in a page screenshot, so the fake Notification here only grants."""
+    from playwright.sync_api import expect
+
+    stub = (
+        "class N { static requestPermission() { N.permission = 'granted'; return Promise.resolve('granted'); } }"
+        " N.permission = 'default'; window.Notification = N;"
+    )
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_init_script(stub)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            page.click("#me-settings")
+            row = page.locator("#settings-row-profile")
+            if row.is_visible():
+                row.click()
+            box = page.locator("#settings-notify")
+            box.scroll_into_view_if_needed()
+            expect(box).to_be_visible()
+            settle(page)
+            shot(page, out, f"notifications-off-{theme}.png")
+            box.check()
+            expect(box).to_be_checked()
+            settle(page)
+            shot(page, out, f"notifications-on-{theme}.png")
+        finally:
+            ctx.close()
 
 
 def shoot_board(browser: Any, out: Path, world: Any) -> None:
@@ -4058,6 +4097,7 @@ ONLY: dict[str, Any] = {
     "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
+    "notifications": shoot_notifications,
     "real_names": shoot_real_names,
     "admin_names": shoot_admin_names,
     "admins": shoot_admins,
@@ -4170,6 +4210,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
             shoot_link_card(browser, out, world)  # a room of its own, after the others
             shoot_quiet(browser, out, world)  # quiets a #build agent for a moment: last in this world
             shoot_claim_board(browser, out, world)  # a room of its own, after that
+            shoot_notifications(browser, out, world)  # Settings only
             shoot_hosted(browser, out, hosted)
             shoot_common_password(browser, out, weak)
             shoot_mention_people(browser, out, people)
