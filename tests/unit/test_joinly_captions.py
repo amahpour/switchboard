@@ -448,7 +448,7 @@ async def test_a_picture_row_key_holds_its_label_and_a_row_with_initials_does_no
     )
     keys = [k for k, _ in seen[0]]
     assert cap.key_parts(keys[0]) == ("", ("al ice " + "x" * 200)[:80])
-    assert keys[1] == "BS|rgb(2, 2, 2)|"
+    assert keys[1] == "BS|rgb(2, 2, 2)||"
 
 
 def test_a_label_that_matches_nobody_or_two_people_names_no_one(joinly_types: None) -> None:
@@ -522,3 +522,96 @@ async def test_a_row_without_initials_is_logged_once_per_call_and_the_active_spe
     task.cancel()
     await asyncio.gather(task, return_exceptions=True)
     assert "active_speaker was named in 2 of 2 samples" in "\n".join(r.getMessage() for r in caplog.records)
+
+
+# ------------------------------------------------- a picture with no name on the row (#810, found live)
+PIC_A, PIC_B = "a" * 12, "b" * 12
+
+
+def _pic_key(pic: str, colour: str = "rgb(1, 1, 1)") -> str:
+    return f"|{colour}||{pic}"
+
+
+def _sample(c: Any, key: str, active: str | None, n: int) -> None:
+    c._provider._platform_controller.active_speaker = active
+    for i in range(n):
+        c._sample_active([(key, f"words {i} {key}")])
+
+
+def test_a_picture_row_with_no_name_is_named_by_the_active_speaker_when_it_always_agrees(
+    joinly_types: None,
+) -> None:
+    """Live, a speaker with a picture had no name on the row, no list could be read, and the call's active
+    speaker was named in 7 of 7 samples. Fails if that row stays "call" (no speaker): the old `_name_for`
+    returned None for a row with no initials and no label before looking at the counts."""
+    c = controller(Page([None]))
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 7)
+    assert _speakers_of(c, [_pic_key(PIC_A)]) == ["Alice Brown"]
+
+
+def test_too_few_samples_or_a_split_count_name_no_one(joinly_types: None) -> None:
+    """Two samples are too few, and 3 against 2 is not sure enough (80% is the bar). Fails if a thin or split
+    count names someone: the name would be a guess."""
+    c = controller(Page([None]))
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 2)
+    _sample(c, _pic_key(PIC_B), "Alice Brown", 3)
+    _sample(c, _pic_key(PIC_B), "Carol", 2)
+    assert _speakers_of(c, [_pic_key(PIC_A), _pic_key(PIC_B)]) == [None, None]
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 1)  # 3 of 3 now
+    assert _speakers_of(c, [_pic_key(PIC_A)]) == ["Alice Brown"]
+
+
+def test_the_bots_own_name_never_names_a_picture_row(joinly_types: None) -> None:
+    """The active speaker can be the bot itself (its own voice). Fails if a picture row is named with the
+    bot's name, or dropped as the bot's own voice on that evidence (it would silence a person)."""
+    c = controller(Page([None]))
+    own = c._bot
+    assert own
+    _sample(c, _pic_key(PIC_A), own.upper(), 9)
+    assert _speakers_of(c, [_pic_key(PIC_A)]) == [None]
+    assert not c._is_own_key(_pic_key(PIC_A))
+
+
+def test_two_pictures_and_a_picture_and_initials_never_share_counts(joinly_types: None) -> None:
+    """Counts are kept for each picture id, apart from every other picture and from any initials. Fails if
+    two people with pictures are given one name, or a row with initials "AB" adds to a picture's counts."""
+    c = controller(Page([None]))
+    _sample(c, _pic_key(PIC_A), "Alice Brown", 4)
+    _sample(c, _pic_key(PIC_B), "Bob Smith", 4)
+    _sample(c, "AB|rgb(1, 1, 1)||", "Zed", 9)
+    assert _speakers_of(c, [_pic_key(PIC_A), _pic_key(PIC_B), _pic_key(PIC_A, "rgb(9, 9, 9)")]) == [
+        "Alice Brown",
+        "Bob Smith",
+        "Alice Brown",
+    ]  # the colour is not the picture: the id is
+    assert c._active_id("", "", PIC_A) != c._active_id("", "", PIC_B) != c._active_id("AB", "", PIC_A)
+    assert set(c._active) == {c._active_id("", "", PIC_A), c._active_id("", "", PIC_B), "AB"}
+
+
+async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id(
+    joinly_types: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The row's markup (with the avatar's src) reaches Python for the one-time diagnostic, and the id is
+    all the key keeps. Fails if the address, or a name, shows in any log record, or the key holds more than
+    12 hex digits of the id (or an id for a row that has initials)."""
+    caplog.set_level("DEBUG", logger=cap.logger.name)
+    src = "https://example.com/avatar/secret-person-123.png"
+    c = controller(Page([None]))
+    seen: list[list[tuple[str, str]]] = []
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    row = {
+        "i": "",
+        "c": "x",
+        "n": "",
+        "p": PIC_A + "ff",
+        "t": "hi",
+        "h": f'<span><img alt="" src="{src}"></span>\0<div/>',
+    }
+    await c._take([row, {**row, "i": "AB"}], 0.0)
+    assert [cap.key_pic(k) for k, _ in seen[0]] == [PIC_A, ""]
+    text = "\n".join(r.getMessage() + str(r.args) for r in caplog.records)
+    assert "secret-person" not in text and "example.com" not in text
+    assert 'src="[' in text  # the diagnostic still ran, with the value as a length
+    c._clock, c._transcript, c._events = Clock(), Transcript(), Bus()
+    c._emit([cap.Final(seen[0][0][0], "hi", 0.0, 1.0)])
+    assert "secret-person" not in "\n".join(r.getMessage() for r in caplog.records)
