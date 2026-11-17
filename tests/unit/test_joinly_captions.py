@@ -282,3 +282,52 @@ async def test_a_speaker_is_named_by_the_active_speaker_when_the_participant_lis
         ("Hey Codex, run the tests", "switchboard self-test speaker")
     ]
     assert c._name_for("AB") is None  # nobody speaking has those initials: unknown, not guessed
+
+
+def test_a_row_the_caller_ignores_does_not_count_as_changing() -> None:
+    """The no-speech signal asks `changing` with the bot's own row ignored. Fails if an ignored row still
+    counts, or if a row that is not ignored stops counting."""
+    rule = cap.FinalRule()
+    rule.feed([("ST|a", "Sure, running them"), ("AB|b", "Hello")], 0)
+    own = lambda key: key.startswith("ST")  # noqa: E731
+    assert rule.changing(0.1, 0.6) is True
+    assert rule.changing(0.1, 0.6, own) is True  # the person's row is still speech
+    rule.feed([("ST|a", "Sure, running them now"), ("AB|b", "Hello")], 1.0)
+    assert rule.changing(1.1, 0.6) is True
+    assert rule.changing(1.1, 0.6, own) is False  # only the bot's row changed: quiet
+
+
+class Changing(Page):
+    """A box whose one row grows on every read, as a caption does while someone speaks."""
+
+    def __init__(self, initials: str) -> None:
+        super().__init__([None])
+        self.initials, self.n = initials, 0
+
+    async def evaluate(self, js: str) -> Any:
+        if js is cap.READ_JS:
+            self.n += 1
+            return [{"i": self.initials, "c": "rgb(2, 2, 2)", "t": "words " * self.n}]
+        return await super().evaluate(js)
+
+
+async def _no_speech_after_reads(initials: str, reads: int) -> bool:
+    c = controller(Changing(initials))
+    await c.start(Clock(), Transcript(), Bus())
+    await c.wait_decided(5)
+    while c._page().n < reads:
+        await asyncio.sleep(0.005)
+    held = c.no_speech_event.is_set()
+    await c.stop()
+    return held
+
+
+async def test_the_bots_own_caption_never_clears_the_no_speech_signal_but_a_persons_does(
+    joinly_types: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Zoom captions the bot's own speech, and joinly stops the bot's voice when `no_speech_event` is clear.
+    While only the bot's row changes the event stays set; when a person's row changes it clears. Fails if the
+    bot interrupts itself (#801)."""
+    monkeypatch.setattr(cap, "POLL_S", 0.01)
+    assert await _no_speech_after_reads("S(", 20) is True  # the bot's own row, growing
+    assert await _no_speech_after_reads("AB", 20) is False  # a person's row, growing
