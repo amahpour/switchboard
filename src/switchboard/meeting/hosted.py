@@ -54,7 +54,7 @@ from switchboard.meeting.screen import (
     post_snapshot,
     says_screen,
 )
-from switchboard.meeting.speech import call_text, speakable
+from switchboard.meeting.speech import call_line, call_text
 from switchboard.meeting.turns import MAX_ID, STALE_NOTICE, Turns
 from switchboard.meeting.voices import voice_of
 from switchboard.models import InvalidName, Meeting, Room, normalize_room, split_session_key
@@ -699,7 +699,7 @@ class HostedCalls:
         if st is None or not st.voice or not st.live:
             return
         body = call_text(text)
-        line = speakable(body) if body is not None else ""
+        line = call_line(body) if body is not None else ""
         if not line:
             return
         self._expire_speech(st)

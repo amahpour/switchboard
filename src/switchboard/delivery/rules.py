@@ -79,7 +79,9 @@ def parse_broadcast(text: str) -> str | None:
     return None
 
 
-def broadcast_targets(kind: str, members: Iterable[tuple[str, str]]) -> list[str]:
+def broadcast_targets(
+    kind: str, members: Iterable[tuple[str, str]], not_connected: Iterable[str] = ()
+) -> list[str]:
     """Screen names a broadcast of ``kind`` ('everyone' or 'here') reaches (DESIGN.md §8.1):
     'everyone' is every member passed in; 'here' only those whose status isn't 'offline' (the
     same presence ``who()`` shows). ``members``: (screen_name, status) of every active
@@ -87,11 +89,14 @@ def broadcast_targets(kind: str, members: Iterable[tuple[str, str]]) -> list[str
     human message is already prio=2 for everyone regardless of ``mentions`` (``classify``,
     above), so a broadcast changes no delivery an ``@name`` mention wouldn't already make --
     only which members' ``mentioned`` flag is set (the mention style, the room badges, and the
-    watchdog, §8.5)."""
+    watchdog, §8.5). A member that is not connected (#814, §49.14) is left out of both: nobody is there to
+    answer, and the sender is told about a name they @mention on purpose instead."""
+    gone = {n.lower() for n in not_connected}
+    live = [(n, s) for n, s in members if n.lower() not in gone]
     if kind == "everyone":
-        return [n for n, _ in members]
+        return [n for n, _ in live]
     if kind == "here":
-        return [n for n, s in members if s != "offline"]
+        return [n for n, s in live if s != "offline"]
     return []
 
 
@@ -629,6 +634,61 @@ def wait_drop_expired(now: float, dropped_at: float) -> bool:
     """True once a wait() that dropped its connection at ``dropped_at`` has had no call or hook after it
     for ``WAIT_DROP_GRACE_S``: a live agent re-arms its wait at once, a killed one never does (#448)."""
     return now - dropped_at >= WAIT_DROP_GRACE_S
+
+
+# ------------------------------------------------------------ not connected (#814, §49.14)
+# Over HTTPS the broker can't check a process on someone's machine, so a session that vanished keeps the
+# last state it reported. The signal is a wait it holds open: an idle session that is really there keeps
+# one (Claude Code's and OpenCode's listener rounds, Codex's and Cursor's Stop wait, Devin's wait()), and
+# a busy one reports every tool call. "No wait open and nothing heard" for these long means it is gone.
+NOT_CONNECTED_IDLE_S = 1800.0  # idle with no wait open: 30 minutes
+NOT_CONNECTED_BUSY_S = 7200.0  # busy with no hook: 2 hours (a long build is one tool call)
+NOT_CONNECTED_END_DAYS = 3  # the default for the admin setting: a weekend survives it
+NOT_CONNECTED_END_KEY = "not_connected_end_days"  # its ``broker_settings`` key
+NOT_CONNECTED_END_DAYS_MAX = 365
+DAY_S = 86400.0
+
+
+def heard_at(*times: float | None) -> float | None:
+    """The newest of the times a session showed it was there (``last_seen``, ``status_at``, ``last_say_at``),
+    or None when none is known."""
+    known = [t for t in times if t]
+    return max(known) if known else None
+
+
+def not_connected_since(
+    status: str,
+    heard_at: float | None,
+    has_open_sink: bool,
+    now: float,
+    *,
+    idle_s: float = NOT_CONNECTED_IDLE_S,
+    busy_s: float = NOT_CONNECTED_BUSY_S,
+) -> float | None:
+    """When a member was last heard from, if it is not connected now, else None (DESIGN.md §49.14).
+
+    ``heard_at`` is its newest sign of life (a hook, a call, a say, a wait opening or closing, a status
+    report). Not connected means no wait open and: ``idle_s`` since it was heard when it is idle, starting
+    or offline (``busy_s`` when busy or waiting on an approval prompt, where only hooks speak for it). Nothing
+    known (``heard_at`` None) is never not connected: a row that was never heard from has no "since"."""
+    if has_open_sink or heard_at is None:
+        return None
+    limit = idle_s if status in ("idle", "starting", "offline") else busy_s
+    return heard_at if now - heard_at >= limit else None
+
+
+def not_connected_expired(since: float | None, now: float, end_days: int) -> bool:
+    """True once a session has been not connected for ``end_days`` days, counted from when it was last
+    heard from; 0 days is never (the setting's off)."""
+    return since is not None and end_days > 0 and now - since >= end_days * DAY_S
+
+
+def clamp_end_days(value: object, default: int = NOT_CONNECTED_END_DAYS) -> int:
+    """The admin setting: 1 to ``NOT_CONNECTED_END_DAYS_MAX`` days, or 0 for never; anything else is the
+    default (an unrecognised stored value never turns the cleanup off)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return value if value == 0 or 1 <= value <= NOT_CONNECTED_END_DAYS_MAX else default
 
 
 def clamp_wait(timeout_s: float | int | None, cap_s: int, default: int = 50) -> int:
