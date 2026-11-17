@@ -85,6 +85,13 @@ class Assembler:
             return [self._emit()]
         return []
 
+    def due_in(self, now: float) -> float | None:
+        """Seconds until ``poll`` would close the open line (0 when it is due), or None with nothing open. A
+        caller that sleeps between polls sleeps no longer than this, or a line waits out the sleep (#801)."""
+        if not self._parts or self._last_wall is None:
+            return None
+        return max(0.0, self._last_wall + self.wall_s - now)
+
     def flush(self) -> list[Line]:
         """The open line now. The call ended, so it does not wait out the pause."""
         if not self._parts:

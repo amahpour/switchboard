@@ -624,3 +624,20 @@ async def test_a_whisper_call_keeps_the_long_wait(
     await wait_until(lambda: len(joinly.joins) == 1)
     joinly.push([seg("hello everyone", 0.0, 1.0)])
     await wait_until(lambda: len(meeting_lines(broker)) >= 1)
+
+
+async def test_an_open_line_is_posted_when_its_wall_wait_ends_not_when_the_poll_sleep_does(
+    captions_broker: InProcBroker, joinly: FakeJoinly, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a segment arrives and nothing else changes, the listen loop used to sleep the whole `POLL_S` and
+    only then ask the assembler, so a 0.4 s wall wait was really about 3 s (#801). `POLL_S` is set to ten
+    minutes and the wall wait to 0.05 s: only a loop that sleeps no longer than the open line's remaining
+    wait can post the line. Fails with a timeout if it sleeps `POLL_S`."""
+    from switchboard.meeting import bridge, lines
+
+    monkeypatch.setattr(bridge, "POLL_S", 600.0)
+    monkeypatch.setattr(lines, "CAPTIONS_WALL_S", 0.05)
+    command(captions_broker, f"/meeting {ZOOM}")
+    await wait_until(lambda: len(joinly.joins) == 1)
+    joinly.push([seg("Bob, what's the capital of France?", 0.0, 1.0)])
+    await wait_until(lambda: len(meeting_lines(captions_broker)) >= 1, timeout=3.0)

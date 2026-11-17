@@ -92,3 +92,16 @@ def test_a_captions_batch_closes_after_the_short_wait_and_a_whisper_line_after_w
         assert asm.add(_seg("Bob, what's the capital of France?", 0.0, 1.0), 100.0) == []
         assert asm.poll(100.0 + wait - 0.01) == []
         assert [ln.text for ln in asm.poll(100.0 + wait)] == ["Bob, what's the capital of France?"]
+
+
+def test_due_in_is_the_time_left_until_poll_would_close_the_line() -> None:
+    """`due_in` is None with nothing open, then the wall wait minus what has passed, never below 0, and it
+    agrees with `poll`. Fails if a sleeping caller is told the wrong time (#801)."""
+    asm = Assembler()
+    assert asm.due_in(0.0) is None
+    asm.add(_seg("Hello", 0.0, 1.0), 10.0)
+    assert asm.due_in(10.0) == asm.wall_s
+    assert asm.due_in(10.0 + asm.wall_s - 1.0) == 1.0
+    assert asm.due_in(10.0 + asm.wall_s + 5) == 0.0
+    assert asm.poll(10.0 + asm.wall_s)
+    assert asm.due_in(20.0) is None
