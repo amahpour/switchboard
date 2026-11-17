@@ -1,4 +1,4 @@
-# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764): see deploy/joinly/NOTICE for what.
+# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764, #820): see deploy/joinly/NOTICE for what.
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. MIT License:
 #
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand
@@ -83,6 +83,95 @@ def _patch_experimental(server: FastMCP, extra: dict[str, dict[str, Any]]) -> No
 
     server._mcp_server.get_capabilities = _get_capabilities  # type: ignore[assignment]  # noqa: SLF001
 
+
+# --- switchboard bot logo (#820, DESIGN.md section 52.10) -----------------------------------------------------
+# joinly draws a logo on a virtual camera (joinly/providers/browser/camera_feed.py) but never turns the camera
+# on, so the bot's tile in a call is grey. This swaps in switchboard's mark (favicon.svg of the switchboard
+# repository, kept equal by tests/unit/test_joinly_voice_patch.py) and, after each platform's join, clicks that
+# platform's camera button once. A failure there is logged once and never fails the join.
+# SWITCHBOARD_BOT_VIDEO=0 (or false, off, no) leaves joinly as it was: a grey tile.
+BOT_LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7.5" '
+    'fill="#0a64d8"/><g transform="translate(4 4) scale(1.5)" fill="none" stroke="#fff" stroke-width="1.6" '
+    'stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="1.8"/><circle cx="12" cy="4" r="1.8"/>'
+    '<circle cx="12" cy="12" r="1.8"/><path d="M4 5.8V8a4 4 0 0 0 4 4h2.2M12 5.8v4.4"/></g></svg>'
+)
+BOT_VIDEO_OFF = frozenset({"0", "false", "off", "no"})
+# a platform's camera button while the camera is off (accessible names, case-insensitive)
+BOT_CAMERA_ON = re.compile(r"^(start (my )?video|turn on (my )?camera|turn camera on)", re.IGNORECASE)
+BOT_PLATFORMS = (
+    ("joinly.providers.browser.platforms.zoom", "ZoomBrowserPlatformController"),
+    ("joinly.providers.browser.platforms.google_meet", "GoogleMeetBrowserPlatformController"),
+    ("joinly.providers.browser.platforms.teams", "TeamsBrowserPlatformController"),
+)
+_bot_camera_warned = False
+
+
+def _bot_video_enabled(env: dict[str, str] | None = None) -> bool:
+    """On unless SWITCHBOARD_BOT_VIDEO says off: the setting only turns it off, so an unknown value is on."""
+    import os
+
+    return (env if env is not None else os.environ).get("SWITCHBOARD_BOT_VIDEO", "1").strip().lower() not in (
+        BOT_VIDEO_OFF
+    )
+
+
+async def _bot_camera_on(page: Any) -> bool:  # noqa: ANN401
+    """Click the page's camera-on button once if it is there; True when it was clicked. Never raises; a failure is
+    logged once per process (a call that fails here fails the same way every time)."""
+    global _bot_camera_warned  # noqa: PLW0603
+    try:
+        button = page.get_by_role("button", name=BOT_CAMERA_ON).first
+        if not await button.is_visible():
+            return False
+        await button.click(timeout=1000)
+    except Exception:
+        if not _bot_camera_warned:
+            _bot_camera_warned = True
+            logger.warning("bot logo: could not turn the camera on", exc_info=True)
+        return False
+    return True
+
+
+def _bot_after_join(original: Any) -> Any:  # noqa: ANN401
+    async def join(self: Any, page: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        result = await original(self, page, *args, **kwargs)
+        await _bot_camera_on(page)
+        return result
+
+    join.__wrapped__ = original  # type: ignore[attr-defined]
+    return join
+
+
+def _install_bot_logo(import_module: Any = None, env: dict[str, str] | None = None) -> bool:  # noqa: ANN401
+    """Swap the logo and wrap each platform's join, once. False, touching nothing, when it is off. Never raises:
+    a joinly without these modules is a grey tile."""
+    if not _bot_video_enabled(env):
+        return False
+    import importlib
+    from urllib.parse import quote
+
+    load = import_module or importlib.import_module
+    try:
+        load("joinly.providers.browser.camera_feed")._LOGO_SVG = "data:image/svg+xml," + quote(
+            BOT_LOGO_SVG, safe="/:=,;"
+        )
+    except Exception:
+        logger.warning("bot logo: could not set the logo", exc_info=True)
+        return False
+    for module, name in BOT_PLATFORMS:
+        try:
+            cls = getattr(load(module), name)
+        except (ImportError, AttributeError):
+            logger.warning("bot logo: %s.%s not found", module, name)
+            continue
+        if not hasattr(cls.join, "__wrapped__"):
+            cls.join = _bot_after_join(cls.join)
+    return True
+
+
+_install_bot_logo()
+# --- end of the bot logo -------------------------------------------------------------------------------------
 
 CAPTIONS = "captions"  # switchboard patch (#764): the token that selects joinly/captions.py's three classes
 

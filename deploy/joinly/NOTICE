@@ -1,4 +1,4 @@
-joinly v0.5.4 files, changed by switchboard (#713, #763, DESIGN.md sections 52.5 and 52.9)
+joinly v0.5.4 files, changed by switchboard (#713, #763, #820, DESIGN.md sections 52.5 and 52.9)
 
 server.py and kokoro.py are copies of two files of joinly v0.5.4
 (https://github.com/joinly-ai/joinly, tag v0.5.4), which is MIT licensed:
@@ -36,5 +36,7 @@ the rest of this repository, a new file mounted at joinly/captions.py. The patch
 `stt`, `vad` and `transcription_controller` settings at its three classes when asked for `captions`, hands the
 controller the meeting provider, and adds the `transcription_status` tool. Only the server's bot mounts it.
 
-bot_logo.py (#820, DESIGN.md section 52) is not a copy of a joinly file: it is switchboard's own, MIT licensed like the
-rest of this repository, a new file that would be mounted at joinly/bot_logo.py. It is not wired in yet.
+The bot's logo (#820, DESIGN.md section 52.10) is in server.py too: `BOT_LOGO_SVG` is switchboard's favicon, and
+`_install_bot_logo()` runs when the file is imported: it sets joinly's `camera_feed._LOGO_SVG` to it and wraps each
+platform controller's `join` to click the camera button once afterwards (a failure is logged once and never fails
+the join). `SWITCHBOARD_BOT_VIDEO=0` turns it off. Nothing else of joinly changes.

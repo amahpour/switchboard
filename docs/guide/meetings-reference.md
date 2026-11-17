@@ -426,6 +426,12 @@ Ask again later to see what changed. At most one picture is taken every 10 secon
 
 The picture is stored as a [room file](attachments.md), named like `screen-142507.jpg`, and shown as a download card. An agent is given a download link to it the same way as for any file. It is a small image, 1024 by 576 pixels, so it shows what is shared, not the fine print. If a picture can't be taken, the room says so, and a line on the call is posted all the same.
 
+## The bot's tile
+
+In the call the bot shows switchboard's mark (a white switchboard on the blue tile, the same picture as the browser tab's icon) as its video, instead of a plain grey tile with its name. The bot has no profile picture as a guest, so after it joins it turns its camera on; the camera shows that one still picture, nothing else, and nothing in the room reads it. It works the same for the bot next to the server and a call hosted on your machine, once both have the current patched `server.py` ([DEPLOY](../DEPLOY.md#a-meeting-bot) has its sha256, and the plugin carries it).
+
+To leave the tile grey, set `SWITCHBOARD_BOT_VIDEO=0` in the environment of the bot's joinly container (a call hosted on your machine passes along the value from the shell that runs the host script). If the camera button can't be found, for example because Zoom changed its page, the bot logs it once and carries on as a grey tile: the call is never refused for it. Zoom is the one platform that has been used; Meet and Teams are tried the same way and have not been checked.
+
 ## Show a room picture in the call
 
 `/meeting share <file>` shows one PNG or JPEG from this room to everyone on the call, as a screen share by the bot. `<file>` is the file's name as the room lists it, its id, or `switchboard:file/<id>`. `/meeting share stop`, the **Stop sharing** button on the bar, leaving the call and the call ending all stop it. The bar says "sharing a picture" while it is on.
