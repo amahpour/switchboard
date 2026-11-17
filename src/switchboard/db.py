@@ -28,7 +28,8 @@ each person has seen of each room and which board cards they set aside, for the 
 48 adds a room's hands-free call settings (§52.3); 49 (#713) adds the voice a person pinned for a member
 on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room's opt-in so an agent's
 new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
-agent chat and wake batches (§61).
+agent chat and wake batches (§61);
+53 (#823) adds say retry receipts (§8.4).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -49,7 +50,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 52
+SCHEMA_VERSION = 53
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -384,7 +385,8 @@ V38_TABLES = (*V32_TABLES, "listener_keys")  # schemas 33 through 38, before mee
 V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
 V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before home_seen (v45)
 V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard (v46)
-TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
+V50_TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
+TABLES = (*V50_TABLES, "say_keys")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -1098,6 +1100,20 @@ V51_TO_V52 = (
 )
 
 
+# Both fresh databases and the migration use these statements (#823, DESIGN.md §8.4).
+SAY_KEYS_DDL = (
+    "CREATE TABLE say_keys("
+    " membership_id INTEGER NOT NULL REFERENCES memberships(id),"
+    " key_hash TEXT NOT NULL CHECK(length(key_hash) = 64),"
+    " message_id INTEGER NOT NULL REFERENCES messages(id),"
+    " expires_at REAL NOT NULL,"
+    " PRIMARY KEY(membership_id, key_hash)) WITHOUT ROWID",
+    "CREATE INDEX say_keys_expires ON say_keys(expires_at)",
+)
+# v52 -> v53 (#823, DESIGN.md §8.4): the retry receipts.
+V52_TO_V53 = (*SAY_KEYS_DDL, "UPDATE meta SET value='53' WHERE key='schema_version'")
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
@@ -1168,6 +1184,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         49: MigrationStep(50, V49_TO_V50, ()),
         50: MigrationStep(51, V50_TO_V51, ()),
         51: MigrationStep(52, V51_TO_V52, ()),
+        52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
     }
     out = []
     v = frm
@@ -1216,7 +1233,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V44_TABLES
     if version == 45:
         return V45_TABLES
-        return V44_TABLES
+    if version <= 52:
+        return V50_TABLES  # 51 added a column and 52 indexes, no table
     return TABLES
 
 
@@ -1249,7 +1267,7 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL]
+SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:

@@ -502,8 +502,10 @@ applies. A crash or SIGKILL can still lose says that were only queued in memory.
   liveness window, still needs the live checks tracked in #823. Do not assume a guaranteed
   reconnect or a common give-up deadline across all clients yet.
 
-A `say` whose answer was lost after it was stored can still be duplicated if resent. Optional
-retry keys and automatic client recovery are separate parts of #823.
+To retry a `say` after the connection drops, send the same call with the same key you supplied
+on the first attempt. The broker remembers the post for five minutes, across restarts. A
+retry without a key can still post twice. See [Retry a say](USAGE.md#retry-a-say)
+for key limits and queued sends.
 
 ## Backups
 

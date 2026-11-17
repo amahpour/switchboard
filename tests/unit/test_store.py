@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 from conftest import FakeClock
 
 from switchboard import db
-from switchboard.store import Conflict, Store
+from switchboard.store import SAY_KEY_TTL_S, Conflict, Store
 
 
 @pytest.fixture
@@ -92,6 +93,33 @@ def test_messages_history_and_hops(store: Store, clock: FakeClock) -> None:
     assert store.room_by_id(r.id).hop_count == 0
     m = store.get_message(ids[0])
     assert m is not None and m.sender_kind == "human" and m.via == "web" and m.mentions == []
+
+
+def test_live_say_receipt_and_message_commit_together(store: Store, clock: FakeClock) -> None:
+    """A duplicate write rejected at the store leaves no message, delivery or extra hop."""
+    room = store.create_room("#build", "alice", 60, 6)
+    _, sender = add_agent(store, room.id, "writer")
+    _, reader = add_agent(store, room.id, "reader")
+    key_hash = hashlib.sha256(b"send-1").hexdigest()
+    args = dict(
+        sender_name="writer",
+        sender_kind="agent",
+        via="mcp",
+        text="hello",
+        sender_membership_id=sender,
+        say_key_hash=key_hash,
+    )
+    posted = store.insert_message(room.id, **args)
+    with pytest.raises(Conflict, match="already has a post"):
+        store.insert_message(room.id, **args)
+    assert store.say_key_message(sender, key_hash) == posted.id
+    assert [msg.id for msg in store.history(room.id)] == [posted.id]
+    assert len(store.deliveries(reader)) == 1
+    assert store.room_by_id(room.id).hop_count == 1
+    clock.advance(SAY_KEY_TTL_S)
+    store.say_key_purge()
+    assert db.row_counts(store.con, ("say_keys",))["say_keys"] == 0
+    assert store.say_key_message(sender, key_hash) is None
 
 
 def test_delivery_classification(store: Store) -> None:
