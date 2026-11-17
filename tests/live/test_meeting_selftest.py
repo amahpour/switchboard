@@ -115,7 +115,7 @@ VOICE_PATCH = {
 }
 CAPTIONS_PATCH = (
     "captions.py",
-    "271345f59158440a0cb7c1f8ecade8752767b4098e9efb449ba032d8c85bb5d8",
+    "715d150ebf3c84ea626fd3346426877e4141b38a835be18d801aa3a3201ef882",
     "/app/.venv/lib/python3.12/site-packages/joinly/captions.py",
 )
 VOICE_PATCH_DIR = Path(__file__).resolve().parents[2] / "deploy" / "joinly"
