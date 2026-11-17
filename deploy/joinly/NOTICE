@@ -35,3 +35,6 @@ captions.py (#764, DESIGN.md section 52.7) is not a copy of a joinly file: it is
 the rest of this repository, a new file mounted at joinly/captions.py. The patched server.py above points joinly's
 `stt`, `vad` and `transcription_controller` settings at its three classes when asked for `captions`, hands the
 controller the meeting provider, and adds the `transcription_status` tool. Only the server's bot mounts it.
+
+bot_logo.py (#820, DESIGN.md section 52) is not a copy of a joinly file: it is switchboard's own, MIT licensed like the
+rest of this repository, a new file that would be mounted at joinly/bot_logo.py. It is not wired in yet.
