@@ -97,7 +97,7 @@ async def test_join_into_a_realistic_room_fits_the_join_budget(broker: InProcBro
     """DESIGN.md's join budget (issue #272, the token-budget spike #141): modeled on the
     spike's measured room (88 chat messages; lengths with median 469 characters, mean 613,
     p90 1,497), a join must stay within the join budget (6,000 characters until
-    #588 raised it to 6,200). With the old last-30 catch-up this
+    #588 raised it to 6,200 and #817/#828 to 6,352). With the old last-30 catch-up this
     same room's join measured about 12,700 characters, over double the budget; the last-8
     catch-up plus the earlier-count line brings it back under."""
     for i in range(80):

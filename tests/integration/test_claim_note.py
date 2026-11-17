@@ -120,7 +120,7 @@ async def test_join_counts_the_board_and_leaves_the_words_out(broker: InProcBrok
         assert (
             "piece-4" not in one["text"] and "queued" not in one["text"] and "example.com" not in one["text"]
         )
-        await holder.call("claim", room="#build", key="piece-5", ttl=300, note="review")
+        await holder.call("claim", room="#build", key="piece-5", ttl=300, note="triage-9x")
         two = await holder.join("#build", "claude-1")
         assert "2 items on the board; call who()." in two["text"]
-        assert "piece-5" not in two["text"] and "review" not in two["text"]
+        assert "piece-5" not in two["text"] and "triage-9x" not in two["text"]
