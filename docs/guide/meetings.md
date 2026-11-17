@@ -1,6 +1,6 @@
 # Meetings
 
-A room can follow a live Zoom, Google Meet or Microsoft Teams call. You send a meeting bot into the call, and switchboard posts what people say into the room as short lines in a transcript card. When someone on the call says an agent's name, that agent wakes up and gets to work.
+A room can follow a live Zoom call, and, as an experiment, a Google Meet or Microsoft Teams call. You send a meeting bot into the call, and switchboard posts what people say into the room as short lines in a transcript card. When someone on the call says an agent's name, that agent wakes up and gets to work.
 
 ## See it work
 
