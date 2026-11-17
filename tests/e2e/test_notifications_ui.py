@@ -158,3 +158,33 @@ def test_nothing_shows_while_the_setting_is_off(ui: UI) -> None:
     ui.world.agent_say(f"#{room}", "scout", "@alice are you there?")
     expect(page.locator("#home-badge")).to_be_visible(timeout=30_000)
     assert shown(page) == []
+
+
+def test_a_prompt_that_was_open_when_the_tab_loaded_is_not_news(ui: UI) -> None:
+    """An agent already waiting for approval when the page loads (a hidden tab reloaded) shows nothing when a
+    later frame arrives for the same room; a fresh prompt after it still does. Fails if the page treats what
+    was already open as news, as it did before the members the page held were compared."""
+    room = "nt-" + secrets.token_hex(3)
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("scout", "bench"))
+    ui.world.set_member_status(f"#{room}", "scout", "waiting-approval", "hook:Notification")
+    broker = ui.world.broker
+    web = broker.web_client()
+    assert web.put("/api/me/notify", json={"on": True}, headers=broker.write_headers()).status_code == 200
+    web.close()
+    ctx = ui.context()
+    # a hidden tab with notifications already allowed, loading while the prompt is open
+    ctx.add_init_script(STUB + "window.__hidden = true; Notification.permission = 'granted';")
+    page = ctx.new_page()
+    page.goto(broker.login_url())
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    page.locator(f'#tabs .room[data-room="#{room}"]').click()
+    expect(page.locator('#buddy-list .member[data-name="scout"]')).to_contain_text("Waiting for approval")
+    ui.world.set_member_status(
+        f"#{room}", "bench", "idle", "hook:Stop"
+    )  # a frame for the room, scout unchanged
+    expect(page.locator('#buddy-list .member[data-name="bench"]')).to_contain_text("Idle")
+    assert shown(page) == []
+    ui.world.set_member_status(f"#{room}", "bench", "waiting-approval", "hook:Notification")  # a new prompt
+    wait_shown(page, 1, 15_000)
+    assert shown(page) == [f"bench is waiting for your approval in #{room}"]

@@ -629,6 +629,8 @@ def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
         try:
             page = ctx.new_page()
             sign_in(page, world.broker)
+            if not page.locator("#me-settings").is_visible():
+                page.click("#rooms-toggle")
             page.click("#me-settings")
             row = page.locator("#settings-row-profile")
             if row.is_visible():

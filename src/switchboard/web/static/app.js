@@ -3617,8 +3617,9 @@
       }
     } else if (f.t === 'members') {
       if (!r) return;
+      const heldBefore = r.members;
       r.members = f.members || [];
-      notifyApprovals(r, r.members);
+      notifyApprovals(r, heldBefore, r.members);
       if (f.room === state.active) {
         renderBuddies();
         updateRoomEmpty();
@@ -7439,20 +7440,26 @@
     notifyPrimed = true;
   }
 
-  // An agent of this person waiting on an approval prompt: only the page's members frames know it. Its owner is
-  // this person, or unknown on a broker with one person. Cleared when it leaves that status, so a later prompt is news.
-  function notifyApprovals(r, members) {
+  // An agent of this person that has just started waiting on an approval prompt: only the page's members frames
+  // know it. News is a change, so it is judged against the members this page held before the frame: one already
+  // waiting then (a tab reloaded while a prompt is open) is not news, and neither is a room whose members the
+  // page did not have yet. Its owner is this person, or unknown on a broker with one person.
+  let notifyApprovalSeq = 0;  // each new prompt is its own item, so the next one is news
+
+  function notifyApprovals(r, before, members) {
+    if (!before.length) return;
     const alone = !state.everyone || state.everyone.length <= 1;
     for (const m of members) {
-      const key = 'a:' + r.name + ':' + m.name + ':' + (m.host || '');
-      if (m.status !== 'waiting-approval') { notified.delete(key); continue; }
+      if (m.status !== 'waiting-approval') continue;
+      const was = before.find(function (x) { return x.name === m.name && (x.host || '') === (m.host || ''); });
+      if (!was || was.status === 'waiting-approval') continue;
       const mine = m.owner ? m.owner === (state.me || {}).human : alone;
       if (!mine) continue;
-      notifyShow(key, m.name + ' is waiting for your approval in ' + r.name,
+      notifyShow('a:' + r.name + ':' + m.name + ':' + (m.host || '') + ':' + notifyApprovalSeq++,
+        m.name + ' is waiting for your approval in ' + r.name,
         'Approve it in its own window', function () { goToRoom(r.name); }, true);
     }
   }
-
   async function loadHome() {
     const seq = ++state.homeSeq;
     if (state.seenWait.size) await Promise.allSettled(Array.from(state.seenWait));  // a room just opened is read first
