@@ -486,8 +486,11 @@ applies. A crash or SIGKILL can still lose says that were only queued in memory.
 - **Claude Code's listener:** an open listening round ends with HTTP 503 and `Retry-After: 1`.
   Its shell and Windows implementations already retry an unreachable broker or a 429, 500,
   502, 503 or 504, starting at 1 second and doubling to a maximum 60 seconds between attempts.
-  After a long listening round it retries immediately. It keeps trying while the session lives;
-  there is no two-minute give-up limit yet.
+  After a long listening round it retries immediately. These retries have no two-minute
+  give-up limit, but a non-retryable refusal such as HTTP 409 ends the current listener.
+  Startup marks sessions offline; an existing listener's later round can therefore receive
+  409 before a fresh hook reports the session. Automatic recovery across that transition
+  still needs the live checks in #823.
 - **MCP tools and Stop hooks:** an open MCP stream already has HTTP 200 headers. A waiting
   `wait()` therefore ends with `code: restarting` and `retry_after_s: 1`; an open MCP Stop hook
   ends with a tool error saying to try again in a minute. New requests get HTTP 503. Transport
