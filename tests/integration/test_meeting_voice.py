@@ -214,11 +214,13 @@ async def test_a_long_at_call_line_is_cut_and_points_to_the_room_and_the_room_ke
         await start_call(broker, joinly)
         command(broker, "/meeting voice on")
         assert (await agent.say("#build", "@call " + long)).get("posted_id")
-        await wait_until(lambda: len(joinly.spoken) >= 1)
+        # a line is spoken a sentence at a time, so a count of what was spoken says nothing about whether
+        # the line is done: wait for its last sentence, the pointer, then for the speech slot to be free
+        await wait_until(lambda: joinly.spoken[-1:] == ["The rest is in the room."])
         await wait_until(lambda: speech_finished(broker))
         advance_voice(broker, clock, 30)
         assert (await agent.say("#build", "@call Short answer.")).get("posted_id")
-        await wait_until(lambda: len(joinly.spoken) >= 2)
+        await wait_until(lambda: joinly.spoken[-1:] == ["Short answer."])
     assert " ".join(joinly.spoken[:-1]) == "First point. Second point. Third point. The rest is in the room."
     assert joinly.spoken[-1] == "Short answer."
     assert "@call " + long in [m["text"] for m in history(broker)]
