@@ -135,7 +135,8 @@ def test_a_key_held_in_another_room_refuses_a_new_claim_and_names_where() -> Non
 def test_a_claim_the_member_already_holds_is_never_asked_about_other_rooms() -> None:
     """A renewal and a release of the member's own claim ignore ``elsewhere`` (a duplicate that existed
     before the key spanned rooms must not lock its own holder out), and a different key is
-    untouched. Fails if renewing a held key is refused because another room also holds it, or an unrelated key is."""
+    untouched. Fails if renewing a held key is refused because another room also holds it, or an
+    unrelated key is."""
     clock = FakeClock()
     mine = claims.Claim("a", 1, "claude-1", clock.now() + 60)
     other = claims.Claim("a", 7, "codex-1", clock.now() + 60, room_id=3, host="box")
