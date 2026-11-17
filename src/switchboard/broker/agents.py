@@ -826,15 +826,17 @@ class AgentService:
         text = text.rstrip()
         if not clean(text).strip():
             raise ServiceError("bad_request", "empty message")
-        # obvious secrets are cut out before anything stores, queues or hands back the text (#819)
-        text, kinds = redact(text)
-        if kinds:
-            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
         if len(text) > self.cfg.delivery.max_msg_chars:
             raise ServiceError(
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        # obvious secrets are cut out before anything stores, queues or hands back the text (#819); after
+        # the length check, so no text over the limit is searched, and a marker that makes the text a little
+        # longer than what it replaced is not a reason to refuse it
+        text, kinds = redact(text)
+        if kinds:
+            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
         if "since" in params:
             try:
                 since = rules.since_id(params["since"], self.store.last_message_id(room.id))

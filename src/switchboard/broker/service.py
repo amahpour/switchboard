@@ -1203,16 +1203,18 @@ class RoomService:
         if not clean(text).strip():
             # e.g. only control or zero-width characters: it would show as an empty line
             raise ServiceError("bad_request", "empty message")
-        text, kinds = redact(text)
-        if kinds:
-            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
-            if redacted is not None:
-                redacted.extend(kinds)
         if len(text) > self.cfg.delivery.max_msg_chars:
             raise ServiceError(
                 "bad_request",
                 f"message too long ({len(text)} > {self.cfg.delivery.max_msg_chars} characters)",
             )
+        # after the length check, so no text over the limit is searched; a marker can make the text a little
+        # longer than what it replaced, and that is not a reason to refuse it (#819)
+        text, kinds = redact(text)
+        if kinds:
+            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
+            if redacted is not None:
+                redacted.extend(kinds)
         self.reply_target(room, reply_to)
         mentions = parse_mentions(text, self.mention_names(room))
         broadcast = parse_broadcast(text)

@@ -33,6 +33,9 @@ class Pattern:
     regex: re.Pattern[str]
 
 
+# Every pattern is linear in the text: a quantifier that reaches forward is bounded (a name prefix 40
+# characters, a lookahead for a digit 200), because a message is untrusted input and an unbounded
+# ``[\w.-]*`` restarted at every word boundary took seconds on 32,000 characters of "a." (tests/unit).
 # One list, one test table (tests/unit/test_redact.py). A new pattern needs a hit and a miss there.
 PATTERNS: tuple[Pattern, ...] = (
     Pattern(
@@ -40,18 +43,18 @@ PATTERNS: tuple[Pattern, ...] = (
         re.compile(
             r"-----BEGIN [A-Z0-9 ]{0,30}PRIVATE KEY(?: BLOCK)?-----"
             r"(?:[\s\S]{0,8000}?-----END [A-Z0-9 ]{0,30}PRIVATE KEY(?: BLOCK)?-----"
-            r"|(?:\s*[A-Za-z0-9+/=]{20,}){1,200})"  # a header with no footer: the base64 lines under it
+            r"|(?:\s+[A-Za-z0-9+/=]{20,}){1,200})"  # a header with no footer: the base64 lines under it
         ),
     ),
     # sk-, sk-ant-, sk-proj-: 20 or more characters, at least one a digit ("sk-learn-..." is a word)
-    Pattern("api key", re.compile(rf"\bsk-(?=[A-Za-z0-9_\-]*\d){_BODY}{{20,}}")),
+    Pattern("api key", re.compile(rf"\bsk-(?=[A-Za-z0-9_\-]{{0,200}}\d){_BODY}{{20,}}")),
     Pattern("api key", re.compile(r"\b[rs]k_live_[A-Za-z0-9]{16,}")),
     Pattern("api key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")),
     Pattern("github token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}")),
     Pattern("github token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}")),
     Pattern("gitlab token", re.compile(r"\bglpat-[A-Za-z0-9_\-]{20,}")),
     Pattern("aws access key", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
-    Pattern("slack token", re.compile(r"\bxox[abprs]-(?=[A-Za-z0-9\-]*\d)[A-Za-z0-9\-]{10,}")),
+    Pattern("slack token", re.compile(r"\bxox[abprs]-(?=[A-Za-z0-9\-]{0,200}\d)[A-Za-z0-9\-]{10,}")),
     Pattern("switchboard token", re.compile(r"\bsb(?:at|l|c)_[A-Za-z0-9_\-]{30,}")),
     Pattern(
         "jwt",
@@ -60,15 +63,15 @@ PATTERNS: tuple[Pattern, ...] = (
     # "Bearer <token>": the word stays; a long token with a digit in it goes (not "Bearer authentication")
     Pattern(
         "bearer token",
-        re.compile(r"\b[Bb]earer\s+((?=[A-Za-z0-9._~+/\-]*\d)[A-Za-z0-9._~+/\-]{20,}={0,2})"),
+        re.compile(r"\b[Bb]earer\s+((?=[A-Za-z0-9._~+/\-]{0,200}\d)[A-Za-z0-9._~+/\-]{20,}={0,2})"),
     ),
     # password=hunter22, "api_key": "...", GITHUB_TOKEN=...: the name stays, a value of 8 or more characters
     # that is not a placeholder (<token>, $TOKEN, ${TOKEN}, %TOKEN%, ***, ..., [x]) goes
     Pattern(
         "password or token",
         re.compile(
-            r"(?i)\b[\w.\-]*(?:password|passwd|secret|token|api[_\-]?key|apikey|access[_\-]?key)\b[\"']?"
-            r"\s*[=:]\s*[\"']?((?![$<{%*.\[\s])[^\s\"'`,;&<>(){}\[\]]{8,})"
+            r"(?i)\b[\w.\-]{0,40}(?:password|passwd|secret|token|api[_\-]?key|apikey|access[_\-]?key)\b[\"']?"
+            r"\s{0,20}[=:]\s{0,20}[\"']?((?![$<{%*.\[\s])[^\s\"'`,;&<>(){}\[\]]{8,})"
             # a colon alone is prose ("token: the value"): it needs a quote, so only an assignment goes
         ),
     ),

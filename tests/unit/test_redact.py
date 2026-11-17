@@ -126,3 +126,46 @@ def test_the_sender_notice_names_kinds_and_never_a_value() -> None:
     """What the sender is told: the kinds, and that this is best effort. Fails if it can carry a value."""
     n = r.notice(["github token", "private key"])
     assert "github token, private key" in n and "best effort" in n
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "a." * 16000,
+        "a-" * 16000,
+        "sk-" + "a-" * 16000,
+        "sk-" * 10000,
+        "xoxb-" * 6000,
+        "Bearer " * 5000,
+        "password " * 4000,
+        "password" + "a." * 16000,
+        "token=" * 6000,
+        "password=" + " " * 32000,
+        "-----BEGIN " + "PRIVATE KEY-----" * 2000,
+        " " * 32000,
+    ],
+    ids=[
+        "dots",
+        "dashes",
+        "sk-dashes",
+        "sk-repeated",
+        "xox-repeated",
+        "bearer-repeated",
+        "password-spaces",
+        "password-dots",
+        "token-repeated",
+        "assignment-spaces",
+        "key-headers",
+        "spaces",
+    ],
+)
+def test_a_hostile_message_of_32000_characters_is_searched_in_linear_time(text: str) -> None:
+    """A message is untrusted input. A name prefix or look-ahead with no bound is restarted at every boundary
+    of a run of dots or dashes, which took 15 s on this size. Fails (by the clock: the bar is 1 s, linear
+    takes tens of milliseconds) if any pattern goes quadratic."""
+    import time
+
+    t = text[:32000]
+    t0 = time.perf_counter()
+    r.redact(t)
+    assert time.perf_counter() - t0 < 1.0

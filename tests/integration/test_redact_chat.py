@@ -113,3 +113,35 @@ async def test_a_secret_an_agent_says_is_cut_out_everywhere_and_the_agent_is_tol
     finally:
         ws.close()
     assert_gone(broker, mid, frame=frame)
+
+
+async def test_text_over_the_length_limit_is_refused_before_anything_searches_it(
+    broker: InProcBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The limit is checked first, for a person and an agent, so a huge message costs a length check and not
+    a scan. Fails (the patched redact raises) if redact runs on text that is then refused, and shows that a
+    text just under the limit that redaction lengthens is not refused."""
+    from switchboard.broker import agents, service
+
+    def boom(text: str) -> None:
+        raise AssertionError("redact ran on text over the limit")
+
+    big = "x" * (broker.cfg.delivery.max_msg_chars + 1)
+    with monkeypatch.context() as mp:
+        mp.setattr(service, "redact", boom)
+        mp.setattr(agents, "redact", boom)
+        r = broker.web.post("/api/rooms/build/say", json={"text": big}, headers=broker.write_headers())
+        assert r.status_code == 400 and "too long" in r.text
+        async with FakeAgent(broker.home, "k1") as a:
+            await a.join("#build", "tester")
+            res = await a.say("#build", big)
+            assert res["ok"] is False and "too long" in res["error"]
+    # just under the limit, with a short secret whose marker is longer: redaction lengthens it, and it posts
+    pad = "x" * (broker.cfg.delivery.max_msg_chars - len("AKIA" + "ABCDEFGH12345678") - 1)
+    r = broker.web.post(
+        "/api/rooms/build/say",
+        json={"text": pad + " " + "AKIA" + "ABCDEFGH12345678"},
+        headers=broker.write_headers(),
+    )
+    assert r.status_code == 200, r.text
+    assert "[redacted: aws access key]" in stored(broker, r.json()["id"])
