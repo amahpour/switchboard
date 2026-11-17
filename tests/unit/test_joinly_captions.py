@@ -331,3 +331,22 @@ async def test_the_bots_own_caption_never_clears_the_no_speech_signal_but_a_pers
     monkeypatch.setattr(cap, "POLL_S", 0.01)
     assert await _no_speech_after_reads("S(", 20) is True  # the bot's own row, growing
     assert await _no_speech_after_reads("AB", 20) is False  # a person's row, growing
+
+
+def test_a_new_sentence_that_ends_like_the_last_one_sent_is_not_dropped() -> None:
+    """After "two plus two?" was sent, "Bob, what's two plus two?" ends with the same
+    words. Fails if the tail of what was sent is taken as a match in the middle of the new text, which drops
+    the whole sentence (#801)."""
+    r = cap.FinalRule()
+    k = "|"
+    out: list[str] = []
+    for t, text in [
+        (0, "Claude, what's"),
+        (2.1, "Claude, what's"),
+        (3, "Claude, what's two plus two?"),
+        (5.1, "Claude, what's two plus two?"),
+        (10, "Bob, what's two plus two?"),
+        (12.1, "Bob, what's two plus two?"),
+    ]:
+        out += [f.text for f in r.feed([(k, text)], t)]
+    assert out == ["Claude, what's", "two plus two?", "Bob, what's two plus two?"]
