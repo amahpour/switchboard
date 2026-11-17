@@ -249,3 +249,46 @@ async def test_a_full_board_does_not_fail_the_say_and_says_why(broker: InProcBro
     finally:
         await a.close()
         await b.close()
+
+
+async def test_a_gitlab_link_on_an_unknown_host_gets_a_notice_and_no_request(broker: InProcBroker) -> None:
+    """An agent could name any host as GitLab's. With the setting on, a merge request link on a host the room
+    has no board on opens no board and asks nobody: one notice, not repeated. A host the room already has a
+    board on, and GitHub, are asked. Fails if the unknown host is asked, or the notice repeats."""
+    a, b = await room_of(broker, ("claude-1", "claude"), ("codex-1", "codex"))
+    evil = "https://evil.example/x/y/-/merge_requests/1"
+    known = "https://gitlab.example.com/team/shop/-/merge_requests/12"
+    try:
+        command(broker, "/room review on")
+        await say(broker, a, f"please look at {evil}")
+        await say(broker, a, evil)
+        assert requests(broker) == [] and boards(broker) == []
+        said = [m["text"] for m in history(broker) if m["kind"] == "notice" and evil in m["text"]]
+        assert len(said) == 1 and "nothing was asked" in said[0]
+        # a person opens a board on the host: it is the room's now, and a new link there is asked
+        command(broker, f"/review {known}")
+        await say(broker, a, "https://gitlab.example.com/team/other/-/merge_requests/3")
+        assert "https://gitlab.example.com/team/other/-/merge_requests/3" in boards(broker)
+        assert len(requests(broker)) == 1  # the system's request; the person's /review is their own message
+    finally:
+        await a.close()
+        await b.close()
+
+
+async def test_the_note_of_links_nothing_was_asked_for_is_capped(
+    broker: InProcBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The memory grows from agent input, so it stops at a cap: past it no more notes and no more entries.
+    Fails if it keeps growing."""
+    monkeypatch.setattr(reviews_broker, "MAX_UNREVIEWED", 2)
+    a, b = await room_of(broker, ("claude-1", "claude"), ("codex-1", "codex"))
+    try:
+        command(broker, "/room review on")
+        for n in range(1, 5):
+            await say(broker, a, f"https://evil.example/x/y/-/merge_requests/{n}")
+        notes = [m for m in history(broker) if m["kind"] == "notice" and "nothing was asked" in m["text"]]
+        assert len(notes) == 2
+        assert len(broker.state.boards._unreviewed) == 2
+    finally:
+        await a.close()
+        await b.close()

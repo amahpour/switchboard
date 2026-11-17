@@ -66,3 +66,18 @@ def test_the_canonical_address_is_the_same_for_every_way_of_writing_it() -> None
     assert reviews.canonical_url(GH + "/files") == GH == reviews.canonical_url(GH)
     assert reviews.canonical_url(GL + "/diffs") == GL
     assert reviews.canonical_url("https://github.com/example/shop") == ""
+
+
+def test_a_gitlab_merge_request_is_trusted_only_on_a_host_the_room_already_has_a_board_on() -> None:
+    """GitLab can be on any host, so an agent could name one that is not the room's. GitHub is always trusted;
+    a GitLab host only when a board of the room is on it (the host as written, any case). Fails if any host
+    is trusted, or a board on another host or on GitHub makes a GitLab host trusted."""
+    gl_other = "https://evil.example/x/y/-/merge_requests/1"
+    boards = [GL, GH, "https://example.com/not-a-forge"]
+    assert reviews.trusted_forge(GH, [])
+    assert not reviews.trusted_forge(gl_other, boards)
+    assert not reviews.trusted_forge(GL, [])
+    assert not reviews.trusted_forge(GL, [GH, "https://gitlab.other.example/g/p/-/merge_requests/2"])
+    assert reviews.trusted_forge(GL, boards)
+    assert reviews.trusted_forge("https://GitLab.Example.com/team/other/-/merge_requests/3", boards)
+    assert not reviews.trusted_forge("https://example.com/not-a-forge", boards)

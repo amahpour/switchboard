@@ -544,6 +544,24 @@ def canonical_url(value: str) -> str:
     )
 
 
+def trusted_forge(url: str, boards: Sequence[str]) -> bool:
+    """May switchboard ask for a review of ``url`` on its own (§37.16)? A GitHub pull request, always; a
+    merge request only on a host the room already has a board on (``boards``: the room's boards' addresses),
+    since GitLab can be on any host and an agent could otherwise name one that is not the room's. Any other
+    host is a person's to open with ``/review``."""
+    f = forge(url)
+    if f is None:
+        return False
+    if f["kind"] == "github":
+        return True
+    host = urlsplit(url).netloc.lower()
+    for board in boards:
+        g = forge(board)
+        if g is not None and g["kind"] == "gitlab" and urlsplit(board).netloc.lower() == host:
+            return True
+    return False
+
+
 def pr_links(text: str, limit: int = MAX_LINKS_PER_MESSAGE) -> list[str]:
     """The distinct pull or merge request links in ``text``, as ``canonical_url`` makes them, in the
     order written, at most ``limit``: what an agent's message points at (§37.16). Only a link ``forge``

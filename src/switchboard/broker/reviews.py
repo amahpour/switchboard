@@ -48,6 +48,9 @@ ACTIONS = (
 )
 
 
+MAX_UNREVIEWED = 500  # links noted as "nothing asked", across all rooms, until a restart (§37.16)
+
+
 def vendor_of(member: Any) -> str:
     """Whose model an agent is, as far as the broker knows: its harness (Claude Code, Codex, ...). A review
     asked for by a link goes to agents of another vendor than the author's (§37.16)."""
@@ -65,6 +68,7 @@ class Boards:
         self._asked: set[tuple[int, str]] = set()
         # A link with no agent of another vendor in the room to review it is said so once (§37.16)
         self._unreviewed: set[tuple[int, str]] = set()
+        self._unreviewed_full = False
 
     @property
     def store(self) -> Any:
@@ -635,20 +639,27 @@ class Boards:
         member = self.store.find_member(room.id, author)
         if member is None:
             return
-        have = {reviews.canonical_url(rv["url"]) for rv in self.store.room_reviews(room.id)}
+        boards = [rv["url"] for rv in self.store.room_reviews(room.id)]
+        have = {reviews.canonical_url(u) for u in boards}
         for url in reviews.pr_links(text):
             if url in have:
                 continue
+            if not reviews.trusted_forge(url, boards):
+                self._say_once(
+                    room,
+                    url,
+                    f"{author} posted {url}, a merge request on a host {room.name} has no review board on:"
+                    " nothing was asked. If you trust it, /review it",
+                )
+                continue
             others = [m.name for m in self.store.members(room.id) if vendor_of(m) != vendor_of(member)]
             if not others:
-                key = (room.id, url)
-                if key not in self._unreviewed:
-                    self._unreviewed.add(key)
-                    self._notice(
-                        room,
-                        f"{author} posted {url}, and no agent of another vendor is in {room.name} to"
-                        " review it: ask one to join, then /review it",
-                    )
+                self._say_once(
+                    room,
+                    url,
+                    f"{author} posted {url}, and no agent of another vendor is in {room.name} to"
+                    " review it: ask one to join, then /review it",
+                )
                 continue
             try:
                 self._open_board(room, "switchboard", url, "")
@@ -669,6 +680,23 @@ class Boards:
                 ),
                 mentions=others,
             )
+
+    def _say_once(self, room: Room, url: str, text: str) -> None:
+        """A notice about a link nothing was asked for, once for each link until the server restarts. The
+        memory is kept from agent input, so it is capped at ``MAX_UNREVIEWED``: past it no more notes are
+        posted (a person's ``/review`` is unaffected) and the cap is logged once, instead of growing."""
+        key = (room.id, url)
+        if key in self._unreviewed:
+            return
+        if len(self._unreviewed) >= MAX_UNREVIEWED:
+            if not self._unreviewed_full:
+                self._unreviewed_full = True
+                log.warning(
+                    "review-on-link: %d links already noted; no more notes until a restart", MAX_UNREVIEWED
+                )
+            return
+        self._unreviewed.add(key)
+        self._notice(room, text)
 
     def person_open(self, room: Room, name: str, url: str) -> str:
         """A person's ``/review`` (§37.8): the board opens, or comes back, or stays, for ``url``,
