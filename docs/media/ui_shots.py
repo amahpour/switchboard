@@ -56,6 +56,7 @@ opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and th
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
+agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
@@ -4083,7 +4084,68 @@ def shoot_redact(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_agents(browser: Any, out: Path, world: Any) -> None:
+    """#815: Home's Agents section, with every state: one waiting for approval, one working and quiet for
+    40 minutes (possibly stuck), one working, some idle, one offline, across three rooms. The desktop in the
+    light theme is the guide's picture (``guide-agents-light``); the dark theme and the phone are the previews."""
+    from playwright.sync_api import expect
+
+    world.create_room("#uploads")
+    world.add_agents("#uploads", ("claude-1", "codex-1"))
+    world.create_room("#ship")
+    world.add_agents("#ship", ("codex-1",))
+    world.set_member_status("#build", "claude-1", "waiting-approval")
+    world.set_member_status("#build", "codex-1", "busy")
+    world.set_member_status("#build", "bench", "offline")
+    world.set_member_status("#uploads", "claude-1", "busy")
+    world.set_member_status("#uploads", "codex-1", "idle")
+    world.agent_status("#uploads", "claude-1", "Reviewing the upload fix")
+    world.agent_status("#ship", "codex-1", "Waiting on CI for the release branch")
+
+    def quiet() -> None:
+        st = world.broker.state
+        member = st.store.find_member(st.store.get_room("#ship").id, "codex-1")
+        t = st.clock.now() - 40 * 60
+        st.store.update_participant(
+            member.participant_id, status="busy", status_at=t, last_seen=t, status_line_at=t
+        )
+        st.hub.members_changed("#ship")
+
+    world.broker.on_loop(quiet)
+
+    def home(options: dict[str, Any], scheme: str) -> Any:
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", color_scheme=scheme, **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        expect(page.locator("#room-title")).to_have_text("Home")
+        expect(page.locator("#home .agent-row")).not_to_have_count(0)
+        expect(page.locator("#home .agent-stuck")).not_to_have_count(0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.mouse.move(0, 0)
+        return page
+
+    for name, options, scheme in (
+        (
+            "guide-agents-light",
+            {"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5},
+            "light",
+        ),
+        ("agents-dark", {"viewport": {"width": 1200, "height": 900}, "device_scale_factor": 1.5}, "dark"),
+        ("agents-phone-light", PHONE, "light"),
+        ("agents-phone-dark", PHONE, "dark"),
+    ):
+        page = home(options, scheme)
+        try:
+            page.locator("#home-h-agents").scroll_into_view_if_needed()
+            settle(page)
+            shot(page, out, name + ".png")
+        finally:
+            page.context.close()
+
+
 ONLY: dict[str, Any] = {
+    "agents": shoot_agents,
     "redact": shoot_redact,
     "backups": shoot_backups,
     "home": shoot_home,

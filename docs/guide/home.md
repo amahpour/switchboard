@@ -12,8 +12,9 @@ Open a link to one room (`/#build`) and you get that room, as before. Open switc
     - **A question.** An agent or a person @mentioned you, wrote to `@humans`, or replied to something you said, and you have not said anything in that room since. There is one card for each room. Press **Reply**, type, and send. Your reply goes into that room as a reply to the message, exactly as if you had typed it there, and the card goes away. **Go** opens the room at that message. Opening the room by any way (Go, the sidebar, a row on Home) counts as reading what is in it, so when you come back to Home the card is gone. A new question to you brings a card back.
     - **A review board call.** Findings and questions on a [review board](review-board.md) that only a person can settle. Press **Decide**. A question shows its options as buttons. A contested finding lets you concede it to an agent or drop it with a reason. A fix waiting for a check has **Confirm the fix**. The room's board shows the same result, and its agents hear about it the way they do when you decide on the board. These cards stay until the items are decided, because each one is a call waiting on you. If it is not the time, press **Not now**: the card is hidden for you until something on that board changes (a new item, or a move on one), and then it comes back by itself.
 2. **Done since you last looked.** What finished while you were away, one line each: a review posted, a board settled, a call that ended (how many lines it took, and which agents it woke), and what each agent last said in each room. Press a line to open its room. A turn that ended without saying anything (a `pass`) is not a line. It is only a page: switchboard sends no digest and no notification.
-3. **Live now.** Calls being transcribed, with where they run, and agents at work, with their status line and how long a claim they hold lasts.
-4. **Rooms.** Your rooms, most recently active first, with their red counts.
+3. **Agents.** Every agent you can see, once, with what it is doing. [Agents](agents.md) has it.
+4. **Live now.** Calls being transcribed, with where they run, and agents at work, with their status line and how long a claim they hold lasts.
+5. **Rooms.** Your rooms, most recently active first, with their red counts.
 
 It updates on its own as things happen. What you were typing stays while it does.
 

@@ -165,6 +165,7 @@ def test_home_is_the_first_screen_and_a_question_is_answered_from_its_card(
     heads = [t.split("\n")[0].split("·")[0].strip() for t in page.locator("#home h2").all_inner_texts()]
     assert [h.rstrip("0123456789 ") for h in heads] == [
         "Waiting on you",
+        "Agents",
         "Done since you last looked",
         "Live now",
         "Rooms",
@@ -347,3 +348,67 @@ def test_a_board_card_with_not_now_fits_a_phone(ui: UI, hosted: tuple[InProcBrok
     for b in card.locator("button").all():
         box = b.bounding_box()
         assert box is not None and box["x"] + box["width"] <= right + 0.5 and box["height"] >= 44
+
+
+def plant_agent(
+    w: World, room: str, name: str, status: str, *, quiet_for_s: float = 0.0, line: str = ""
+) -> int:
+    """A session in ``room`` as the store holds it, last heard of ``quiet_for_s`` ago."""
+
+    def run() -> int:
+        store = w.b.state.store
+        r = store.get_room(room)
+        assert r is not None
+        p = store.upsert_participant("claude", session_key("claude", "", name), host="")
+        t = store.clock.now() - quiet_for_s
+        store.update_participant(p.id, status=status, status_at=t, last_seen=t, status_line=line or None)
+        store.create_membership(r.id, p.id, name)
+        return int(p.id)
+
+    return int(w.b.on_loop(run))
+
+
+@pytest.mark.parametrize("phone", [False, True])
+def test_the_agents_overview_lists_each_session_marks_a_stuck_one_links_its_rooms_and_updates_live(
+    ui: UI, hosted: tuple[InProcBroker, str], phone: bool
+) -> None:
+    """Home's Agents section (#815): a busy agent quiet for 40 minutes is marked possibly stuck, one session
+    in two rooms is one row with a button for each room, a button opens that room, and a change in the broker
+    (the agent finishing) updates the row without a reload. The phone: nothing is cut off or scrolls sideways
+    and the room buttons are big enough to press. Fails if a session is listed twice, the mark is missing or
+    stays after the agent is heard from, the page needs a reload, or a control is cut off."""
+    tag = "agents-phone" if phone else "agents-desk"
+    w = World(hosted, tag)
+    stuck = f"stuck-{tag}"
+    two = f"two-rooms-{tag}"
+    pid = plant_agent(w, w.build, stuck, "busy", quiet_for_s=40 * 60, line="porting the cart totals")
+    plant_agent(w, w.build, two, "idle")
+    plant_agent(w, w.uploads, two, "idle")  # the same session (its key is its name here), in a second room
+    page = open_home(ui, w, **(PHONE if phone else {}))
+    row = page.locator(f'#home .agent-row[data-agent="{pid}"]')
+    expect(row).to_have_count(1)
+    expect(row).to_contain_text(stuck)
+    expect(row).to_contain_text("Working")
+    expect(row).to_contain_text("porting the cart totals")
+    expect(row.locator(".agent-stuck")).to_contain_text("Possibly stuck")
+    expect(row.locator(".agent-room")).to_have_count(1)
+    both = page.locator("#home .agent-row", has_text=two)
+    expect(both).to_have_count(1)  # one session, one row
+    expect(both.locator(".agent-room")).to_have_count(2)  # and a button for each room
+    if phone:
+        no_sideways_scroll(page)
+        box = row.locator(".agent-room").bounding_box()
+        assert box is not None and box["height"] >= 36
+
+    # heard from, and finished: the row changes with no reload, and the mark clears
+    def finished() -> None:
+        store = w.b.state.store
+        t = store.clock.now()
+        store.update_participant(pid, status="idle", status_at=t, last_seen=t)
+        w.b.state.hub.members_changed(w.build)
+
+    w.b.on_loop(finished)
+    expect(row.locator(".agent-stuck")).to_have_count(0)
+    expect(row).to_contain_text("Idle")
+    row.locator(".agent-room").click()
+    expect(page.locator("#room-title")).to_have_text(w.build.lstrip("#"))
