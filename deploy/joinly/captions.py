@@ -194,9 +194,13 @@ class FinalRule:
                 sp.last_text = ""
         return out
 
-    def changing(self, now: float, within: float) -> bool:
-        """Whether any speaker's text changed in the last ``within`` seconds."""
-        return any(sp.last_text and now - sp.changed_at < within for sp in self._by_key.values())
+    def changing(self, now: float, within: float, ignore: Any = None) -> bool:
+        """Whether any speaker's text changed in the last ``within`` seconds. ``ignore`` is a predicate on a
+        key: a row it is true for does not count (the bot's own caption, which must not stop its own voice)."""
+        return any(
+            sp.last_text and now - sp.changed_at < within and not (ignore is not None and ignore(key))
+            for key, sp in self._by_key.items()
+        )
 
     @staticmethod
     def _pending(sp: _Speaker, text: str) -> list[str]:
@@ -411,7 +415,8 @@ class CaptionsTranscriptionController:
                 else:
                     last_on = now
                     await self._take(items, now)
-                    quiet = not self._rule.changing(now, 0.6)
+                    # Zoom captions the bot's own speech: that row changing is not someone talking over it
+                    quiet = not self._rule.changing(now, 0.6, self._is_own_key)
                     self._no_speech.set() if quiet else self._no_speech.clear()
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
@@ -422,6 +427,9 @@ class CaptionsTranscriptionController:
             logger.exception("captions: reading stopped")
             if not self._decided.is_set():
                 self._decide(False, "no_box")
+
+    def _is_own_key(self, key: str) -> bool:
+        return speaker_for(key.split("|", 1)[0], self._participants, self._bot) == SELF
 
     async def _take(self, items: list[dict[str, Any]], now: float) -> None:
         entries = [

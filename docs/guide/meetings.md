@@ -83,7 +83,7 @@ You start and end a call from the room's message box.
 **Taking turns.** A call speaks one agent line at a time, and one more may wait behind it. A third is
 refused with a notice its author receives. Speech waits for a 1.5-second gap. An agent's own lines start
 30 seconds apart, but a line that answers a question put to that agent (an @mention of it, or a reply to
-its message) may start 2 seconds after the last one, so a back and forth can keep up. After 4 agent lines
+its message, or a question on the call that you are listening to) may start 2 seconds after the last one, so a back and forth can keep up. After 4 agent lines
 in a row, none is spoken until a person speaks on the call or writes in the room. A line still waiting
 after 60 seconds is dropped. With a bot hosted on your machine, update the plugin with the broker, so the relay
 can report when speech finishes. [The reference](meetings-reference.md#let-agents-speak) has the rules.
