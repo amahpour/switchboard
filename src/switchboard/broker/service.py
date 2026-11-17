@@ -53,6 +53,7 @@ from switchboard.models import (
     normalize_room,
     tier_label,
 )
+from switchboard.redact import redact
 from switchboard.report import _safe
 from switchboard.store import Ambiguous, Conflict, NotFound, Store, StoreError
 
@@ -1183,8 +1184,11 @@ class RoomService:
         skip: tuple[int, ...] = (),
         person: tuple[str, int | None] | None = None,
         reply_to: int | None = None,
+        redacted: list[str] | None = None,
     ) -> Message:
-        """A message from a human. Posted literally, never parsed as a command.
+        """A message from a human. Posted literally, never parsed as a command. Obvious secrets in it are cut
+        out first (``redact``, #819); ``redacted``, when given, is filled with the kinds removed so the caller
+        can tell the sender.
         ``skip``: memberships that get no delivery of it (only ``/catchup`` passes any: its
         subjects, §26). ``person``: who, on a hosted broker with people (§32): their name
         and id (None: the owner); by default the owner, ``human_name``. An ``@here``/
@@ -1199,6 +1203,11 @@ class RoomService:
         if not clean(text).strip():
             # e.g. only control or zero-width characters: it would show as an empty line
             raise ServiceError("bad_request", "empty message")
+        text, kinds = redact(text)
+        if kinds:
+            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
+            if redacted is not None:
+                redacted.extend(kinds)
         if len(text) > self.cfg.delivery.max_msg_chars:
             raise ServiceError(
                 "bad_request",

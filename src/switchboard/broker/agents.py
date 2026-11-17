@@ -52,6 +52,8 @@ from switchboard.models import (
     Snapshot,
     join_code_hash,
 )
+from switchboard.redact import notice as redact_notice
+from switchboard.redact import redact
 from switchboard.reviews import ProofRequired, ReviewError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -824,6 +826,10 @@ class AgentService:
         text = text.rstrip()
         if not clean(text).strip():
             raise ServiceError("bad_request", "empty message")
+        # obvious secrets are cut out before anything stores, queues or hands back the text (#819)
+        text, kinds = redact(text)
+        if kinds:
+            log.info("redacted %s from a message in %s", ", ".join(kinds), room.name)
         if len(text) > self.cfg.delivery.max_msg_chars:
             raise ServiceError(
                 "bad_request",
@@ -904,7 +910,7 @@ class AgentService:
             }
             if share:
                 queued["share"] = share
-            return queued
+            return self._with_redaction(queued, kinds)
         msg = self._post_say(p, m, room, text, reply_to, file_ids)
         utext, bid, count, _more, acts = self.engine.pull(p, m, "say", 50, before_id=msg.id)
         self.run(acts)
@@ -916,7 +922,16 @@ class AgentService:
         }
         if share:
             posted["share"] = share
-        return posted
+        return self._with_redaction(posted, kinds)
+
+    @staticmethod
+    def _with_redaction(result: dict[str, Any], kinds: list[str]) -> dict[str, Any]:
+        """The sender is told what was cut out of its message (the kinds, never the value), in the reply."""
+        if kinds:
+            note = redact_notice(kinds)
+            result["redacted"] = kinds
+            result["note"] = f"{result['note']}; {note}" if result.get("note") else note
+        return result
 
     def _say_wait(self, p: Participant) -> float | None:
         """Seconds until ``p`` may say again by the rate limit alone (no event: a queued say's
