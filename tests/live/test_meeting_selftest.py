@@ -105,7 +105,7 @@ CONTROLLER_PY = "/app/.venv/lib/python3.12/site-packages/joinly/controllers/tran
 # repository, mounted into every container on any platform, pinned by sha256 like the others. Step 6 uses it.
 VOICE_PATCH = {
     "server.py": (
-        "9acf307c62c0cd38ee3e9d1dafcd44ef2ad658bc5a09265c91d3694048813053",
+        "641d0988ff85076bf1032dd5c0b685affd5e48bf8863df30d77af54154e80993",
         "/app/.venv/lib/python3.12/site-packages/joinly/server.py",
     ),
     "kokoro.py": (

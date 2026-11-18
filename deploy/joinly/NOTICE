@@ -1,4 +1,4 @@
-joinly v0.5.4 files, changed by switchboard (#713, #763, #820, DESIGN.md sections 52.5 and 52.9)
+joinly v0.5.4 files, changed by switchboard (#713, #763, #820, #824, DESIGN.md sections 52.5 and 52.9)
 
 server.py and kokoro.py are copies of two files of joinly v0.5.4
 (https://github.com/joinly-ai/joinly, tag v0.5.4), which is MIT licensed:
@@ -40,3 +40,11 @@ The bot's logo (#820, DESIGN.md section 52.10) is in server.py too: `BOT_LOGO_SV
 `_install_bot_logo()` runs when the file is imported: it sets joinly's `camera_feed._LOGO_SVG` to it and wraps each
 platform controller's `join` to click the camera button once afterwards (a failure is logged once and never fails
 the join). `SWITCHBOARD_BOT_VIDEO=0` turns it off. Nothing else of joinly changes.
+
+The Zoom participant list (#824, DESIGN.md section 52.7) is in server.py too: `_install_zoom_participants()` replaces the
+Zoom controller's `get_participants` when the file is imported. joinly's own looks for one button and gives up when it
+is not visible at that moment; this one tries every match of the button (then a click made in the page), the "More"
+menu's Participants entry (exactly that, never "Mute all participants"), then Alt+U, waits for a slow panel instead of
+toggling it closed, reads the visible panel's rows and closes it, and logs one line (counts, visibility and boxes,
+never names) when it still fails. Nothing at import can stop the bot: any exception there is logged and joinly's own
+method is kept. The mounted `zoom.py` (a commit of a fork, pinned by address) is not changed.
