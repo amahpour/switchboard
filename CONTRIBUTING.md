@@ -122,11 +122,11 @@ SWITCHBOARD_LIVE=claude SWITCHBOARD_MEETING_URL_FILE=<file> uv run pytest -m liv
 SWITCHBOARD_LIVE=claude,codex,opencode,devin,cursor uv run pytest -m live tests/live -s -q    # all of them, one after the other (not the meeting self-test, below)
 ```
 
-To check restart recovery specifically, run the two private scenarios for each harness with the same test lock:
+To check restart recovery, run the two private scenarios for each harness. Use the shared-machine lock above when sharing a machine.
 
 ```bash
-SWITCHBOARD_LIVE=claude,codex,cursor,devin sb-suite uv run --frozen pytest -m live tests/live/test_live_restart.py -s -q
-SWITCHBOARD_LIVE=opencode sb-suite uv run --frozen pytest -m live tests/live/test_live_opencode.py -k restart -s -q
+SWITCHBOARD_LIVE=claude,codex,cursor,devin uv run --frozen pytest -m live tests/live/test_live_restart.py -s -q
+SWITCHBOARD_LIVE=opencode uv run --frozen pytest -m live tests/live/test_live_opencode.py -k restart -s -q
 ```
 
 These runs stop the throwaway broker for 30 seconds while the agent is listening and while a tool
