@@ -28,6 +28,7 @@ dependencies = [
     "fido2==2.2.1",
     "cryptography==50.0.1",
     "truststore==0.10.4",
+    "httpx==0.28.1",  # the meeting talker's model client (meeting/talker.py, §52.11)
 ]
 
 [project.urls]
