@@ -10,7 +10,14 @@ from conftest import FakeClock
 from test_store import add_agent
 
 from switchboard import db
-from switchboard.broker.commands import HELP_TEXT, Actor, CommandError, parse_command, required_role
+from switchboard.broker.commands import (
+    HELP_TEXT,
+    Actor,
+    CommandError,
+    help_text,
+    parse_command,
+    required_role,
+)
 from switchboard.broker.hub import Hub, Subscriber
 from switchboard.broker.service import BrokerInfo, RoomService, ServiceError
 from switchboard.config import Config
@@ -315,6 +322,32 @@ def test_hold_release_kick_with_a_member(svc: RoomService, rec: Rec) -> None:
     assert kinds == ["kick", "release", "hold"]
 
 
+class _Talker:
+    """A stand-in for the broker's talker: only whether the operator set its key."""
+
+    def __init__(self, key: bool) -> None:
+        self.key = key
+
+    def available(self) -> bool:
+        return self.key
+
+
+def test_help_lists_the_talker_only_when_it_has_a_key(svc: RoomService) -> None:
+    """/help shows /meeting talker only when the server can run one (#854: the talker is parked).
+
+    Without a key /meeting talker on can only refuse, so listing it sends people to a dead end. The
+    bug this catches: the line shown on a server with no talker key, or hidden on one that has it."""
+    line = "/meeting talker on|off"
+    assert line in HELP_TEXT  # the full list keeps it, for a server with a key
+    assert line not in svc.command("#build", "/help", WEB)["text"]  # no meeting server: no talker
+    svc.talker = _Talker(key=False)
+    shown = svc.command("#build", "/help", WEB)["text"]
+    assert line not in shown and "/meeting voice on" in shown and "/meeting leave" in shown
+    assert shown.count("\n") == HELP_TEXT.count("\n") - 1  # only that one line went
+    svc.talker = _Talker(key=True)
+    assert svc.command("#build", "/help", WEB)["text"] == HELP_TEXT
+
+
 def test_who_status_help(svc: RoomService) -> None:
     who = svc.command("#build", "/who", WEB)["text"]
     assert "alice (you, human) + 0 agent(s)" in who and "no agents" in who
@@ -323,7 +356,7 @@ def test_who_status_help(svc: RoomService) -> None:
     assert "hops 0, loop guard off" in st  # the guard ships off (#406); it showed "hops 0/6"
     assert "agents: none" in st and "TEST MODE" in st
     assert "codex link" not in st and "hooks:" not in st  # the local path's lines went with it (#385)
-    assert svc.command("#build", "/help", WEB)["text"] == HELP_TEXT
+    assert svc.command("#build", "/help", WEB)["text"] == help_text(False)  # no meeting server here
     room = svc.room("#build")
     add_agent(svc.store, room.id, "codex-1", harness="codex")
     who = svc.command("#build", "/who", WEB)["text"]

@@ -93,6 +93,19 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /help               this list
   //text              post text that starts with a single /"""
 
+# the talker's line, which /help shows only when the server can run a talker (#854)
+_TALKER_HELP = (
+    "  /meeting talker on|off  a fast model answers short questions on the call,"
+    " off at every call (web only)\n"
+)
+
+
+def help_text(talker: bool) -> str:
+    """The /help list. ``talker``: the server has a talker with a key (``Talker.available``); without one,
+    /meeting talker on can only refuse, so its line is left out (#854, parked; the command still answers)."""
+    return HELP_TEXT if talker else HELP_TEXT.replace(_TALKER_HELP, "")
+
+
 _NO_ARGS = frozenset({"pause", "resume", "who", "status", "help", "close"})
 _ONE_NAME = frozenset({"kick", "hold", "release", "wake", "quiet", "unquiet"})
 _ONE_NUMBER = {"budget": MAX_BUDGET, "hops": MAX_HOPS}  # /name [n], 0 <= n <= max
@@ -1136,7 +1149,7 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
         renamed = svc.rename_room(room, cmd.args[0], actor.who(svc.cfg.human_name))
         return Result(True, f"{room.name} renamed to {renamed.name}", done=True)
     if name == "help":
-        return Result(True, HELP_TEXT)
+        return Result(True, help_text(svc.talker is not None and svc.talker.available()))
     if name == "who":
         return Result(True, svc.who_text(room))
     if name == "status":

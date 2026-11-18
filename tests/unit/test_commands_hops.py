@@ -16,12 +16,12 @@ from conftest import FakeClock
 
 from switchboard import db
 from switchboard.broker.commands import (
-    HELP_TEXT,
     MAX_BUDGET,
     MAX_HOPS,
     Actor,
     CommandError,
     apply,
+    help_text,
     hops_raise,
     parse_command,
     required_role,
@@ -319,5 +319,5 @@ def test_lowering_below_the_count_says_the_next_agent_message_pauses(svc: RoomSe
 
 def test_help_lists_hops(svc: RoomService) -> None:
     text = cmd(svc, "/help")
-    assert text == HELP_TEXT
+    assert text == help_text(False)  # no talker in this test broker (#854)
     assert "/hops               show" in text and "/hops <n>" in text and "0 turns it off" in text
