@@ -4,8 +4,8 @@ Speech-to-text writes "Claude one" or "claude 1", never ``@claude-1``. A bare "C
 matches when exactly one member's name starts with it. Spaces and hyphens do not matter ("coral
 board claude" is ``coralboard-claude``), and a name inside a clearly addressed line counts
 ("I want the Coralboard Claude to ...", "can Claude one check ..."), see ``_addressed``.
-Nothing here reads a clock or
-the store: the bridge passes the room's members in.
+One "agent" right after a name is not part of it ("the widget board agent").
+Nothing here reads a clock or the store: the bridge passes the room's members in.
 """
 
 from __future__ import annotations
@@ -340,16 +340,20 @@ def _addressed(before: list[str], after: list[str]) -> bool:
     Yes: "ask/tell" right before it, "have/want/need" before it and "to" or a request after it,
     "can/could/would/will/should/please" before it, "can you/please" after it, and a request verb
     after it when a connector ("so", "and", "then") comes before. No: "I asked Claude yesterday",
-    "Claude said that earlier", "I told Claude to ...", "the prices Claude mentioned". Small on
-    purpose: a missed wake is said again, a false wake sends an agent off."""
+    "Claude said that earlier", "I told Claude to ...", "the prices Claude mentioned". One "agent"
+    right after the name is how the line refers to the member ("the widget board agent"), so it is
+    not the next word, and on its own it is not a request. Small on purpose: a missed wake is
+    said again, a false wake sends an agent off."""
     lead = [w for w in before if w not in _FILLER]
     prev = lead[-1] if lead else ""
-    nxt = after[0] if after else ""
+    # "agent" is a role word, not a token of the screen name (#761). "agents" is left as said.
+    rest = after[1:] if after[:1] == ["agent"] else after
+    nxt = rest[0] if rest else ""
     if prev in _ASKS or prev in _MODALS:
-        return bool(after)
+        return bool(rest)
     if prev in _WANTS:
         return nxt == "to" or nxt in _REQUESTS
-    if " ".join(after[:2]) in _ASKED_OF or nxt == "please":
+    if " ".join(rest[:2]) in _ASKED_OF or nxt == "please":
         return True
     return prev in _CONNECT and nxt in _REQUESTS
 

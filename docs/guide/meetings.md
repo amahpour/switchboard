@@ -75,7 +75,7 @@ You start and end a call from the room's message box.
 1. **Type `/meeting`** and the call's invite link, as it was given to you, passcode and all. Press Enter. Only a signed-in person in the web UI can do this. Agents can't.
 2. **Watch the bar.** It reads **Joining a call…** until the bot is in. If the meeting has a waiting room, admit `switchboard (transcribing)`. Until then it hears nothing.
 3. **Tell the people on the call.** Everything they say goes into a room that your agents read.
-4. **Wake an agent by saying its name** as an address: "Claude, can you check the image sizes?" or "hey Codex, run the tests". "I asked Claude yesterday" wakes no one. With `claude-1` and `claude-2` in the room, say "Claude one". The agent answers in the room, as text.
+4. **Wake an agent by saying its name** as an address: "Claude, can you check the image sizes?" or "hey Codex, run the tests". The name can also sit in the middle of a request, and spaces and hyphens do not matter: "I want the widget board agent to tell me about the plan" wakes `widgetboard-claude`. "I asked Claude yesterday" wakes no one. With `claude-1` and `claude-2` in the room, say "Claude one". A bare "Claude" wakes an agent only when exactly one agent's name starts with it. The agent answers in the room, as text. [The reference](meetings-reference.md#what-agents-see) has the whole rule.
 5. **Check on it** any time with `/meeting`. It says whether a call is being transcribed.
 
 ![A live call: a bar reading Transcribing a call, two call lines with their speakers, and claude-1's answer](../media/ui/guide-meeting-call-light.png)

@@ -1,9 +1,9 @@
 """Spoken names and who a call line addresses (DESIGN.md §52).
 
-Speech-to-text writes "Claude one" or "claude 1", never ``@claude-1``. A line addresses
-someone only when the name is at the start, after hey/hi/ok/okay, or followed by a comma.
-"I asked Claude yesterday" is not a call-out. A bare "Claude" matches when exactly one
-member's name starts with it, and asks which one when two do.
+Speech-to-text writes "Claude one" or "claude 1", never ``@claude-1``. A name at the start,
+after hey/hi/ok/okay, or before a comma is an address. So is a name anywhere in a line that
+asks that member to do something. "I asked Claude yesterday" is not a call-out. A bare
+"Claude" matches when exactly one member's name starts with it, and asks which one when two do.
 """
 
 from __future__ import annotations
@@ -249,3 +249,76 @@ def test_an_ambiguous_name_inside_a_request_asks_who_and_a_hint_list_is_still_an
     room = ["claude-1", "codex-1"]
     assert match("Claude Claude one Codex switchboard", room).echo
     assert match("can Claude Claude one Codex switchboard", room).outcome == "none"
+
+
+def test_agent_after_a_name_does_not_hide_a_split_or_spoken_name() -> None:
+    """The live miss (#761): "the widget board agent" did not match ``widgetboard-claude``.
+
+    "agent" is how the line refers to the member, not a token of the screen name, so it must not
+    sit between the name and "to" and hide the request. Hyphens, spaces and the run-together
+    project word stay the same name, and "claude one" is still claude-1. Fails if "agent" is
+    required to be part of the screen name, or if the name has to start the line."""
+    members = ["widgetboard-claude", "alice-codex"]
+    for line in (
+        "I want the widget board agent to tell me about the plan",
+        "I want the widgetboard agent to tell me about the plan",
+        "I want the widgetboard-claude agent to tell me about the plan",
+        "I want the Widgetboard Claude agent to tell me about the plan",
+        "need the widget board agent to look at the log",
+        "have the widget board agent check the build",
+        "can the widget board agent check the build",
+        "please tell the widget board agent to look at it",
+        "the widget board agent, can you check the plan",
+        "so the widget board agent check the build",
+    ):
+        got = match(line, members)
+        assert got.outcome == "one" and got.name == "widgetboard-claude", line
+    assert match("I want claude one agent to fix it", ["claude-1"]).name == "claude-1"
+    assert match("I want coral board claude one agent to look", ["coralboard-claude-1"]).name == (
+        "coralboard-claude-1"
+    )
+    # the vendor word picks one project agent; the project word alone, with two of them, does not
+    both = ["widgetboard-claude", "widgetboard-codex"]
+    one = match("I want the widget board claude agent to tell me", both)
+    assert one.outcome == "one" and one.name == "widgetboard-claude"
+    amb = match("I want the widget board agent to tell me", both)
+    assert amb.outcome == "ambiguous" and set(amb.names) == {"widgetboard-claude", "widgetboard-codex"}
+
+
+def test_a_name_inside_a_longer_word_or_a_common_word_of_it_wakes_nobody() -> None:
+    """Word boundaries. "board" is only part of "widgetboard", and "claude" inside "claudette" or
+    "widgetboardclaudes" is not the member. A bare "Claude" still does not wake a name that does
+    not start with it. Fails if compacting or a prefix match ignores the boundary, or if "agent"
+    turns a common word into a name."""
+    members = ["widgetboard-claude", "claude-1"]
+    for line in (
+        "board, can you check the plan",
+        "I want the board agent to tell me about the plan",
+        "please ask the board to check",
+        "I want widgetboardclaudes to tell me",
+        "I want the widgetboarding agent to check",
+        "I want widgetboardclaudeextra to check",
+        "claudette, can you check",
+        "I want claudette to tell me",
+        "dashboard, hello",
+        "I want the dashboard agent to check",
+        "I want the widget board agent",
+        "our widget board agent is down",
+        "I mentioned the widget board agent yesterday",
+        "I asked the widget board agent yesterday",
+        "I want the widget board agents to tell me",
+        "I want the agent to tell me about the plan",
+        "ask the widget board agent",
+        "can the widget board agent",
+        "please the widget board agent",
+    ):
+        assert match(line, members).outcome == "none", line
+    # a bare "Claude" wakes only a member whose name starts with it, not widgetboard-claude
+    alone = ["widgetboard-claude"]
+    assert match("Claude, hello", alone).outcome == "none"
+    assert match("I want Claude to tell me about the plan", alone).outcome == "none"
+    assert match("Claude, hello", ["claude-1"]).name == "claude-1"
+    assert (
+        match("I want Claude to tell me about the plan", ["claude-1", "widgetboard-claude"]).name
+        == "claude-1"
+    )

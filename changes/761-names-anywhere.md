@@ -1,0 +1,3 @@
+### Fixed
+
+- **"The widget board agent" in a request wakes that agent.** "I want the widget board agent to tell me about the plan" wakes `widgetboard-claude`. The word "agent" after the name was hiding a name the transcript had split: "widget board" already matched, but only when the request came next with nothing in between. "widgetboard claude", "widget board claude" and "widgetboard-claude" are still the same name, and "claude one" is still claude-1. A bare "Claude" still wakes only an agent whose name starts with it, and only when just one does. "board" on its own, or a name inside a longer word ("claudette", "widgetboardclaudes"), still wakes nobody.
