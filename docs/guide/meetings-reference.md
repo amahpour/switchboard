@@ -129,7 +129,7 @@ The bot does not have to run next to the server. It can run on your laptop or wo
 
 You need:
 
-- **Claude Code or Codex with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Codex also needs `SWITCHBOARD_URL` and either `SWITCHBOARD_AGENT_TOKEN` or the [browser-sign-in helper](#codex-with-browser-sign-in). Update the server first and the plugin second: the plugin of this release talks to routes an older server doesn't have.
+- **Claude Code or Codex with switchboard's plugin**, with a session in the room (join it as usual) and signed in to the server. Codex also needs `SWITCHBOARD_URL` and either `SWITCHBOARD_AGENT_TOKEN` or the [browser-sign-in helper](#codex-with-browser-sign-in). A plugin works with a server of the same major version. One from another major may call meeting routes this server does not have.
 - **Docker with Compose** on that machine. The plugin installs nothing else: no `pip install`, no model to fetch by hand.
 - **An NVIDIA GPU, if you have one,** with its driver and the NVIDIA Container Toolkit. The script uses it by itself. Without one, or on a Mac, it runs on the CPU with a smaller model.
 
@@ -139,7 +139,7 @@ Step by step:
 
 With Codex 0.166.0 or later, a local HTTP MCP connection can make a private script key while using its saved browser sign-in. No agent token needs to be in the shell, and no script reads Codex's credential store.
 
-1. Upgrade the broker, then the plugin. From the installed plugin's `bin` folder, run its launcher once with an absolute path:
+1. Use a plugin of the same major version as the broker. From the installed plugin's `bin` folder, run its launcher once with an absolute path:
 
     ```sh
     "$HOME/.codex/plugins/cache/switchboard/switchboard/<version>/bin/headers-launcher" --install
