@@ -1,3 +1,0 @@
-### Fixed
-
-- **The bot can read Zoom's participant list again, or says why it can't.** In live calls joinly's own reading of the list failed with "Participants button not found or not visible" every time (so "0 participants known" and no name from the list for a speaker), though the button was on the page. The patched `server.py` now tries the button (every match, then a click made in the page), the "More" menu and Alt+U, and when none opens the list it logs one line of counts, visibility and boxes (never names). It needs the new `server.py` on the server (its sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)) and the updated plugin for a call hosted on your machine. Not yet checked in a live call.
