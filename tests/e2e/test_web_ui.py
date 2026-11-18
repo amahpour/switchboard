@@ -510,8 +510,16 @@ def test_a_tab_reports_a_long_broker_restart_and_catches_up(ui: UI, broker: InPr
     broker.call("human.say", {"room": "#restart", "text": "before the restart"})
     expect(page.get_by_text("before the restart", exact=True)).to_be_visible()
     held: list[Route] = []
-    # Keep the browser's reconnect check paused so a message can arrive before the new socket.
-    page.route("**/api/**", lambda route: held.append(route))
+    restarting = True
+
+    def hold(route: Route) -> None:
+        # Keep the reconnect check paused so a message can arrive before the new socket.
+        if restarting:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/**", hold)
     navigations = []
     page.on("framenavigated", lambda frame: navigations.append(frame) if frame == page.main_frame else None)
 
@@ -525,9 +533,9 @@ def test_a_tab_reports_a_long_broker_restart_and_catches_up(ui: UI, broker: InPr
 
     broker.start()
     broker.call("human.say", {"room": "#restart", "text": "after the restart"})
-    page.unroute("**/api/**")
-    for route in held:
-        route.continue_()
+    restarting = False
+    while held:
+        held.pop().continue_()
     expect(page.locator("#st-conn")).to_have_text("Connected")
     expect(banner).to_be_hidden()
     expect(page.get_by_text("before the restart", exact=True)).to_have_count(1)
