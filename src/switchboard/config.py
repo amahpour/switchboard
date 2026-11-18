@@ -210,13 +210,23 @@ class MeetingCfg:
     ``transcriber`` (``SWITCHBOARD_MEETING_TRANSCRIBER``, #764) is how the bot turns the call into text:
     ``captions`` reads the platform's own captions and runs no speech model, ``whisper`` runs joinly's.
     Empty is unset, and unset means captions, except that a ``stt_model`` an admin named is a sign they
-    want Whisper, so with that set and no ``transcriber`` the bot keeps Whisper. ``mode`` is the answer."""
+    want Whisper, so with that set and no ``transcriber`` the bot keeps Whisper. ``mode`` is the answer.
+
+    ``talker_api_key`` (``SWITCHBOARD_TALKER_API_KEY``, #806) is the one key of the model provider the call
+    talker (§52.11) uses, the operator's, never a room's. Empty is unset: ``/meeting talker on`` then says so
+    and no talker runs. It is never shown (the field has no ``repr``), logged, sent to a page or put in a
+    room. ``talker_model`` (``SWITCHBOARD_TALKER_MODEL``) is the model's name, a setting and not hard-coded.
+    ``talker_call_budget`` is the most tokens (what was sent and what came back) a talker spends on one call,
+    the per-call cost cap: past it the talker stops with a notice."""
 
     joinly_url: str = ""
     tts_voice: str = "bm_george"
     max_calls: int = 1
     stt_model: str = ""
     transcriber: str = ""
+    talker_api_key: str = field(default="", repr=False)
+    talker_model: str = "claude-haiku-5-5"
+    talker_call_budget: int = 60_000
 
     @property
     def mode(self) -> str:
@@ -238,6 +248,26 @@ class MeetingCfg:
             or not 1 <= self.max_calls <= MAX_CALLS_CEILING
         ):
             raise ConfigError(f"[meeting] max_calls must be an integer from 1 to {MAX_CALLS_CEILING}")
+        key = self.talker_api_key.strip() if isinstance(self.talker_api_key, str) else None
+        if key is None or (key and not TALKER_KEY_RE.fullmatch(key)):
+            # the value is never repeated: it is a secret
+            raise ConfigError(
+                "[meeting] talker_api_key must be 8 to 400 letters, digits, dots, underscores or hyphens"
+            )
+        if key != self.talker_api_key:
+            object.__setattr__(self, "talker_api_key", key)
+        if not isinstance(self.talker_model, str) or not TALKER_MODEL_RE.fullmatch(self.talker_model):
+            raise ConfigError(
+                "[meeting] talker_model must be a model name of 1 to 80 letters, digits and . _ : -"
+            )
+        if (
+            isinstance(self.talker_call_budget, bool)
+            or not isinstance(self.talker_call_budget, int)
+            or not 1000 <= self.talker_call_budget <= 5_000_000
+        ):
+            raise ConfigError(
+                "[meeting] talker_call_budget must be a whole number of tokens from 1000 to 5000000"
+            )
         url = self.joinly_url.strip()
         if url != self.joinly_url:
             object.__setattr__(self, "joinly_url", url)
@@ -367,6 +397,11 @@ def from_dict(data: dict[str, Any]) -> Config:
     return Config(**kwargs, retired=tuple(retired))
 
 
+TALKER_KEY_RE = re.compile(r"[A-Za-z0-9_.\-]{8,400}")
+TALKER_MODEL_RE = re.compile(r"[A-Za-z0-9._:\-]{1,80}")
+# the call talker's key and model from the environment, so a deployment keeps the key in its secrets (§52.11)
+TALKER_KEY_ENV = "SWITCHBOARD_TALKER_API_KEY"
+TALKER_MODEL_ENV = "SWITCHBOARD_TALKER_MODEL"
 # the human's name from the environment: a deployment's manifest names its admin (§32.4),
 # where the container's own user (``switchboard``) would make it ``me``
 HUMAN_NAME_ENV = "SWITCHBOARD_HUMAN_NAME"
@@ -430,4 +465,18 @@ def load(paths: Paths) -> Config:
         if env not in TRANSCRIBERS:  # never ignored: a typo must not leave the default in force unseen
             raise ConfigError(f"{TRANSCRIBER_ENV} must be one of {', '.join(TRANSCRIBERS)}")
         cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, transcriber=env))
+    env = os.environ.get(TALKER_KEY_ENV, "").strip()
+    if env:
+        if not TALKER_KEY_RE.fullmatch(env):  # never ignored, and never repeated: it is a secret
+            raise ConfigError(
+                f"{TALKER_KEY_ENV} must be 8 to 400 letters, digits, dots, underscores or hyphens"
+            )
+        cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, talker_api_key=env))
+    env = os.environ.get(TALKER_MODEL_ENV, "").strip()
+    if env:
+        if not TALKER_MODEL_RE.fullmatch(env):
+            raise ConfigError(
+                f"{TALKER_MODEL_ENV} must be a model name of 1 to 80 letters, digits and . _ : -"
+            )
+        cfg = cfg.replace(meeting=dataclasses.replace(cfg.meeting, talker_model=env))
     return cfg

@@ -557,8 +557,10 @@ class MeetingBridge:
             log.debug("meeting: stop_share_image on leaving failed")
 
     def _finish(self, room_id: int, error: str | None) -> None:
-        # a call does not outlive the process, and its voice does not outlive the call
+        # a call does not outlive the process, and its voice (and its talker) does not outlive the call
         self._voice.discard(room_id)
+        if self.state.talker is not None:
+            self.state.talker.call_ended(room_id)
         try:
             row = self.state.store.open_meeting(room_id)
             if row is not None:

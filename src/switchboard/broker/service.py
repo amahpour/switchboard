@@ -303,6 +303,9 @@ class RoomService:
         self.boards: Any = None  # the review boards (broker/reviews.py Boards), for /review (§37.8)
         self.meetings: Any = None  # the call bridge (meeting/bridge.py), for /meeting (§52)
         self.hosted_calls: Any = None  # the calls hosted on people's machines (meeting/hosted.py, §54)
+        self.talker: Any = (
+            None  # the calls' fast talker (meeting/talker.py, §52.11), when the lifespan wires it
+        )
         self.attachments: Any = None  # files a room holds (files.py, §53)
         # participant id -> the plugin version its last MCP call reported (None: none that parses), §49.13
         self.plugin_seen: dict[int, str | None] = {}
@@ -1180,6 +1183,8 @@ class RoomService:
         self.hub.message(room.name, frame)
         if msg.kind == "chat" and self.delivery is not None:
             self.delivery.on_message(msg)
+        if msg.kind == "chat" and self.talker is not None:
+            self.talker.on_message(room, msg)  # a call's talker hears the room (§52.11)
         return msg
 
     def reply_target(self, room: Room, reply_to: Any) -> Message | None:

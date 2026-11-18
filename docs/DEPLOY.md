@@ -821,6 +821,22 @@ joinly_url = "http://127.0.0.1:8010/mcp/"
 
 That joinly is stock, and the bot's default is to read the call's own captions (described further down, under "Captions"), which needs two files mounted first. Without them a call ends with a notice that says so. Restart the broker. Or set the environment variable `SWITCHBOARD_JOINLY_URL` to the same address, which is easier where there is no file to edit (a Kubernetes manifest); when both are set, the variable wins. `/meeting <link>` with no server set names this page. `/meeting` alone only says whether a call is live: it does not look for the server.
 
+### A fast talker for calls
+
+Optional (#806, [DESIGN.md §52.11](DESIGN.md#5211-a-fast-talker-for-calls-806)). A person can turn on a **talker** for a call, a fast hosted model that answers short questions in about a second and hands work to the agents ([the guide](guide/meetings-reference.md#a-fast-talker)). It needs your key for the provider's API, and it is off until you set one.
+
+| Setting | Environment | Default | |
+|---|---|---|---|
+| `[meeting] talker_api_key` | `SWITCHBOARD_TALKER_API_KEY` | none | The provider key. **Set it in the environment, from your deployment's secret store** (a Kubernetes `Secret` as an env var, Compose's secrets); a key in `config.toml` works but is a secret on disk. 8 to 400 letters, digits, dots, underscores and hyphens. It is never shown in the page, a room or a log. |
+| `[meeting] talker_model` | `SWITCHBOARD_TALKER_MODEL` | `claude-haiku-5-5` | The model's name. A setting, not hard-coded. |
+| `[meeting] talker_call_budget` | | `60000` | The most tokens (sent and received) a talker spends on one call. 1,000 to 5,000,000. |
+
+```bash
+export SWITCHBOARD_TALKER_API_KEY=...   # from your secret store, not typed into a shell history
+```
+
+The broker calls `https://api.anthropic.com/v1/messages` from its own process, only for a call whose talker a person turned on. Allow that address in an egress policy if you have one. A call line and the room's last 12 messages are what it sends. Without the key, `/meeting talker on` says so and nothing runs. Restart the broker to change the key.
+
 **How many calls at once.** One joinly follows several calls at the same time, a session and a browser for each, but it has no limit of its own and a call is heavy. Measured with two real Zoom calls open at once: about 2.7 GiB of memory and one CPU for each live call (5.5 GiB and about 2 CPUs for the two), and more while people talk. So the broker follows **one** call at a time unless you say more, and refuses a start past the limit before anything reaches joinly. The limit is `max_calls` under `[meeting]`, from 1 to 50, or the environment variable `SWITCHBOARD_MEETING_MAX_CALLS`, which wins over the file:
 
 ```toml
