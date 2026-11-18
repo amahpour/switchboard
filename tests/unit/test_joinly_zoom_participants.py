@@ -218,7 +218,7 @@ def test_a_button_that_is_on_the_page_but_not_visible_is_clicked_without_visibil
 def test_an_element_the_role_locator_cannot_see_is_found_by_its_label_in_the_page() -> None:
     """A role locator skips hidden elements, and the live button was one: nothing matches by role, but a
     page-side click on the button whose aria-label says "participants list" opens the panel. Fails if only
-    role locators are tried (the #824 error again), or the page click is given anything but the label pattern."""
+    role locators are tried (the #824 error again), or the page click gets anything but the label pattern."""
     w = World()
     hidden = El(w, visible=False, opens="dom")
     hidden.dom_label = "open the participants list pane, 2 participants"
