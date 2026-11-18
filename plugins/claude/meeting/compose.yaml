@@ -31,6 +31,7 @@ x-joinly: &joinly
   environment:
     JOINLY_SERVER_HOST: 127.0.0.1   # the relay's loopback only; the image's own default is 0.0.0.0
     XDG_CONFIG_HOME: /tmp           # PulseAudio's state: the one place a read-only root leaves writable
+    SWITCHBOARD_BOT_VIDEO: ${SWITCHBOARD_BOT_VIDEO:-}   # 0: no camera, a grey tile (#820); the patched server.py reads it
   # As tight as the broker's own joinly in deploy/kubernetes/meetings/joinly.yaml, which ran with these
   read_only: true
   cap_drop: [ALL]

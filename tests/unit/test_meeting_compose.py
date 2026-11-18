@@ -39,3 +39,14 @@ def test_the_relay_turns_off_the_images_broker_health_check(harness: str) -> Non
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert doc["services"]["relay"].get("healthcheck") == {"disable": True}
     assert "127.0.0.1:7419" in path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_the_hosted_joinly_passes_the_bot_video_switch_through(harness: str) -> None:
+    """SWITCHBOARD_BOT_VIDEO (#820) must reach the joinly container, where the patched server.py reads it:
+    the host's value, or empty (the logo on). Fails if the switch stops at the host script."""
+    doc = yaml.safe_load(
+        (ROOT / "plugins" / harness / "meeting" / "compose.yaml").read_text(encoding="utf-8")
+    )
+    env = doc["x-joinly"]["environment"]
+    assert env["SWITCHBOARD_BOT_VIDEO"] == "${SWITCHBOARD_BOT_VIDEO:-}"
