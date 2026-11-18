@@ -486,7 +486,9 @@ applies. A crash or SIGKILL can still lose says that were only queued in memory.
   Keep the tab open to catch up automatically.
 - **Claude Code and OpenCode:** an open listener receives HTTP 503 and `Retry-After: 1`.
   The same listener can park again once the broker returns if its session was idle before
-  startup and no newer status prevents it. The listeners retry failed requests with backoff
+  startup and no newer status prevents it. Update the Claude Code plugin to use the
+  restart path. Its local hooks cancel a previous listener when a prompt or approval appears
+  during the outage. The listeners retry failed requests with backoff
   and report after two minutes of continued failures. Claude Code writes to `listen.log` and
   wakes its session once with the notice. OpenCode logs the notice and starts listening again
   on its next idle event.

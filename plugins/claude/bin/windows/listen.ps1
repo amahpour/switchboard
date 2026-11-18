@@ -59,7 +59,10 @@ function Remember($name, [byte[]]$bytes) { # false when there is nowhere to writ
     } catch { $false }
 }
 function Alive { # Claude Code's own pid: a background hook outlives a Claude Code that quits
-    try { -not [Diagnostics.Process]::GetProcessById($owner).HasExited } catch { $false }
+    try {
+        -not [Diagnostics.Process]::GetProcessById($owner).HasExited -and
+            (-not $parkFile -or (Remembers "listening-$sid" "$PID"))
+    } catch { $false }
 }
 
 # whatever goes wrong, the listener ends with exit 0, never a code Claude Code would read as a wake, and says why in the log
@@ -74,6 +77,16 @@ function Field([string]$name) {
 }
 
 $event = Field 'hook_event_name'
+$sid = Field 'session_id'
+if ($sid -cnotmatch '^[A-Za-z0-9_-]+\z') { exit 0 }
+# A prompt or approval can miss its MCP status report while the broker is down.
+if ($event -cin 'UserPromptSubmit', 'SessionEnd', 'Notification') {
+    if ($dir -and ($event -cne 'Notification' -or
+            ((Field 'notification_type') -ceq 'permission_prompt' -and -not (Field 'agent_id')))) {
+        Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "listening-$sid")
+    }
+    exit 0
+}
 # Claude Code sets this to 0 for -p (observed with 2.1.307). A one-shot process waits for
 # background hooks at SessionStart and Stop; it cannot hear a later room message after it exits.
 # With the variable absent, keep listening for older Claude Code versions.
@@ -81,8 +94,6 @@ if ($env:CLAUDE_CODE_SESSION_ATTENDED -ceq '0') { exit 0 }
 # A /clear or compaction can happen mid-turn; its next Stop starts the listener. Starting one
 # here would report that busy session idle and could deliver a wake into the running turn.
 if ($event -cne 'Stop' -and -not ($event -ceq 'SessionStart' -and (Field 'source') -cin 'startup', 'resume')) { exit 0 }
-$sid = Field 'session_id'
-if ($sid -cnotmatch '^[A-Za-z0-9_-]+\z') { exit 0 }
 $url = First $env:CLAUDE_PLUGIN_OPTION_SERVER_URL $env:SWITCHBOARD_URL
 if ($url -and $url.EndsWith('/')) { $url = $url.Substring(0, $url.Length - 1) }
 $token = First $env:CLAUDE_PLUGIN_OPTION_TOKEN $env:SWITCHBOARD_AGENT_TOKEN
@@ -94,6 +105,7 @@ if ($env:SWITCHBOARD_LISTEN_GRACE_S -cmatch '^[0-9]{1,9}\z') { $grace = [int]$en
 $owner = 0
 if ($env:CLAUDE_PID -cmatch '^[0-9]{1,9}\z') { $owner = [int]$env:CLAUDE_PID }
 if ($owner -le 0) { LogLine 'no-owner' 'CLAUDE_PID is not set, so the listener can not tell when Claude Code quits'; exit 0 }
+$parkFile = Remember "listening-$sid" $utf8.GetBytes("$PID")
 # no typed token: the key bin/headers.cmd made for this Claude Code stands in for it
 $keyfile = ''
 if (-not $token) {
@@ -140,6 +152,7 @@ function Round($again) { # one request: the status ('' when nothing answered) an
             @('X-Switchboard-Again', "$again"), @('User-Agent', 'switchboard-claude-plugin'))) {
         [void]$req.Headers.TryAddWithoutValidation($h[0], $h[1])
     }
+    if ($parkFile) { [void]$req.Headers.TryAddWithoutValidation('X-Switchboard-Resume-Idle', '1') }
     $req.Headers.ExpectContinue = $false
     $req.Content = New-Object Net.Http.ByteArrayContent (, [byte[]]@())
     $task = $client.SendAsync($req)

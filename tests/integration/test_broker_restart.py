@@ -302,7 +302,11 @@ def test_listener_returns_after_restart_only_if_it_was_idle(broker: InProcBroker
     if approval == "after":
         claude_hook(claude, event="Notification", notification_type="permission_prompt")
     broker.call("human.say", {"room": "#build", "text": "@claude-1 after restarting"})
-    response = listen(broker, token, SESSION_1, 10, **{"x-switchboard-again": "1"})
+    headers = {"x-switchboard-again": "1"}
+    if approval == "none":
+        assert listen(broker, token, SESSION_1, 10, **headers).status_code == 409
+    headers["x-switchboard-resume-idle"] = "1"
+    response = listen(broker, token, SESSION_1, 10, **headers)
     if approval == "none":
         assert response.status_code == 200 and "after restarting" in response.text
     else:

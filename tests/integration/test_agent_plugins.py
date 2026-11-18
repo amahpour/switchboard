@@ -325,6 +325,7 @@ def run_listen(
     source: str = "",
     grace_s: int | None = None,
     attended: str | None = None,
+    notification_type: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop or SessionStart: the hook's input on stdin,
     the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in
@@ -349,7 +350,13 @@ def run_listen(
     if tmp is not None:
         env["TMPDIR"] = str(tmp)
     stop = json.dumps(
-        {"session_id": session, "hook_event_name": event, "source": source, "stop_hook_active": False}
+        {
+            "session_id": session,
+            "hook_event_name": event,
+            "source": source,
+            "stop_hook_active": False,
+            "notification_type": notification_type,
+        }
     )
     argv, throwaway = script_run("listen", env)
     try:
@@ -795,7 +802,8 @@ def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_
     real request drift apart, or either plugin registers a permission hook."""
     [group] = claude_hooks()["Notification"]
     assert group["matcher"] == "permission_prompt"
-    [hook] = group["hooks"]
+    hook, local_cancel = group["hooks"]
+    assert local_cancel == {"type": "command", "command": LISTEN_COMMAND, "timeout": 2}
     assert hook["input"] == {
         "event": "${hook_event_name}",
         "session_id": "${session_id}",
@@ -948,7 +956,12 @@ class Stub:
     request until the test lets it go), and records each POST's ``X-Switchboard-Again`` and the
     ``requests`` made: (method, path, headers, body)."""
 
-    def __init__(self, replies: list[tuple[int, str] | tuple[int, str, dict[str, str]] | None]) -> None:
+    def __init__(
+        self,
+        replies: list[tuple[int, str] | tuple[int, str, dict[str, str]] | None],
+        *,
+        release_reply: tuple[int, str] = (409, ""),
+    ) -> None:
         self.replies = list(replies)
         self.again: list[str] = []
         self.requests: list[tuple[str, str, dict[str, str], bytes]] = []
@@ -965,7 +978,7 @@ class Stub:
                 reply = stub.replies.pop(0) if stub.replies else (409, "")
                 if reply is None:
                     stub.release.wait(30)
-                    reply = (409, "")
+                    reply = release_reply
                 status, text, *more = reply
                 data = text.encode()
                 try:
@@ -1024,6 +1037,36 @@ def test_the_listener_rides_out_a_server_that_is_away_and_says_which_round_it_is
         stub.close()
     assert (r.returncode, r.stderr) == (2, "the message"), r
     assert stub.again == ["0", "1", "1"]
+
+
+@pytest.mark.usefixtures("impl")
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "Notification"])
+def test_local_activity_cancels_a_listener_even_when_its_broker_is_down(tmp_path: Path, event: str) -> None:
+    """The local hook stays quiet and prevents a retry when the broker missed the MCP status report."""
+    stub = Stub([None, (200, "wake that must stay pending")], release_reply=(503, "restarting"))
+    token = "sbat_" + "x" * 43
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(run_listen, None, token, SESSION_1, url=stub.url, data=tmp_path)
+            try:
+                until(lambda: stub.again == ["0"], timeout=20)
+                cancellation = run_listen(
+                    None,
+                    token,
+                    SESSION_1,
+                    url=stub.url,
+                    data=tmp_path,
+                    event=event,
+                    notification_type="permission_prompt",
+                )
+                assert (cancellation.returncode, cancellation.stdout, cancellation.stderr) == (0, "", "")
+            finally:
+                stub.release.set()
+            result = waiting.result(10)
+    finally:
+        stub.close()
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert stub.again == ["0"]
 
 
 def test_listener_explains_a_two_minute_outage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

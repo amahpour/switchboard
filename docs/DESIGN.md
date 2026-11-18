@@ -433,7 +433,7 @@ The engine checks all three before every offer (§8.2).
 
 **Restart semantics.** On startup (`Store.recover_on_start`):
 - every `offered` batch becomes `expired` (reason `restart`), and its deliveries go back to `pending` with `attempts+1`;
-- every participant becomes `offline`; none is ended, because a session over HTTPS is tied to no process the broker could probe (§49.3): each comes back with its next call or hook. The store saves `restart:idle` as the status source for sessions that were idle, including across successive restarts. A later Claude Code or OpenCode listener round may resume a session with this source. A busy or approval status report takes precedence over the old idle state;
+- every participant becomes `offline`; none is ended, because a session over HTTPS is tied to no process the broker could probe (§49.3): each comes back with its next call or hook. The store saves `restart:idle` as the status source for sessions that were idle, including across successive restarts. A later OpenCode listener round, or a Claude Code round with `X-Switchboard-Resume-Idle: 1`, may resume a session with this source. A busy or approval status report takes precedence over the old idle state. Claude Code sends this header only when its local cancellation file is in use. A new prompt, the main session's approval notification or SessionEnd removes the file through a local hook, including if its remote report cannot reach the broker;
 - the batch-token HMAC key is regenerated. That is harmless, because every open offer was just expired.
 
 `handled` deliveries older than 7 days may be pruned. Batches are kept for reports.

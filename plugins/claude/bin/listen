@@ -29,6 +29,22 @@ field() {
   printf '%s' "$input" | grep -o "\"$1\": *\"[^\"]*\"" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 event=$(field hook_event_name)
+sid=$(field session_id)
+case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
+# A new prompt or an approval can arrive while the broker is down and miss its
+# MCP status report. Invalidate the previous listener locally before it can repark.
+dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+park_file=
+[ -z "$dir" ] || park_file="$dir/listening-$sid"
+case $event in
+  UserPromptSubmit | SessionEnd) [ -z "$park_file" ] || rm -f "$park_file" 2>/dev/null; exit 0 ;;
+  Notification)
+    if [ "$(field notification_type)" = permission_prompt ] && [ -z "$(field agent_id)" ]; then
+      [ -z "$park_file" ] || rm -f "$park_file" 2>/dev/null
+    fi
+    exit 0
+    ;;
+esac
 # Claude Code sets this to 0 for -p (observed with 2.1.307). Its background hooks hold the
 # one-shot process open, including after Stop; it cannot receive another turn once it exits.
 # With the variable absent, keep listening for older Claude Code versions.
@@ -40,8 +56,6 @@ case $event in
   SessionStart) case $(field source) in startup | resume) ;; *) exit 0 ;; esac ;;
   *) exit 0 ;;
 esac
-sid=$(field session_id)
-case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
 url=${CLAUDE_PLUGIN_OPTION_SERVER_URL:-$SWITCHBOARD_URL}
 url=${url%/}
 token=${CLAUDE_PLUGIN_OPTION_TOKEN:-$SWITCHBOARD_AGENT_TOKEN}
@@ -52,13 +66,16 @@ case $round in '' | *[!0-9]*) round=900 ;; esac
 grace=${SWITCHBOARD_LISTEN_GRACE_S:-60} # how long a SessionStart listener asks again for a key the server doesn't know yet
 case $grace in '' | *[!0-9]*) grace=60 ;; esac
 owner=${CLAUDE_PID:-$PPID}
+if [ -n "$park_file" ] && { ! mkdir -p "$dir" 2>/dev/null || ! (printf '%s' "$$" >"$park_file") 2>/dev/null; }; then
+  park_file= # a listener without the local cancellation file cannot resume a pre-restart park
+fi
+active() {
+  kill -0 "$owner" 2>/dev/null && { [ -z "$park_file" ] || [ "$(cat "$park_file" 2>/dev/null)" = "$$" ]; }
+}
 body=$(mktemp) || exit 0
 code="$body.code"
 trap 'rm -f "$body" "$code"' EXIT
 trap 'exit 0' HUP INT TERM
-# the plugin's own data folder, or the user's; never a shared one like /tmp, where another account
-# could plant the name first
-dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
 # no typed token: the key bin/headers made for this Claude Code stands in for it
 keyfile=
 if [ -z "$token" ]; then
@@ -91,7 +108,7 @@ first=$(date +%s)
 if [ -n "$keyfile" ]; then
   until token=$(read_key); do
     # the helper runs as Claude Code connects the server, which can be just after this hook starts
-    if [ "$event" = SessionStart ] && [ $(($(date +%s) - first)) -lt "$grace" ] && kill -0 "$owner" 2>/dev/null; then
+    if [ "$event" = SessionStart ] && [ $(($(date +%s) - first)) -lt "$grace" ] && active; then
       sleep 1
     else
       logline nokey "no listener key in $keyfile"
@@ -123,13 +140,14 @@ notice_once() {
 }
 unreachable_since=
 outage_limit=120
-while kill -0 "$owner" 2>/dev/null; do
+while active; do
   rounds=$((rounds + 1))
   began=$(date +%s)
   if [ -n "$keyfile" ]; then k=$(read_key) && token=$k; fi # a reconnect makes a new key: the newest one
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
     curl -s --connect-timeout 10 --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
       -H "X-Switchboard-Session: $sid" -H "X-Switchboard-Wait: $round" -H "X-Switchboard-Again: $again" \
+      -H "X-Switchboard-Resume-Idle: ${park_file:+1}" \
       "$url/mcp/listen" >"$code" &
   job=$!
   # dash (Debian and Ubuntu's sh) keeps a subshell on this script's TERM trap until the subshell
@@ -138,7 +156,7 @@ while kill -0 "$owner" 2>/dev/null; do
   # never finishes (#632). It also ends when this script does ($$ is the script, even here), and
   # its output is not the hook's, so a survivor can't keep Claude Code waiting on it.
   (
-    while kill -0 "$owner" 2>/dev/null && kill -0 "$$" 2>/dev/null; do
+    while active && kill -0 "$$" 2>/dev/null; do
       sleep 2
     done
     kill "$job" 2>/dev/null
@@ -146,7 +164,7 @@ while kill -0 "$owner" 2>/dev/null; do
   watch=$!
   wait "$job" 2>/dev/null
   kill "$watch" 2>/dev/null
-  kill -0 "$owner" 2>/dev/null || exit 0
+  active || exit 0
   again=1
   status=$(cat "$code" 2>/dev/null)
   said=$(flat "$body")
