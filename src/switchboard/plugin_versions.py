@@ -5,8 +5,9 @@ claim from outside: cut to ``HEADER_MAX`` characters and parsed strictly (``pars
 isn't ``X.Y.Z`` of digits is no version at all. Nothing here decides what a session may do; it only
 lets ``/who``, the Inspector and ``join`` say that a plugin is old, with the command that updates it.
 
-``PINNED`` is the manifest version of each plugin at this release (``plugins/<harness>/``). A test
-holds it equal to the manifests, and ``release.py`` rewrites it when it raises one.
+A plugin's version is the release's: ``release.py`` sets every plugin manifest to the release's own version at
+each release (#841), so the plugin of switchboard X.Y.Z is X.Y.Z, and a session's plugin is compared with this
+server's own version, ``PINNED`` below. Nothing in this file is rewritten at a release.
 """
 
 from __future__ import annotations
@@ -14,12 +15,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from switchboard import __version__
+
 HEADER = b"x-switchboard-plugin-version"
 HEADER_MAX = 32  # a longer value is no version: nothing past it is looked at
 VERSION_RE = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 
-# release.py rewrites the PINNED line (and nothing else in this file) to match the plugin manifests
-PINNED = {"claude": "0.16.33", "codex": "0.8.32"}
+# the version of each plugin this server expects: its own (derived, so a release cannot leave it behind)
+PINNED = {"claude": __version__, "codex": __version__}
 
 # how a person updates each plugin (DESIGN.md §49.5), the same words everywhere
 UPDATE = {
@@ -74,7 +77,10 @@ class PluginCheck:
         if not self.nags:
             return ""
         if self.state == "older":
-            return f"its plugin is {self.version}, older than {self.pinned}: {self.update}"
+            return (
+                f"its plugin is from release {self.version}, older than {self.pinned}, this server's release:"
+                f" {self.update}"
+            )
         return f"its plugin's version is unknown (older than {self.pinned}, or not the plugin): {self.update}"
 
 

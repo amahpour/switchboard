@@ -1191,7 +1191,27 @@ def test_the_listener_watcher_ends_with_the_script_and_frees_the_hook() -> None:
             shutil.rmtree(throwaway, ignore_errors=True)
 
 
-# ------------------------------------------------------- a change to a plugin bumps its version
+# ------------------------------------------------- plugin versions follow the release (#841, DESIGN.md §49.5)
+def test_no_plugin_manifest_is_ahead_of_the_release_it_is_in() -> None:
+    """A plugin's version is the release's, stamped by ``release.py`` for every plugin at each release (the
+    tests of that are in ``tests/unit/test_release_script.py``), so between releases a manifest is at the last
+    release or older and never ahead of the package. This replaces the check that every change to a plugin
+    bumped its version (#402): a pull request no longer touches a version, and a plugin change still reaches
+    people only with a release, because the marketplaces pin the release's tag (§49.5). Fails if a manifest
+    carries a version the package has not reached (a hand-set bump), or one that isn't X.Y.Z."""
+    from switchboard import __version__
+
+    def key(v: str) -> tuple[int, ...]:
+        assert re.fullmatch(r"\d+\.\d+\.\d+", v), v
+        return tuple(int(x) for x in v.split("."))
+
+    for folder, manifest in {**MANIFESTS, "plugins/cursor": ".cursor-plugin/plugin.json"}.items():
+        version = load(ROOT / folder / manifest)["version"]
+        assert key(version) <= key(__version__), (
+            f"{folder} is at {version}, ahead of switchboard {__version__}"
+        )
+
+
 MANIFESTS = {
     "plugins/claude": ".claude-plugin/plugin.json",
     "plugins/codex": ".codex-plugin/plugin.json",
@@ -1209,146 +1229,6 @@ def vcs(repo: Path, *args: str) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout if r.returncode == 0 else None
-
-
-def base_commit(repo: Path) -> str | None:
-    """What this work is compared with: the merge base with origin/main, or, in CI's checkout of a
-    pull request's merge commit (which has no origin/main), that commit's first parent, which is
-    main as it is. None where neither is known (the Docker test image has no .git)."""
-    base = vcs(repo, "merge-base", "HEAD", "origin/main")
-    if base:
-        return base.strip()
-    parents = vcs(repo, "rev-list", "--parents", "-n", "1", "HEAD")
-    if parents and len(parents.split()) == 3:
-        return parents.split()[1]
-    return None
-
-
-def version_at(repo: Path, rev: str, path: str) -> str | None:
-    text = vcs(repo, "show", f"{rev}:{path}")
-    return json.loads(text)["version"] if text else None
-
-
-def unbumped_plugins(repo: Path, base: str) -> list[str]:
-    """The plugins with a file changed since ``base`` (committed, edited or new) whose manifest
-    ``version`` is still what it was there."""
-    out = []
-    for folder, manifest in MANIFESTS.items():
-        changed = (vcs(repo, "diff", "--name-only", base, "--", folder) or "").split()
-        changed += (vcs(repo, "ls-files", "--others", "--exclude-standard", folder) or "").split()
-        old = version_at(repo, base, f"{folder}/{manifest}")
-        if changed and old is not None and old == load(repo / folder / manifest)["version"]:
-            out.append(f"{folder} ({', '.join(sorted(changed))}) is still at {old}")
-    return out
-
-
-def test_a_change_to_a_plugin_bumps_its_version() -> None:
-    """Claude Code and Codex keep an installed plugin by its `version`, so a change to its hooks or
-    listener that leaves the version alone never reaches anyone who has installed it (DESIGN.md
-    §49.5, #402). Compares each plugin's files with main and fails if one changed and its manifest
-    version didn't. Skipped where there is no git history to compare with, except where
-    ``SWITCHBOARD_REQUIRE_GIT_BASE=1`` (CI's test jobs) says there must be one: there a lost
-    history fails the run instead of quietly checking nothing (F1 on #403's board)."""
-    base = base_commit(ROOT)
-    if base is None:
-        if os.environ.get("SWITCHBOARD_REQUIRE_GIT_BASE") == "1":
-            pytest.fail("no base to compare the plugins with, and SWITCHBOARD_REQUIRE_GIT_BASE=1 needs one")
-        pytest.skip("no git history to compare the plugins with")
-    assert unbumped_plugins(ROOT, base) == []
-
-
-def test_ci_requires_the_plugin_version_check_to_run() -> None:
-    """The test job that fetches the history for the version check (``fetch-depth: 2``) also sets
-    ``SWITCHBOARD_REQUIRE_GIT_BASE``, so the check can't turn into a skip unnoticed. Fails if the
-    flag goes from the workflow while the check still depends on that history."""
-    workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text()
-    assert "fetch-depth: 2" in workflow
-    assert 'SWITCHBOARD_REQUIRE_GIT_BASE: "1"' in workflow
-
-
-def test_the_version_check_sees_a_changed_file_and_a_new_one_and_accepts_a_bump(tmp_path: Path) -> None:
-    """The check above, on a throwaway repository: an edit to a plugin file, or a new file in the
-    plugin, without a bump is found; the same with a bump, and a change outside the plugins, are
-    not. Fails if the check can't tell them apart (so it would pass whatever the plugins do)."""
-    if vcs(tmp_path, "--version") is None:
-        pytest.skip("git is not available")
-    repo = tmp_path / "repo"
-    for folder, manifest in MANIFESTS.items():
-        (repo / folder / Path(manifest).parent).mkdir(parents=True)
-        (repo / folder / manifest).write_text('{"name": "switchboard", "version": "1.0.0"}')
-        (repo / folder / "hooks.json").write_text("{}")
-    assert vcs(repo, "init", "-q", "-b", "main") is not None
-    ident = ["-c", "user.name=alice", "-c", "user.email=alice@example.com"]
-    assert vcs(repo, "add", "-A") is not None
-    assert vcs(repo, *ident, "commit", "-q", "-m", "start") is not None
-    base = (vcs(repo, "rev-parse", "HEAD") or "").strip()
-    assert base and unbumped_plugins(repo, base) == []
-
-    (repo / "plugins/claude/hooks.json").write_text('{"hooks": {}}')  # an edit, no bump
-    (repo / "plugins/codex/bin.sh").write_text("exit 0")  # a new file, no bump
-    (repo / "README.md").write_text("outside the plugins")
-    found = unbumped_plugins(repo, base)
-    assert [f.split(" ")[0] for f in found] == ["plugins/claude", "plugins/codex"], found
-
-    for folder, manifest in MANIFESTS.items():
-        (repo / folder / manifest).write_text('{"name": "switchboard", "version": "1.0.1"}')
-    assert unbumped_plugins(repo, base) == []
-    assert vcs(repo, "add", "-A") is not None  # committed work is compared the same way
-    assert vcs(repo, *ident, "commit", "-q", "-m", "change") is not None
-    assert unbumped_plugins(repo, base) == []
-
-
-def test_manual_ci_fetch_restores_a_base_and_still_rejects_an_unbumped_plugin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A detached, depth-two branch needs its older fork point, even after main diverges (#672).
-
-    Execute the workflow's fetch in that checkout. The required-base check must then catch a
-    plugin edit older than the shallow history, and accept it only after a version bump.
-    """
-    workflow = (ROOT / ".github/workflows/test.yml").read_text().split("\n  test:\n", 1)[1]
-    match = re.search(
-        r"      - name: Fetch the manual run's comparison base\n"
-        r"        if: github.event_name == 'workflow_dispatch'\n"
-        r"        run: (.+)\n",
-        workflow,
-    )
-    assert match is not None, "manual runs must fetch their comparison base before pytest"
-    assert match.start() < workflow.index("uv run --frozen pytest")
-    source, repo = tmp_path / "source", tmp_path / "checkout"
-    source.mkdir()
-    assert vcs(source, "init", "-q", "-b", "main") is not None
-    plugin = source / "plugins/claude/.claude-plugin/plugin.json"
-    plugin.parent.mkdir(parents=True)
-    plugin.write_text('{"version":"1.0.0"}')
-    ident = ["-c", "user.name=alice", "-c", "user.email=alice@example.com"]
-
-    def commit(message: str) -> None:
-        assert vcs(source, "add", "-A") is not None
-        assert vcs(source, *ident, "commit", "-qm", message) is not None
-
-    commit("start")
-    fork = (vcs(source, "rev-parse", "HEAD") or "").strip()
-    assert vcs(source, "branch", "topic") is not None
-    (source / "README.md").write_text("main moved on")
-    commit("main changed")
-    assert vcs(source, "checkout", "-q", "topic") is not None
-    (source / "plugins/claude/hooks.json").write_text("{}")
-    commit("plugin changed without a bump")
-    for i in range(3):
-        (source / "README.md").write_text(f"branch change {i}")
-        commit(f"branch change {i}")
-    assert vcs(tmp_path, "clone", "-q", "--depth=2", "--branch=topic", source.as_uri(), str(repo)) is not None
-    assert vcs(repo, "checkout", "-q", "--detach") is not None
-    assert base_commit(repo) is None
-    subprocess.run(["sh", "-ec", match[1]], cwd=repo, env=child_env(), check=True, timeout=20)
-    assert base_commit(repo) == fork
-    monkeypatch.setitem(globals(), "ROOT", repo)
-    monkeypatch.setenv("SWITCHBOARD_REQUIRE_GIT_BASE", "1")
-    with pytest.raises(AssertionError, match="plugins/claude"):
-        test_a_change_to_a_plugin_bumps_its_version()
-    (repo / "plugins/claude/.claude-plugin/plugin.json").write_text('{"version":"1.0.1"}')
-    test_a_change_to_a_plugin_bumps_its_version()
 
 
 def run_session(
@@ -1687,20 +1567,3 @@ def test_a_gateway_that_cuts_the_rounds_does_not_end_the_listener(broker: InProc
         gw.close()
     assert r.returncode == 2 and "are you still there" in r.stderr, r
     assert gw.again == ["0", "1", "1"], gw.again
-
-
-def test_without_a_base_the_version_check_fails_where_ci_requires_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no history to compare with, the check skips on a laptop but fails under
-    ``SWITCHBOARD_REQUIRE_GIT_BASE=1``. Fails if CI's lost history would pass as a skip."""
-    monkeypatch.setitem(globals(), "base_commit", lambda root: None)
-    monkeypatch.delenv("SWITCHBOARD_REQUIRE_GIT_BASE", raising=False)
-    with pytest.raises(pytest.skip.Exception):
-        test_a_change_to_a_plugin_bumps_its_version()
-    monkeypatch.setenv("SWITCHBOARD_REQUIRE_GIT_BASE", "1")
-    try:
-        test_a_change_to_a_plugin_bumps_its_version()
-    except pytest.fail.Exception:
-        return  # what CI should see
-    except pytest.skip.Exception:
-        pass
-    pytest.fail("the check passed or skipped where SWITCHBOARD_REQUIRE_GIT_BASE=1 needs a base")

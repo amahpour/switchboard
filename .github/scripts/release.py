@@ -28,11 +28,12 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
   installed it with a release, never with a merge to main (#462). The tag is made by release.yml
   a minute after the merge; until then an update finds no such tag and keeps the old plugin
   (DESIGN.md §49.5 says when each harness tries again);
-- raises the patch `version` in a plugin's manifest (`plugins/claude/.claude-plugin/plugin.json`,
-  `plugins/codex/.codex-plugin/plugin.json`) when it moved a pin inside that plugin (the relay image in
-  its `meeting/compose.yaml`), because a plugin is kept by its version and a pin moved under an unchanged
-  one never reaches an installed copy (#705). A release PR skips the suite, so the check that makes a
-  change to a plugin bump its version never sees this one;
+- sets the `version` of every plugin manifest (`plugins/claude/.claude-plugin/plugin.json`,
+  `plugins/codex/.codex-plugin/plugin.json`, `plugins/cursor/.cursor-plugin/plugin.json`) to the
+  release's own, changed or not, so the plugin of switchboard X.Y.Z is always X.Y.Z (#841). Claude Code
+  and Codex keep an installed plugin by that `version` (§49.5), and a pull request no longer touches
+  it. The broker compares a session's plugin with its own version (`plugin_versions.PINNED`), so
+  nothing else is rewritten;
 - commits that as "release: vX.Y.Z" on `release/vX.Y.Z`, pushes it and opens the PR (`gh`).
 
 Merging the PR releases it: .github/workflows/release.yml tags the merge, publishes the GitHub
@@ -83,17 +84,14 @@ PIN_FILES = (
     "plugins/codex/meeting/compose.yaml",  # a call's relay on a person's machine (#623)
     "deploy/kubernetes/meetings/joinly-voice-patch.yaml",
 )  # the patch's files at the tag (#713)
-# each plugin's folder and its manifest: a plugin is kept by its `version` (§49.5), so a release that
-# moves a pin inside the folder bumps the manifest's patch (#705)
+# each plugin's folder and its manifest: a plugin is kept by its `version` (§49.5), and every release sets
+# each one to the release's own version (#841)
 PLUGIN_MANIFESTS = {
     "plugins/claude": "plugins/claude/.claude-plugin/plugin.json",
     "plugins/codex": "plugins/codex/.codex-plugin/plugin.json",
+    "plugins/cursor": "plugins/cursor/.cursor-plugin/plugin.json",
 }
 PLUGIN_VERSION_RE = re.compile(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")')
-# the broker's copy of those versions (§49.13): what a session's plugin is compared with. It is the
-# manifests', so a release that bumps a manifest rewrites it, and a test holds the two equal
-PLUGIN_VERSIONS_FILE = "src/switchboard/plugin_versions.py"
-PLUGIN_PINNED_RE = re.compile(r"^PINNED = \{.*\}$", re.M)
 # with the notes files, all a release PR changes
 RELEASE_FILES = (
     *VERSION_FILES,
@@ -102,7 +100,6 @@ RELEASE_FILES = (
     *MARKETPLACE_FILES,
     CHART_FILE,
     *PLUGIN_MANIFESTS.values(),
-    PLUGIN_VERSIONS_FILE,
 )
 CHANGES_DIR = "changes"  # a PR's notes: changes/<name>.md (changes/README.md)
 # a release's headings in this order; any other heading follows them, in the order first seen
@@ -267,25 +264,15 @@ def pin_marketplace(text: str, version: str, where: str = "a marketplace") -> st
     return pinned
 
 
-def bump_plugin(text: str, where: str = "a plugin manifest") -> str:
-    """A plugin manifest with its patch version raised by one (#705). Claude Code and Codex keep an installed
-    plugin by this `version`, so a pin moved inside the plugin that leaves it alone never reaches anyone who
-    has the plugin. A manifest with no `"version": "X.Y.Z"` stops the release instead of passing."""
-    bumped, n = PLUGIN_VERSION_RE.subn(lambda m: f"{m[1]}{m[2]}.{m[3]}.{int(m[4]) + 1}{m[5]}", text, count=1)
+def stamp_plugin(text: str, version: str, where: str = "a plugin manifest") -> str:
+    """A plugin manifest with its first `"version"` set to the release's (#841). Claude Code and Codex keep
+    an installed plugin by this `version` alone, so every release sets it, changed or not: the plugin of
+    switchboard X.Y.Z is X.Y.Z. Only the number moves. A manifest with no `"version": "X.Y.Z"` stops the
+    release instead of passing."""
+    stamped, n = PLUGIN_VERSION_RE.subn(rf"\g<1>{version}\g<5>", text, count=1)
     if n != 1:
-        raise SystemExit(f'{where} has no `"version": "X.Y.Z"` to bump')
-    return bumped
-
-
-def sync_plugin_versions(text: str, versions: dict[str, str], where: str = PLUGIN_VERSIONS_FILE) -> str:
-    """The broker's table of plugin versions (``PINNED`` in plugin_versions.py) set to the manifests', by
-    harness. A file with no such line stops the release instead of leaving the broker comparing against
-    versions no plugin has."""
-    line = "PINNED = {" + ", ".join(f'"{h}": "{v}"' for h, v in sorted(versions.items())) + "}"
-    synced, n = PLUGIN_PINNED_RE.subn(line, text, count=1)
-    if n != 1:
-        raise SystemExit(f"{where} has no `PINNED = {{...}}` line to set")
-    return synced
+        raise SystemExit(f'{where} has no `"version": "X.Y.Z"` to set')
+    return stamped
 
 
 def pin_chart(text: str, version: str, where: str = CHART_FILE) -> str:
@@ -376,24 +363,14 @@ def release(root: Path, notes_path: Path, today: str, *, major: bool = False) ->
     (root / "CHANGELOG.md").write_text(changelog)
     for p in files:
         p.unlink()  # gathered into the release (`git commit -a` records the deletions)
-    moved: set[str] = set()  # the plugins whose own files a pin moved in
     for rel in PIN_FILES:
         p = root / rel
         if p.exists():
-            old = p.read_text()
-            new = update_pins(old, version)
-            p.write_text(new)
-            moved.update(folder for folder in PLUGIN_MANIFESTS if new != old and rel.startswith(f"{folder}/"))
-    for folder in sorted(moved):  # #705
-        manifest = root / PLUGIN_MANIFESTS[folder]
-        manifest.write_text(bump_plugin(manifest.read_text(), PLUGIN_MANIFESTS[folder]))
-    versions_file = root / PLUGIN_VERSIONS_FILE
-    if moved and versions_file.exists():  # §49.13
-        manifests = {
-            Path(folder).name: json.loads((root / manifest).read_text())["version"]
-            for folder, manifest in PLUGIN_MANIFESTS.items()
-        }
-        versions_file.write_text(sync_plugin_versions(versions_file.read_text(), manifests))
+            p.write_text(update_pins(p.read_text(), version))
+    for manifest in PLUGIN_MANIFESTS.values():  # every plugin, changed or not (#841)
+        p = root / manifest
+        if p.exists():
+            p.write_text(stamp_plugin(p.read_text(), version, manifest))
     for rel in MARKETPLACE_FILES:
         p = root / rel
         if p.exists():
