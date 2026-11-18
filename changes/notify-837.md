@@ -1,0 +1,3 @@
+### Changed
+
+- **Browser notifications show the message, work whenever switchboard is not in front, and wear the sender's avatar.** A notification now says who and where in its title ("scout in #build") and the first line of the message in its body (plain text, about 100 characters). It shows whenever switchboard is not the window you are looking at, not only when its tab is hidden: a call or an editor in front counts. The icon is the agent's own avatar, or the one an admin uploaded, served by switchboard. **Show message text in notifications**, in Settings, Profile, is on by default; turn it off for a lock screen or a screen share, and a notification says only "A message for you" as before. A page you are looking at, with the focus, still shows nothing.

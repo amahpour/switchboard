@@ -28,12 +28,18 @@ def test_the_choice_is_off_until_set_and_stored_for_the_person(broker: InProcBro
     web: Any = broker.web_client()
     h = broker.write_headers()
     assert web.get("/api/me").json()["notify"] is False
-    assert web.put("/api/me/notify", json={"on": True}, headers=h).json() == {"notify": True}
+    assert web.put("/api/me/notify", json={"on": True}, headers=h).json() == {
+        "notify": True,
+        "notify_text": True,
+    }
     assert web.get("/api/me").json()["notify"] is True
-    for bad in ({"on": "yes"}, {"on": 1}, {"on": True, "x": 1}, {}):
+    for bad in ({"on": "yes"}, {"on": 1}, {"on": True, "x": 1}, {"text": "no"}, {"text": 0}, {}):
         assert web.put("/api/me/notify", json=bad, headers=h).status_code == 400, bad
     assert web.get("/api/me").json()["notify"] is True
-    assert web.put("/api/me/notify", json={"on": False}, headers=h).json() == {"notify": False}
+    assert web.put("/api/me/notify", json={"on": False}, headers=h).json() == {
+        "notify": False,
+        "notify_text": True,
+    }
     assert web.get("/api/me").json()["notify"] is False
     web.close()
 
@@ -47,4 +53,27 @@ def test_the_route_needs_a_signed_in_session_and_the_origin_check(broker: InProc
     assert anon.status_code == 401
     web: Any = broker.web_client()
     assert web.put("/api/me/notify", json={"on": True}).status_code in (400, 403)
+    web.close()
+
+
+def test_showing_the_message_text_is_on_until_turned_off_and_kept_apart(broker: InProcBroker) -> None:
+    """``notify_text`` is true until the person sets it false, is changed alone without touching ``notify``
+    (and the other way round), and only a boolean sets it (#837). Fails if the default is off (the maintainer
+    asked for on), if setting one resets the other, or a non-boolean is taken."""
+    web: Any = broker.web_client()
+    h = broker.write_headers()
+    assert web.get("/api/me").json()["notify_text"] is True
+    assert web.put("/api/me/notify", json={"on": True}, headers=h).json()["notify_text"] is True
+    got = web.put("/api/me/notify", json={"text": False}, headers=h).json()
+    assert got == {"notify": True, "notify_text": False}
+    me = web.get("/api/me").json()
+    assert (me["notify"], me["notify_text"]) == (True, False)
+    assert web.put("/api/me/notify", json={"on": False}, headers=h).json() == {
+        "notify": False,
+        "notify_text": False,
+    }
+    assert web.put("/api/me/notify", json={"on": True, "text": True}, headers=h).json() == {
+        "notify": True,
+        "notify_text": True,
+    }
     web.close()
