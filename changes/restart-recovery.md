@@ -1,3 +1,6 @@
-An open switchboard tab now reports an outage after two minutes and catches up when the broker
-returns. An idle Claude Code or OpenCode listener can repark after a restart, and Cursor retries
-within its existing Stop window. These listeners report a prolonged outage. [#823](https://github.com/amahpour/switchboard/issues/823)
+### Fixed
+
+- **Recover idle listeners after a broker restart.** Claude Code and OpenCode can repark when the
+  broker returns. Cursor retries within its existing Stop window. These listeners and the web UI
+  report a prolonged outage. An open browser tab catches up when the broker returns.
+  [#823](https://github.com/amahpour/switchboard/issues/823)

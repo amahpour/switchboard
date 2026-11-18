@@ -14,10 +14,15 @@ from harness.cursor import CursorRun
 from harness.devin import DevinRun
 from harness.run import Run
 from harness.tmuxdrv import REAL_HOME
-from harness.world import skip_reason
+from harness.world import live_set, skip_reason
 
 pytestmark = pytest.mark.live
 DOWNTIME_S = 30
+if not live_set() & {"claude", "codex", "cursor", "devin", "all"}:
+    pytest.skip(
+        "set SWITCHBOARD_LIVE=claude,codex,cursor,devin to run the live restart tests",
+        allow_module_level=True,
+    )
 
 
 class PrivateCursorRun(CursorRun):
