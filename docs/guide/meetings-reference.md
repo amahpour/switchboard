@@ -415,7 +415,9 @@ Only an agent that is a member of the room can speak this way. A person's messag
 
 ## A fast talker
 
-A coding agent answers a question on a call in 5 to 18 seconds, because every reply is a whole turn of its own. A **talker** is a small fast model that answers in about a second. It is off, and it is yours to turn on, for one call at a time.
+**Parked** (#854). It stays in and works as described here, but nothing more is being built on it for now. On its first live call it answered in 0.8 s (the median), and a Claude Code agent on Haiku in 1.9 s, so it saved about a second for the cost of a provider key. `/help` lists `/meeting talker` only when your server has that key.
+
+A **talker** is a small fast model that answers a question on a call in about a second, where a coding agent's reply is a whole turn of its own. It is off, and it is yours to turn on, for one call at a time.
 
 - **It needs a key.** Your server's operator sets one model provider key (`talker_api_key`, [DEPLOY.md](../DEPLOY.md#a-fast-talker-for-calls)). With none, `/meeting talker on` says so in the room and nothing starts.
 - **Turn it on** with `/meeting talker on` while a call is live on the server's bot (web page, like Voice). It turns Voice on too, since the talker speaks, and joins the room as `talker`. `/meeting talker off`, the call ending, or an error takes it out. It is off at the start of every call. A call hosted on your machine has no talker yet.

@@ -823,7 +823,7 @@ That joinly is stock, and the bot's default is to read the call's own captions (
 
 ### A fast talker for calls
 
-Optional (#806, [DESIGN.md §52.11](DESIGN.md#5211-a-fast-talker-for-calls-806)). A person can turn on a **talker** for a call, a fast hosted model that answers short questions in about a second and hands work to the agents ([the guide](guide/meetings-reference.md#a-fast-talker)). It needs your key for the provider's API, and it is off until you set one.
+Optional (#806, [DESIGN.md §52.11](DESIGN.md#5211-a-fast-talker-for-calls-806)). A person can turn on a **talker** for a call, a fast hosted model that answers short questions in about a second and hands work to the agents ([the guide](guide/meetings-reference.md#a-fast-talker)). It needs your key for the provider's API, and it is off until you set one. It is parked (#854): leave the key unset unless you want it. Without a key, `/help` doesn't list `/meeting talker`.
 
 | Setting | Environment | Default | |
 |---|---|---|---|
