@@ -105,27 +105,30 @@ else
   fix='Check the plugin settings, the server address and the agent token.'
 fi
 stopped() { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
-  # with it, because nothing else would tell it the listener is gone. The marker keeps the same
-  # reason from waking it again at every later Stop; a wake clears it.
   logline "$status" "$said"
-  [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
-  marker="$dir/stopped-$sid"
   # only switchboard's own error word goes to the model, never the rest of the body: whatever
   # stood in the way (a proxy's page) is in the log
   what=$(printf '%s' "$said" | grep -o '"error": *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
   reason="$status $what"
-  [ "$(cat "$marker" 2>/dev/null)" = "$reason" ] && exit 0
-  printf '%s' "$reason" 2>/dev/null >"$marker" || exit 0 # no marker, no wake: it could loop the session awake
-  printf '[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered %s%s. %s The listener starts again at the end of this session'"'"'s next turn. Details: %s/listen.log\n' \
-    "$status" "${what:+ ($what)}" "$fix" "$dir" >&2
+  notice_once "$reason" "[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status${what:+ ($what)}. $fix The listener starts again at the end of this session's next turn. Details: $dir/listen.log"
+}
+notice_once() {
+  # The same reason at the next Stop must stay quiet, or it could loop the session awake.
+  [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
+  marker="$dir/stopped-$sid"
+  [ "$(cat "$marker" 2>/dev/null)" = "$1" ] && exit 0
+  printf '%s' "$1" 2>/dev/null >"$marker" || exit 0
+  printf '%s\n' "$2" >&2
   exit 2
 }
+unreachable_since=
+outage_limit=120
 while kill -0 "$owner" 2>/dev/null; do
   rounds=$((rounds + 1))
   began=$(date +%s)
   if [ -n "$keyfile" ]; then k=$(read_key) && token=$k; fi # a reconnect makes a new key: the newest one
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
-    curl -s --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
+    curl -s --connect-timeout 10 --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
       -H "X-Switchboard-Session: $sid" -H "X-Switchboard-Wait: $round" -H "X-Switchboard-Again: $again" \
       "$url/mcp/listen" >"$code" &
   job=$!
@@ -158,12 +161,28 @@ while kill -0 "$owner" 2>/dev/null; do
       cat "$body" >&2
       exit 2
       ;;
-    408) backoff=1; sleep 1 ;;
+    408)
+      unreachable_since=
+      if [ -n "$dir" ] && [ "$(cat "$dir/stopped-$sid" 2>/dev/null)" = unreachable ]; then
+        rm -f "$dir/stopped-$sid" 2>/dev/null
+      fi
+      backoff=1; sleep 1
+      ;;
     '' | 000 | 429 | 500 | 502 | 503 | 504)
-      if [ $(($(date +%s) - began)) -ge 10 ]; then
+      now=$(date +%s)
+      unreachable_since=${unreachable_since:-$now}
+      remaining=$((outage_limit - now + unreachable_since))
+      if [ "$remaining" -le 0 ]; then
+        note="Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
+        logline unreachable "$note"
+        notice_once unreachable "[switchboard] $note"
+      fi
+      if [ "$((now - began))" -ge 10 ]; then
         backoff=1 # a long wait that a proxy cut: wait again at once
       else
-        sleep "$backoff"
+        delay=$backoff
+        [ "$delay" -le "$remaining" ] || delay=$remaining
+        sleep "$delay"
         [ "$backoff" -ge 60 ] || backoff=$((backoff * 2))
       fi
       ;;

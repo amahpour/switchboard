@@ -19,3 +19,6 @@ permission rules. See [DESIGN.md §49.12](https://github.com/amahpour/switchboar
 Tool hooks enqueue status reports without waiting on the broker. A received wake still queues if the
 session becomes busy; a pending permission, lost location or shutdown drops it. Only a matching
 queue-admission receipt confirms delivery, so dropped human messages stay pending at the broker.
+
+An idle listener can reconnect after a broker restart. After two minutes of failed requests it
+logs the outage and stops listening until the session's next idle event.

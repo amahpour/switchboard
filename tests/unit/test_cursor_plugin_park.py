@@ -7,9 +7,14 @@ the numbers agree again."""
 
 from __future__ import annotations
 
+import importlib.util
+import io
 import json
 import re
+import sys
+import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from conftest import FakeClock
@@ -66,3 +71,38 @@ def test_a_cursor_that_idled_past_its_park_shows_the_limit_until_it_stops_again(
     again = stop(w, p)  # the person typed and the turn ended: its Stop parks, and the mention wakes it
     assert again is not None and again.kind == "park" and woke(w, again)
     assert w.engine.parked_reason(m.id) is None
+
+
+def test_stop_retries_a_restart_within_the_original_park(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    """A Cursor Stop survives 503 and a connection refusal, and keeps its original deadline."""
+    spec = importlib.util.spec_from_file_location("cursor_hook", PLUGIN / "lib" / "hook.py")
+    assert spec is not None and spec.loader is not None
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    requests = []
+    now = [0.0]
+
+    def pause(seconds: float) -> None:
+        now[0] += seconds
+
+    def answer(request: Any, *, timeout: float) -> io.BytesIO:
+        requests.append((json.loads(request.data)["wait_s"], timeout))
+        if len(requests) == 1:
+            raise urllib.error.HTTPError(request.full_url, 503, "restart", {}, io.BytesIO())
+        if len(requests) == 2:
+            raise urllib.error.URLError(ConnectionRefusedError())
+        return io.BytesIO(b'{"followup_message":"one wake"}')
+
+    monkeypatch.setenv("SWITCHBOARD_URL", "http://switchboard.localhost")
+    monkeypatch.setenv("SWITCHBOARD_AGENT_TOKEN", "token")
+    monkeypatch.setattr(sys, "argv", ["hook.py", "stop"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"conversation_id":"one"}'))
+    monkeypatch.setattr(urllib.request, "urlopen", answer)
+    monkeypatch.setattr(hook, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=pause), raising=False)
+    hook.main()
+    assert json.loads(capsys.readouterr().out) == {"followup_message": "one wake"}
+    assert [wait for wait, _ in requests] == [630, 629, 627]
+    assert all(timeout > wait for wait, timeout in requests)

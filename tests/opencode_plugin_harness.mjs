@@ -53,6 +53,17 @@ test('listener rounds: 200, 408, 409, 401, unreachable; no credentials in output
   }
 });
 
+test('an OpenCode listener reports a two-minute outage and stops retrying', async () => {
+  let clock = 0;
+  const logs = [];
+  await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+    canWake: async () => true, ctx: {session: {prompt: async () => assert.fail('unexpected wake')}},
+    request: async () => new Response('', {status: clock < 121000 ? 503 : 409}),
+    sleep: async ms => { clock += ms; }, now: () => clock, warn: text => logs.push(text)});
+  assert.equal(clock, 120000);
+  assert.deepEqual(logs, ['[switchboard] Switchboard has been unreachable for at least 2 minutes. The listener stopped.']);
+});
+
 // Even a response already received cannot wake an approval-blocked, moved or deleted session.
 test('listener rechecks eligibility after 200 and rejects oversized or credential-bearing text', async () => {
   for (const [text, allowed] of [[wake, false], [token, true], ['x'.repeat(65537), true], ['', true]]) {

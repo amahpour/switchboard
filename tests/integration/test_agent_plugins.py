@@ -1026,6 +1026,30 @@ def test_the_listener_rides_out_a_server_that_is_away_and_says_which_round_it_is
     assert stub.again == ["0", "1", "1"]
 
 
+def test_listener_explains_a_two_minute_outage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A continuous outage ends the shell listener with one plain notice, before another retry."""
+    if shutil.which("curl") is None:
+        pytest.skip("the listener needs curl")
+    date = tmp_path / "date"
+    date.write_text("""#!/bin/sh
+if [ "$1" != +%s ]; then exec /bin/date "$@"; fi
+count=$(cat "${0%/*}/calls" 2>/dev/null || echo 0)
+echo "$((count + 1))" >"${0%/*}/calls"
+if [ "$count" -lt 3 ]; then echo 1000; else echo 1121; fi
+""")
+    date.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    stub = Stub([(503, "restarting"), (503, "restarting"), (200, "late wake")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path)
+    finally:
+        stub.close()
+    note = "Switchboard has been unreachable for at least 2 minutes."
+    assert r.returncode == 2 and note in r.stderr, r
+    assert note in (tmp_path / "listen.log").read_text()
+    assert stub.again == ["0", "1"]
+
+
 @pytest.mark.usefixtures("impl")
 def test_the_listener_ends_with_claude_code() -> None:
     """A background hook outlives Claude Code when it quits (seen with 2.1.300), so the listener

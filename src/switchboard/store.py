@@ -2294,7 +2294,8 @@ class Store:
         """Restart semantics (§4): expire open offers and mark everyone offline. A session over HTTPS
         is not tied to a process the broker could probe (§49.3), so none ends here: each comes back
         with its next hook or call, and one that never does is ended by its device (the token's
-        revocation, a kick, a closed room)."""
+        revocation, a kick, a closed room). Remember the last idle state so a returning listener can
+        repark without overriding a busy or approval-blocked session."""
         now = self.clock.now()
         with db.tx(self.con):
             reverted = self.con.execute(
@@ -2306,7 +2307,8 @@ class Store:
                 (now,),
             ).rowcount
             offline = self.con.execute(
-                "UPDATE participants SET status='offline', status_at=?, status_src='restart'"
+                "UPDATE participants SET status='offline', status_at=?, status_src="
+                " CASE WHEN status='idle' OR status_src='restart:idle' THEN 'restart:idle' ELSE 'restart' END"
                 " WHERE ended_at IS NULL",
                 (now,),
             ).rowcount

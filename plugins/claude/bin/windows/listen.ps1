@@ -152,23 +152,28 @@ function Round($again) { # one request: the status ('' when nothing answered) an
 }
 
 function Stopped { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
-    # with it, because nothing else would tell it the listener is gone. The marker keeps the same
-    # reason from waking it again at every later Stop; a wake clears it.
     LogLine $status $said
     # only switchboard's own error word goes to the model, never the rest of the body: whatever
     # stood in the way (a proxy's page) is in the log
     $m = [regex]::Match($said, '"error":\s*"([A-Za-z0-9_-]*)"')
     $what = if ($m.Success) { $m.Groups[1].Value } else { '' }
     $reason = "$status $what"
+    $named = if ($what) { " ($what)" } else { '' }
+    NoticeOnce $reason ("[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status$named. $fix The listener starts again at the end of this session's next turn. Details: " + (Join-Path $dir 'listen.log'))
+}
+
+function NoticeOnce($reason, $text) {
+    # The same reason at the next Stop must stay quiet, or it could loop the session awake.
     if (Remembers "stopped-$sid" $reason) { exit 0 }
     if (-not (Remember "stopped-$sid" $utf8.GetBytes($reason))) { exit 0 }
-    $named = if ($what) { " ($what)" } else { '' }
-    SayText ("[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status$named. $fix The listener starts again at the end of this session's next turn. Details: " + (Join-Path $dir 'listen.log') + "`n")
+    SayText "$text`n"
     exit 2
 }
 
 $again = 0
 $backoff = 1
+$unreachableSince = $null
+$outageLimit = 120
 while (Alive) {
     $rounds++
     $began = Get-Date
@@ -192,12 +197,26 @@ while (Alive) {
             Say $body
             exit 2
         }
-        '408' { $backoff = 1; Start-Sleep -Seconds 1 }
+        '408' {
+            $unreachableSince = $null
+            if (Remembers "stopped-$sid" 'unreachable') {
+                Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "stopped-$sid")
+            }
+            $backoff = 1; Start-Sleep -Seconds 1
+        }
         { $_ -in '', '429', '500', '502', '503', '504' } {
-            if (((Get-Date) - $began).TotalSeconds -ge 10) {
+            $now = Get-Date
+            if ($null -eq $unreachableSince) { $unreachableSince = $now }
+            $remaining = $outageLimit - ($now - $unreachableSince).TotalSeconds
+            if ($remaining -le 0) {
+                $note = "Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
+                LogLine 'unreachable' $note
+                NoticeOnce 'unreachable' "[switchboard] $note"
+            }
+            if (($now - $began).TotalSeconds -ge 10) {
                 $backoff = 1 # a long wait that a proxy cut: wait again at once
             } else {
-                Start-Sleep -Seconds $backoff
+                Start-Sleep -Milliseconds ([int](1000 * [Math]::Min($backoff, $remaining)))
                 if ($backoff -lt 60) { $backoff = $backoff * 2 }
             }
         }

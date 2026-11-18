@@ -17,7 +17,7 @@ from fakes.fake_agent import FakeAgent, ids_in
 from test_agents_http import THREAD_A, Codex, make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
 from test_agents_http_cursor import invoke
-from test_agents_http_wake import listen
+from test_agents_http_wake import claude_hook, joined_claude, listen, parked, participant, until
 
 from switchboard import db
 from switchboard.clock import SystemClock
@@ -281,3 +281,29 @@ async def test_sigterm_answers_wait_and_posts_queued_say(subproc_broker: Subproc
         assert [m.text for m in store.history(room.id) if m.kind == "chat"] == ["first", "second"]
     finally:
         con.close()
+
+
+@pytest.mark.parametrize("approval", ["none", "before", "after"])
+def test_listener_returns_after_restart_only_if_it_was_idle(broker: InProcBroker, approval: str) -> None:
+    """An idle listener re-parks after restart. Approval reports on either side of the restart
+    prevent the old listener round from waking the session."""
+    broker.call("room.create", {"name": "#build"})
+    claude, token = joined_claude(broker)
+    pid = participant(broker, "claude-1").id
+    with ThreadPoolExecutor(1) as pool:
+        pending = pool.submit(listen, broker, token, SESSION_1, 15)
+        until(lambda: parked(broker, pid))
+        if approval == "before":
+            claude_hook(claude, event="Notification", notification_type="permission_prompt")
+            assert participant(broker, "claude-1").status == "waiting-approval"
+        broker.restart()
+        assert pending.result(5).status_code == (409 if approval == "before" else 503)
+
+    if approval == "after":
+        claude_hook(claude, event="Notification", notification_type="permission_prompt")
+    broker.call("human.say", {"room": "#build", "text": "@claude-1 after restarting"})
+    response = listen(broker, token, SESSION_1, 10, **{"x-switchboard-again": "1"})
+    if approval == "none":
+        assert response.status_code == 200 and "after restarting" in response.text
+    else:
+        assert response.status_code == 409

@@ -668,6 +668,10 @@ class Participant:
     def active(self) -> bool:
         return self.ended_at is None
 
+    @property
+    def idle_at_restart(self) -> bool:
+        return self.status == "offline" and self.status_src == "restart:idle"
+
 
 @dataclass(frozen=True)
 class Membership:

@@ -182,6 +182,9 @@ class Listening(PullAdapter):
             return Route("pull", reason="next tool call")
         return Route("none", reason=self.idle_why)
 
+    def listener_retry(self, p: Participant, has_continue: bool) -> bool:
+        return p.idle_at_restart
+
     def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
         """A follow-up a Stop hook answered with is confirmed by the session's next hook once the
         answer went out (``acked``): the turn it started, or the turn it continued."""
@@ -333,7 +336,7 @@ class HttpsOpenCodeAdapter(Listening):
         return super().continue_verdict(p, acked, ev)
 
     def listener_retry(self, p: Participant, has_continue: bool) -> bool:
-        return has_continue and p.status == "busy" and p.status_src == "stop:followup"
+        return p.idle_at_restart or (has_continue and p.status == "busy" and p.status_src == "stop:followup")
 
     def join_guidance(self, p: Participant, room: str) -> str:
         return (

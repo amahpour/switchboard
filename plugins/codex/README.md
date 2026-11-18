@@ -4,6 +4,11 @@ Install and connect the plugin as described in [USAGE.md](https://github.com/ama
 
 A review on a room's board uses the `review-board` skill, which is the how-to for the `review` tool. The tool's own description only names the actions.
 
+A broker restart can end an idle thread's Stop wait. If the thread stays offline when the
+broker comes back, send it a prompt to start a new turn. Its room memberships and pending
+messages survive the restart. If a `say` was interrupted, reuse its original key on a retry.
+[Deployment guide](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#during-a-restart)
+
 To host a room's call on this machine, ask Codex to use `host-meeting-bot`. Docker with Compose and `SWITCHBOARD_URL` in Codex's shell are required, and this session must already be in the room. Use an agent token in `SWITCHBOARD_AGENT_TOKEN`, or install this plugin's stable launcher with `bin/headers-launcher --install` (Windows: `bin/windows/headers-launcher.ps1 --install`) and configure its fixed path as Codex's `http_headers_helper` for browser-signed-in hosting (Codex 0.166.0 or later). The [setup steps](https://github.com/amahpour/switchboard/blob/main/docs/guide/meetings-reference.md#codex-with-browser-sign-in) keep the key in a private file and send only its hash through the signed-in MCP connection. Never copy a credential out of Codex's store.
 
 The skill runs `bin/meeting-host`, which reads the link on stdin, registers the hash of a new call key, and starts joinly and the relay. It uses an NVIDIA GPU Docker can use, else the CPU. Compare the printed fingerprint with the call bar. Voice uses the server's `[meeting] tts_voice`. End call in the room stops both containers; `meeting-host stop` removes them locally and tells the server the call ended, with that call's own key, so the call ends even when the relay never reached the server. If the server cannot be reached, press End call in the room; otherwise the call stays until it times out. `status`, `plan` and `--no-join` work as in the [meetings guide](https://github.com/amahpour/switchboard/blob/main/docs/guide/meetings-reference.md#host-the-bot-on-your-own-machine).

@@ -122,6 +122,17 @@ SWITCHBOARD_LIVE=claude SWITCHBOARD_MEETING_URL_FILE=<file> uv run pytest -m liv
 SWITCHBOARD_LIVE=claude,codex,opencode,devin,cursor uv run pytest -m live tests/live -s -q    # all of them, one after the other (not the meeting self-test, below)
 ```
 
+To check restart recovery specifically, run the two private scenarios for each harness with the same test lock:
+
+```bash
+SWITCHBOARD_LIVE=claude,codex,cursor,devin sb-suite uv run --frozen pytest -m live tests/live/test_live_restart.py -s -q
+SWITCHBOARD_LIVE=opencode sb-suite uv run --frozen pytest -m live tests/live/test_live_opencode.py -k restart -s -q
+```
+
+These runs stop the throwaway broker for 30 seconds while the agent is listening and while a tool
+is running. They use a temporary configuration and home for every CLI, with only a private copy
+of its account login where needed.
+
 - **What you need:** the CLI on `PATH`, logged in (`claude`, `codex login`, `devin auth login`, `agent login`), `tmux` and `curl`. tmux is found on the `PATH` pytest was started with, wherever it is installed (Homebrew's `/opt/homebrew/bin` included); the CLIs' own `PATH` is not widened for it. A harness whose CLI or login is missing is skipped with the reason.
 - **What they cost:** the cheapest model each account has (Claude `haiku`, Codex `gpt-6-luna`, both at low effort; Devin `swe-1-6-slow`; Cursor `auto`), about a dozen model turns per harness. A run takes 25 to 50 s for Claude Code, about 40 s for Codex (about 0.4 million tokens, nearly all cached input), about a minute for Cursor and about 3 minutes for Devin (it waits out the 130 s a killed Devin takes to show offline; the free plan's quota fell by under 1 percentage point a run). Each ends with a `LIVE RESULTS` block: what each scenario found, and one line of what the run spent, read from the CLI's own record (Claude Code's transcript, Codex's rollout, Devin's quota banner). Cursor's free account may be out of quota: its first test needs no model, and the rest are skipped, with the reason, until a one-word call works.
 - **Cursor on macOS:** its live tests skip, except the first (#530). The Cursor CLI keeps its login in the macOS Keychain, not under the home directory, and the run gives Cursor a temp `HOME` (so your own `~/.cursor` is never touched), which cannot see the Keychain. The run does not read or copy the Keychain either, so Cursor looks logged out and every test that needs its model skips with "Cursor is not logged in (on macOS its login is in the Keychain, which the private run can't see; run these on Linux)". Run them on Linux, where the login is a file under `~/.config/cursor`. Don't try to get round it with a `CURSOR_API_KEY` on macOS: print mode works with a key, but the interactive CLI then looks for a Keychain under the temp `HOME`, and macOS shows a "Keychain Not Found" dialog whose **Reset To Defaults** button would reset your own login keychain. Close the dialog with Cancel.

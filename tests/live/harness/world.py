@@ -18,7 +18,6 @@ import contextlib
 import os
 import secrets
 import shutil
-import signal
 import socket
 import sqlite3
 import subprocess
@@ -91,55 +90,14 @@ class Broker:
 
     # ------------------------------------------------------------ start and stop
     def start(self) -> Broker:
-        from switchboard.mcp.client import call_sync, ping
-        from switchboard.paths import Paths
+        from switchboard.mcp.client import call_sync
 
         self.home.mkdir(mode=0o700)
         (self.home / ".switchboard-test").touch()
         (self.home / "config.toml").write_text(f'human_name = "{HUMAN}"\n')
-        env = {
-            "PATH": REAL_PATH,
-            "HOME": str(self.base),  # the broker never sees the real home
-            "LANG": "en_US.UTF-8",
-            "TMPDIR": str(self.base),
-            "SWITCHBOARD_TEST": "1",
-            "LOGNAME": HUMAN,
-        }
-        log = open(self.base / "broker.log", "ab")
         if self.hosted:
             self.port = free_port()
-        self.proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "switchboard",
-                "start",
-                "--foreground",
-                "--test-mode",
-                "--test-trust-uds",
-                "--home",
-                str(self.home),
-                "--port",
-                str(self.port),
-                *(["--public-url", f"http://localhost:{self.port}"] if self.hosted else []),
-            ],  # fmt: skip
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
-            start_new_session=True,
-        )
-        self.paths = Paths.from_home(self.home)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            info = ping(self.paths.sock, timeout=1.0)
-            if info:
-                self.port = info["port"]
-                break
-            if self.proc.poll() is not None:
-                break
-            time.sleep(0.1)
-        assert self.port, "the broker did not start:\n" + (self.base / "broker.log").read_text()
+        self._boot()
         self.url = (
             f"http://localhost:{self.port}" if self.hosted else f"http://switchboard.localhost:{self.port}"
         )
@@ -153,6 +111,60 @@ class Broker:
         r = self.web.post("/api/rooms", json={"name": self.room}, headers=self.hdr)
         assert r.status_code == 200, r.text
         return self
+
+    def _boot(self) -> None:
+        from switchboard.mcp.client import ping
+        from switchboard.paths import Paths
+
+        env = {
+            "PATH": REAL_PATH,
+            "HOME": str(self.base),  # the broker never sees the real home
+            "LANG": "en_US.UTF-8",
+            "TMPDIR": str(self.base),
+            "SWITCHBOARD_TEST": "1",
+            "LOGNAME": HUMAN,
+        }
+        with open(self.base / "broker.log", "ab") as log:
+            self.proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "switchboard",
+                    "start",
+                    "--foreground",
+                    "--test-mode",
+                    "--test-trust-uds",
+                    "--home",
+                    str(self.home),
+                    "--port",
+                    str(self.port),
+                    *(["--public-url", f"http://localhost:{self.port}"] if self.hosted else []),
+                ],  # fmt: skip
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        self.paths = Paths.from_home(self.home)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if self.proc.poll() is not None:
+                break
+            info = ping(self.paths.sock, timeout=1.0)
+            if info:
+                self.port = info["port"]
+                return
+            time.sleep(0.1)
+        raise AssertionError("the broker did not start:\n" + self.log_tail())
+
+    def restart(self, downtime_s: float) -> None:
+        """Replace only the broker, keeping its database, address, browser session and device tokens."""
+        assert self.proc is not None and self.proc.poll() is None
+        self.proc.terminate()
+        assert self.proc.wait(15) == 0, self.log_tail()
+        time.sleep(downtime_s)  # the outage is the stimulus, independent of startup readiness
+        self._boot()
 
     def _set_up_admin(self) -> None:
         """A hosted broker has no admin until someone uses the one-time password it prints; a test-mode broker
@@ -202,11 +214,11 @@ class Broker:
         if self.web is not None:
             self.web.close()
         if self.proc is not None and self.proc.poll() is None:
-            os.killpg(self.proc.pid, signal.SIGTERM)
+            self.proc.terminate()
             try:
                 self.proc.wait(15)
             except subprocess.TimeoutExpired:
-                os.killpg(self.proc.pid, signal.SIGKILL)
+                self.proc.kill()
                 self.proc.wait(5)
 
     def cleanup(self) -> None:
@@ -274,9 +286,10 @@ class Broker:
             con.close()
 
     def delivery_of(self, message_id: int, name: str) -> sqlite3.Row | None:
-        """How message ``message_id`` reached ``name``: the delivery's state, and its batch's path, kind."""
+        """How a message reached the agent, including the delivery state and any retries."""
         rows = self.q(
-            "SELECT d.state AS dstate, b.path, b.kind, b.state AS bstate, b.wake_kind"
+            "SELECT d.state AS dstate, d.attempts, d.redelivered, b.path, b.kind,"
+            " b.state AS bstate, b.wake_kind"
             " FROM deliveries d JOIN memberships m ON m.id = d.membership_id"
             " LEFT JOIN batches b ON b.id = d.batch_id"
             " WHERE d.message_id = ? AND m.screen_name = ? ORDER BY m.id DESC",

@@ -1218,7 +1218,8 @@ class Listener:
     A later round (``X-Switchboard-Again: 1``) is the same listener coming back after a proxy cut its
     wait, so it is refused (409) only when the session has moved on (``MOVED_ON``: a turn started, or
     the session ended) and waits in any other state. A refusal ends the listener for good, so a state
-    that merely isn't "idle" must not cause one (#436). Each refusal is logged at warning level."""
+    that merely isn't "idle" must not cause one (#436). At startup, a session that was idle is offline
+    until its listener returns. Each refusal is logged at warning level."""
 
     def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
         self.auth = auth

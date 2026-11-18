@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -29,9 +30,11 @@ OTHER = ("post-other", "failure-other")
 OWN_TOOL = "MCP:switchboard_"  # how Cursor names the tools of the plugin's server
 ID_MAX = 128  # an id or a tool's name longer than this is not relayed (the broker takes no more)
 OTHER_TIMEOUT = 1.5  # under the group's own timeout (2 s): the script ends itself, Cursor never kills it
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+OUTAGE_LIMIT_S = 120
 
 
-def send(path, body, timeout):
+def send(path, body, timeout, retry_stop=False):
     base = os.environ.get("SWITCHBOARD_URL", "").rstrip("/")
     token = os.environ.get("SWITCHBOARD_AGENT_TOKEN", "")
     u = urlsplit(base)
@@ -49,8 +52,41 @@ def send(path, body, timeout):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.load(response)
-    except (OSError, ValueError, urllib.error.HTTPError):
+    except urllib.error.HTTPError as err:
+        err.close()
+        if retry_stop and err.code in RETRY_STATUSES:
+            raise
         return None
+    except OSError:
+        if retry_stop:
+            raise
+        return None
+    except ValueError:
+        return None
+
+
+def park(body):
+    """Only Stop backs off on outages, within the original hook's time budget."""
+    stop_deadline = time.monotonic() + body["wait_s"]
+    retry_deadline = None
+    backoff = 1
+    while (remaining := int(stop_deadline - time.monotonic())) >= 10:
+        try:
+            return send("/mcp/event", {**body, "wait_s": remaining}, remaining + 10, retry_stop=True)
+        except OSError:
+            now = time.monotonic()
+            if retry_deadline is None:
+                retry_deadline = now + OUTAGE_LIMIT_S
+            if now >= retry_deadline:
+                print(
+                    "[switchboard] Switchboard has been unreachable for at least 2 minutes. "
+                    "The listener stopped. Start a turn in Cursor to listen again.",
+                    file=sys.stderr,
+                )
+                return None
+            time.sleep(min(backoff, retry_deadline - now, max(0, stop_deadline - now - 10)))
+            backoff = min(backoff * 2, 60)
+    return None
 
 
 def short(value):
@@ -144,7 +180,9 @@ def main():
         body["tool_response"] = " ".join(list(dict.fromkeys(TOKEN.findall(text)))[:MAX_TOKENS])
     if kind == "stop":
         body["wait_s"] = 630
-    reply = send("/mcp/event", body, 650 if kind == "stop" else 5)
+        reply = park(body)
+    else:
+        reply = send("/mcp/event", body, 5)
     if isinstance(reply, dict) and (
         set(reply) == {"followup_message"} or set(reply) == {"additional_context"}
     ):
