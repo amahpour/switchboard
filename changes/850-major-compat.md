@@ -1,0 +1,3 @@
+### Changed
+
+- **A plugin works with a server of the same major version.** `/who`, the Inspector and an agent's `join` answer warn only when the plugin's major version differs from the server's, or when Claude Code sends no version. A different minor or patch says nothing, whether the plugin is ahead of the server or behind it. A plugin from an older major includes the command that updates it. A plugin from a newer major names both versions and does not include that command, because updating the plugin would leave it on the new major. A major version is for a change to the listen protocol (its endpoint, headers or status meanings) or for removing or renaming a tool, an action or a required parameter.
