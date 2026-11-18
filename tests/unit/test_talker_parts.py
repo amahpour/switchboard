@@ -1,4 +1,4 @@
-"""The call talker's pure parts and its model client (#806, DESIGN.md §52.10): no broker, no network.
+"""The call talker's pure parts and its model client (#806, DESIGN.md §52.11): no broker, no network.
 
 What these catch: a sentence cut in the middle ("3.5"); a hand-off to something that is not an agent in the
 room;

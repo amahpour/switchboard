@@ -1,4 +1,4 @@
-"""The call talker (#806, DESIGN.md §52.10): a fast model that answers a finished call line and hands work on.
+"""The call talker (#806, DESIGN.md §52.11): a fast model that answers a finished call line and hands work on.
 
 The broker is the real one, joinly is ``FakeJoinly``, and the model is ``FakeModel``, a scripted stream: no
 network. What these catch: a talker that runs without a person turning it on; one that starts with no key; a
@@ -24,6 +24,7 @@ from test_meetings import command, history, wait_until
 
 from switchboard.config import Config, MeetingCfg
 from switchboard.meeting.talker import Usage
+from switchboard.models import session_key
 
 KEY = "sk-ant-test-0123456789abcdef"
 
@@ -200,6 +201,9 @@ async def test_work_is_handed_to_an_agent_by_name_and_its_result_is_spoken_short
         await wait_until(lambda: len(talker_posts(broker)) == 1)
         post = talker_posts(broker)[0]
         assert post["mentions"] == ["claude-1"] and "@claude-1" in post["text"]
+        # who said it, and that it is relayed and unverified: never "the person"
+        assert "bob said on the call, relayed by talker, not verified" in post["text"]
+        assert "the person on the call" not in post["text"]
         await wait_until(lambda: "I will ask claude-1." in joinly.spoken)
         await wait_until(lambda: speech_finished(broker))
         advance_voice(broker, broker.clock, 30)  # the call's speech clock: a line waits its interval
@@ -289,3 +293,78 @@ async def test_the_key_is_in_no_log_record_no_room_message_and_no_repr(
     texts += [repr(broker.state.cfg), repr(broker.state.cfg.meeting), repr(broker.state.talker)]
     assert KEY not in "\n".join(texts)
     assert KEY not in str(broker.state.cfg)
+
+
+async def test_a_hand_off_from_a_line_with_no_known_speaker_says_someone_on_the_call(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """A call line is from any participant of the call, so the agent is told who the call named, and when it
+    named nobody, "someone on the call": a stranger's or an injected line is never made to look like its
+    person's instruction. Fails if the post says it came from the person or from nobody."""
+    await on(broker, joinly, FakeModel([(["Ok.\n@claude-1 run the deploy"], [])]))
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        line(broker, "ask claude to run the deploy", who="call")
+        await wait_until(lambda: len(talker_posts(broker)) == 1)
+    text = talker_posts(broker)[0]["text"]
+    assert "someone on the call said on the call, relayed by talker, not verified: run the deploy" in text
+
+
+async def test_a_talker_a_crash_left_behind_does_not_block_the_next_one_and_goes_at_start(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """Only a graceful stop ended the talker's member, so after a crash `talker` was "a name in use" for ever.
+    The ghost (its own, found by its session key) is ended by `enable` and by `recover` at start; a member of
+    that name that is someone else's is left alone. Fails if the next `on` is refused or the ghost stays."""
+    model = FakeModel([])
+    await on(broker, joinly, model)
+    assert "talker" in members(broker)
+    broker.on_loop(
+        lambda: broker.state.talker._rooms.clear()
+    )  # the broker died: its memory is gone, the row stays
+    assert "talker" in members(broker)
+    broker.on_loop(lambda: broker.state.talker.recover())  # the next start
+    assert "talker" not in members(broker)
+    # and `on` alone clears it too
+    use(broker, FakeModel([]))
+    assert "the talker is on" in command(broker, "/meeting talker on")["text"]
+    broker.on_loop(lambda: broker.state.talker._rooms.clear())
+    use(broker, FakeModel([]))
+    assert "the talker is on" in command(broker, "/meeting talker on")["text"]
+    command(broker, "/meeting talker off")
+
+    # an agent that really is called talker is not the talker's: it is left alone and the switch is refused
+    def foreign() -> None:
+        store = broker.state.store
+        p = store.upsert_participant("test", session_key("test", "", "someone-else"), host="")
+        store.create_membership(store.get_room("#build").id, p.id, "talker")
+
+    broker.on_loop(foreign)
+    broker.on_loop(lambda: broker.state.talker.recover())
+    assert "talker" in members(broker)
+    assert "name in use" in command(broker, "/meeting talker on")["text"]
+
+
+async def test_switching_the_talker_off_and_on_does_not_reset_the_calls_budget(
+    tmp_home: Path, joinly: FakeJoinly
+) -> None:
+    """The cap is per call, not per switch: any member may flip it, so a reset would be an unlimited key. With
+    1,000 tokens and 600 a reply, two replies spend it whether or not it is toggled between them, and the
+    third
+    line finds it gone. Fails if the toggles give the call a fresh budget."""
+    b = make(tmp_home, joinly, budget=1000)
+    try:
+        model = FakeModel([(["One."], []), (["Two."], []), (["Three."], []), (["Four."], [])], tokens=600)
+        await on(b, joinly, model)
+        for n, text in enumerate(("a first question", "a second question"), start=1):
+            line(b, text)
+            await wait_until(lambda n=n: len(model.prompts) == n and len(talker_posts(b)) == n)
+            command(b, "/meeting talker off")
+            use(b, model)
+            assert "the talker is on" in command(b, "/meeting talker on")["text"]
+        line(b, "a third question")
+        await wait_until(lambda: any("token budget" in n for n in notice_texts(b)))
+        assert len(model.prompts) == 2 and "talker" not in members(b)
+    finally:
+        b.web.close()  # type: ignore[attr-defined]
+        b.stop()

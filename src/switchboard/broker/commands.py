@@ -973,7 +973,7 @@ def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
 
 
 def _meeting_talker(on: bool, room: Room, svc: "RoomService") -> Result:
-    """The call's fast talker on or off (§52.10, #806). A person's command only, web only like voice: it
+    """The call's fast talker on or off (§52.11, #806). A person's command only, web only like voice: it
     spends
     the operator's model key and speaks in the call. It needs an open call on the server's bot (a call hosted
     on a person's machine has no talker yet), and turns voice on with it, since the talker speaks. Off at
@@ -1012,8 +1012,9 @@ def _meeting_talker(on: bool, room: Room, svc: "RoomService") -> Result:
         f"{room.name}: the talker is on",
         notice=(
             "turned the talker on, and voice with it: a fast model answers short questions on the call, and"
-            " hands real work to an agent by name. The call lines and the room's recent messages go to the"
-            " model provider"
+            " hands real work to an agent by name. While it is on, every call line and the room's last 12"
+            " messages, other people's and a private room's included (those already there too), are sent to"
+            " api.anthropic.com, the model provider"
         ),
         room_changed=True,
         event="meeting_talker",

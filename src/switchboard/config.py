@@ -213,7 +213,7 @@ class MeetingCfg:
     want Whisper, so with that set and no ``transcriber`` the bot keeps Whisper. ``mode`` is the answer.
 
     ``talker_api_key`` (``SWITCHBOARD_TALKER_API_KEY``, #806) is the one key of the model provider the call
-    talker (§52.10) uses, the operator's, never a room's. Empty is unset: ``/meeting talker on`` then says so
+    talker (§52.11) uses, the operator's, never a room's. Empty is unset: ``/meeting talker on`` then says so
     and no talker runs. It is never shown (the field has no ``repr``), logged, sent to a page or put in a
     room. ``talker_model`` (``SWITCHBOARD_TALKER_MODEL``) is the model's name, a setting and not hard-coded.
     ``talker_call_budget`` is the most tokens (what was sent and what came back) a talker spends on one call,
@@ -399,7 +399,7 @@ def from_dict(data: dict[str, Any]) -> Config:
 
 TALKER_KEY_RE = re.compile(r"[A-Za-z0-9_.\-]{8,400}")
 TALKER_MODEL_RE = re.compile(r"[A-Za-z0-9._:\-]{1,80}")
-# the call talker's key and model from the environment, so a deployment keeps the key in its secrets (§52.10)
+# the call talker's key and model from the environment, so a deployment keeps the key in its secrets (§52.11)
 TALKER_KEY_ENV = "SWITCHBOARD_TALKER_API_KEY"
 TALKER_MODEL_ENV = "SWITCHBOARD_TALKER_MODEL"
 # the human's name from the environment: a deployment's manifest names its admin (§32.4),

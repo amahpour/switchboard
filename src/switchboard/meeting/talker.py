@@ -1,4 +1,4 @@
-"""A fast talker for calls (DESIGN.md §52.10, #806).
+"""A fast talker for calls (DESIGN.md §52.11, #806).
 
 A coding agent speaks a reply only after a whole turn of its own (a wake, a read, a say), which is 5 to 18 s.
 A talker is a member of the room that answers a finished call line in about a second: a fast hosted model,
@@ -237,7 +237,7 @@ class _Room:
     wake: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task[None] | None = None
     handoffs: dict[str, float] = field(default_factory=dict)  # agent -> when it was asked
-    spent: int = 0
+    meeting_id: int = 0  # the call this talker is for: what it spends is counted against it
     stopping: bool = False
 
 
@@ -250,6 +250,9 @@ class Talker:
         self._rooms: dict[int, _Room] = {}
         self._client_factory = client_factory or self._anthropic
         self._clients: dict[int, ModelClient] = {}
+        # tokens spent on each open call, by meeting id: off and on again for the same call does not reset it
+        # (any member may flip the switch), and a new call starts at none (§52.11)
+        self._spent: dict[int, int] = {}
 
     # ------------------------------------------------------------------------------ what a person asks
     @property
@@ -279,21 +282,21 @@ class Talker:
         room = store.room_by_id(room_id)
         if room is None:
             return "no such room"
+        self._end_stale(room_id)  # a talker a crash left behind is not "a name in use"
         if store.find_member(room_id, TALKER_NAME) is not None:
             return f"{TALKER_NAME} is a name in use in {room.name}"
+        call = store.open_meeting(room_id)
+        if call is None:
+            return "no call is being transcribed"
         try:
             client = self._client_factory()
         except Exception:
             log.warning("talker: the model client could not be made")
             return "the talker could not be set up"
-        from switchboard.models import session_key
-
-        p = store.upsert_participant(
-            "unknown", session_key("unknown", "", f"{TALKER_NAME}-{room_id}"), host=""
-        )
+        p = store.upsert_participant("unknown", self._key(room_id), host="")
         store.update_participant(p.id, status="idle", status_at=self.state.clock.now(), status_src="talker")
         m = store.create_membership(room_id, p.id, TALKER_NAME)
-        st = _Room(room_id, p.id, m.id)
+        st = _Room(room_id, p.id, m.id, meeting_id=call.id)
         for msg in store.history(room_id, limit=CONTEXT_MESSAGES):
             if msg.kind == "chat":
                 st.recent.append(self._line_of(msg.sender_name, msg.text))
@@ -302,6 +305,37 @@ class Talker:
         st.task = asyncio.get_running_loop().create_task(self._run(st))
         self.state.hub.members_changed(room.name)
         return None
+
+    def _end_stale(self, room_id: int) -> None:
+        """End a member called ``talker`` that is this talker's own but is not running: the broker died
+        with it
+        in the room (a graceful stop ends it), and nothing else would. A member of that name that is anyone
+        else's is left alone."""
+        if room_id in self._rooms:
+            return
+        store = self.state.store
+        m = store.find_member(room_id, TALKER_NAME)
+        p = store.get_participant(m.participant_id) if m is not None else None
+        if p is None or p.harness != "unknown" or p.session_key != self._key(room_id):
+            return
+        for ended in store.end_participant(p.id, "talker_stale"):
+            self.state.agents.on_membership_ended(ended.id, "talker_stale")
+        room = store.room_by_id(room_id)
+        if room is not None:
+            self.state.hub.members_changed(room.name)
+
+    @staticmethod
+    def _key(room_id: int) -> str:
+        from switchboard.models import session_key
+
+        return session_key("unknown", "", f"{TALKER_NAME}-{room_id}")
+
+    def recover(self) -> None:
+        """At the broker's start: a talker a crash left in a room goes (``_end_stale``), so the ghost is
+        not in
+        Members and ``/meeting talker on`` is not refused for ever."""
+        for room in self.state.store.list_rooms():
+            self._end_stale(room.id)
 
     def disable(self, room_id: int, why: str = "talker_off") -> bool:
         """Stop the talker: its worker, its client and its place in the room. True when one was running."""
@@ -330,7 +364,10 @@ class Talker:
             self.disable(room_id, "broker_stopped")
 
     def call_ended(self, room_id: int) -> None:
-        """The room's call is over: the talker does not outlive it."""
+        """The room's call is over: the talker does not outlive it, and what the call spent is forgotten."""
+        st = self._rooms.get(room_id)
+        if st is not None:
+            self._spent.pop(st.meeting_id, None)
         self.disable(room_id, "call_ended")
 
     # ------------------------------------------------------------------------------- what the room says
@@ -404,7 +441,7 @@ class Talker:
         room = self.state.store.room_by_id(st.room_id)
         if room is None or room.paused:
             return  # a paused room (the budget or the loop guard) is quiet: the talker is too
-        if st.spent >= self.cfg.talker_call_budget:
+        if self._spent.get(st.meeting_id, 0) >= self.cfg.talker_call_budget:
             self._stop_with_notice(
                 st, "The talker stopped: it used this call's token budget (talker_call_budget)."
             )
@@ -426,7 +463,7 @@ class Talker:
         except TimeoutError:
             raise TalkerError("the model took too long to answer") from None
         finally:
-            st.spent += client.usage.total
+            self._spent[st.meeting_id] = self._spent.get(st.meeting_id, 0) + client.usage.total
         reply = parse_reply(buf, agents)
         if reply.skip:
             return
@@ -438,7 +475,18 @@ class Talker:
             st.handoffs[name] = self.state.clock.now()
             if name not in spoken.lower():
                 self._speak(st, f"I will ask {name}.")
-        self._post(st, room, reply, spoken)
+        self._post(st, room, reply, spoken, trig)
+
+    @staticmethod
+    def _relayed(trig: _Trigger) -> str:
+        """Who a hand-off came from, as an agent will read it. A call line is from whoever is on the call (the
+        name the call gave them, or "call" when it did not know), so the agent is told it is relayed and
+        unverified: it is not an instruction from its own person, and a stranger's or an injected line is not
+        made to look like one."""
+        who = trig.who.strip()
+        if trig.kind == "result" or not who or who.lower() == "call":
+            who = "someone on the call"
+        return f"{who} said on the call, relayed by {TALKER_NAME}, not verified"
 
     def _speak(self, st: _Room, sentence: str) -> None:
         text, _kinds = redact(sentence)
@@ -446,7 +494,7 @@ class Talker:
         if meetings is not None:
             meetings.speak(st.room_id, "@call " + text, membership_id=st.membership_id, answering=True)
 
-    def _post(self, st: _Room, room: Any, reply: Reply, spoken: str) -> None:
+    def _post(self, st: _Room, room: Any, reply: Reply, spoken: str, trig: _Trigger) -> None:
         """The reply in the room, as the talker's own message: what it said, and the hand-off as an
         @mention of
         the one agent. Peer input to every other member, delivered by the usual rules (the wake budget, a
@@ -454,7 +502,7 @@ class Talker:
         lines = [spoken] if spoken else []
         mentions: list[str] = []
         if reply.handoff is not None:
-            lines.append(f"@{reply.handoff[0]} the person on the call asks: {reply.handoff[1]}")
+            lines.append(f"@{reply.handoff[0]} {self._relayed(trig)}: {reply.handoff[1]}")
             mentions = [reply.handoff[0]]
         if not lines:
             return

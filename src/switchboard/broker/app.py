@@ -82,7 +82,7 @@ class BrokerState:
     meetings: Any = None  # the call bridge (meeting/bridge.py, §52); None until the lifespan wires it
     # calls hosted on people's machines (meeting/hosted.py, §54); None until the lifespan wires it
     hosted_calls: Any = None
-    talker: Any = None  # the calls' fast talker (meeting/talker.py, §52.10)
+    talker: Any = None  # the calls' fast talker (meeting/talker.py, §52.11)
     attachments: Any = None  # files a room holds (files.py, §53)
     backups: Backups | None = None
     files_swept: float = 0.0  # when the retention sweep last ran (broker clock)
@@ -286,6 +286,7 @@ def create_app(
 
         state.talker = Talker(state)
         state.service.talker = state.talker
+        state.talker.recover()  # a talker a crash left in a room is ended
         state.engine.voice_on = lambda room_id: (
             state.meetings.voice(room_id) or state.hosted_calls.voice(room_id)
         )
