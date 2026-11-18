@@ -148,26 +148,18 @@ def test_the_logo_is_safe_in_joinlys_format_string_and_the_off_words_leave_joinl
     assert uri.startswith("data:image/svg+xml,%3Csvg") and not any(c in uri for c in '"{}<> \n')
 
 
-class _Button:
-    def __init__(self, shown: bool, fails: bool = False) -> None:
-        self.shown, self.fails, self.clicked, self.first = shown, fails, 0, self
-
-    async def is_visible(self) -> bool:
-        return self.shown
-
-    async def click(self, timeout: int = 0) -> None:
-        if self.fails:
-            raise RuntimeError("detached")
-        self.clicked += 1
-
-
 class _Page:
-    def __init__(self, button: _Button) -> None:
-        self.button, self.names = button, []
+    """A page whose one ``evaluate`` is the DOM click: it records what it was given and answers true (a button
+    was clicked), false (none matched) or raises."""
 
-    def get_by_role(self, role: str, name: object) -> _Button:
-        self.names.append(name)
-        return self.button
+    def __init__(self, found: bool = True, fails: bool = False) -> None:
+        self.found, self.fails, self.calls = found, fails, []
+
+    async def evaluate(self, js: str, arg: str) -> bool:
+        self.calls.append((js, arg))
+        if self.fails:
+            raise RuntimeError("page closed")
+        return self.found
 
 
 def _zoom_world(ns: dict[str, object]) -> tuple[object, type, object]:
@@ -190,31 +182,49 @@ def _zoom_world(ns: dict[str, object]) -> tuple[object, type, object]:
     return ns["_install_bot_logo"], Zoom, load
 
 
-def test_a_join_then_clicks_the_camera_once_and_a_second_install_does_not_double_it() -> None:
-    """The camera click comes after joinly's own join, keeps its result, and installing twice wraps once. The
-    button regex takes the start-video names and not the stop ones. Fails if the join result is lost, the
-    click comes first, or it fires twice."""
+def test_a_join_then_clicks_the_camera_once_in_the_page_and_a_second_install_does_not_double_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The camera click comes after joinly's own join, keeps its result, installing twice wraps once, and it
+    is ONE page.evaluate that clicks the first button whose label matches, visible or not (Zoom hides its bar
+    after a join, so is_visible() was False in the live check). The pattern handed to the page names the
+    start-video buttons and not the stop ones, and the outcome is logged once at info. Fails if the join
+    result is lost, the click comes first or twice, or the old visibility check is back."""
     import asyncio
+    import logging
+    import re
 
     install, zoom, load = _zoom_world(logo_namespace())
     install(load, {})  # type: ignore[operator]
     install(load, {})  # type: ignore[operator]
-    page = _Page(_Button(True))
-    assert asyncio.run(zoom().join(page, "https://zoom.us/j/1")) == "joined"
-    assert page.button.clicked == 1
-    assert page.names[0].match("Start Video") and page.names[0].match("Turn on camera")
-    assert not page.names[0].match("Stop Video")
+    page = _Page(found=True)
+    with caplog.at_level(logging.INFO, logger="joinly.test"):
+        assert asyncio.run(zoom().join(page, "https://zoom.us/j/1")) == "joined"
+        assert asyncio.run(zoom().join(_Page(found=True), "https://zoom.us/j/2")) == "joined"
+    assert len(page.calls) == 1
+    js, pattern = page.calls[0]
+    assert "querySelectorAll('button')" in js and "aria-label" in js and ".click()" in js
+    assert "is_visible" not in js
+    rx = re.compile(pattern, re.IGNORECASE)
+    assert rx.search("start my video") and rx.search("Start Video") and rx.search("Turn on camera")
+    assert not rx.search("Stop Video") and not rx.search("turn off camera")
+    assert "(?" not in pattern  # a Python-only group would not parse in the page's RegExp
+    assert [r.getMessage() for r in caplog.records].count("bot logo: camera button clicked") == 1
 
 
-@pytest.mark.parametrize("button", [_Button(False), _Button(True, fails=True)])
-def test_a_missing_or_broken_camera_button_never_fails_the_join(button: _Button) -> None:
-    """No button, or a click that raises, is a grey tile, not a failed join, and the failure is logged once
-    per process. Fails if the join raises."""
+def test_no_matching_button_or_an_exception_never_fails_the_join(caplog: pytest.LogCaptureFixture) -> None:
+    """No button matched ("not found" at info) or the page raising (a warning once per process) is a grey
+    tile, not a failed join. Fails if the join raises, or the exception is logged on every call."""
     import asyncio
+    import logging
 
     ns = logo_namespace()
     install, zoom, load = _zoom_world(ns)
     install(load, {})  # type: ignore[operator]
-    assert asyncio.run(zoom().join(_Page(button), "u")) == "joined"
-    assert button.clicked == 0
-    assert asyncio.run(zoom().join(_Page(button), "u")) == "joined"
+    with caplog.at_level(logging.INFO, logger="joinly.test"):
+        assert asyncio.run(zoom().join(_Page(found=False), "u")) == "joined"
+        for _ in range(2):
+            assert asyncio.run(zoom().join(_Page(fails=True), "u")) == "joined"
+    messages = [r.getMessage() for r in caplog.records]
+    assert "bot logo: camera button not found" in messages
+    assert messages.count("bot logo: could not turn the camera on") == 1

@@ -430,7 +430,7 @@ The picture is stored as a [room file](attachments.md), named like `screen-14250
 
 In the call the bot shows switchboard's mark (a white switchboard on the blue tile, the same picture as the browser tab's icon) as its video, instead of a plain grey tile with its name. The bot has no profile picture as a guest, so after it joins it turns its camera on; the camera shows that one still picture, nothing else, and nothing in the room reads it. It works the same for the bot next to the server and a call hosted on your machine, once both have the current patched `server.py` ([DEPLOY](../DEPLOY.md#a-meeting-bot) has its sha256, and the plugin carries it).
 
-To leave the tile grey, set `SWITCHBOARD_BOT_VIDEO=0` in the environment of the bot's joinly container (a call hosted on your machine passes along the value from the shell that runs the host script). If the camera button can't be found, for example because Zoom changed its page, the bot logs it once and carries on as a grey tile: the call is never refused for it. Zoom is the one platform that has been used; Meet and Teams are tried the same way and have not been checked.
+To leave the tile grey, set `SWITCHBOARD_BOT_VIDEO=0` in the environment of the bot's joinly container (a call hosted on your machine passes along the value from the shell that runs the host script). If the camera button can't be found, for example because Zoom changed its page, the bot logs "camera button not found" once and carries on as a grey tile: the call is never refused for it. Zoom is the one platform that has been used; Meet and Teams are tried the same way and have not been checked.
 
 ## Show a room picture in the call
 

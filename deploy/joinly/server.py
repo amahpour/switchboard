@@ -116,21 +116,36 @@ def _bot_video_enabled(env: dict[str, str] | None = None) -> bool:
     )
 
 
+# Zoom hides its control bar a moment after a join, and a hidden button is on the page but not visible, so
+# get_by_role(...).is_visible() was False in the live check and the camera stayed off. One DOM click finds the first
+# button whose aria-label (or text) matches and clicks it, visible or not; the pattern is the Python one's source.
+_BOT_CAMERA_JS = """(src) => {
+    const rx = new RegExp(src, 'i');
+    for (const b of document.querySelectorAll('button')) {
+        const t = (b.getAttribute('aria-label') || b.innerText || '').trim();
+        if (rx.test(t)) { b.click(); return true; }
+    }
+    return false;
+}"""
+_bot_camera_logged = False
+
+
 async def _bot_camera_on(page: Any) -> bool:  # noqa: ANN401
-    """Click the page's camera-on button once if it is there; True when it was clicked. Never raises; a failure is
-    logged once per process (a call that fails here fails the same way every time)."""
-    global _bot_camera_warned  # noqa: PLW0603
+    """Click the page's camera-on button once if there is one; True when it was clicked. Never raises: an exception
+    is logged once per process as a warning (a call that fails here fails the same way every time), and the outcome
+    of the first attempt, clicked or not found, is logged once at info."""
+    global _bot_camera_warned, _bot_camera_logged  # noqa: PLW0603
     try:
-        button = page.get_by_role("button", name=BOT_CAMERA_ON).first
-        if not await button.is_visible():
-            return False
-        await button.click(timeout=1000)
+        clicked = bool(await page.evaluate(_BOT_CAMERA_JS, BOT_CAMERA_ON.pattern))
     except Exception:
         if not _bot_camera_warned:
             _bot_camera_warned = True
             logger.warning("bot logo: could not turn the camera on", exc_info=True)
         return False
-    return True
+    if not _bot_camera_logged:
+        _bot_camera_logged = True
+        logger.info("bot logo: camera button %s", "clicked" if clicked else "not found")
+    return clicked
 
 
 def _bot_after_join(original: Any) -> Any:  # noqa: ANN401
