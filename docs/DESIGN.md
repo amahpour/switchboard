@@ -1125,6 +1125,7 @@ See §23 for the rules of removal.
 | `/review <url> [note]` | Opens the room's review board for `url`, as the person, and posts one human chat message that @mentions every agent in the room and asks them to review it on the board (§37.8). Until 0.4 it was `/catchup`'s alias (§26) | human_cli (it posts as the human, like `/catchup`) | service (`human_say`), `Boards` |
 | `/meeting listen <name> [off]` | Listen to call chatter (§52.1); off also works from the person's CLI | human (off: human_cli) | engine.evaluate |
 | `/meeting voice <name> <voice>` | Pin the Kokoro voice that member speaks with on calls, or `default` for the one its name picks (§52.6) | human | store |
+| `/meeting unmute` | Ask the server's bot to unmute itself once in the call (§52.12). A hosted call says it has none yet | human | bridge |
 | `/room`, `/room voice on\|off`, `/room listen on\|off`, `/room review on\|off` | A room's settings: the hands-free call ones (§52.3: every call starts with Voice on; every agent listens on calls) and, for `review`, an agent's new pull request link asking the room's agents of another vendor for a review (§37.16). Bare `/room` shows them | human (bare: human_cli) | service |
 | `/who` | Members: name, harness, status, tier (+note; `verifying...` alone while a Codex thread proof runs, §9.3), away, ⚠/?, held, quiet, queued, in flight, parked, `session: <id> @ <host>` (§26) | human_cli | service |
 | `/status` | Room: paused and reason, budget, hop count; per-agent queued, in-flight and expiry counts; the last 10 rule events; Codex link state; hook hash state; test mode | human_cli | service |
@@ -3067,6 +3068,7 @@ The setting is `utterance_preroll_seconds` of `transcription_controller_args`, a
 - `/meeting <link> mine` asks the person's own agent to host it without a model seeing the link (§54); the server bot does not join.
 - `/meeting leave` ends it.
 - `/meeting voice on` and `/meeting voice off` let agents speak in the call, or stop them (**Voice**).
+- `/meeting unmute` asks the server's bot to unmute itself once (§52.12). A hosted call says it has none yet.
 - `/meeting listen <name>` opts that agent into call chatter, and `/meeting listen <name> off` stops it (§52.1).
 - `/meeting voice <name> <voice>` pins the Kokoro voice that member's `@call` lines are spoken in (§52.6).
 - `/meeting snapshot` posts a picture of the call's shared screen (**Snapshots**).
@@ -3573,6 +3575,18 @@ Tests: `tests/unit/test_joinly_voice_patch.py` (the logo equals the favicon, the
 - **Listed only when it can run.** `/help` shows the `/meeting talker` line only when the server has a talker with a key (`help_text`, `Talker.available`). Without one the command can only refuse, so the list doesn't send people to it. `/meeting talker on` still answers as above.
 
 **Parked (2026-11-18, #854).** On the first live call the talker answered in 0.8 s (the median of 33 replies, from the finished line to the posted reply), and a Claude Code agent on Haiku 5.5 in 1.9 s (10 replies). So it saves about a second, not the 5 to 18 s this section started from, and for that it needs a provider key. Phase 1 stays, opt-in. #854 lists what the call found (old room messages read as current, lines meant for others answered or handed off, its spoken replies refused by the one waiting slot) and what would unpark it.
+
+### 52.12 A muted bot is said, and a person can unmute it (#853)
+
+Zoom's "Mute all" mutes the bot too. joinly still turns each `@call` line into speech, and nobody on the call hears it, because the bot's microphone is off. The room used to show nothing wrong.
+
+**How it is known.** The patched joinly (`deploy/joinly/server.py`, the same file as §52.5) adds `mute_status`. It reads the accessible names of the buttons on the call page and does not click. The names are the ones joinly's own mute and unmute already use: Zoom "unmute my microphone" against "mute my microphone", Meet "turn on mic…" against "turn off mic…", Teams "Unmute" against "Mute". The button stays in the page when the toolbar is hidden, so visibility is not required. Zoom's and Meet's own names win over another participant's Unmute, and the page read keeps that button when the page has many others. A host's "Mute all" is a different control and is ignored. Both of one platform's states at once is unknown. The answer is JSON, `muted` true, false, or null when that button was not found. A joinly without the tool, an error, or null is unknown, and unknown is not reported as muted.
+
+**The notice.** While voice is on, the bridge asks once for each `@call` line it is about to speak, until it has told the room. True posts one notice, `The bot is muted in the call, so @call lines are not heard.`, and that call is not told again. The line is still spoken. Voice off does not ask. The flag is memory on the live call, so the next call can be told again. A hosted call's relay does not read the button, so that call gets no notice.
+
+**`/meeting unmute`.** Role `human`, web only, like voice. An agent's `say` of it is text. It calls joinly's own `unmute_yourself` once for the room's live call on the server's bot, and the room hears `The bot unmuted itself in the call.` or `Couldn't unmute the bot in the call.` A second command while one is under way is refused. No open call answers "no call is being transcribed". The bot still joining answers "The bot is not in the call yet." A call hosted on a person's machine (§54) answers that it has no unmute yet: the relay has no such call. Nothing here unmutes before a line. A host who muted the bot on purpose stays muted until a person asks.
+
+**Tests.** `tests/unit/test_joinly_mute_status.py` (the button names, including "Mute all" ignored, and the tool not clicking), `tests/unit/test_meeting_joinly.py` (`mute_claimed` accepts only a boolean), `tests/unit/test_commands.py` (the form, the role, help), `tests/integration/test_meeting_voice.py` (the notice once, on the next `@call` line, not when the button is unread or voice is off, unmute once and an agent cannot, a failed unmute, still joining, a joinly without the tools) and `tests/integration/test_meeting_hosted.py` (a hosted call says it has no unmute yet).
 
 ## 53. Attachments (#544)
 

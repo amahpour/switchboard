@@ -289,6 +289,23 @@ def segments(contents: Any) -> list[Segment]:
     return out
 
 
+def mute_claimed(result: Any) -> bool | None:
+    """What ``mute_status`` claimed: True, False, or None when the answer is not that shape.
+
+    None is unknown. Only a JSON object whose ``muted`` is a boolean is a claim, so a joinly that
+    answers something else cannot make the room say the bot is muted."""
+    try:
+        data = json.loads(reply(result))
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    muted = data.get("muted")
+    if muted is True or muted is False:
+        return muted
+    return None
+
+
 def reply(result: Any) -> str:
     """The text of a tool result, whatever shape the client library gave it."""
     data = getattr(result, "data", None)

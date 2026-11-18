@@ -85,6 +85,8 @@ def notices(svc: RoomService) -> list[str]:
         ("/meeting", "meeting", ()),
         ("/meeting LEAVE", "meeting", ("leave",)),
         ("/meeting snapshot", "meeting", ("snapshot",)),
+        ("/meeting unmute", "meeting", ("unmute",)),
+        ("/meeting UNMUTE", "meeting", ("unmute",)),
         ("/meeting share plan.png", "meeting", ("share", "plan.png")),
         ("/meeting SHARE  release   plan.png", "meeting", ("share", "release plan.png")),
         ("/meeting share STOP", "meeting", ("share", "stop")),
@@ -126,6 +128,7 @@ def test_parse_ok(text: str, name: str, args: tuple[str, ...]) -> None:
         "/meeting voice bad*name am_adam",
         "/meeting voice off am_adam",
         "/meeting snapshot now",
+        "/meeting unmute now",
         "/meeting share",  # which file?
         "/meeting share " + "x" * 201,
         "/meeting leave now",
@@ -164,6 +167,7 @@ def test_required_roles(svc: RoomService) -> None:
             "/meeting voice on",
             "/meeting voice off",
             "/meeting snapshot",
+            "/meeting unmute",
             "/meeting share plan.png",
             "/meeting share stop",
         ]
@@ -191,6 +195,7 @@ def test_required_roles(svc: RoomService) -> None:
         "/meeting voice on": "human",
         "/meeting voice off": "human",
         "/meeting snapshot": "human",
+        "/meeting unmute": "human",
         # showing a picture in the call is the person's own web session too (§52.9)
         "/meeting share plan.png": "human",
         "/meeting share stop": "human",

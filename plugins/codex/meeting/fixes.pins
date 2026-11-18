@@ -9,5 +9,5 @@
 # file  sha256  url or plugin:path
 zoom.py 9bf581c20a9a7911afb9f2ac1447a5d0800cdca24485dd215099d5d82afad6ff https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5/joinly/providers/browser/platforms/zoom.py
 transcription.py 6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97 https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py
-server.py 641d0988ff85076bf1032dd5c0b685affd5e48bf8863df30d77af54154e80993 plugin:joinly/server.py
+server.py 2916dd7fd88e0fdf10bc37aaf83b9fa80d0158b7904d9d6c3ff3f088b52690c1 plugin:joinly/server.py
 kokoro.py d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3 plugin:joinly/kokoro.py
