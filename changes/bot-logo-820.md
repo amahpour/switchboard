@@ -1,0 +1,3 @@
+### Added
+
+- **The meeting bot shows the switchboard logo on its tile.** In a Zoom call the bot was a plain grey tile with its name, because a guest has no profile picture. It now turns its camera on after it joins and shows switchboard's mark (the same picture as the browser tab's icon). It is one fixed picture that nothing reads, and the call is never refused if the camera button isn't found. `SWITCHBOARD_BOT_VIDEO=0` in the bot's joinly container leaves the tile grey. The change is in the patched `server.py`, with no new file: update `server.py` on the server (the new sha256 is in [DEPLOY.md](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#a-meeting-bot)), and update the plugin for a call hosted on your machine. Only Zoom has been tried.
