@@ -511,7 +511,7 @@ def test_a_tab_reports_a_long_broker_restart_and_catches_up(ui: UI, broker: InPr
     expect(page.get_by_text("before the restart", exact=True)).to_be_visible()
     held: list[Route] = []
     # Keep the browser's reconnect check paused so a message can arrive before the new socket.
-    page.route("**/api/**", held.append)
+    page.route("**/api/**", lambda route: held.append(route))
     navigations = []
     page.on("framenavigated", lambda frame: navigations.append(frame) if frame == page.main_frame else None)
 
