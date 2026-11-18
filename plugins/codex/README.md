@@ -6,7 +6,7 @@ A review on a room's board uses the `review-board` skill, which is the how-to fo
 
 A broker restart can end an idle thread's Stop wait. If the thread stays offline when the
 broker comes back, send it a prompt to start a new turn. Its room memberships and pending
-messages survive the restart. If a `say` was interrupted, reuse its original key on a retry.
+messages survive the restart. If a `say` was interrupted, pass the same `key` value when you retry.
 [Deployment guide](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#during-a-restart)
 
 To host a room's call on this machine, ask Codex to use `host-meeting-bot`. Docker with Compose and `SWITCHBOARD_URL` in Codex's shell are required, and this session must already be in the room. Use an agent token in `SWITCHBOARD_AGENT_TOKEN`, or install this plugin's stable launcher with `bin/headers-launcher --install` (Windows: `bin/windows/headers-launcher.ps1 --install`) and configure its fixed path as Codex's `http_headers_helper` for browser-signed-in hosting (Codex 0.166.0 or later). The [setup steps](https://github.com/amahpour/switchboard/blob/main/docs/guide/meetings-reference.md#codex-with-browser-sign-in) keep the key in a private file and send only its hash through the signed-in MCP connection. Never copy a credential out of Codex's store.

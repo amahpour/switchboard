@@ -146,7 +146,7 @@ $handler.AllowAutoRedirect = $false # a redirect would carry the token to wherev
 $client = New-Object Net.Http.HttpClient $handler
 $client.Timeout = [TimeSpan]::FromSeconds($round + 30)
 
-function Round($again) { # one request: the status ('' when nothing answered) and the body; $null when Claude Code is gone
+function Round($again) { # one request: the status ('' when nothing answered) and the body; $null when the park was cancelled
     $req = New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Post), "$url/mcp/listen"
     foreach ($h in @(@('Authorization', "Bearer $token"), @('X-Switchboard-Session', $sid), @('X-Switchboard-Wait', "$round"),
             @('X-Switchboard-Again', "$again"), @('User-Agent', 'switchboard-claude-plugin'))) {
@@ -157,7 +157,9 @@ function Round($again) { # one request: the status ('' when nothing answered) an
     $req.Content = New-Object Net.Http.ByteArrayContent (, [byte[]]@())
     $task = $client.SendAsync($req)
     try {
-        while (-not $task.Wait(2000)) { if (-not (Alive)) { return $null } }
+        while (-not $task.Wait(2000)) {
+            if (-not (Alive) -and -not $task.IsCompleted) { return $null }
+        }
         [pscustomobject]@{ Status = [string][int]$task.Result.StatusCode; Body = $task.Result.Content.ReadAsByteArrayAsync().Result }
     } catch {
         [pscustomobject]@{ Status = ''; Body = [byte[]]@() } # refused, reset, timed out
@@ -192,17 +194,20 @@ while (Alive) {
     $began = Get-Date
     if ($keyfile) { $newest = ReadKey; if ($newest) { $token = $newest } } # a reconnect makes a new key: the newest one
     $answer = Round $again
-    if ($null -eq $answer -or -not (Alive)) { exit 0 }
-    $again = 1
+    if ($null -eq $answer) { exit 0 }
     $status = $answer.Status
     $body = [byte[]]$answer.Body
+    # The broker has already acknowledged a wake by the time its text arrives.
+    # A local hook may cancel the next park, but the completed wake still belongs to this session.
+    if ($status -ceq '200') {
+        if ($dir) { Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "stopped-$sid") }
+        Say $body
+        exit 2
+    }
+    if (-not (Alive)) { exit 0 }
+    $again = 1
     $said = Flat $utf8.GetString($body)
     switch -CaseSensitive ($status) {
-        '200' {
-            if ($dir) { Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "stopped-$sid") }
-            Say $body
-            exit 2
-        }
         '410' { # someone else ended the session: say so once, or it goes deaf without a word
             LogLine 410 $said
             if (Remembers "ended-$sid" $utf8.GetString($body)) { exit 0 }

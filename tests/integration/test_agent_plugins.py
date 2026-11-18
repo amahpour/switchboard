@@ -11,6 +11,7 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1066,6 +1067,32 @@ def test_local_activity_cancels_a_listener_even_when_its_broker_is_down(tmp_path
     finally:
         stub.close()
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert stub.again == ["0"]
+
+
+def test_local_activity_preserves_a_received_wake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cancel the park after curl receives the wake and before it returns to the listener.
+
+    The broker already confirmed the message, so exiting quietly here would lose the wake.
+    """
+    curl = shutil.which("curl")
+    if curl is None:
+        pytest.skip("the listener needs curl")
+    wrapper = tmp_path / "curl"
+    wrapper.write_text(f"""#!/bin/sh
+{shlex.quote(curl)} "$@" || exit "$?"
+trap '' TERM
+rm "$CLAUDE_PLUGIN_DATA/listening-{SESSION_1}"
+""")
+    wrapper.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    stub = Stub([(200, "the confirmed wake")])
+    try:
+        result = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path)
+    finally:
+        stub.close()
+    assert not (tmp_path / f"listening-{SESSION_1}").exists()
+    assert (result.returncode, result.stdout, result.stderr) == (2, "", "the confirmed wake")
     assert stub.again == ["0"]
 
 

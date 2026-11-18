@@ -162,14 +162,23 @@ while active; do
     kill "$job" 2>/dev/null
   ) >/dev/null 2>&1 </dev/null &
   watch=$!
-  wait "$job" 2>/dev/null
+  if wait "$job" 2>/dev/null; then
+    status=$(cat "$code" 2>/dev/null)
+  else
+    status= # an interrupted transfer can report HTTP 200 with an incomplete body
+  fi
   kill "$watch" 2>/dev/null
+  # The broker has already acknowledged a wake by the time its text arrives.
+  # A local hook may cancel the next park, but the completed wake still belongs to this session.
+  if [ "$status" = 200 ]; then
+    [ -n "$dir" ] && rm -f "$dir/stopped-$sid" 2>/dev/null
+    cat "$body" >&2
+    exit 2
+  fi
   active || exit 0
   again=1
-  status=$(cat "$code" 2>/dev/null)
   said=$(flat "$body")
   case $status in
-    200) [ -n "$dir" ] && rm -f "$dir/stopped-$sid" 2>/dev/null; cat "$body" >&2; exit 2 ;;
     410) # someone else ended the session: say so once, or it goes deaf without a word
       logline 410 "$said"
       [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
