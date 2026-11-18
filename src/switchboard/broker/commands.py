@@ -10,7 +10,8 @@ removed in 0.4; it opens a review board now.) ``/close`` (§28.3) ends every mem
 so it reduces activity: ``human_cli``. ``/quiet`` reduces what wakes an agent, so
 ``human_cli``; ``/unquiet`` raises it, so ``human`` (§50). ``/meeting`` joins a call,
 which raises what the room's agents can be asked to do, so ``human`` (§52); so do its
-``voice on|off`` (agents speaking in the call), ``snapshot`` (a picture of its shared screen) and
+``voice on|off`` (agents speaking in the call), ``unmute`` (the server's bot unmutes itself
+once, §52.12), ``snapshot`` (a picture of its shared screen) and
 ``share <file>|stop`` (a room's picture shown in the call, §52.9).
 ``/room voice|listen on|off`` (§52.3) sets what every call in the room starts with, so it raises
 what agents can do and needs ``human`` too; ``/room`` alone only reads them. ``/room review on|off``
@@ -78,6 +79,8 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /meeting voice on   let agents speak in the call: a say() that starts with @call
                       is read aloud to everyone on it. Off when a call starts unless /room voice on (web only)
   /meeting voice off  stop that (web only)
+  /meeting unmute     unmute the server's bot in the call, once (web only);
+                      a hosted call has none yet
   /meeting voice <name> <voice>  the Kokoro voice this agent speaks with on calls (web only);
                       <voice> is a-z, 0-9 and _, up to 32 characters, or "default" for the one picked
                       from its name
@@ -235,7 +238,7 @@ def parse_command(text: str) -> Command:
 
 
 MEETING_USAGE = (
-    "usage: /meeting [<link> [mine]|leave|snapshot|share <file>|share stop|voice on|voice off"
+    "usage: /meeting [<link> [mine]|leave|unmute|snapshot|share <file>|share stop|voice on|voice off"
     "|voice <name> <voice>|talker on|talker off|listen <name> [off]]"
 )
 
@@ -244,13 +247,13 @@ VOICE_USAGE = "usage: /meeting voice on|off, or /meeting voice <name> <voice>"
 
 
 def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
-    """``/meeting``, ``/meeting leave``, ``/meeting snapshot``, ``/meeting voice on|off``, or
-    ``/meeting <link> [mine]``. The link is one argument, kept only until ``apply`` hands it to
-    the bridge or the expiring private handoff (§54)."""
+    """``/meeting``, ``/meeting leave``, ``/meeting unmute``, ``/meeting snapshot``,
+    ``/meeting voice on|off``, or ``/meeting <link> [mine]``. The link is one argument, kept only until
+    ``apply`` hands it to the bridge or the expiring private handoff (§54)."""
     if not args:
         return Command(name="meeting", args=(), raw=raw)
     word = args[0].lower()
-    if len(args) == 1 and word in ("leave", "snapshot"):
+    if len(args) == 1 and word in ("leave", "snapshot", "unmute"):
         return Command(name="meeting", args=(word,), raw=raw)
     if word == "share":
         # a file's name may have had spaces: the words after "share" are one reference
@@ -766,6 +769,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         )
     if cmd.args == ("snapshot",):
         return _meeting_snapshot(room, actor, svc)
+    if cmd.args == ("unmute",):
+        return _meeting_unmute(room, svc)
     if cmd.args[:1] == ("share",):
         return _meeting_share(cmd, room, actor, svc)
     if cmd.args[:1] == ("listen",):
@@ -1045,6 +1050,22 @@ def _meeting_voice_pin(cmd: Command, room: Room, svc: "RoomService") -> Result:
         event="meeting_voice_pin",
         event_data={"membership_id": member.membership_id, "voice": voice},
     )
+
+
+def _meeting_unmute(room: Room, svc: "RoomService") -> Result:
+    """Ask the server's bot to unmute itself once (§52.12). A person's web command: an agent's say of it is
+    text, and a call hosted on a person's machine has no unmute yet. The room hears how the one call went."""
+    row = svc.store.open_meeting(room.id)
+    if row is None:
+        return Result(True, f"{room.name}: no call is being transcribed")
+    if row.hosted:
+        return Result(True, f"{room.name}: a hosted call has no unmute yet")
+    if svc.meetings is None:
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    why = svc.meetings.request_unmute(room.id)
+    if why is not None:
+        raise CommandError("conflict", why)
+    return Result(True, f"{room.name}: asking the bot to unmute", event="meeting_unmute")
 
 
 def _meeting_snapshot(room: Room, actor: Actor, svc: "RoomService") -> Result:

@@ -10,8 +10,10 @@ Three things go back into the call through the same session, all started by a pe
 voice is on, an agent's ``@call`` line is spoken (``speak_text``), one line at a time off the
 request that posted it. A snapshot (``get_video_snapshot``) is stored as a room file and posted. A
 room's picture is shown as a screen share (``share_image``, §52.9), one at a time, and ends with
-the call. Whether voice is on, and whether a picture is shared, is memory only: a call does not
-outlive the process, so neither does either.
+the call. While voice is on, the bot's own mute button is read once a line is about to be spoken
+(``mute_status``, §52.12): muted, the room is told once for that call. A person's ``/meeting unmute``
+calls ``unmute_yourself`` once. Whether voice is on, and whether a picture is shared, is memory only:
+a call does not outlive the process, so neither does either.
 """
 
 from __future__ import annotations
@@ -55,6 +57,9 @@ log = logging.getLogger("switchboard.meeting")
 MIN_WAIT_S = 0.05  # the least the listen loop sleeps for an open line that is due: no spinning
 JOIN_TIMEOUT_S = 45.0
 SHARE_TIMEOUT_S = 40.0  # joinly waits about eight seconds for Zoom to answer, after it has drawn the picture
+MUTE_TIMEOUT_S = 5.0  # reading the mute button is one page evaluation; it must not hold the line
+UNMUTE_TIMEOUT_S = 8.0  # joinly clicks the button, twice at most, after showing the toolbar
+MUTE_NOTICE = "The bot is muted in the call, so @call lines are not heard."
 
 
 @dataclass
@@ -71,6 +76,9 @@ class _Live:
     missing: set[str] = field(default_factory=set)  # voices Kokoro lacked, already told to the room
     sharing: str | None = None  # the name of the picture being shared in the call, once Zoom has taken it
     share_busy: bool = False  # a share or its stop is under way: no second one starts beside it
+    mute_told: bool = False  # the room has been told this call that the bot is muted (§52.12)
+    reads_mute: bool | None = None  # this joinly has mute_status; None until asked once
+    unmute_busy: bool = False  # an unmute is under way: the command calls the tool once
 
 
 class MeetingBridge:
@@ -359,6 +367,7 @@ class MeetingBridge:
                     pass
                 continue
             try:
+                await self._note_if_muted(room_id, live)
                 voice = line.voice
 
                 async def one(sentence: str, voice: str | None = voice) -> str:
@@ -388,12 +397,77 @@ class MeetingBridge:
             finally:
                 live.turns.finish(line.id)
 
+    async def _note_if_muted(self, room_id: int, live: _Live) -> None:
+        """Once per call, when voice is on and the bot's own button says it is muted (#853).
+
+        Unknown (no tool, no button, an error) is not a mute: the line is still spoken, and the next
+        line asks again until the room has been told. The check does not click the button."""
+        if live.mute_told or room_id not in self._voice:
+            return
+        try:
+            if live.reads_mute is None:
+                live.reads_mute = await joinly.has_tool(live.client, "mute_status")
+            if not live.reads_mute:
+                return
+            result = await asyncio.wait_for(
+                live.client.call_tool("mute_status", {}, timeout=MUTE_TIMEOUT_S),
+                MUTE_TIMEOUT_S + 1,
+            )
+            claimed = joinly.mute_claimed(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("meeting room %s: mute status failed", room_id)
+            return
+        if claimed is True:
+            live.mute_told = True
+            self.state.service.notice_in(room_id, MUTE_NOTICE)
+
     async def _stop_speech(self, live: _Live) -> None:
         live.turns.clear_pending()
         worker = live.worker
         if worker is not None and not worker.done():
             worker.cancel()
             await asyncio.gather(worker, return_exceptions=True)
+
+    # ---------------------------------------------------------------- unmute (§52.12)
+    def request_unmute(self, room_id: int) -> str | None:
+        """A person asks the server's bot to unmute itself, once. None when that is under way; the room
+        hears how it went. Otherwise why not, as a sentence for them. Only a person's command reaches here."""
+        live = self._live.get(room_id)
+        if live is None:
+            return "The bot is not in the call yet."
+        if live.unmute_busy:
+            return "An unmute is already under way. Try again in a moment."
+        try:
+            task = asyncio.get_running_loop().create_task(self._unmute(room_id, live))
+        except RuntimeError:
+            return "The meeting bridge is not running."
+        live.unmute_busy = True
+        self._side.add(task)
+        task.add_done_callback(self._side.discard)
+        return None
+
+    async def _unmute(self, room_id: int, live: _Live) -> None:
+        """Call ``unmute_yourself`` once. joinly's own words are not repeated in the room."""
+        notice = "Couldn't unmute the bot in the call."
+        try:
+            if not await joinly.has_tool(live.client, "unmute_yourself"):
+                notice = "This meeting server cannot unmute."
+            else:
+                await asyncio.wait_for(
+                    live.client.call_tool("unmute_yourself", {}, timeout=UNMUTE_TIMEOUT_S),
+                    UNMUTE_TIMEOUT_S + 2,
+                )
+                notice = "The bot unmuted itself in the call."
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("meeting room %s: unmute_yourself failed", room_id)
+            notice = "Couldn't unmute the bot in the call."
+        finally:
+            live.unmute_busy = False
+        self.state.service.notice_in(room_id, notice)
 
     # --------------------------------------------------------------- snapshot (§52)
     def request_snapshot(self, room_id: int, asker: Asker) -> str | None:

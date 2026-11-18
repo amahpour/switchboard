@@ -1,4 +1,4 @@
-# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764, #820, #824): see deploy/joinly/NOTICE for what.
+# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764, #820, #824, #853): see deploy/joinly/NOTICE for what.
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. MIT License:
 #
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand
@@ -981,6 +981,100 @@ async def unmute_yourself(
     ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
     await ms.unmute()
     return "Unmuted yourself."
+
+
+def muted_from_labels(labels: object) -> bool | None:
+    """True when the bot's own button would unmute it, False when it would mute it, None when that
+    button was not among ``labels``.
+
+    The names are the ones joinly's mute and unmute already click. Zoom and Meet name the bot's own
+    button, and that name wins over another participant's Unmute. Teams' own button is "Unmute" /
+    "Mute". A host's "Mute all" is a different control and is ignored. Both states at once, or a
+    value that is not a list of text, is unknown.
+    """
+    if not isinstance(labels, list):
+        return None
+    zoom_muted = zoom_open = False
+    meet_muted = meet_open = False
+    teams_muted = teams_open = False
+    for raw in labels[:80]:
+        if not isinstance(raw, str):
+            continue
+        name = " ".join(raw.split()).lower()
+        if not name or len(name) > 120 or "all" in name.split():
+            continue
+        if name.startswith("unmute my microphone"):
+            zoom_muted = True
+        elif name.startswith("mute my microphone"):
+            zoom_open = True
+        elif name.startswith("turn on mic"):
+            meet_muted = True
+        elif name.startswith("turn off mic"):
+            meet_open = True
+        elif name.startswith("unmute"):
+            teams_muted = True
+        elif name == "mute" or name.startswith("mute "):
+            teams_open = True
+    for muted, open_mic in (
+        (zoom_muted, zoom_open),
+        (meet_muted, meet_open),
+        (teams_muted, teams_open),
+    ):
+        if muted or open_mic:
+            if muted and not open_mic:
+                return True
+            if open_mic and not muted:
+                return False
+            return None
+    return None
+
+
+# The toolbar hides, and a hidden button is still on the page (the same as the camera button, #820).
+# Read the accessible name. Never click: a click would change the call. The bot's own button is kept
+# even when the page has many other buttons; another participant's Unmute is only a fallback.
+_MUTE_LABELS_JS = """() => {
+    const own = [];
+    const other = [];
+    for (const b of document.querySelectorAll('button, [role="button"]')) {
+        const t = (b.getAttribute('aria-label') || b.innerText || '').replace(/\\s+/g, ' ').trim();
+        if (!t) continue;
+        const n = t.toLowerCase();
+        if (n.split(' ').includes('all')) continue;
+        const short = t.slice(0, 120);
+        if (
+            n.startsWith('unmute my microphone') || n.startsWith('mute my microphone') ||
+            n.startsWith('turn on mic') || n.startsWith('turn off mic')
+        ) {
+            if (own.length < 8) own.push(short);
+        } else if (
+            (n.startsWith('unmute') || n === 'mute' || n.startsWith('mute ')) && other.length < 80
+        ) {
+            other.push(short);
+        }
+    }
+    return own.length ? own : other;
+}"""
+
+
+@mcp.tool(
+    "mute_status",
+    description=(
+        "Whether this participant's own mute button says it is muted. Reads the button and does not "
+        'click it. JSON: {"muted": true}, {"muted": false}, or {"muted": null} when the button was not found.'
+    ),
+)
+async def mute_status(ctx: Context) -> str:
+    """Read the call page's own mute button (switchboard patch, #853). Never clicks."""
+    ms: MeetingSession = ctx.request_context.lifespan_context.meeting_session
+    page = getattr(getattr(ms, "_meeting_provider", None), "_page", None)
+    if page is None:
+        return json.dumps({"muted": None})
+    try:
+        labels = await page.evaluate(_MUTE_LABELS_JS)
+    except Exception:
+        logger.warning("mute status: the page could not be read")
+        return json.dumps({"muted": None})
+    return json.dumps({"muted": muted_from_labels(labels)})
 
 
 @mcp.tool(

@@ -90,6 +90,8 @@ can report when speech finishes. [The reference](meetings-reference.md#let-agent
 
 **A voice for each agent.** With Voice on, each agent speaks in a voice of its own, picked from its name, and Members shows it. `/meeting voice claude-1 bf_emma` gives it another. [The reference](meetings-reference.md#let-agents-speak) has the details.
 
+**If the host mutes everyone.** Zoom's Mute all mutes the bot too, so the call stops hearing `@call` lines. The room says so once, and `/meeting unmute` asks the server's bot to unmute itself. [The reference](meetings-reference.md#when-the-host-uses-mute-all) has it.
+
 **Listening.** Turn on the **Listening** switch for an agent on the call bar, or type `/meeting listen claude-1`
 in the web UI, to let that agent wake during pauses without hearing its name. Members and the agent's details say
 "listening" while it is on. Brief it first on what to watch for and when to answer. It wakes after

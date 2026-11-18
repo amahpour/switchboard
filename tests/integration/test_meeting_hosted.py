@@ -1122,6 +1122,20 @@ async def test_only_the_person_whose_call_it_is_or_an_admin_can_end_it(
         await his.close()
 
 
+async def test_a_hosted_call_has_no_unmute_yet(world: World) -> None:
+    """``/meeting unmute`` is the server's bot. A call hosted on a person's machine says so and calls
+    nothing. Fails if the command claims the bot unmuted, or is refused as an unknown command."""
+    w = world
+    claude, codex = await hosted_call(w)
+    try:
+        got = w.command("/meeting unmute")
+        assert "no unmute yet" in got["text"]
+        assert not any("unmuted" in n for n in w.notices())
+    finally:
+        await claude.close()
+        await codex.close()
+
+
 @pytest.fixture
 def hosted_broker_world() -> Iterator[tuple[InProcBroker, Browser, Browser, int]]:
     b, admin, bob, bob_id = hosted_world()

@@ -41,6 +41,12 @@ The bot's logo (#820, DESIGN.md section 52.10) is in server.py too: `BOT_LOGO_SV
 platform controller's `join` to click the camera button once afterwards (a failure is logged once and never fails
 the join). `SWITCHBOARD_BOT_VIDEO=0` turns it off. Nothing else of joinly changes.
 
+The bot's own mute button (#853, DESIGN.md section 52.12) is in server.py too: `mute_status` reads the
+accessible names of the buttons on the call page (Zoom "unmute my microphone" / "mute my microphone", Meet
+"turn on mic" / "turn off mic", Teams "Unmute" / "Mute") and answers whether the bot's own button says it is
+muted. Zoom's and Meet's own names win over another participant's Unmute. It does not click. A host's
+"Mute all" is not that button. `unmute_yourself` is joinly's own tool and is unchanged.
+
 The Zoom participant list (#824, DESIGN.md section 52.7) is in server.py too: `_install_zoom_participants()` replaces the
 Zoom controller's `get_participants` when the file is imported. joinly's own looks for one button and gives up when it
 is not visible at that moment; this one tries every match of the button (then a click made in the page), the "More"

@@ -552,3 +552,139 @@ async def test_the_passcode_is_still_nowhere_after_speaking_and_snapshots(
     assert SECRET not in notices(broker)
     assert SECRET not in caplog.text
     assert SECRET not in "\n".join(m["text"] for m in history(broker))
+
+
+# --------------------------------------------------------------- a muted bot (#853)
+
+MUTED = "The bot is muted in the call, so @call lines are not heard."
+
+
+async def test_a_muted_bot_is_told_once_on_the_next_at_call_line(
+    timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
+) -> None:
+    """Voice is on and the call page's own button says the bot is muted (Zoom's Mute all does that). The
+    room is told once, by the next ``@call`` line, and the line is still spoken. A later line does not tell
+    it again. Fails if the notice is missing, repeated, or the line is dropped."""
+    broker, clock = timed
+    joinly.muted = True
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        command(broker, "/meeting voice on")
+        await agent.say("#build", "@call hello from the room")
+        await wait_until(lambda: joinly.spoken == ["hello from the room"])
+        await wait_until(lambda: count(notice_texts(broker), MUTED) == 1)
+        advance_voice(broker, clock, 30)
+        await agent.say("#build", "@call still muted")
+        await wait_until(lambda: joinly.spoken == ["hello from the room", "still muted"])
+    assert count(notice_texts(broker), MUTED) == 1
+    assert joinly.mute_reads >= 1
+
+
+async def test_an_unmuted_bot_and_one_whose_button_cannot_be_read_are_not_told(
+    timed: tuple[InProcBroker, FakeClock], joinly: FakeJoinly
+) -> None:
+    """Not muted, or the button was not on the page: no notice, and the line is still spoken. A mute that
+    shows up later is told on the next line. Fails if an unknown page is reported as muted, or a later mute
+    is missed."""
+    broker, clock = timed
+    joinly.muted = False
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        command(broker, "/meeting voice on")
+        await agent.say("#build", "@call heard")
+        await wait_until(lambda: joinly.spoken == ["heard"])
+        assert count(notice_texts(broker), MUTED) == 0
+        joinly.muted = None  # the tool answered, and the button was not there
+        advance_voice(broker, clock, 30)
+        await agent.say("#build", "@call unsure")
+        await wait_until(lambda: joinly.spoken == ["heard", "unsure"])
+        assert count(notice_texts(broker), MUTED) == 0
+        joinly.muted = True
+        advance_voice(broker, clock, 30)
+        await agent.say("#build", "@call now muted")
+        await wait_until(lambda: "now muted" in joinly.spoken)
+    assert count(notice_texts(broker), MUTED) == 1
+
+
+async def test_voice_off_does_not_mention_a_mute(broker: InProcBroker, joinly: FakeJoinly) -> None:
+    """The notice is for a line that would have been heard. Voice off speaks nothing and says nothing about
+    mute. Fails if a mute is announced when nobody was going to speak."""
+    joinly.muted = True
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        await agent.say("#build", "@call quiet")
+        await wait_until(lambda: call_state(broker)["state"] == "live")  # type: ignore[index]
+    assert joinly.spoken == []
+    assert count(notice_texts(broker), MUTED) == 0
+
+
+async def test_unmute_asks_the_servers_bot_once_and_an_agent_cannot(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """``/meeting unmute`` is the person's web command. It calls joinly's ``unmute_yourself`` once and the
+    room hears that the bot unmuted. An agent's ``/meeting unmute`` is only text. With no call, the reply
+    says so. Fails if the tool is not called, is called twice, or an agent can run it."""
+    assert "no call" in command(broker, "/meeting unmute")["text"]
+    assert joinly.unmutes == 0
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        said = await agent.say("#build", "/meeting unmute")
+        assert said.get("posted_id")
+        assert joinly.unmutes == 0
+        assert "unmute" in command(broker, "/meeting unmute")["text"]
+        await wait_until(lambda: any("unmuted itself" in t for t in notice_texts(broker)))
+    assert joinly.unmutes == 1
+
+
+async def test_unmute_that_fails_is_one_sentence(broker: InProcBroker, joinly: FakeJoinly) -> None:
+    """joinly's own error is not repeated. One sentence says the unmute did not happen, and the tool was
+    called once. Fails if the room is left waiting, or the error text is stored."""
+    joinly.unmute_error = "Unmute button not found or not visible."
+    await start_call(broker, joinly)
+    command(broker, "/meeting unmute")
+    await wait_until(lambda: any("Couldn't unmute" in t for t in notice_texts(broker)))
+    assert joinly.unmutes == 1
+    assert joinly.unmute_error not in "\n".join(notice_texts(broker))
+
+
+async def test_a_joinly_without_the_mute_tools_still_speaks_and_says_it_cannot_unmute(tmp_home: Path) -> None:
+    """Stock joinly has ``unmute_yourself`` and no ``mute_status``. A server with neither still speaks, does
+    not claim the bot is muted, and says it cannot unmute. Fails if a missing tool is taken as muted, or
+    the unmute command calls a tool that is not there."""
+    server = FakeJoinly()
+    server.mute_tool = False
+    server.unmute_tool = False
+    server.start()
+    broker = make_broker(tmp_home, server)
+    try:
+        async with FakeAgent(broker.home, "k1") as agent:
+            await agent.join("#build", "claude-1")
+            await start_call(broker, server)
+            command(broker, "/meeting voice on")
+            await agent.say("#build", "@call hello")
+            await wait_until(lambda: server.spoken == ["hello"])
+            command(broker, "/meeting unmute")
+            await wait_until(lambda: any("cannot unmute" in t for t in notice_texts(broker)))
+        assert count(notice_texts(broker), MUTED) == 0
+        assert server.mute_reads == 0 and server.unmutes == 0
+    finally:
+        broker.web.close()  # type: ignore[attr-defined]
+        broker.stop()
+        server.stop()
+
+
+async def test_unmute_while_the_bot_is_still_joining_is_refused(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """The button is not there until the bot is in the call. Fails if unmute is attempted while joining."""
+    joinly.hold_join = True
+    command(broker, f"/meeting {MEET}")
+    await wait_until(lambda: joinly.join_attempts == 1)
+    r = refused(broker, "/meeting unmute")
+    assert r.status_code == 409 and "not in the call yet" in r.text
+    assert joinly.unmutes == 0
+    joinly.release_join()
