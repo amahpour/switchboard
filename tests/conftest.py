@@ -327,6 +327,10 @@ class InProcBroker:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.error: BaseException | None = None
 
+    # How long start() waits for the lifespan: it returns the moment the server is up, so this is a ceiling
+    # for a loaded runner, not a wait. It was 10 s, and a CI run (#832) timed out on five slow starts.
+    START_TIMEOUT_S = 60.0
+
     def start(self) -> "InProcBroker":
         import uvicorn
 
@@ -379,10 +383,19 @@ class InProcBroker:
 
         self.thread = threading.Thread(target=run, name="yk-broker", daemon=True)
         self.thread.start()
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + self.START_TIMEOUT_S
         while not self.server.started:
-            if not self.thread.is_alive() or time.monotonic() > deadline:
+            if not self.thread.is_alive():
                 raise RuntimeError(f"in-process broker failed to start: {self.error!r}")
+            if time.monotonic() > deadline:
+                # Still starting, not dead. Stop it and wait for the thread before saying so: the caller's
+                # cleanup removes the home, and a start that went on under a removed home failed with a
+                # FileNotFoundError that hid the real cause, a start too slow for its deadline (CI, #832).
+                self.server.should_exit = True
+                self.thread.join(max(self.START_TIMEOUT_S, 10.0))
+                raise RuntimeError(
+                    f"in-process broker did not start within {self.START_TIMEOUT_S:g} s: {self.error!r}"
+                )
             time.sleep(0.01)
         return self
 
