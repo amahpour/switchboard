@@ -1546,6 +1546,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "wake_defaults": state.service.wake_defaults(w.person_id),
                 # browser notifications on or off for this person (#723, §55.9)
                 "notify": state.store.setting_get(notify_key(w.person_id)) == "1",
+                # ... and whether a notification carries the message's first line (#837): on unless turned off
+                "notify_text": state.store.setting_get(notify_text_key(w.person_id)) != "0",
             }
         )
         # Slide the browser cookie along with the server-side session.
@@ -1760,11 +1762,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         """The broker_settings row that holds one person's notifications choice (0: the owner)."""
         return f"notify:{0 if person_id is None else person_id}"
 
+    def notify_text_key(person_id: int | None) -> str:
+        """The row that holds whether a notification shows the message's first line (#837)."""
+        return f"notify_text:{0 if person_id is None else person_id}"
+
     @app.put("/api/me/notify")
     async def set_notify(request: Request) -> Response:
-        """Browser notifications on or off for the signed-in person (#723, §55.9). The page asks the browser
-        for permission from the click that sends this; the broker only keeps the choice, so it follows the
-        person to another browser, where the browser asks again. It changes nothing for an agent."""
+        """Browser notifications on or off for the signed-in person (#723, §55.9), and whether they show the
+        message's first line (``text``, #837); either or both. The page asks the browser for permission from
+        the click that sends this; the broker only keeps the choice, so it follows the person to another
+        browser, where the browser asks again. It changes nothing for an agent."""
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
@@ -1772,10 +1779,18 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        if set(body) != {"on"} or not isinstance(body["on"], bool):
-            return _err(400, "bad_request", "on must be true or false")
-        state.store.setting_set(notify_key(w.person_id), "1" if body["on"] else "0")
-        return _ok({"notify": body["on"]})
+        if not body or not set(body) <= {"on", "text"} or not all(isinstance(v, bool) for v in body.values()):
+            return _err(400, "bad_request", "on and text must be true or false, and one must be given")
+        if "on" in body:
+            state.store.setting_set(notify_key(w.person_id), "1" if body["on"] else "0")
+        if "text" in body:
+            state.store.setting_set(notify_text_key(w.person_id), "1" if body["text"] else "0")
+        return _ok(
+            {
+                "notify": state.store.setting_get(notify_key(w.person_id)) == "1",
+                "notify_text": state.store.setting_get(notify_text_key(w.person_id)) != "0",
+            }
+        )
 
     @app.put("/api/me/preferences")
     async def set_preferences(request: Request) -> Response:

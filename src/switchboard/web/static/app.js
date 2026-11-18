@@ -4303,18 +4303,27 @@
   // Settings → Profile → Notifications (#723): the on/off, and the browser's own permission prompt from this click
   function buildNotifySetting(box) {
     box.append(el('h3', null, 'Notifications'),
-      el('p', 'fine', 'While this tab is hidden, your browser shows a notification when something needs you: a message to you,'
-        + ' a review that needs your call, or an agent waiting for your approval. Clicking it opens the item.'
-        + ' Nothing is sent to anyone: the browser draws it. This is for this browser only.'));
+      el('p', 'fine', 'When switchboard is not the window you are in (another tab, another app, a call), your browser shows a'
+        + ' notification when something needs you: a message to you, a review that needs your call, or an agent waiting for'
+        + ' your approval. Clicking it opens the item. Nothing is sent to anyone: the browser draws it.'
+        + ' This is for this browser only.'));
     const row = el('label', 'check-row');
     const box1 = el('input');
     box1.type = 'checkbox';
     box1.id = 'settings-notify';
-    row.append(box1, el('span', null, 'Show notifications when this tab is hidden'));
+    row.append(box1, el('span', null, 'Show notifications when switchboard is not in front'));
     const status = el('p', 'fine');
     status.id = 'settings-notify-status';
-    box.append(row, status);
+    const textRow = el('label', 'check-row');
+    const textBox = el('input');
+    textBox.type = 'checkbox';
+    textBox.id = 'settings-notify-text';
+    textRow.append(textBox, el('span', null, 'Show message text in notifications'));
+    const textNote = el('p', 'fine', 'On: a notification shows the first line of the message. Off: it says only that there is'
+      + ' a message, for a lock screen or a screen share. This is yours, in every browser you sign in to.');
+    box.append(row, status, textRow, textNote);
     function show() {
+      textBox.checked = notifyTextOn();
       if (!notifySupported()) {
         box1.disabled = true;
         status.textContent = 'This browser can\u2019t show notifications here.';
@@ -4336,6 +4345,17 @@
       try {
         const res = await api('PUT', '/api/me/notify', { on: want });
         state.me.notify = res.notify;
+      } catch (e) {
+        show();
+        status.textContent = String(e.message || e);
+        return;
+      }
+      show();
+    });
+    textBox.addEventListener('change', async function () {
+      try {
+        const res = await api('PUT', '/api/me/notify', { text: textBox.checked });
+        state.me.notify_text = res.notify_text;
       } catch (e) {
         show();
         status.textContent = String(e.message || e);
@@ -4501,6 +4521,7 @@
   // constructable sheets shows the change on its next load.
   let iconSheet = null;
   async function refreshAgentIcons() {
+    notifyIcons = null;  // a notification's avatar may have changed too
     if (typeof CSSStyleSheet !== 'function' || !('adoptedStyleSheets' in document)) return;
     let css;
     try {
@@ -7552,31 +7573,99 @@
     }, state.homeTimerMs);
   }
 
-  // ---------------------------------------------------- browser notifications (#723, level 1)
-  // When something needs this person and this tab is hidden, the browser shows its own notification. It is local:
-  // the page already holds what waits on the person (Home) and each room's members, and the browser draws the
-  // notification itself, so nothing is sent to anyone. The permission is asked only from a click in Settings.
-  // The on/off is per person and kept by the broker (`notify` in /api/me; the page keeps no storage of its own); the
-  // permission stays the browser's, so on a browser that never granted it nothing shows. A notification names who, where and what kind in a line, and clicking it opens the item.
-  const NOTIFY_MAX = 60;  // a notification line is cut: what an agent wrote is untrusted text
+  // ---------------------------------------------------- browser notifications (#723, level 1; #837)
+  // When something needs this person and switchboard is not what they are looking at (the tab is hidden, or the
+  // page is open but another window has the focus: a call, an editor), the browser shows its own notification. It
+  // is local: the page already holds what waits on the person (Home) and each room's members, and the browser
+  // draws the notification itself, so nothing is sent to anyone. The permission is asked only from a click in
+  // Settings. The on/off and "show message text" are per person and kept by the broker (`notify` and `notify_text`
+  // in /api/me; the page keeps no storage of its own); the permission stays the browser's, so on a browser that
+  // never granted it nothing shows. A notification names who and where, says the message's first line unless the
+  // person turned that off, wears the sender's avatar, and clicking it opens the item.
+  const NOTIFY_TITLE_MAX = 120;  // a notification line is cut: what an agent wrote is untrusted text
+  const NOTIFY_BODY_MAX = 100;
   const notified = new Set();  // what this page has already shown or has taken as the starting point
   let notifyPrimed = false;
+  let notifyIcons = null;  // the uploaded avatars (GET /api/agent-icons), fetched once and dropped when one changes
 
   function notifyOn() { return !!(state.me && state.me.notify === true); }
+
+  // anything but a plain true hides the text: an unknown value fails closed
+  function notifyTextOn() { return !!(state.me && state.me.notify_text === true); }
 
   function notifySupported() { return typeof Notification === 'function'; }
 
   function notifyReady() { return notifySupported() && Notification.permission === 'granted' && notifyOn(); }
 
-  function notifyShow(key, title, body, go, live) {
+  // Not in front: the tab is hidden, or the page is visible but does not have the focus. A focused page is the
+  // notification itself.
+  function notifyAway() { return document.hidden || !document.hasFocus(); }
+
+  // What a notification may say of a message: one line of plain text, cut. A Notification body is plain text and
+  // the browser draws it, so nothing here is HTML; the Markdown marks the broker's first line may still hold go.
+  function notifyLine(text, max) {
+    let t = Array.from(String(text || '')).map(function (ch) {
+      const n = ch.charCodeAt(0);
+      return n < 32 || n === 127 ? ' ' : ch;  // a control character is a space
+    }).join('').replace(/[`*]+|__|~~/g, '').replace(/\s+/g, ' ').trim().replace(/^(#{1,6}\s+|>\s*)/, '');
+    if (t.length > max) t = t.slice(0, max - 1).trimEnd() + '\u2026';
+    return t;
+  }
+
+  async function notifyIconList() {
+    if (notifyIcons) return notifyIcons;
+    try {
+      const res = await api('GET', '/api/agent-icons');
+      notifyIcons = Array.isArray(res.icons) ? res.icons : [];
+    } catch (e) { return []; }
+    return notifyIcons;
+  }
+
+  // The sender's avatar, from this page's own origin: an uploaded one (§29.11), or the built-in image of Codex, Cursor
+  // and Devin, in the scheme the page is showing; for the rest (Claude Code, OpenCode, a person) a tile the page draws
+  // itself, the harness's color and its letters. No address but the broker's own.
+  async function notifyIconFor(who) {
+    if (!who) return undefined;
+    const theme = document.documentElement.getAttribute('data-theme');
+    const dark = theme === 'dark' || (theme !== 'light' && !!window.matchMedia
+      && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const want = dark ? 'dark' : 'light';
+    const harness = who.kind === 'human' || !HARNESS[who.harness] ? null : who.harness;
+    if (harness) {
+      const mine = (await notifyIconList()).filter(function (i) { return i.harness === harness; });
+      const pick = mine.find(function (i) { return i.scheme === want; }) || mine[0];
+      if (pick) return '/api/agent-icons/' + harness + '/' + pick.scheme + '?v=' + encodeURIComponent(pick.v);
+      if (harness === 'codex' || harness === 'cursor' || harness === 'devin') return '/static/agents/' + harness + '-' + want + '.png';
+    }
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const g = c.getContext('2d');
+      const css = getComputedStyle(document.documentElement);
+      const bg = harness ? css.getPropertyValue('--h-' + harness + '-bg').trim() : '';
+      g.fillStyle = bg || '#5b6472';
+      g.fillRect(0, 0, 128, 128);
+      g.fillStyle = (harness && css.getPropertyValue('--h-' + harness + '-fg').trim()) || '#ffffff';
+      g.font = 'bold 64px sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText(harness ? HARNESS[harness][0] : String(who.name || '?').charAt(0).toUpperCase(), 64, 68);
+      return c.toDataURL('image/png');
+    } catch (e) { return undefined; }
+  }
+
+  // `who` is the sender ({ harness, kind, name }) for the avatar; nothing for an item with no one behind it.
+  async function notifyShow(key, title, body, go, live, who) {
     if (notified.has(key)) return;
     notified.add(key);
-    title = String(title).slice(0, NOTIFY_MAX * 2);
-    body = String(body).slice(0, NOTIFY_MAX);
-    if ((!live && !notifyPrimed) || !document.hidden || !notifyReady()) return;
+    if ((!live && !notifyPrimed) || !notifyAway() || !notifyReady()) return;
+    const opts = { body: notifyLine(body, NOTIFY_BODY_MAX), tag: key };
+    const icon = await notifyIconFor(who);
+    if (icon) opts.icon = icon;
+    if (!notifyAway() || !notifyReady()) return;  // the person came back while the avatar was fetched
     let n;
     try {
-      n = new Notification(title, { body: body, tag: key });
+      n = new Notification(notifyLine(title, NOTIFY_TITLE_MAX), opts);
     } catch (e) { return; }
     n.onclick = function () {
       try { window.focus(); } catch (e) { /* ignore */ }
@@ -7589,13 +7678,20 @@
   // list the page gets is the starting point (what already waited is not news), later ones notify once per item.
   function notifyHome(waiting) {
     const list = Array.isArray(waiting) ? waiting : [];
+    const showText = notifyTextOn();
     for (const c of list) {
       if (c.kind === 'question') {
-        notifyShow('q:' + c.slug + ':' + c.id, (c.from || 'Someone') + ' needs you in ' + c.room,
-          'A message for you', function () { goToRoom(c.room, function () { setTimeout(function () { jumpTo(c.id); }, 0); }); });
+        const text = notifyLine(c.text, NOTIFY_BODY_MAX);
+        const go = function () { goToRoom(c.room, function () { setTimeout(function () { jumpTo(c.id); }, 0); }); };
+        const who = { harness: c.harness, kind: c.from_kind, name: c.from };
+        if (showText && text) notifyShow('q:' + c.slug + ':' + c.id, (c.from || 'Someone') + ' in ' + c.room, text, go, false, who);
+        else notifyShow('q:' + c.slug + ':' + c.id, (c.from || 'Someone') + ' needs you in ' + c.room, 'A message for you', go, false, who);
       } else if (c.kind === 'board') {
-        notifyShow('b:' + c.url + ':' + c.ts, 'A review needs your call in ' + c.room,
-          plural(c.need || 1, 'item', 'items') + ' on the board', function () { goToRoom(c.room); });
+        const first = Array.isArray(c.items) && c.items[0] ? c.items[0] : null;
+        const detail = showText && first ? plural(c.need || 1, 'item needs', 'items need') + ' your call: ' + first.title
+          : plural(c.need || 1, 'item', 'items') + ' on the board';
+        notifyShow('b:' + c.url + ':' + c.ts, 'A review needs your call in ' + c.room, detail,
+          function () { goToRoom(c.room); });
       }
     }
     notifyPrimed = true;
@@ -7618,7 +7714,8 @@
       if (!mine) continue;
       notifyShow('a:' + r.name + ':' + m.name + ':' + (m.host || '') + ':' + notifyApprovalSeq++,
         m.name + ' is waiting for your approval in ' + r.name,
-        'Approve it in its own window', function () { goToRoom(r.name); }, true);
+        'Approve it in its own window', function () { goToRoom(r.name); }, true,
+        { harness: m.harness, kind: 'agent', name: m.name });
     }
   }
   async function loadHome() {

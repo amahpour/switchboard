@@ -74,6 +74,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /meeting <link> mine  ask your own agent to host it; no model sees the link (web only)
   /meeting leave      leave the call and stop transcribing (web only)
   /meeting listen <name> [off]  wake this agent on call chatter (on: web only)
+  /meeting talker on|off  a fast model answers short questions on the call, off at every call (web only)
   /meeting voice on   let agents speak in the call: a say() that starts with @call
                       is read aloud to everyone on it. Off when a call starts unless /room voice on (web only)
   /meeting voice off  stop that (web only)
@@ -235,7 +236,7 @@ def parse_command(text: str) -> Command:
 
 MEETING_USAGE = (
     "usage: /meeting [<link> [mine]|leave|snapshot|share <file>|share stop|voice on|voice off"
-    "|voice <name> <voice>|listen <name> [off]]"
+    "|voice <name> <voice>|talker on|talker off|listen <name> [off]]"
 )
 
 
@@ -260,6 +261,10 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
         except share.ShareError as e:
             raise CommandError("bad_request", str(e)) from None
         return Command(name="meeting", args=("share", ref), raw=raw)
+    if word == "talker":
+        if len(args) == 2 and args[1].lower() in ("on", "off"):
+            return Command(name="meeting", args=("talker", args[1].lower()), raw=raw)
+        raise CommandError("bad_request", "usage: /meeting talker on|off")
     if word == "listen":
         if len(args) not in (2, 3) or (len(args) == 3 and args[2].lower() != "off"):
             raise CommandError("bad_request", "usage: /meeting listen <name> [off]")
@@ -765,6 +770,8 @@ def _meeting(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resu
         return _meeting_share(cmd, room, actor, svc)
     if cmd.args[:1] == ("listen",):
         return _meeting_listen(cmd, room, svc)
+    if cmd.args[:1] == ("talker",):
+        return _meeting_talker(cmd.args[1] == "on", room, svc)
     if cmd.args[:1] == ("voice",):
         if len(cmd.args) == 3:
             return _meeting_voice_pin(cmd, room, svc)
@@ -962,6 +969,56 @@ def _meeting_voice(on: bool, room: Room, svc: "RoomService") -> Result:
         room_changed=True,
         event="meeting_voice",
         event_data={"on": on},
+    )
+
+
+def _meeting_talker(on: bool, room: Room, svc: "RoomService") -> Result:
+    """The call's fast talker on or off (§52.11, #806). A person's command only, web only like voice: it
+    spends
+    the operator's model key and speaks in the call. It needs an open call on the server's bot (a call hosted
+    on a person's machine has no talker yet), and turns voice on with it, since the talker speaks. Off at
+    every
+    call's start. With no key set it says so, in the room too, and nothing runs."""
+    talker = svc.talker
+    row = svc.store.open_meeting(room.id)
+    if row is None:
+        return Result(True, f"{room.name}: no call is being transcribed")
+    if row.hosted:
+        return Result(True, f"{room.name}: the talker is for the server's bot; a hosted call has none yet")
+    if talker is None or svc.meetings is None:
+        return Result(True, "No meeting server is running. See DEPLOY.md.")
+    if not on:
+        if not talker.disable(room.id, "talker_off"):
+            return Result(True, f"{room.name}: the talker is already off")
+        return Result(
+            True,
+            f"{room.name}: the talker is off",
+            notice="turned the talker off",
+            room_changed=True,
+            event="meeting_talker",
+            event_data={"on": False},
+        )
+    if talker.active(room.id):
+        return Result(True, f"{room.name}: the talker is already on")
+    problem = talker.enable(room.id)
+    if problem is not None:
+        notice = f"The talker could not start: {problem}."
+        if not talker.available():
+            svc.notice_in(room.id, notice)  # nobody is told twice: the reply is the person's own
+        return Result(True, f"{room.name}: {notice}")
+    svc.meetings.set_voice(room.id, True)
+    return Result(
+        True,
+        f"{room.name}: the talker is on",
+        notice=(
+            "turned the talker on, and voice with it: a fast model answers short questions on the call, and"
+            " hands real work to an agent by name. While it is on, every call line and the room's last 12"
+            " messages, other people's and a private room's included (those already there too), are sent to"
+            " api.anthropic.com, the model provider"
+        ),
+        room_changed=True,
+        event="meeting_talker",
+        event_data={"on": True},
     )
 
 

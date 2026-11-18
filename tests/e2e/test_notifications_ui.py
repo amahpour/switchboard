@@ -2,8 +2,10 @@
 
 The browser's Notification is stubbed (the page is given a fake that records what it was asked), and
 ``document.hidden`` is under the test's control. The permission is asked only from the click in Settings,
-never on load; a notification shows only while the tab is hidden, once per item, for what needs this person
-(a message to them, an agent waiting for their approval); and clicking one opens the item. Marker ``e2e``.
+never on load; a notification shows only while the page is not in front (the tab hidden, or visible without
+the focus: #837), once per item, for what needs this person (a message to them, an agent waiting for their
+approval); it says the message's first line unless the person turned that off, wears the sender's avatar from
+the broker's own origin, and clicking one opens the item. Marker ``e2e``.
 """
 
 from __future__ import annotations
@@ -24,12 +26,15 @@ pytestmark = pytest.mark.e2e
 
 STUB = """
 window.__hidden = false;
+window.__focused = true;
 Object.defineProperty(document, 'hidden', { get: () => window.__hidden });
+document.hasFocus = () => window.__focused;
 window.__asked = 0;
 window.__shown = [];
 class FakeNotification {
   constructor(title, opts) {
-    this.title = title; this.body = (opts || {}).body; this.closed = false; window.__shown.push(this);
+    this.title = title; this.body = (opts || {}).body; this.icon = (opts || {}).icon;
+    this.closed = false; window.__shown.push(this);
   }
   close() { this.closed = true; }
   static requestPermission() {
@@ -137,16 +142,137 @@ def test_an_agent_waiting_for_approval_notifies_once_and_only_while_hidden(ui: U
     assert page.evaluate("window.__shown[0].closed")
 
 
-def test_a_message_to_the_person_notifies_while_hidden_without_its_text(ui: UI) -> None:
-    """A message that @mentions the person shows one notification naming who and where, never the text of it.
-    Fails if the notification carries the message text."""
+def set_harness(ui: UI, room: str, name: str, harness: str) -> None:
+    """Make what a stand-in agent says from now on carry ``harness`` as its sender's, as the message of a real
+    session of that harness does. The stand-in's own session is untouched (it still calls as a test agent), so
+    a trigger stamps each message it posts, in the same transaction, before the page can read it."""
+    from switchboard import db
+
+    def update() -> None:
+        s = ui.world.broker.state.store
+        m = s.find_member(s.get_room(f"#{room}").id, name)
+        with db.tx(s.con):
+            s.con.execute(f"DROP TRIGGER IF EXISTS stamp_{m.membership_id}")
+            s.con.execute(
+                f"CREATE TRIGGER stamp_{m.membership_id} AFTER INSERT ON messages "
+                f"WHEN NEW.sender_membership_id = {int(m.membership_id)} BEGIN "
+                f"UPDATE messages SET sender_harness = '{harness}' WHERE id = NEW.id; END"
+            )
+
+    ui.world.broker.on_loop(update)
+
+
+def put_text_setting(ui: UI, on: bool) -> None:
+    web = ui.world.broker.web_client()
+    try:
+        assert (
+            web.put("/api/me/notify", json={"text": on}, headers=ui.world.broker.write_headers()).status_code
+            == 200
+        )
+    finally:
+        web.close()
+
+
+def test_a_message_to_the_person_notifies_with_its_first_line_by_default(ui: UI) -> None:
+    """A message that @mentions the person, while the tab is hidden, shows "who in #room" with the message's
+    first line as its body, cleaned of Markdown and cut to 100 characters. Fails if the body is the old fixed
+    wording, still has the Markdown marks, or is not cut."""
     page, room = room_page(ui)
     turn_on(page)
     page.evaluate("window.__hidden = true")
-    ui.world.agent_say(f"#{room}", "scout", "@alice the deploy key is hunter2, can you approve?")
+    long = "word " * 40
+    ui.world.agent_say(
+        f"#{room}", "scout", f"@alice **Can you approve** the `deploy` now? {long}\nsecond line"
+    )
     wait_shown(page, 1, 30_000)
-    assert shown(page) == [f"scout needs you in #{room}"]
-    assert "hunter2" not in page.evaluate("window.__shown[0].body + window.__shown[0].title")
+    assert shown(page) == [f"scout in #{room}"]
+    body = page.evaluate("window.__shown[0].body")
+    assert body.startswith("Can you approve the deploy now? word word"), body
+    assert len(body) <= 100 and body.endswith("\u2026"), body
+    assert "**" not in body and "`" not in body and "second line" not in body
+
+
+def test_the_message_text_can_be_hidden_by_the_setting(ui: UI) -> None:
+    """With "Show message text in notifications" off the notification keeps the old wording and none of the
+    message, secrets included; the box is on by default and the choice is kept by the broker. Fails if the
+    text leaks while the setting is off, or the setting is off by default."""
+    page, room = room_page(ui)
+    turn_on(page)
+    page.click("#me-settings")
+    tab = page.locator("#settings-tab-profile")
+    if tab.is_visible():
+        tab.click()
+    expect(page.locator("#settings-notify-text")).to_be_checked()  # on by default
+    page.locator("#settings-notify-text").uncheck()
+    try:
+        expect(page.locator("#settings-notify-text")).not_to_be_checked()
+        page.keyboard.press("Escape")
+        page.evaluate("window.__hidden = true")
+        ui.world.agent_say(f"#{room}", "scout", "@alice the deploy key is hunter2, can you approve?")
+        wait_shown(page, 1, 30_000)
+        assert shown(page) == [f"scout needs you in #{room}"]
+        assert page.evaluate("window.__shown[0].body") == "A message for you"
+        assert "hunter2" not in page.evaluate("window.__shown[0].body + window.__shown[0].title")
+    finally:
+        put_text_setting(ui, True)
+
+
+def test_it_notifies_when_the_page_is_visible_but_not_focused_and_not_when_focused(ui: UI) -> None:
+    """A page that is visible but has lost the focus (a call or an editor in front) notifies; the same message
+    while the page has the focus shows nothing, and a later blur does not bring it back. Fails if only
+    a hidden
+    tab notifies (the live try of #837), or a focused page does."""
+    page, room = room_page(ui)
+    turn_on(page)
+    ui.world.agent_say(f"#{room}", "scout", "@alice are you looking at this?")
+    expect(page.locator("#home-badge")).to_be_visible(timeout=30_000)  # the page heard it, focused
+    page.evaluate("window.__focused = false")
+    assert shown(page) == []  # the blur alone shows nothing: it was already seen
+    ui.world.agent_say(f"#{room}", "bench", "@alice and this, from the other agent?")
+    wait_shown(page, 1, 30_000)
+    assert shown(page) == [f"bench in #{room}"]
+    assert page.evaluate("document.hidden") is False
+
+
+def test_the_icon_is_the_brokers_own_never_a_remote_address(ui: UI) -> None:
+    """The icon is a Codex agent's built-in image served by the broker, an admin's upload for Cursor under the
+    upload's URL, and for an agent with no image a tile the page drew (a data: URL), never an http(s) address
+    of another host. Fails if an icon points off the broker, or an upload is ignored."""
+    from test_agent_icons_ui import picture, put_icon, reset_all
+
+    page, room = room_page(ui)
+    set_harness(ui, room, "scout", "codex")
+    set_harness(ui, room, "bench", "cursor")
+    put_icon(ui.world, "cursor", "light")
+    put_icon(ui.world, "cursor", "dark")
+    try:
+        turn_on(page)
+        page.evaluate("window.__hidden = true")
+        ui.world.agent_say(f"#{room}", "scout", "@alice one")
+        wait_shown(page, 1, 30_000)
+        ui.world.agent_say(f"#{room}", "bench", "@alice two")
+        wait_shown(page, 2, 30_000)
+        icons = page.evaluate("window.__shown.map(n => n.icon)")
+        assert icons[0] == "/static/agents/codex-light.png", icons
+        assert icons[1].startswith("/api/agent-icons/cursor/light?v="), icons
+        assert page.request.get(ui.world.broker.base + icons[0]).status == 200
+        assert picture("cursor", "light")  # the upload is what the URL serves, by its own tests
+        set_harness(ui, room, "scout", "claude")
+        ui.world.agent_say(f"#{room}", "scout", "@alice three")
+        wait_shown(page, 3, 30_000)
+        assert page.evaluate("window.__shown[2].icon").startswith("data:image/png;base64,")
+    finally:
+        reset_all(ui.world)
+
+
+def test_a_message_to_the_person_never_shows_while_the_page_is_in_front(ui: UI) -> None:
+    """Visible and focused: a message to the person shows nothing, whatever the setting. Fails if a
+    notification shows over the page the person is looking at."""
+    page, room = room_page(ui)
+    turn_on(page)
+    ui.world.agent_say(f"#{room}", "scout", "@alice in front?")
+    expect(page.locator("#home-badge")).to_be_visible(timeout=30_000)
+    assert shown(page) == []
 
 
 def test_nothing_shows_while_the_setting_is_off(ui: UI) -> None:
