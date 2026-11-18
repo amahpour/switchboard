@@ -96,17 +96,33 @@ ZOOM_LIST = 'div[role="list"][aria-label^="participants" i], div[role="list"][ar
 ZOOM_ROWS = "div.participants-li, div[role='listitem'][aria-label]"
 ZOOM_PARTICIPANTS_BUTTON = re.compile(r"participants list|^(show|open|manage) (the )?participants", re.IGNORECASE)
 ZOOM_MORE_BUTTON = re.compile(r"^more( meeting)?( control)?s?$|more meeting control", re.IGNORECASE)
-ZOOM_PARTICIPANTS_ENTRY = re.compile(r"participants", re.IGNORECASE)
-_zoom_plist_logged: set[int] = set()
+# a menu entry that is exactly "Participants" (a count may follow): never "Mute all participants" or the like
+ZOOM_PARTICIPANTS_ENTRY = re.compile(r"^participants( \(\d+\))?$", re.IGNORECASE)
+ZOOM_MENU_ITEMS = "[role='menuitem']"
+_zoom_plist_logged: Any = None  # a WeakSet of the pages already described, made on first use
 
 
-async def _zoom_list_visible(page: Any) -> bool:  # noqa: ANN401
-    """True when any match of the participant panel is visible (a count of several is not an error)."""
+async def _zoom_visible_panel(page: Any) -> Any:  # noqa: ANN401
+    """The first VISIBLE match of the participant panel, or None (a hidden duplicate is not the panel)."""
     panel = page.locator(ZOOM_LIST)
     for i in range(await panel.count()):
         if await panel.nth(i).is_visible():
+            return panel.nth(i)
+    return None
+
+
+async def _zoom_list_visible(page: Any) -> bool:  # noqa: ANN401
+    return await _zoom_visible_panel(page) is not None
+
+
+async def _zoom_wait_list(page: Any, visible: bool = True, ms: int = 2000) -> bool:  # noqa: ANN401
+    """Poll until the panel is (or is not) visible, up to ``ms``: a panel that opens slowly must not be taken
+    for a failed click, and clicked again, which would close it."""
+    for _ in range(ms // 200 + 1):
+        if await _zoom_list_visible(page) == visible:
             return True
-    return False
+        await page.wait_for_timeout(200)
+    return await _zoom_list_visible(page) == visible
 
 
 async def _zoom_click_first(loc: Any) -> bool:  # noqa: ANN401
@@ -175,10 +191,10 @@ async def _zoom_open_list(self: Any, page: Any) -> str | None:  # noqa: ANN401
     )
     for way, attempt in steps:
         try:
-            if await attempt():
-                await page.wait_for_timeout(700)
-                if await _zoom_list_visible(page):
-                    return way
+            if await _zoom_list_visible(page):
+                return way  # an earlier step did open it, slowly: nothing may toggle it again
+            if await attempt() and await _zoom_wait_list(page):
+                return way
         except Exception:  # noqa: S112
             continue
     return None
@@ -191,10 +207,9 @@ async def _zoom_open_via_more(page: Any) -> bool:  # noqa: ANN401
     ):
         return False
     await page.wait_for_timeout(300)
-    for role in ("menuitem", "button"):
-        if await _zoom_click_first(page.get_by_role(role, name=ZOOM_PARTICIPANTS_ENTRY)):
-            return True
-    return await _zoom_dom_click(page, ZOOM_PARTICIPANTS_ENTRY, "[role='menuitem'], [role='menuitem'] *, li, a")
+    if await _zoom_click_first(page.get_by_role("menuitem", name=ZOOM_PARTICIPANTS_ENTRY)):
+        return True
+    return await _zoom_dom_click(page, ZOOM_PARTICIPANTS_ENTRY, ZOOM_MENU_ITEMS)
 
 
 async def _zoom_open_via_keys(page: Any) -> bool:  # noqa: ANN401
@@ -205,13 +220,30 @@ async def _zoom_open_via_keys(page: Any) -> bool:  # noqa: ANN401
 async def _zoom_close_list(page: Any, way: str) -> None:  # noqa: ANN401
     """Put the panel back as it was (a chat panel, or none, shares the space); best effort."""
     try:
-        if way == "keyboard":
-            await page.keyboard.press("Alt+U")
-        elif way == "button":
+        if way != "keyboard":  # a panel opened from the button or the "More" menu closes with the button
             if not await _zoom_click_first(page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)):
                 await _zoom_dom_click(page, ZOOM_PARTICIPANTS_BUTTON, "button")
+            if await _zoom_wait_list(page, visible=False, ms=1000):
+                return
+        await page.keyboard.press("Alt+U")  # the way that opened it, or the one left when the button did not close it
     except Exception:
         logger.debug("zoom participants: could not close the panel", exc_info=True)
+
+
+def _zoom_first_report(page: Any) -> bool:  # noqa: ANN401
+    """True the first time a page asks: one diagnostic line per page, remembered without keeping the page alive."""
+    global _zoom_plist_logged  # noqa: PLW0603
+    import weakref
+
+    if _zoom_plist_logged is None:
+        _zoom_plist_logged = weakref.WeakSet()
+    try:
+        if page in _zoom_plist_logged:
+            return False
+        _zoom_plist_logged.add(page)
+    except TypeError:  # a page that cannot be referenced weakly is reported every time: rare, and only a line
+        return True
+    return True
 
 
 async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: ANN401
@@ -221,8 +253,7 @@ async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: AN
     if not await _zoom_list_visible(page):
         way = await _zoom_open_list(self, page)
         if way is None:
-            if id(page) not in _zoom_plist_logged:
-                _zoom_plist_logged.add(id(page))
+            if _zoom_first_report(page):
                 logger.warning(
                     "zoom participants: the list did not open; button %s; more %s; panel %s",
                     await _zoom_describe(page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)),
@@ -232,8 +263,10 @@ async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: AN
             msg = "Participants button not found or not visible."
             raise RuntimeError(msg)
     participants = []
-    panel = page.locator(ZOOM_LIST).first
-    for item in await panel.locator(ZOOM_ROWS).all():
+    panel = await _zoom_visible_panel(page)
+    if panel is None and _zoom_first_report(page):
+        logger.warning("zoom participants: no panel is visible to read; panel %s", await _zoom_describe(page.locator(ZOOM_LIST)))
+    for item in await panel.locator(ZOOM_ROWS).all() if panel is not None else []:
         if aria_label := await item.get_attribute("aria-label"):
             labels = aria_label.split(",")
             participants.append(MeetingParticipant(name=labels[0].strip(), infos=labels[1:] if len(labels) > 1 else []))
@@ -249,8 +282,8 @@ def _install_zoom_participants(import_module: Any = None) -> bool:  # noqa: ANN4
     load = import_module or importlib.import_module
     try:
         cls = load("joinly.providers.browser.platforms.zoom").ZoomBrowserPlatformController
-    except (ImportError, AttributeError):
-        logger.warning("zoom participants: the Zoom controller was not found")
+    except Exception:  # this runs when server.py is imported: nothing here may stop the bot
+        logger.warning("zoom participants: not installed, joinly's own is used", exc_info=True)
         return False
     if not hasattr(cls.get_participants, "__wrapped__"):
         _zoom_get_participants.__wrapped__ = cls.get_participants  # type: ignore[attr-defined]

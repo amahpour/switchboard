@@ -41,6 +41,8 @@ def namespace() -> dict[str, Any]:
 class El:
     """One element: a visibility, a box, a click that may open the panel, and (for a row) its label."""
 
+    dom_label = ""
+
     def __init__(
         self, world: "World", visible: bool = True, opens: str | None = None, label: str = ""
     ) -> None:
@@ -72,6 +74,9 @@ class El:
 
     async def get_attribute(self, name: str) -> str | None:
         return self.label
+
+    def locator(self, css: str) -> "Loc":
+        return Loc(self.world.rows, self.world)
 
 
 class Loc:
@@ -111,13 +116,20 @@ class World:
         self.keys: list[str] = []
         self.opened_by: str | None = None
         self.key_opens = False
+        self.delay = 0  # polls before an opened panel shows (a slow Zoom)
+        self.pending = 0
         self.dom_elements: list[El] = []  # elements only the page-side click can reach
         self.dom: list[tuple[str, str]] = []
         self.page = Page(self)
 
     def hit(self, el: El) -> None:
         if el.opens:
-            self.panel.visible = not self.panel.visible if el.opens == "toggle" else True
+            if el.opens == "toggle" and self.panel.visible:
+                self.panel.visible = False
+            elif self.delay:
+                self.pending = self.delay
+            else:
+                self.panel.visible = True
             self.opened_by = el.opens
 
 
@@ -149,12 +161,16 @@ class Page:
             return Loc(w.buttons, w)
         if role == "button" and name.search("More meeting controls"):
             return Loc(w.more, w)
-        if role in ("menuitem", "button") and name.search("participants"):
-            return Loc(w.entries if role == "menuitem" else [], w)
+        if role == "menuitem" and name.search("Participants") and not name.search("Mute all participants"):
+            return Loc([e for e in w.entries if name.search(e.dom_label or "Participants")], w)
         return Loc([], w)
 
     async def wait_for_timeout(self, ms: int) -> None:
-        return None
+        w = self.world
+        if w.pending:
+            w.pending -= 1
+            if w.pending == 0:
+                w.panel.visible = True
 
     async def evaluate(self, js: str, arg: Any) -> bool:
         """The page-side DOM click: finds an element by its label, whether or not a role locator sees it."""
@@ -280,3 +296,75 @@ def test_install_replaces_the_controllers_method_once() -> None:
     first = cls.get_participants
     assert ns["_install_zoom_participants"](load) is True and cls.get_participants is first
     assert ns["_install_zoom_participants"](lambda n: (_ for _ in ()).throw(ImportError(n))) is False
+
+
+def test_a_panel_that_opens_slowly_is_waited_for_not_clicked_again() -> None:
+    """Zoom draws the panel a moment after the click. The first step is polled until it shows instead of
+    falling to the next way, so the button is clicked once to open and once to close, and Alt+U is never
+    pressed. Fails if a slow panel is toggled closed by a second way."""
+    w = World()
+    w.delay = 3
+    w.buttons = [El(w, opens="toggle")]
+    assert names(run(w)) == EXPECTED
+    assert w.buttons[0].clicks == 2 and w.keys == [] and not w.panel.visible
+
+
+def test_the_more_menu_entry_must_be_exactly_participants() -> None:
+    """A host view's menu has "Mute all participants" and the like. Only a menu item named exactly
+    "Participants" (a count may follow) is clicked; anything that merely contains the word is left alone.
+    Fails if the first item with the word in it is clicked."""
+    ns = namespace()
+    entry = ns["ZOOM_PARTICIPANTS_ENTRY"]
+    assert entry.match("Participants") and entry.match("participants (2)")
+    for other in (
+        "Mute all participants",
+        "Allow participants to unmute",
+        "Participants Settings",
+        "Manage participants",
+    ):
+        assert not entry.match(other), other
+    assert "menuitem" in ns["ZOOM_MENU_ITEMS"] and "*" not in ns["ZOOM_MENU_ITEMS"]
+
+
+def test_the_more_path_closes_the_panel_it_opened() -> None:
+    """After a read through "More", the panel is closed again (with the button the menu made visible), as for
+    the other ways. Fails if the panel stays open over the call's layout."""
+    w = World()
+    w.more = [El(w)]
+    entry = El(w, opens="more")
+    w.entries = [entry]
+    closer = El(w, opens="toggle")
+    w.buttons = [closer]
+    closer.visible = False  # not on the bar when it opens, so the first step cannot be the button...
+    closer.dom_label = ""
+    assert names(run(w)) == EXPECTED
+    assert not w.panel.visible
+
+
+def test_a_hidden_duplicate_panel_is_not_read() -> None:
+    """With two matches for the panel, the hidden one first, the rows come from the visible one. Fails if the
+    first match is read regardless of its visibility (rows come back empty)."""
+    import asyncio
+
+    w = World()
+    w.panel.visible = True
+    hidden = El(w, visible=False)
+    page = w.page
+    real_locator = page.locator
+    page.locator = lambda css: (  # type: ignore[method-assign]
+        Loc([hidden, w.panel], w) if "participant" in css else real_locator(css)
+    )
+    ns = namespace()
+    people = asyncio.run(ns["_zoom_get_participants"](Controller(), page))
+    assert names(people) == EXPECTED
+
+
+def test_install_never_raises_whatever_the_import_throws() -> None:
+    """The block runs when server.py is imported: an exception of any kind from the Zoom module (not only a
+    missing one) is logged and joinly's own method is kept; the bot still starts. Fails if it propagates."""
+    ns = namespace()
+
+    def boom(name: str) -> Any:
+        raise ValueError("a module that fails at import")
+
+    assert ns["_install_zoom_participants"](boom) is False
