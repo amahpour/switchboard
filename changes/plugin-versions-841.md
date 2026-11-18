@@ -1,0 +1,3 @@
+### Changed
+
+- **Plugin versions now match the release that shipped them.** The Claude Code, Codex and Cursor plugins were at 0.16.x, 0.8.x and 0.3.x, numbers that counted changes to the plugin. Every release now sets all three to its own version, so the plugin of switchboard 1.9.0 is 1.9.0 (changed or not: an unchanged plugin gives one update prompt that auto-update absorbs). A plugin that is behind the server says so as "from release 1.8.0, older than 1.9.0, this server's release", with the command that updates it. The first release that does this jumps the plugins' numbers up to the release's.

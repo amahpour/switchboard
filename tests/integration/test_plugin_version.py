@@ -74,7 +74,7 @@ def test_an_older_plugin_is_named_in_who_the_inspector_and_the_join_answer(build
     """A plugin behind this release's is said so in all three places, each with Claude Code's update
     command. Fails if any of them stays quiet, names no version, or leaves out how to update."""
     claude, answer = joined(build, "0.1.0")
-    assert "plugin is 0.1.0, older than " + CLAUDE_NOW in answer["text"]
+    assert "plugin is from release 0.1.0, older than " + CLAUDE_NOW in answer["text"]
     assert "claude plugin update switchboard@switchboard" in answer["text"]
     who = claude.call("who", room="#build")["text"]
     assert "plugin=older" in who and "claude plugin update switchboard@switchboard" in who
@@ -149,18 +149,13 @@ def test_codex_reports_its_own_version_and_its_own_update_command(build: InProcB
     assert inspector(build, "codex-1")["plugin_state"] == "older"
 
 
-def test_the_pinned_versions_are_the_manifests_versions() -> None:
-    """The broker compares against ``plugin_versions.PINNED``; a release rewrites it with the manifests
-    (``release.py``). Fails if a manifest's version moves and the table doesn't."""
-    import json
-    from pathlib import Path
+def test_the_expected_plugin_version_is_the_servers_own() -> None:
+    """The broker compares a session's plugin with its own release (#841, §49.13): ``PINNED`` is derived from
+    the package version, so a release cannot leave it behind, and ``release.py`` sets every manifest to the
+    same number. Fails if the table holds a copy that can drift."""
+    from switchboard import __version__
 
-    root = Path(__file__).resolve().parents[2] / "plugins"
-    manifests = {
-        "claude": json.loads((root / "claude/.claude-plugin/plugin.json").read_text())["version"],
-        "codex": json.loads((root / "codex/.codex-plugin/plugin.json").read_text())["version"],
-    }
-    assert plugin_versions.PINNED == manifests
+    assert plugin_versions.PINNED == {"claude": __version__, "codex": __version__}
 
 
 def test_a_codex_that_sends_no_version_is_not_nagged(build: InProcBroker) -> None:

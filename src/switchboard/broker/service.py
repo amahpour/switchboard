@@ -628,7 +628,10 @@ class RoomService:
         if got is None or not got.nags:
             return ""
         if got.state == "older":
-            head = f"your switchboard plugin is {got.version}, older than {got.pinned}"
+            head = (
+                f"your switchboard plugin is from release {got.version}, older than {got.pinned},"
+                " this server's"
+            )
         else:
             head = (
                 f"your switchboard plugin's version is unknown (older than {got.pinned}, or not the plugin)"
