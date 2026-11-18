@@ -1,4 +1,4 @@
-joinly v0.5.4 files, changed by switchboard (#713, #763, DESIGN.md sections 52.5 and 52.9)
+joinly v0.5.4 files, changed by switchboard (#713, #763, #824, DESIGN.md sections 52.5 and 52.9)
 
 server.py and kokoro.py are copies of two files of joinly v0.5.4
 (https://github.com/joinly-ai/joinly, tag v0.5.4), which is MIT licensed:
@@ -35,3 +35,9 @@ captions.py (#764, DESIGN.md section 52.7) is not a copy of a joinly file: it is
 the rest of this repository, a new file mounted at joinly/captions.py. The patched server.py above points joinly's
 `stt`, `vad` and `transcription_controller` settings at its three classes when asked for `captions`, hands the
 controller the meeting provider, and adds the `transcription_status` tool. Only the server's bot mounts it.
+
+The Zoom participant list (#824, DESIGN.md section 52.7) is in server.py too: `_install_zoom_participants()` replaces the
+Zoom controller's `get_participants` when the file is imported. joinly's own looks for one button and gives up when it
+is not visible at that moment; this one tries every match of the button, then the "More" menu, then Alt+U, reads the
+panel's rows, and logs one line (counts, visibility and boxes, never names) when it still fails. The mounted
+`zoom.py` (a commit of a fork, pinned by address) is not changed.

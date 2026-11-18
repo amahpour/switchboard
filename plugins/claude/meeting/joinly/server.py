@@ -1,4 +1,4 @@
-# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764): see deploy/joinly/NOTICE for what.
+# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764, #824): see deploy/joinly/NOTICE for what.
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. MIT License:
 #
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand
@@ -83,6 +83,183 @@ def _patch_experimental(server: FastMCP, extra: dict[str, dict[str, Any]]) -> No
 
     server._mcp_server.get_capabilities = _get_capabilities  # type: ignore[assignment]  # noqa: SLF001
 
+
+# --- switchboard Zoom participant list (#824, DESIGN.md section 52.7) -----------------------------------------
+# joinly's Zoom get_participants looks for one button named "participants list", checks is_visible() once after
+# clicking the screen to bring up the control bar, and gives up with "Participants button not found or not
+# visible." In live calls the button was on the page (the buttons at rest listed it) and still not visible at that
+# moment, so no caption speaker could be named. This replaces get_participants: it tries the button (every match,
+# scrolled into view, then a click that needs no visibility), then the "More" menu, then Alt+U, and reads rows
+# from the panel Zoom draws. When it still fails it logs ONE line per page with counts, visibility and boxes, no
+# names or addresses, and raises the same error as before.
+ZOOM_LIST = 'div[role="list"][aria-label^="participants" i], div[role="list"][aria-label*="participant" i]'
+ZOOM_ROWS = "div.participants-li, div[role='listitem'][aria-label]"
+ZOOM_PARTICIPANTS_BUTTON = re.compile(r"participants list|^(show|open|manage) (the )?participants", re.IGNORECASE)
+ZOOM_MORE_BUTTON = re.compile(r"^more( meeting)?( control)?s?$|more meeting control", re.IGNORECASE)
+ZOOM_PARTICIPANTS_ENTRY = re.compile(r"participants", re.IGNORECASE)
+_zoom_plist_logged: set[int] = set()
+
+
+async def _zoom_list_visible(page: Any) -> bool:  # noqa: ANN401
+    """True when any match of the participant panel is visible (a count of several is not an error)."""
+    panel = page.locator(ZOOM_LIST)
+    for i in range(await panel.count()):
+        if await panel.nth(i).is_visible():
+            return True
+    return False
+
+
+async def _zoom_click_first(loc: Any) -> bool:  # noqa: ANN401
+    """Click the first visible match, scrolled into view; failing that, a click that needs no visibility (the
+    control bar hides its buttons until the pointer moves). True when one was clicked."""
+    n = await loc.count()
+    for i in range(n):
+        item = loc.nth(i)
+        try:
+            if await item.is_visible():
+                await item.scroll_into_view_if_needed(timeout=1000)
+                await item.click(timeout=1000)
+                return True
+        except Exception:  # noqa: S112
+            continue
+    for i in range(n):
+        try:
+            await loc.nth(i).evaluate("el => el.click()")
+        except Exception:  # noqa: S112
+            continue
+        else:
+            return True
+    return False
+
+
+_ZOOM_DOM_JS = """([src, sel]) => {
+    const rx = new RegExp(src, 'i');
+    for (const b of document.querySelectorAll(sel)) {
+        const t = (b.getAttribute('aria-label') || b.innerText || '').trim();
+        if (rx.test(t)) { b.click(); return true; }
+    }
+    return false;
+}"""
+
+
+async def _zoom_dom_click(page: Any, pattern: Any, selector: str) -> bool:  # noqa: ANN401
+    """One click made in the page on the first element of ``selector`` whose aria-label (or text) matches: Zoom
+    hides its control bar a moment after a join, and a role locator skips hidden elements while this does not
+    (the camera button of #820 failed the same way and this click worked)."""
+    return bool(await page.evaluate(_ZOOM_DOM_JS, [pattern.pattern, selector]))
+
+
+async def _zoom_describe(loc: Any) -> str:  # noqa: ANN401
+    """``count; visible/hidden and the box of each match``, nothing that is text of the page."""
+    out = []
+    try:
+        for i in range(min(await loc.count(), 6)):
+            item = loc.nth(i)
+            box = await item.bounding_box()
+            where = "none" if box is None else f"{box['width']:.0f}x{box['height']:.0f}@{box['x']:.0f},{box['y']:.0f}"
+            out.append(("v " if await item.is_visible() else "h ") + where)
+        return f"{await loc.count()} [{'; '.join(out)}]"
+    except Exception:
+        return "unreadable"
+
+
+async def _zoom_open_list(self: Any, page: Any) -> str | None:  # noqa: ANN401
+    """Open the participant panel; the way it opened ("button", "more", "keyboard") or None."""
+    await self._activate_controls(page)
+    button = page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)
+    steps = (
+        ("button", lambda: _zoom_click_first(button)),
+        ("button", lambda: _zoom_dom_click(page, ZOOM_PARTICIPANTS_BUTTON, "button")),
+        ("more", lambda: _zoom_open_via_more(page)),
+        ("keyboard", lambda: _zoom_open_via_keys(page)),
+    )
+    for way, attempt in steps:
+        try:
+            if await attempt():
+                await page.wait_for_timeout(700)
+                if await _zoom_list_visible(page):
+                    return way
+        except Exception:  # noqa: S112
+            continue
+    return None
+
+
+async def _zoom_open_via_more(page: Any) -> bool:  # noqa: ANN401
+    if not (
+        await _zoom_click_first(page.get_by_role("button", name=ZOOM_MORE_BUTTON))
+        or await _zoom_dom_click(page, ZOOM_MORE_BUTTON, "button")
+    ):
+        return False
+    await page.wait_for_timeout(300)
+    for role in ("menuitem", "button"):
+        if await _zoom_click_first(page.get_by_role(role, name=ZOOM_PARTICIPANTS_ENTRY)):
+            return True
+    return await _zoom_dom_click(page, ZOOM_PARTICIPANTS_ENTRY, "[role='menuitem'], [role='menuitem'] *, li, a")
+
+
+async def _zoom_open_via_keys(page: Any) -> bool:  # noqa: ANN401
+    await page.keyboard.press("Alt+U")
+    return True
+
+
+async def _zoom_close_list(page: Any, way: str) -> None:  # noqa: ANN401
+    """Put the panel back as it was (a chat panel, or none, shares the space); best effort."""
+    try:
+        if way == "keyboard":
+            await page.keyboard.press("Alt+U")
+        elif way == "button":
+            if not await _zoom_click_first(page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)):
+                await _zoom_dom_click(page, ZOOM_PARTICIPANTS_BUTTON, "button")
+    except Exception:
+        logger.debug("zoom participants: could not close the panel", exc_info=True)
+
+
+async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: ANN401
+    from joinly.types import MeetingParticipant
+
+    way = None
+    if not await _zoom_list_visible(page):
+        way = await _zoom_open_list(self, page)
+        if way is None:
+            if id(page) not in _zoom_plist_logged:
+                _zoom_plist_logged.add(id(page))
+                logger.warning(
+                    "zoom participants: the list did not open; button %s; more %s; panel %s",
+                    await _zoom_describe(page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)),
+                    await _zoom_describe(page.get_by_role("button", name=ZOOM_MORE_BUTTON)),
+                    await _zoom_describe(page.locator(ZOOM_LIST)),
+                )
+            msg = "Participants button not found or not visible."
+            raise RuntimeError(msg)
+    participants = []
+    panel = page.locator(ZOOM_LIST).first
+    for item in await panel.locator(ZOOM_ROWS).all():
+        if aria_label := await item.get_attribute("aria-label"):
+            labels = aria_label.split(",")
+            participants.append(MeetingParticipant(name=labels[0].strip(), infos=labels[1:] if len(labels) > 1 else []))
+    if way is not None:
+        await _zoom_close_list(page, way)
+    return participants
+
+
+def _install_zoom_participants(import_module: Any = None) -> bool:  # noqa: ANN401
+    """Replace the Zoom controller's get_participants, once. Never raises: a joinly without it keeps its own."""
+    import importlib
+
+    load = import_module or importlib.import_module
+    try:
+        cls = load("joinly.providers.browser.platforms.zoom").ZoomBrowserPlatformController
+    except (ImportError, AttributeError):
+        logger.warning("zoom participants: the Zoom controller was not found")
+        return False
+    if not hasattr(cls.get_participants, "__wrapped__"):
+        _zoom_get_participants.__wrapped__ = cls.get_participants  # type: ignore[attr-defined]
+        cls.get_participants = _zoom_get_participants
+    return True
+
+
+_install_zoom_participants()
+# --- end of the Zoom participant list ------------------------------------------------------------------------
 
 CAPTIONS = "captions"  # switchboard patch (#764): the token that selects joinly/captions.py's three classes
 
