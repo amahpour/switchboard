@@ -1,4 +1,4 @@
-# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764, #824): see deploy/joinly/NOTICE for what.
+# joinly v0.5.4, server.py, changed by switchboard (#713, #763, #764, #820, #824): see deploy/joinly/NOTICE for what.
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand. MIT License:
 #
 # Copyright (c) 2025 Dominik Brockmann, Johannes Dittrich, Fynn Aurand
@@ -84,6 +84,110 @@ def _patch_experimental(server: FastMCP, extra: dict[str, dict[str, Any]]) -> No
     server._mcp_server.get_capabilities = _get_capabilities  # type: ignore[assignment]  # noqa: SLF001
 
 
+# --- switchboard bot logo (#820, DESIGN.md section 52.10) -----------------------------------------------------
+# joinly draws a logo on a virtual camera (joinly/providers/browser/camera_feed.py) but never turns the camera
+# on, so the bot's tile in a call is grey. This swaps in switchboard's mark (favicon.svg of the switchboard
+# repository, kept equal by tests/unit/test_joinly_voice_patch.py) and, after each platform's join, clicks that
+# platform's camera button once. A failure there is logged once and never fails the join.
+# SWITCHBOARD_BOT_VIDEO=0 (or false, off, no) leaves joinly as it was: a grey tile.
+BOT_LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7.5" '
+    'fill="#0a64d8"/><g transform="translate(4 4) scale(1.5)" fill="none" stroke="#fff" stroke-width="1.6" '
+    'stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="4" r="1.8"/><circle cx="12" cy="4" r="1.8"/>'
+    '<circle cx="12" cy="12" r="1.8"/><path d="M4 5.8V8a4 4 0 0 0 4 4h2.2M12 5.8v4.4"/></g></svg>'
+)
+BOT_VIDEO_OFF = frozenset({"0", "false", "off", "no"})
+# a platform's camera button while the camera is off (accessible names, case-insensitive)
+BOT_CAMERA_ON = re.compile(r"^(start (my )?video|turn on (my )?camera|turn camera on)", re.IGNORECASE)
+BOT_PLATFORMS = (
+    ("joinly.providers.browser.platforms.zoom", "ZoomBrowserPlatformController"),
+    ("joinly.providers.browser.platforms.google_meet", "GoogleMeetBrowserPlatformController"),
+    ("joinly.providers.browser.platforms.teams", "TeamsBrowserPlatformController"),
+)
+_bot_camera_warned = False
+
+
+def _bot_video_enabled(env: dict[str, str] | None = None) -> bool:
+    """On unless SWITCHBOARD_BOT_VIDEO says off: the setting only turns it off, so an unknown value is on."""
+    import os
+
+    return (env if env is not None else os.environ).get("SWITCHBOARD_BOT_VIDEO", "1").strip().lower() not in (
+        BOT_VIDEO_OFF
+    )
+
+
+# Zoom hides its control bar a moment after a join, and a hidden button is on the page but not visible, so
+# get_by_role(...).is_visible() was False in the live check and the camera stayed off. One DOM click finds the first
+# button whose aria-label (or text) matches and clicks it, visible or not; the pattern is the Python one's source.
+_BOT_CAMERA_JS = """(src) => {
+    const rx = new RegExp(src, 'i');
+    for (const b of document.querySelectorAll('button')) {
+        const t = (b.getAttribute('aria-label') || b.innerText || '').trim();
+        if (rx.test(t)) { b.click(); return true; }
+    }
+    return false;
+}"""
+_bot_camera_logged = False
+
+
+async def _bot_camera_on(page: Any) -> bool:  # noqa: ANN401
+    """Click the page's camera-on button once if there is one; True when it was clicked. Never raises: an exception
+    is logged once per process as a warning (a call that fails here fails the same way every time), and the outcome
+    of the first attempt, clicked or not found, is logged once at info."""
+    global _bot_camera_warned, _bot_camera_logged  # noqa: PLW0603
+    try:
+        clicked = bool(await page.evaluate(_BOT_CAMERA_JS, BOT_CAMERA_ON.pattern))
+    except Exception:
+        if not _bot_camera_warned:
+            _bot_camera_warned = True
+            logger.warning("bot logo: could not turn the camera on", exc_info=True)
+        return False
+    if not _bot_camera_logged:
+        _bot_camera_logged = True
+        logger.info("bot logo: camera button %s", "clicked" if clicked else "not found")
+    return clicked
+
+
+def _bot_after_join(original: Any) -> Any:  # noqa: ANN401
+    async def join(self: Any, page: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        result = await original(self, page, *args, **kwargs)
+        await _bot_camera_on(page)
+        return result
+
+    join.__wrapped__ = original  # type: ignore[attr-defined]
+    return join
+
+
+def _install_bot_logo(import_module: Any = None, env: dict[str, str] | None = None) -> bool:  # noqa: ANN401
+    """Swap the logo and wrap each platform's join, once. False, touching nothing, when it is off. Never raises:
+    a joinly without these modules is a grey tile."""
+    if not _bot_video_enabled(env):
+        return False
+    import importlib
+    from urllib.parse import quote
+
+    load = import_module or importlib.import_module
+    try:
+        load("joinly.providers.browser.camera_feed")._LOGO_SVG = "data:image/svg+xml," + quote(
+            BOT_LOGO_SVG, safe="/:=,;"
+        )
+    except Exception:
+        logger.warning("bot logo: could not set the logo", exc_info=True)
+        return False
+    for module, name in BOT_PLATFORMS:
+        try:
+            cls = getattr(load(module), name)
+        except (ImportError, AttributeError):
+            logger.warning("bot logo: %s.%s not found", module, name)
+            continue
+        if not hasattr(cls.join, "__wrapped__"):
+            cls.join = _bot_after_join(cls.join)
+    return True
+
+
+_install_bot_logo()
+# --- end of the bot logo -------------------------------------------------------------------------------------
+
 # --- switchboard Zoom participant list (#824, DESIGN.md section 52.7) -----------------------------------------
 # joinly's Zoom get_participants looks for one button named "participants list", checks is_visible() once after
 # clicking the screen to bring up the control bar, and gives up with "Participants button not found or not
@@ -96,17 +200,33 @@ ZOOM_LIST = 'div[role="list"][aria-label^="participants" i], div[role="list"][ar
 ZOOM_ROWS = "div.participants-li, div[role='listitem'][aria-label]"
 ZOOM_PARTICIPANTS_BUTTON = re.compile(r"participants list|^(show|open|manage) (the )?participants", re.IGNORECASE)
 ZOOM_MORE_BUTTON = re.compile(r"^more( meeting)?( control)?s?$|more meeting control", re.IGNORECASE)
-ZOOM_PARTICIPANTS_ENTRY = re.compile(r"participants", re.IGNORECASE)
-_zoom_plist_logged: set[int] = set()
+# a menu entry that is exactly "Participants" (a count may follow): never "Mute all participants" or the like
+ZOOM_PARTICIPANTS_ENTRY = re.compile(r"^participants( \(\d+\))?$", re.IGNORECASE)
+ZOOM_MENU_ITEMS = "[role='menuitem']"
+_zoom_plist_logged: Any = None  # a WeakSet of the pages already described, made on first use
 
 
-async def _zoom_list_visible(page: Any) -> bool:  # noqa: ANN401
-    """True when any match of the participant panel is visible (a count of several is not an error)."""
+async def _zoom_visible_panel(page: Any) -> Any:  # noqa: ANN401
+    """The first VISIBLE match of the participant panel, or None (a hidden duplicate is not the panel)."""
     panel = page.locator(ZOOM_LIST)
     for i in range(await panel.count()):
         if await panel.nth(i).is_visible():
+            return panel.nth(i)
+    return None
+
+
+async def _zoom_list_visible(page: Any) -> bool:  # noqa: ANN401
+    return await _zoom_visible_panel(page) is not None
+
+
+async def _zoom_wait_list(page: Any, visible: bool = True, ms: int = 2000) -> bool:  # noqa: ANN401
+    """Poll until the panel is (or is not) visible, up to ``ms``: a panel that opens slowly must not be taken
+    for a failed click, and clicked again, which would close it."""
+    for _ in range(ms // 200 + 1):
+        if await _zoom_list_visible(page) == visible:
             return True
-    return False
+        await page.wait_for_timeout(200)
+    return await _zoom_list_visible(page) == visible
 
 
 async def _zoom_click_first(loc: Any) -> bool:  # noqa: ANN401
@@ -175,10 +295,10 @@ async def _zoom_open_list(self: Any, page: Any) -> str | None:  # noqa: ANN401
     )
     for way, attempt in steps:
         try:
-            if await attempt():
-                await page.wait_for_timeout(700)
-                if await _zoom_list_visible(page):
-                    return way
+            if await _zoom_list_visible(page):
+                return way  # an earlier step did open it, slowly: nothing may toggle it again
+            if await attempt() and await _zoom_wait_list(page):
+                return way
         except Exception:  # noqa: S112
             continue
     return None
@@ -191,10 +311,9 @@ async def _zoom_open_via_more(page: Any) -> bool:  # noqa: ANN401
     ):
         return False
     await page.wait_for_timeout(300)
-    for role in ("menuitem", "button"):
-        if await _zoom_click_first(page.get_by_role(role, name=ZOOM_PARTICIPANTS_ENTRY)):
-            return True
-    return await _zoom_dom_click(page, ZOOM_PARTICIPANTS_ENTRY, "[role='menuitem'], [role='menuitem'] *, li, a")
+    if await _zoom_click_first(page.get_by_role("menuitem", name=ZOOM_PARTICIPANTS_ENTRY)):
+        return True
+    return await _zoom_dom_click(page, ZOOM_PARTICIPANTS_ENTRY, ZOOM_MENU_ITEMS)
 
 
 async def _zoom_open_via_keys(page: Any) -> bool:  # noqa: ANN401
@@ -205,13 +324,30 @@ async def _zoom_open_via_keys(page: Any) -> bool:  # noqa: ANN401
 async def _zoom_close_list(page: Any, way: str) -> None:  # noqa: ANN401
     """Put the panel back as it was (a chat panel, or none, shares the space); best effort."""
     try:
-        if way == "keyboard":
-            await page.keyboard.press("Alt+U")
-        elif way == "button":
+        if way != "keyboard":  # a panel opened from the button or the "More" menu closes with the button
             if not await _zoom_click_first(page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)):
                 await _zoom_dom_click(page, ZOOM_PARTICIPANTS_BUTTON, "button")
+            if await _zoom_wait_list(page, visible=False, ms=1000):
+                return
+        await page.keyboard.press("Alt+U")  # the way that opened it, or the one left when the button did not close it
     except Exception:
         logger.debug("zoom participants: could not close the panel", exc_info=True)
+
+
+def _zoom_first_report(page: Any) -> bool:  # noqa: ANN401
+    """True the first time a page asks: one diagnostic line per page, remembered without keeping the page alive."""
+    global _zoom_plist_logged  # noqa: PLW0603
+    import weakref
+
+    if _zoom_plist_logged is None:
+        _zoom_plist_logged = weakref.WeakSet()
+    try:
+        if page in _zoom_plist_logged:
+            return False
+        _zoom_plist_logged.add(page)
+    except TypeError:  # a page that cannot be referenced weakly is reported every time: rare, and only a line
+        return True
+    return True
 
 
 async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: ANN401
@@ -221,8 +357,7 @@ async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: AN
     if not await _zoom_list_visible(page):
         way = await _zoom_open_list(self, page)
         if way is None:
-            if id(page) not in _zoom_plist_logged:
-                _zoom_plist_logged.add(id(page))
+            if _zoom_first_report(page):
                 logger.warning(
                     "zoom participants: the list did not open; button %s; more %s; panel %s",
                     await _zoom_describe(page.get_by_role("button", name=ZOOM_PARTICIPANTS_BUTTON)),
@@ -232,8 +367,10 @@ async def _zoom_get_participants(self: Any, page: Any) -> list[Any]:  # noqa: AN
             msg = "Participants button not found or not visible."
             raise RuntimeError(msg)
     participants = []
-    panel = page.locator(ZOOM_LIST).first
-    for item in await panel.locator(ZOOM_ROWS).all():
+    panel = await _zoom_visible_panel(page)
+    if panel is None and _zoom_first_report(page):
+        logger.warning("zoom participants: no panel is visible to read; panel %s", await _zoom_describe(page.locator(ZOOM_LIST)))
+    for item in await panel.locator(ZOOM_ROWS).all() if panel is not None else []:
         if aria_label := await item.get_attribute("aria-label"):
             labels = aria_label.split(",")
             participants.append(MeetingParticipant(name=labels[0].strip(), infos=labels[1:] if len(labels) > 1 else []))
@@ -249,8 +386,8 @@ def _install_zoom_participants(import_module: Any = None) -> bool:  # noqa: ANN4
     load = import_module or importlib.import_module
     try:
         cls = load("joinly.providers.browser.platforms.zoom").ZoomBrowserPlatformController
-    except (ImportError, AttributeError):
-        logger.warning("zoom participants: the Zoom controller was not found")
+    except Exception:  # this runs when server.py is imported: nothing here may stop the bot
+        logger.warning("zoom participants: not installed, joinly's own is used", exc_info=True)
         return False
     if not hasattr(cls.get_participants, "__wrapped__"):
         _zoom_get_participants.__wrapped__ = cls.get_participants  # type: ignore[attr-defined]
