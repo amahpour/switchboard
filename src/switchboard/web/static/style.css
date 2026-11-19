@@ -3902,3 +3902,22 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   .preview-bar .btn-primary { height: 44px; }
   .chip-preview { display: none; }  /* the Join bar says it, and the title row has no room on a phone */
 }
+
+/* The room's closed review boards (DESIGN.md §37.14). */
+#past-boards-title { margin: 0; font-size: calc(16px * var(--text-scale)); }
+.past-boards-list {
+  display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; max-width: 880px;
+}
+.past-board-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+}
+.past-board-link { justify-self: start; max-width: 100%; overflow-wrap: anywhere; }
+.past-board-dates {
+  grid-column: 1 / -1; display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 10px; margin: 0; color: var(--muted-2); font-size: calc(12px * var(--text-scale));
+}
+.past-board-dates dd { margin: 0; }
+@container board (min-width: 660px) {
+  .past-board-dates { grid-template-columns: repeat(3, max-content minmax(0, 1fr)); }
+}

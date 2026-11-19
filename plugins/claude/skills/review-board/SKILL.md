@@ -38,11 +38,15 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
-- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three.
+- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` to record the outcome.
 - `close` (`reason` when work is still open): only the board's holder. A settled board needs no reason.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 
 A move that is another agent's to answer is posted as your message and wakes them. Any other move is a notice. `show` reads the board.
+
+## Check back after handoff
+
+If you were chosen to post the review, check the pull request or merge request again with your own `gh` or `glab` when you next have a chance. When the forge shows it merged, call `review(action="report", url=..., state="merged")` with the original board link. This works after the board closes and keeps it closed.
 
 ## Ask for a review when you are the author
 
