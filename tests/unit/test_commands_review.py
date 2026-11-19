@@ -127,6 +127,18 @@ def test_the_request_tells_agents_to_pass_the_link_as_url_when_other_boards_are_
     assert text.count(PR) == 1
 
 
+def test_the_request_points_reviewers_to_the_repos_review_md_files() -> None:
+    """#860: a repo may keep REVIEW.md files (what to flag and skip). The request tells each agent to read
+    the ones nearest the changed files, from the default branch, so the pull request cannot change the
+    rules it is reviewed under. It lives here, not in the review tool's description, which is at its size
+    cap. Fails on the old request, which said nothing about the repo's own rules."""
+    text = review_request(["claude-1"], PR, "")
+    assert (
+        "If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch."
+        in text
+    )
+
+
 def test_help_lists_review() -> None:
     assert "  /review <url> [note]" in HELP_TEXT
 

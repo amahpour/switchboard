@@ -3534,6 +3534,10 @@ class Store:
                 (key, value),
             )
 
+    def setting_delete(self, key: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM broker_settings WHERE key=?", (key,))
+
     def settings_with_prefix(self, prefix: str) -> list[tuple[str, str]]:
         """The broker settings whose key starts with ``prefix``, by key (a literal prefix, not a LIKE)."""
         rows = self.con.execute(

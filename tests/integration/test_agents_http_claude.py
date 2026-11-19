@@ -217,6 +217,26 @@ def test_a_config_cap_cannot_lift_claudes_wait_past_what_claude_code_allows(
         b.stop()
 
 
+def test_a_default_claude_wait_is_cut_to_60_s(tmp_home: Path) -> None:
+    """#878: an agent waited 300 s to pass time and held its session. With no config, Claude Code's wait is
+    held to 60 s (it was 600), and the result says what was asked and the cap. (The advice a timeout adds is
+    tested on the tool, tests/unit/test_mcp_server_static.py: this does not sit out 60 s.) Fails if the
+    default cap is still 600."""
+    b = InProcBroker(tmp_home, Config(human_name=TEST_HUMAN)).start()
+    try:
+        b.call("room.create", {"name": "#build"})
+        claude = Claude(b, make_token(b, "laptop"), SESSION_1)
+        assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+        claude.call("read", room="#build")
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(claude.call, "wait", room="#build", timeout_s=300)
+            b.call("human.say", {"room": "#build", "text": "@claude-1 you may stop waiting"})
+            got = waiting.result(30)
+        assert (got["timeout_s"], got["capped_from"], got["cap_s"]) == (60, 300, 60), got
+    finally:
+        b.stop()
+
+
 def test_a_config_cap_raises_how_long_codex_may_wait(
     tmp_home: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
