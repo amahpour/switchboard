@@ -73,6 +73,9 @@ def test_a_person_sees_only_rooms_they_can_see(hosted: InProcBroker) -> None:
         )
         shown = member(plaza.id, "plaza-1")
         wake(shown, "in the open")
+        for room, who in ((secret, "quiet-1"), (plaza, "plaza-1")):
+            rv = store.open_review(room.id, "https://github.com/example/shop/pull/7", "", who)
+            store.add_review_item(rv["id"], "finding", "raised", title="t", raised_by=who)
 
     hosted.on_loop(plant)
 
@@ -90,6 +93,11 @@ def test_a_person_sees_only_rooms_they_can_see(hosted: InProcBroker) -> None:
         assert "#plaza" in _names(page, "rooms")
         plaza_row = next(r for r in page["rooms"] if r["name"] == "#plaza")
         assert plaza_row["wakes_week"] == 1 and plaza_row["posts_week"] == 0
+    # the review figures follow the same rule: a private room's boards are its people's alone (§44)
+    assert sorted(r["name"] for r in bob_page["reviews"]["rooms"]) == ["#plaza", "#secret"]
+    assert [r["name"] for r in admin_page["reviews"]["rooms"]] == ["#plaza"]
+    assert {a["name"] for a in admin_page["reviews"]["agents"]} == {"plaza-1"}
+    assert all(r["week"]["raised"] == 1 for r in bob_page["reviews"]["rooms"])
 
 
 def test_usage_needs_a_session(broker: InProcBroker) -> None:

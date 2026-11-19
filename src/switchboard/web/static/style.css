@@ -3833,9 +3833,15 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   color: var(--amber-ink);
   font-size: calc(13px * var(--text-scale));
 }
+.usage-h3 { margin: 14px 0 6px; font-size: calc(13px * var(--text-scale)); font-weight: 600; color: var(--muted); }
+.usage-review { display: flex; flex-direction: column; gap: 2px; font-size: calc(13px * var(--text-scale)); }
+.usage-review-h { font-weight: 600; }
+.usage-review-line { overflow-wrap: anywhere; }
+.usage-review-row { align-items: start; }
 @media (max-width: 760px) {
   .usage { padding: 8px 16px 32px; }
   .usage-row { grid-template-columns: minmax(0, 1fr); }
+  .usage-review-row > div:empty { display: none; }
   .usage button { min-height: 44px; min-width: 44px; }
 }
 
