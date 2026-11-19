@@ -354,14 +354,18 @@ def needs(state: Any, name: str, person_id: int | None) -> list[notify.Need]:
     """What needs this person right now, for their webhook (§62): the home page's question and board cards,
     and an agent of theirs waiting on an approval (``owner`` is them, or nobody on a broker with one person).
     The same rows ``build`` reads, never a new record. A person never gets another person's, or a private
-    room they are not in (§44)."""
+    room they are not in (§44), and the cards come only from the rooms they are a member of, as Waiting on
+    you does (§63): a public room they never joined, or left, does not reach them this way either."""
     now = state.clock.now()
     key = state.service.person_key(person_id)
     rooms = [r for r in state.store.list_rooms() if state.service.visible(r, key)]
     read = state.store.home_seen_marks(key)
     snoozed = state.store.home_snoozes(key)
+    joined, one = state.store.person_rooms(key), state.service.one_person()
     cards: list[dict[str, Any]] = []
     for room in rooms:
+        if not is_member(room, joined, one):
+            continue
         questions, _ = state.store.home_lines(
             room.id, name, now - WAIT_DAYS * DAY_S, now, CANDIDATES, BOARD_LINE, read.get(room.id, 0)
         )

@@ -18,6 +18,7 @@ from test_passkeys import HOST, Browser, hosted_broker, stop
 from test_people import join_as_bob, set_up
 
 from switchboard import db
+from switchboard.broker import home
 from switchboard.paths import Paths
 from switchboard.store import Store
 
@@ -154,6 +155,27 @@ def test_at_humans_and_questions_wait_only_on_a_rooms_members(
     assert waiting(bob) == []  # history, not news
     agent_says(b, "@humans one more thing", ["humans"])
     assert waiting(bob) == [("question", "#build")]
+
+
+def test_a_webhook_is_sent_only_for_a_public_rooms_members(
+    team: tuple[InProcBroker, Browser, Browser],
+) -> None:
+    """A person's webhook (§62) is sent for what needs them (``home.needs``), so it follows membership as
+    Waiting on you does: @humans in #build needs alice, its member, and not bob, who can read it but never
+    joined; once he joins, the next one needs him too. Fails if the webhook still reaches everyone on the
+    broker from any public room."""
+    b, _alice, bob = team
+    bob_id = b.state.store.person_named("bob").id
+
+    def needs(name: str, pid: int | None) -> list[tuple[str, str]]:
+        return [(n.kind, n.room) for n in home.needs(b.state, name, pid)]
+
+    agent_says(b, "@humans deploy at noon?", ["humans"])
+    assert b.on_loop(needs, "alice", None) == [("question", "#build")]
+    assert b.on_loop(needs, "bob", bob_id) == []
+    assert people(bob, "build", "add", "bob").status_code == 200
+    agent_says(b, "@humans one more thing", ["humans"])
+    assert b.on_loop(needs, "bob", bob_id) == [("question", "#build")]
 
 
 def test_leaving_clears_unread_and_home_and_the_agents_stay(
