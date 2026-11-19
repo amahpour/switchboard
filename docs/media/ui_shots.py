@@ -4301,6 +4301,178 @@ def shoot_agents(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
+    """#843, on a hosted broker with alice, bob and carol (DESIGN.md §62): ``room-members-sidebar-*`` is
+    #build with the rooms alice is in (#design with a red count, #infra "joined with claude-2") and Other
+    rooms folded, its dot saying a call is live in one; ``room-members-preview-*`` is #ops, a room she is
+    not in, read with the Join bar and Other rooms open; ``room-members-leave-*`` is the confirm from the
+    room's menu; ``room-members-people-*`` is Members with the room's people, Leave and Add a person. Light,
+    dark and the phone, which must not scroll sideways; ``guide-rooms-light`` is the guide's picture.
+    ``world`` is a HostedWorld. Run on a branch without
+    #843, the same setup makes the "before" pictures: every public room in the sidebar, and People listing
+    everyone on the broker."""
+    import httpx
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    cookies: dict[str, str] = {}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert c.post("/api/setup/password", json={"password": "correct horse battery"}).status_code == 200
+        cookies["alice"] = c.cookies.get("switchboard_session") or ""
+        added = {
+            n: c.post("/api/people", json={"name": n, "email": f"{n}@example.com"}) for n in ("bob", "carol")
+        }
+    for name, r in added.items():
+        assert r.status_code == 200, r.text
+        with httpx.Client(base_url=origin, headers=headers) as c:
+            signed = c.post(
+                "/api/signin/password", json={"name": f"{name}@example.com", "password": r.json()["password"]}
+            )
+            assert signed.status_code == 200, signed.text
+            assert c.post("/api/me/password", json={"password": "correct horse " + name}).status_code == 200
+            cookies[name] = c.cookies.get("switchboard_session") or ""
+
+    def as_(who: str, path: str, body: dict[str, Any]) -> None:
+        with httpx.Client(
+            base_url=origin, headers=headers, cookies={"switchboard_session": cookies[who]}
+        ) as c:
+            c.post(path, json=body)  # a "before" run refuses joining a public room: that is the point
+
+    as_("alice", "/api/rooms", {"name": "#design"})
+    for room in ("#infra", "#ops", "#hiring", "#random"):
+        as_("bob", "/api/rooms", {"name": room})
+    as_("carol", "/api/rooms/hiring/people", {"action": "add", "name": "carol"})
+    as_("bob", "/api/rooms/build/people", {"action": "add", "name": "bob"})
+    as_(
+        "alice",
+        "/api/rooms/build/say",
+        {"text": "Can someone review the login rewrite? @claude-1 you wrote the first pass."},
+    )
+    as_("bob", "/api/rooms/design/say", {"text": "@alice is the new header ready to look at?"})
+    as_(
+        "bob",
+        "/api/rooms/ops/say",
+        {"text": "Deploy window moves to Thursday. Anything blocking? @humans please shout now."},
+    )
+    as_(
+        "bob",
+        "/api/rooms/ops/say",
+        {"text": "Rollback plan is in the runbook; the canary stays at 5% until Wednesday."},
+    )
+    b = world.broker
+
+    def seed() -> None:
+        store, svc = b.state.store, b.state.service
+        room = store.get_room("#build")
+        for name, harness in (("claude-1", "claude"), ("codex-1", "codex")):
+            p = store.upsert_participant(harness, f"{harness}:{name}", host="")
+            m = store.create_membership(room.id, p.id, name)
+            svc._post(
+                room,
+                sender_name=name,
+                sender_kind="agent",
+                sender_harness=harness,
+                sender_membership_id=m.id,
+                via="mcp",
+                kind="join",
+                text="joined (mcp-only)",
+            )
+        infra = store.get_room("#infra")
+        if hasattr(svc, "agent_joined"):  # what an agent's join does since #843 (§62)
+            svc.agent_joined(infra, 0, "claude-2")
+        ops = store.get_room("#ops")
+        call = store.insert_meeting(ops.id, started_by="bob", platform="zoom")
+        store.set_meeting_live(call.id)
+        svc.publish_settings(ops.id)
+        svc.rooms_changed()
+
+    b.on_loop(seed)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    themes = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+
+    def page_for(ctx_args: dict[str, Any]) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": cookies["alice"], "url": origin}])
+        page = ctx.new_page()
+        page.goto(origin + "/#build")
+        connected(page)
+        expect(page.locator("#room-title")).to_have_text("build")
+        return page
+
+    def drawer(page: Any, open_: bool) -> None:
+        if not page.locator("#rooms-toggle").is_visible():
+            return
+        if open_ != bool(page.locator("#app.nav-open").count()):
+            page.click("#rooms-toggle")
+
+    def wide_ok(page: Any) -> None:
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth"
+        )
+
+    def still(page: Any) -> None:
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+
+    for theme, ctx_args in themes:
+        phone = theme.startswith("phone")
+        page = page_for(ctx_args)
+        try:
+            drawer(page, True)
+            still(page)
+            shot(page, out, f"room-members-sidebar-{theme}.png")
+            other = page.locator("#other-rooms")
+            if other.count():
+                other.click()
+                page.locator('#tabs .room[data-room="#ops"]').click()
+            else:
+                page.locator('#tabs .room[data-room="#ops"]').click()
+            drawer(page, False)
+            if phone:
+                wide_ok(page)
+            still(page)
+            shot(page, out, f"room-members-preview-{theme}.png")
+            drawer(page, True)
+            page.locator('#tabs .room[data-room="#build"]').click()
+            drawer(page, False)
+            if page.locator("#room-menu-btn").is_visible():
+                page.click("#room-menu-btn")
+                page.click("#room-menu-leave")
+                expect(page.locator("#app-dialog")).to_be_visible()
+                still(page)
+                shot(page, out, f"room-members-leave-{theme}.png")
+                page.click("#app-dialog-cancel")
+            if phone:
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                wide_ok(page)
+            expect(page.locator("#room-people .person-row").first).to_be_visible()
+            still(page)
+            shot(page, out, f"room-members-people-{theme}.png")
+        finally:
+            page.context.close()
+    # the guide's picture (docs/guide/rooms.md): a room alice is not in, read, with Other rooms open
+    page = page_for(
+        {"viewport": {"width": 1200, "height": 760}, "device_scale_factor": 1.5, "color_scheme": "light"}
+    )
+    try:
+        if page.locator("#other-rooms").count():
+            page.click("#other-rooms")
+        page.locator('#tabs .room[data-room="#ops"]').click()
+        still(page)
+        shot(page, out, "guide-rooms-light.png")
+    finally:
+        page.context.close()
+
+
 ONLY: dict[str, Any] = {
     "agents": shoot_agents,
     "redact": shoot_redact,
@@ -4328,18 +4500,20 @@ ONLY: dict[str, Any] = {
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
+    "room_members": shoot_room_members,
 }
 
 
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names``,
-    ``admin_names``, ``admins`` and ``backups`` start a hosted broker; the others start the seeded desktop world."""
+    ``admin_names``, ``admins``, ``backups`` and ``room_members`` start a hosted broker; the others start the
+    seeded desktop world."""
     from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    hosted = name in ("real_names", "admin_names", "admins", "backups")
+    hosted = name in ("real_names", "admin_names", "admins", "backups", "room_members")
     world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()

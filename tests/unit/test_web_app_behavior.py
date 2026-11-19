@@ -701,7 +701,7 @@ def test_a_person_is_shown_by_their_real_name() -> None:
     assert "nick-system" in out["before"]["system"]["cls"]
     assert out["before"]["you"] == {"name": "Alice Ng", "handle": "@alice"}
     assert out["before"]["people"] == [
-        {"name": "alice", "text": "Alice Ng@aliceyou", "handle": "@alice"},
+        {"name": "alice", "text": "Alice Ng@aliceyouLeave", "handle": "@alice"},  # a member leaves (§62)
         {"name": "bob-lee", "text": "Bob Lee@bob-lee", "handle": "@bob-lee"},
         {"name": "carol", "text": "carol", "handle": ""},
     ]
@@ -853,3 +853,37 @@ def test_a_room_on_screen_refreshes_the_home_count_only_for_what_can_change_it()
     assert out["afterAddressed"] == 1 and out["afterReview"] == 1  # two messages and a review: one refresh
     assert out["fetched"] == 1
     assert out["onHome"] == 1 and out["fetchedOnHome"] == 1
+
+
+def test_the_sidebar_lists_your_rooms_and_folds_the_others_and_join_and_leave_move_a_room() -> None:
+    """§62 (#843): the rooms alice is a member of are listed, #infra with "joined with claude-2" the first
+    time, and the public rooms she is not in fold under Other rooms, with a dot while a call is live in one.
+    @humans in a room she is not in counts nothing (no badge, no title count); in her own it does. Opening
+    one is a preview: no composer, a Join bar and a Preview chip, no room menu. Join posts her own name and
+    makes it hers; Leave, from the room's menu and after a confirm that says what changes, posts it again and
+    makes it a preview. Fails if a room she is not in pings her, the composer shows where she can't post, or
+    Join and Leave send anything else."""
+    out = run("room_members")
+    assert out["start"] == ["#build|build", "#infra|infrajoined with claude-2", "toggle:Other rooms (2)"]
+    assert out["counted"]["title"] == "(1) switchboard — #build"  # #infra's @humans; #ops's counts nothing
+    assert out["counted"]["tabs"] == ["#build|build", "#infra|infra1", "toggle:Other rooms (2):live"]
+    assert out["open"][-1] == ["#ops|ops2 people", "#random|randomcall"]
+    assert out["preview"] == {
+        "composer": False,
+        "bar": True,
+        "chip": True,
+        "menu": False,
+        "title": "You’re viewing #ops",
+        "join": "Join #ops",
+    }
+    assert out["joined"]["calls"] == [{"room": "ops", "action": "add", "name": "alice"}]
+    assert (out["joined"]["composer"], out["joined"]["bar"], out["joined"]["menu"]) == (True, False, True)
+    assert "#ops|ops" in out["joined"]["tabs"]
+    assert out["menu"] == {"open": True, "item": "Leave #ops"}
+    assert out["confirm"].startswith(
+        "Leave #ops?You will stop getting @humans, unread badges and notifications"
+    )
+    assert "Your agents there stay in the room" in out["confirm"]
+    assert out["left"]["calls"] == [{"room": "ops", "action": "remove", "name": "alice"}]
+    assert (out["left"]["composer"], out["left"]["bar"], out["left"]["menu"]) == (False, True, False)
+    assert out["left"]["tabs"][-1] == ["#ops|ops2 people", "#random|random1 person"]

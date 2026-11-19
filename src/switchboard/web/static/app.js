@@ -78,6 +78,7 @@
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
     ncOpen: false,     // the Members group "Not connected (n)" is unfolded (#814)
+    otherOpen: null,   // the sidebar's Other rooms is unfolded (§62); null: open only when they are in no room
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
     usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
     usageData: null,   // the last GET /api/usage
@@ -192,6 +193,7 @@
           body.id = 'app-dialog-body';
           form.append(body);
         }
+        if (options.note) form.append(el('p', 'app-dialog-note', options.note));  // a smaller second line
         let name = null;
         let validName = null;
         let rulesInput = null;
@@ -669,6 +671,15 @@
   }
 
   function activeRoom() { return state.active ? state.rooms.get(state.active) || null : null; }
+
+  // A public room's members are who is pinged there (§62, #843): the rooms someone is in fill the sidebar,
+  // and the others wait under Other rooms, to read and join. A broker that says nothing (an older one) makes
+  // every room theirs, and so does one with a single person, whose list says member for every room.
+  function isMember(r) { return !!r && r.member !== false; }
+
+  // Leave is for a member of a public room on a switchboard with people (§62): with one person every room
+  // is theirs, and a private room's own Leave is in Members, as before (§44).
+  function canLeave(r) { return isMember(r) && !r.private && state.everyone.length > 1; }
 
   function memberOf(r, name, host) {
     if (!r) return null;
@@ -1538,7 +1549,8 @@
       // a person's message counts only when it's another person's @mention of you (#418) or
       // @humans (#138); otherwise a person's messages are left out, as they were before (#109).
       // What this person already read (the broker's mark, §55.8) never counts again.
-      const unseen = m.id > (r.seenId || 0);
+      // A room they are not a member of counts nothing at all: they read it, it doesn't ping them (§62).
+      const unseen = m.id > (r.seenId || 0) && isMember(r);
       if (unseen && m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
         else r.quiet = true;                     // other agent chatter: a quiet marker, no number
@@ -1581,35 +1593,94 @@
   }
 
   // ------------------------------------------------------- sidebar, title
+  // One room's row in the sidebar. A room they are a member of has its red count, "joined with <agent>" the
+  // first time (§62), or a quiet dot. One under Other rooms pings them for nothing, so it has no count: what
+  // is live there (a call), or how many people are in it.
+  function roomButton(r, other) {
+    const name = r.name;
+    const b = btn('room' + (other ? ' room-other' : ''));
+    b.dataset.room = name;
+    b.dataset.focus = 'room:' + name;  // a redraw (a message, a join) keeps the keyboard on it
+    b.title = name;
+    if (name === state.active) b.setAttribute('aria-current', 'page');
+    b.append(icon(r.private ? 'lock' : 'hash'), el('span', 'room-name', name.replace(/^#/, '')));
+    if (r.private) b.title = name + ' (private: only its people see it)';
+    if (other) {
+      let aside = '';
+      if (callOf(r)) {
+        aside = 'call';
+        b.append(el('span', 'room-aside room-live', 'call'));
+      } else if (r.people && r.people.length) {
+        aside = plural(r.people.length, 'person', 'people');
+        b.append(el('span', 'room-aside', aside));
+      }
+      b.title = name + ': you are not a member' + (aside === 'call' ? ' (a call is live)' : aside ? ' (' + aside + ')' : '');
+    } else if (r.unread > 0 && name !== state.active) {
+      const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
+      badge.setAttribute('aria-label', plural(r.unread, 'message', 'messages') + ' for you');
+      b.append(badge);
+    } else if (r.joinedWith && name !== state.active && state.everyone.length > 1) {
+      b.append(el('span', 'room-aside', 'joined with ' + r.joinedWith));
+      b.title = name + ': you are a member because ' + r.joinedWith + ' joined it';
+    } else if (r.quiet && name !== state.active) {
+      const dot = el('span', 'dot quiet');
+      dot.setAttribute('aria-label', 'new activity');
+      b.append(dot);
+    }
+    b.addEventListener('click', function () {
+      setNav(false);
+      selectRoom(name);
+    });
+    return b;
+  }
+
   function renderTabs() {
     const tabs = $('tabs');
+    const focused = focusKey(tabs);
     tabs.replaceChildren();
     const names = Array.from(state.rooms.keys()).sort();
     let total = 0;
+    const others = [];
     for (const name of names) {
       const r = state.rooms.get(name);
-      const b = btn('room');
-      b.dataset.room = name;
-      b.title = name;
-      if (name === state.active) b.setAttribute('aria-current', 'page');
-      b.append(icon(r.private ? 'lock' : 'hash'), el('span', 'room-name', name.replace(/^#/, '')));
-      if (r.private) b.title = name + ' (private: only its people see it)';
-      if (r.unread > 0 && name !== state.active) {
-        total += r.unread;
-        const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
-        badge.setAttribute('aria-label', plural(r.unread, 'message', 'messages') + ' for you');
-        b.append(badge);
-      } else if (r.quiet && name !== state.active) {
-        const dot = el('span', 'dot quiet');
-        dot.setAttribute('aria-label', 'new activity');
-        b.append(dot);
-      }
-      b.addEventListener('click', function () {
-        setNav(false);
-        selectRoom(name);
-      });
-      tabs.append(b);
+      if (!isMember(r)) { others.push(r); continue; }
+      if (r.unread > 0 && name !== state.active) total += r.unread;
+      tabs.append(roomButton(r, false));
     }
+    if (others.length) {
+      // Other rooms (§62): the public rooms they are not a member of, folded under one row. It is open by
+      // itself when they are in none, and opened when one of them is the room on screen (selectRoom).
+      const mine = names.length - others.length;
+      const open = state.otherOpen === null ? mine === 0 : state.otherOpen;
+      const toggle = btn('room room-other-toggle' + (open ? ' open' : ''));
+      toggle.id = 'other-rooms';
+      toggle.dataset.focus = 'other-rooms';
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.append(icon('chev-right'), el('span', 'room-name', 'Other rooms (' + others.length + ')'));
+      toggle.title = open ? 'Hide the rooms you are not a member of'
+        : 'Public rooms you are not a member of: read one, or join it';
+      const live = others.filter(function (r) { return !!callOf(r); });
+      if (!open && live.length) {
+        const dot = el('span', 'dot live');
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', (live.length === 1 ? 'a call is live in ' + live[0].name
+          : 'calls are live in ' + live.length + ' of them'));
+        toggle.append(dot);
+      }
+      toggle.addEventListener('click', function () {
+        state.otherOpen = !open;
+        renderTabs();
+      });
+      tabs.append(toggle);
+      if (open) {
+        const list = el('div', 'room-list other-rooms');
+        list.id = 'other-rooms-list';
+        toggle.setAttribute('aria-controls', 'other-rooms-list');
+        for (const r of others) list.append(roomButton(r, true));
+        tabs.append(list);
+      }
+    }
+    refocus(tabs, focused);
     const rb = $('rooms-badge');
     rb.textContent = total > 99 ? '99+' : String(total);
     rb.classList.toggle('hidden', total === 0);
@@ -1814,18 +1885,18 @@
     renderCalls();  // after People and Agents, and in the Members total
   }
 
-  // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person.
-  // A public room on a hosted broker lists everyone signed up, since everyone sees it (#354):
-  // before, it showed nobody, and the other people in a room were only names on messages. Each
-  // row has a dot for a page open now, and those people come first. A desktop broker has one
-  // person and shows no list.
+  // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person. A public
+  // room's are its members (§62): who @humans, the unread badges and notifications reach there, with Leave
+  // on your own row and Add a person for a member. Before #843 a public room listed everyone signed up
+  // (#354). Each row has a dot for a page open now, and those people come first. A broker with one person
+  // shows no list.
   const PEOPLE_SHOWN = 10;  // a longer public list starts with this many, then "N more"
 
   function renderRoomPeople() {
     const r = activeRoom();
     const box = $('room-people');
     const isPrivate = !!(r && r.private && r.people);
-    const everyone = isPrivate ? r.people : (r && state.everyone.length > 1 ? state.everyone : null);
+    const everyone = r && Array.isArray(r.people) && (isPrivate || state.everyone.length > 1) ? r.people : null;
     const show = !!everyone;
     box.classList.toggle('hidden', !show);
     if (!show) { box.replaceChildren(); return; }
@@ -1835,6 +1906,7 @@
       'People (' + everyone.length + ')' + (isPrivate ? ' · private' : '') + (stale ? ' · last known' : ''));
     const list = el('ul', 'member-list');
     list.classList.toggle('stale', stale);
+    if (!everyone.length) list.append(el('li', 'member-empty', 'Nobody has joined ' + r.name + ' yet.'));
     const here = function (n) { return state.online.has(n); };
     // those with a page open first, each group in the order it came
     const ordered = everyone.filter(here).concat(everyone.filter(function (n) { return !here(n); }));
@@ -1849,12 +1921,20 @@
       const names = el('span', 'p-names');
       appendShownPerson(names, n);  // the real name, then @username; data-name stays the username
       li.append(dot, names);
+      const mine = !!state.me && n === state.me.human;
       if (!isPrivate) {
-        if (state.me && n === state.me.human) li.append(el('span', 'p-you', 'you'));
+        if (mine) li.append(el('span', 'p-you', 'you'));
+        if (mine && canLeave(r)) {
+          const leave = btn('btn btn-ghost-sm', 'Leave');
+          leave.id = 'room-people-leave';
+          leave.dataset.focus = 'room-person:' + n;
+          leave.setAttribute('aria-label', 'Leave ' + r.name);
+          leave.addEventListener('click', function () { leaveRoom(r); });
+          li.append(leave);
+        }
         list.append(li);
         continue;
       }
-      const mine = state.me && n === state.me.human;
       const b = btn('btn btn-ghost-sm', mine ? 'Leave' : 'Remove');
       b.dataset.focus = 'room-person:' + n;
       b.setAttribute('aria-label', mine ? 'Leave ' + r.name : 'Remove ' + n + ' from ' + r.name);
@@ -1862,13 +1942,8 @@
       li.append(b);
       list.append(li);
     }
-    if (isPrivate) {
-      const add = btn('btn invite-btn', 'Add a person');
-      add.id = 'room-people-add';
-      add.dataset.focus = 'room-people-add';
-      add.addEventListener('click', function () { addRoomPerson(r); });
-      box.replaceChildren(title, list, add);
-    } else if (ordered.length > PEOPLE_SHOWN) {
+    const parts = [title, list];
+    if (!isPrivate && ordered.length > PEOPLE_SHOWN) {
       const more = btn('btn btn-ghost-sm', cut ? (ordered.length - PEOPLE_SHOWN) + ' more' : 'Show fewer');
       more.id = 'room-people-more';
       more.dataset.focus = 'room-people-more';
@@ -1877,8 +1952,20 @@
         state.peopleAll = !state.peopleAll;
         renderRoomPeople();
       });
-      box.replaceChildren(title, list, more);
-    } else box.replaceChildren(title, list);
+      parts.push(more);
+    }
+    if (!isPrivate) {
+      parts.push(el('p', 'people-note',
+        'People here get @humans, unread badges and notifications. Agents still answer to everyone.'));
+    }
+    if (isPrivate || isMember(r)) {
+      const add = btn('btn invite-btn', 'Add a person');
+      add.id = 'room-people-add';
+      add.dataset.focus = 'room-people-add';
+      add.addEventListener('click', function () { addRoomPerson(r); });
+      parts.push(add);
+    }
+    box.replaceChildren(...parts);
     refocus(box, focused);
   }
 
@@ -1888,8 +1975,10 @@
         { action: action, name: name });
       if (res.room) { r.people = res.room.people; renderRoomPeople(); }
       await loadRooms().catch(function () {});
+      return true;
     } catch (e) {
       await openDialog({ kind: 'notice', title: 'People not changed', body: String(e.message || e), action: 'Close' });
+      return false;
     }
   }
 
@@ -1898,15 +1987,86 @@
     try {
       everyone = (await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/members')).people || [];
     } catch (e) { everyone = []; }
-    const others = everyone.filter(function (n) { return r.people.indexOf(n) < 0; });
+    const others = everyone.filter(function (n) { return (r.people || []).indexOf(n) < 0; });
     if (!others.length) {
       await openDialog({ kind: 'notice', title: 'Everyone is in it', body: 'Everyone on this switchboard is in ' + r.name + ' already.', action: 'Close' });
       return;
     }
     const answer = await openDialog({ kind: 'person', title: 'Add a person to ' + r.name,
-      body: 'They see the room, its history and its agents, and their agents can join it.',
+      body: r.private ? 'They see the room, its history and its agents, and their agents can join it.'
+        : 'They get @humans, unread badges and notifications from ' + r.name + '. Agents there answer to them already.',
       people: others, action: 'Add' });
     if (answer) roomPeople(r, 'add', answer);
+  }
+
+  // ----------------------------------------------------- joining and leaving (§62)
+  // A public room they are not a member of is read-only: a Preview chip in the header and a Join bar in
+  // place of the composer. A member's room has the "..." menu with Leave (and Leave on their own row in
+  // Members). Called whenever the room on screen, the room list or the number of people changes.
+  function syncRoomActions() {
+    const r = activeRoom();
+    const preview = !!r && !isMember(r);
+    $('composer').classList.toggle('hidden', preview);
+    $('preview-bar').classList.toggle('hidden', !preview);
+    $('room-preview').classList.toggle('hidden', !preview);
+    if (r) {
+      $('preview-title').textContent = 'You’re viewing ' + r.name;
+      $('preview-join').textContent = 'Join ' + r.name;
+    }
+    const leave = canLeave(r);
+    $('room-menu-wrap').classList.toggle('hidden', !leave);
+    if (!leave) setRoomMenu(false);
+  }
+
+  function roomMenuOpen() { return !$('room-menu').classList.contains('hidden'); }
+
+  function setRoomMenu(open) {
+    const menu = $('room-menu');
+    const b = $('room-menu-btn');
+    const r = activeRoom();
+    if (!open || !canLeave(r)) {
+      menu.classList.add('hidden');
+      menu.replaceChildren();
+      b.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const leave = btn('menu-item menu-danger', 'Leave ' + r.name);
+    leave.id = 'room-menu-leave';
+    leave.setAttribute('role', 'menuitem');
+    leave.addEventListener('click', function () {
+      setRoomMenu(false);
+      leaveRoom(r);
+    });
+    menu.replaceChildren(el('div', 'group-label', r.name), leave);
+    menu.classList.remove('hidden');
+    b.setAttribute('aria-expanded', 'true');
+    leave.focus();
+  }
+
+  // Leave, after a confirm that says what changes. They stay in the room, now a preview, and the keyboard
+  // goes to its Join button.
+  async function leaveRoom(r) {
+    if (!state.me || !canLeave(r)) return;
+    const ok = await openDialog({ title: 'Leave ' + r.name + '?',
+      body: 'You will stop getting @humans, unread badges and notifications from ' + r.name +
+        '. Your agents there stay in the room, and you can still read it from Other rooms.',
+      note: 'Your unread count for ' + r.name + ' is cleared, and anything waiting on you there leaves Home.',
+      action: 'Leave ' + r.name, danger: true });
+    if (!ok) return;
+    if (r.name === state.active) state.otherOpen = true;  // the room on screen stays in view, under Other rooms
+    if (await roomPeople(r, 'remove', state.me.human) && r.name === state.active && !isMember(r)) {
+      $('preview-join').focus();
+    }
+  }
+
+  async function joinRoom() {
+    const r = activeRoom();
+    if (!r || !state.me || isMember(r)) return;
+    const b = $('preview-join');
+    b.disabled = true;
+    const ok = await roomPeople(r, 'add', state.me.human);
+    b.disabled = false;
+    if (ok && r.name === state.active && isMember(r)) $('input').focus();
   }
 
   // narrow: the Members pill (people icon, count, and a red badge for agents needing attention)
@@ -2242,6 +2402,7 @@
     if (state.active !== name) closeWhiteboard();
     state.active = name;
     const activeR = state.rooms.get(name);
+    if (!isMember(activeR)) state.otherOpen = true;  // its row stays in view, under Other rooms (§62)
     if (!state.around) {  // a window around a search result has not shown the room's latest
       markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
       activeR.unread = 0;
@@ -2259,7 +2420,9 @@
     renderBoard();
     loadBoard(state.rooms.get(name));
     renderComposerMentions();  // the known-names set just changed with the room
-    $('input').focus();
+    syncRoomActions();
+    // a room they only read has no composer: its Join button has the keyboard instead (§62)
+    (isMember(activeR) ? $('input') : $('preview-join')).focus();
   }
 
   // ------------------------------------------------ pane, drawers, sheets
@@ -3728,6 +3891,7 @@
       if (!r) return;
       r.settings = f.settings || {};
       if (f.room === state.active) renderStatus();
+      if (!isMember(r)) renderTabs();  // a call there shows under Other rooms (§62)
     } else if (f.t === 'pins') {
       if (!r) return;
       r.pins = Array.isArray(f.pins) ? f.pins : [];
@@ -3775,6 +3939,8 @@
       }
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
+      renderTabs();  // "joined with" shows only with people (§62)
+      syncRoomActions();  // a second person makes Leave possible, the last other one takes it away (§62)
       noteOwnAdmin(f);
     }
   }
@@ -7503,9 +7669,12 @@
   // has, so a stale or repeated post does nothing. A question card counts only messages after it. `refresh`: ask
   // for Home again once it is stored, so the sidebar's count drops (Home itself waits for it in loadHome).
   function markRoomSeen(r, refresh) {
-    if (!r || !r.lastId || (r.seenSent || 0) >= r.lastId) return;
-    const upto = r.lastId;
-    r.seenSent = upto;
+    // "joined with <agent>" (§62) is seen once the room is opened, even with nothing new in it to mark
+    const note = !!(r && r.joinedWith);
+    if (!r || (!note && (!r.lastId || (r.seenSent || 0) >= r.lastId))) return;
+    const upto = r.lastId || 0;
+    r.seenSent = Math.max(r.seenSent || 0, upto);
+    r.joinedWith = '';
     const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
     state.seenWait.add(p);
     p.then(function () { r.seenId = Math.max(r.seenId || 0, upto); }, function () { if (r.seenSent === upto) r.seenSent = 0; }).then(function () {
@@ -8168,7 +8337,8 @@
   function renderHome(error, again, focusKey) {
     const root = $('home');
     const d = state.homeData;
-    const rooms = Array.from(state.rooms.values()).map(function (r) {
+    // the rooms the sidebar lists as theirs (§62): Other rooms are not on Home
+    const rooms = Array.from(state.rooms.values()).filter(isMember).map(function (r) {
       const last = roomSummary(r);
       return { r: r, last: last, ts: last ? last.ts : 0 };
     }).sort(function (a, b) { return b.ts - a.ts || (a.r.name < b.r.name ? -1 : 1); });
@@ -8329,6 +8499,11 @@
       closeSearch(false);
       updateTitle();
       searchFocusBack();
+      return;
+    }
+    if (roomMenuOpen()) {  // the room's menu (§62): closed, and the keyboard back on its button
+      setRoomMenu(false);
+      $('room-menu-btn').focus();
       return;
     }
     const ui = state.inspUi;
@@ -8545,6 +8720,8 @@
       submitText('/meeting share stop');
     });
     $('room-rules').addEventListener('click', openRoomRules);
+    $('room-menu-btn').addEventListener('click', function () { setRoomMenu(!roomMenuOpen()); });
+    $('preview-join').addEventListener('click', joinRoom);
     $('room-wake').addEventListener('click', openRoomWake);
     $('room-calls').addEventListener('click', openRoomCalls);
     if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
@@ -8595,6 +8772,12 @@
         ev.preventDefault();  // "/" focuses the search box, unless a field has it (the composer's own "/" is a command)
         focusSearch();
       }
+    });
+    // a click outside the room's menu closes it (§62)
+    document.addEventListener('click', function (ev) {
+      const t = ev.target;
+      if (!roomMenuOpen() || (t && typeof t.closest === 'function' && t.closest('#room-menu-wrap'))) return;
+      setRoomMenu(false);
     });
     // a click outside the catch-up menu closes it (click-driven: closest is fine here)
     document.addEventListener('click', function (ev) {
@@ -9191,6 +9374,10 @@
       r.pins = Array.isArray(l.pins) ? l.pins : [];  // the room's pinned messages (#292)
       r.private = !!l.private;  // seen only by its people (§44)
       r.people = Array.isArray(l.people) ? l.people : null;
+      // whether this person is a member, pinged here, and the agent that made them one until they open it (§62)
+      r.member = l.member !== false;
+      r.joinedWith = r.member && typeof l.joined_with === 'string' ? l.joined_with : '';
+      if (!r.member) { r.unread = 0; r.quiet = false; }  // a room they left, or never joined, counts nothing
       // how far this person has read the room, on any browser (§55.8): older messages the history replays
       // don't count toward the badge again, and the page doesn't post a mark it already has
       const seen = typeof l.seen === 'number' && l.seen > 0 ? l.seen : 0;
@@ -9224,6 +9411,7 @@
       if (activeRoom()) markPinned(activeRoom());
     }
     if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
+    syncRoomActions();  // joined or left (§62): the composer or the Join bar, and the menu
     return fresh;
   }
 

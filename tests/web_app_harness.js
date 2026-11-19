@@ -87,7 +87,8 @@ function makeWorld(rooms) {
         e.ownerDocument = document;
         // as index.html starts them
         if (['empty', 'closed-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home', 'usage'].includes(id)) e.classList.add('hidden');
+             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home', 'usage', 'preview-bar', 'room-preview',
+             'room-menu', 'room-menu-wrap'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);
@@ -126,6 +127,9 @@ function makeWorld(rooms) {
     const d = { id: r.id, name: r.name, slug: r.name.slice(1), created_at: r.created_at, members: 0, last_id: 0,
                 settings: {} };
     if (r.private) { d.private = true; d.people = r.people; }  // a private room lists its people (§44)
+    else if (r.people) d.people = r.people;  // a public room's members (§62)
+    if (r.member === false) d.member = false;  // a room this person is not a member of (§62)
+    if (r.joined_with) d.joined_with = r.joined_with;
     return d;
   }
 
@@ -171,6 +175,18 @@ function makeWorld(rooms) {
     if (method === 'POST' && mv) {
       server.moves.push(Object.assign({ room: decodeURIComponent(mv[1]) }, body));
       return function () { return [server.moveFails ? 400 : 200, server.moveFails ? { message: server.moveFails } : { ok: true, boards: [] }]; };
+    }
+    // join, add someone or leave a public room (§62): the listing follows, as the broker's does
+    const mp = /^\/api\/rooms\/([^/]+)\/people$/.exec(url);
+    if (method === 'POST' && mp) {
+      server.peopleCalls = (server.peopleCalls || []).concat([Object.assign({ room: decodeURIComponent(mp[1]) }, body)]);
+      const r = server.rooms.find(function (x) { return x.name === '#' + decodeURIComponent(mp[1]); });
+      if (r && body.name === 'alice') {
+        r.member = body.action === 'add';
+        r.joined_with = '';
+        r.people = (r.people || []).filter(function (n) { return n !== 'alice'; }).concat(r.member ? ['alice'] : []);
+      }
+      return function () { return [200, { text: 'ok', room: r ? roomDict(r) : null }]; };
     }
     if (method === 'GET' && url === '/api/people') {
       return function () { return [200, { people: server.people || [] }]; };
@@ -807,6 +823,65 @@ const SCENARIOS = {
     };
     seen.inspector = { alice: await inspector('claude-1'), bob: await inspector('codex-1'), none: await inspector('devin-1') };
     return seen;
+  },
+
+  // A public room's members (§62): the sidebar lists the rooms alice is in, with "joined with" the first time,
+  // and folds the rest under Other rooms, with a dot when a call is live in one; a message there counts
+  // nothing. Opening one is a preview with a Join bar in place of the composer; Join makes it hers, and Leave
+  // (the room's menu, then a confirm) makes it a preview again.
+  async room_members() {
+    const w = makeWorld([
+      { id: 1, name: '#build', created_at: 100, people: ['alice', 'bob'] },
+      { id: 2, name: '#infra', created_at: 100, people: ['alice'], joined_with: 'claude-2' },
+      { id: 3, name: '#ops', created_at: 100, member: false, people: ['bob', 'carol'] },
+      { id: 4, name: '#random', created_at: 100, member: false, people: ['bob'] },
+    ]);
+    w.location.hash = '#build';
+    const ws = await boot(w);
+    ws.deliver({ t: 'people', people: ['alice', 'bob', 'carol'], online: ['alice'] });
+    await settle();
+    const side = function () {
+      return w.$('tabs').children.map(function (c) {
+        if (c.id === 'other-rooms') {
+          const live = findAll(c, function (n) { return n.classList.contains('live'); }).length ? ':live' : '';
+          return 'toggle:' + c.textContent + (c.attrs['aria-expanded'] === 'true' ? ':open' : '') + live;
+        }
+        if (c.id === 'other-rooms-list') return c.children.map(function (b) { return b.dataset.room + '|' + b.textContent; });
+        return c.dataset.room + '|' + c.textContent;
+      });
+    };
+    const shown = function (id) { return !w.$(id).classList.contains('hidden'); };
+    const out = { start: side() };
+    ws.deliver({ t: 'msg', room: '#ops', msg: chat(10, 'claude-1', '@humans ship it?', { sender_kind: 'agent', mentions: ['humans'] }) });
+    ws.deliver({ t: 'msg', room: '#infra', msg: chat(11, 'claude-2', '@humans look', { sender_kind: 'agent', mentions: ['humans'] }) });
+    ws.deliver({ t: 'room', room: '#random', settings: { meeting: { state: 'live', platform: 'zoom', source: 'bot' } } });
+    await settle();
+    out.counted = { title: w.document.title, tabs: side() };
+    click(findAll(w.$('tabs'), function (n) { return n.id === 'other-rooms'; })[0]);
+    await settle();
+    out.open = side();
+    click(findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === '#ops'; })[0]);
+    await settle();
+    out.preview = { composer: shown('composer'), bar: shown('preview-bar'), chip: shown('room-preview'),
+                    menu: shown('room-menu-wrap'), title: w.$('preview-title').textContent,
+                    join: w.$('preview-join').textContent };
+    click(w.$('preview-join'));
+    await settle();
+    out.joined = { composer: shown('composer'), bar: shown('preview-bar'), menu: shown('room-menu-wrap'),
+                   tabs: side(), calls: w.server.peopleCalls.slice() };
+    click(w.$('room-menu-btn'));
+    await settle();
+    const leave = findAll(w.$('room-menu'), function (n) { return n.id === 'room-menu-leave'; })[0];
+    out.menu = { open: shown('room-menu'), item: leave && leave.textContent };
+    click(leave);
+    await settle();
+    const dialog = w.$('app-dialog');
+    out.confirm = dialog.textContent;
+    click(findAll(dialog, function (n) { return n.id === 'app-dialog-action'; })[0]);
+    await settle();
+    out.left = { composer: shown('composer'), bar: shown('preview-bar'), menu: shown('room-menu-wrap'),
+                 calls: w.server.peopleCalls.slice(1), tabs: side() };
+    return out;
   },
 
   // The call as a member (#623): a room frame that carries an open call makes a Calls row after the agents
@@ -1695,7 +1770,8 @@ const SCENARIOS = {
   // option id, what choosing inserts). Agents and a system line stay the name they posted under.
   // A later people frame with full_names redraws an open page. Typing the real name matches.
   async real_names_show() {
-    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    // its members (§62): a public room's People list is who is in it
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100, people: ['alice', 'bob-lee', 'carol'] }]);
     w.server.me = {
       human: 'alice', admin: false, test_mode: false,
       full_names: { alice: 'Alice Ng', 'bob-lee': 'Bob Lee' },

@@ -54,8 +54,12 @@ def hosted(playwright: Any, tmp_path_factory: pytest.TempPathFactory) -> Iterato
             assert added.status_code == 200, added.text
             admin = c.cookies.get("switchboard_session")
         assert admin
+        bob = person_cookie((b, admin), "bob")
+        with httpx.Client(base_url=origin, headers=h, cookies={"switchboard_session": bob}) as c:
+            # bob is in #build: a public room pings only its members (§62)
+            assert c.post("/api/rooms/build/people", json={"action": "add", "name": "bob"}).status_code == 200
         try:
-            yield Hosted(b, admin, person_cookie((b, admin), "bob"))
+            yield Hosted(b, admin, bob)
         finally:
             b.stop()
             shutil.rmtree(home, ignore_errors=True)
@@ -143,6 +147,7 @@ def room_of_its_own(hosted: Hosted, name: str) -> Iterator[None]:
     """A new public room, closed again after the test: a page replays a room's history, so a
     mention left in it would count in the next test's badges and title."""
     post(hosted, hosted.admin, "/api/rooms", {"name": f"#{name}"})
+    post(hosted, hosted.bob, f"/api/rooms/{name}/people", {"action": "add", "name": "bob"})  # a member (§62)
     try:
         yield
     finally:
