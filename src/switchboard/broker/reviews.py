@@ -16,7 +16,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from switchboard import reviews
+from switchboard import review_stats, reviews
 from switchboard.models import Room
 from switchboard.reviews import ReviewError
 
@@ -112,18 +112,8 @@ class Boards:
         return self.board(room, rv)
 
     def _settled_at(self, room: Room, rv: dict[str, Any]) -> float | None:
-        items = self.store.review_items(rv["id"])
-        if not items or not reviews.settled(items):
-            return None
-        times = {}
-        for event in self.store.review_events(room.id, rv["id"], rv["opened_at"]):
-            if event.data.get("to") in ("answered", "confirmed", "dropped", "deferred") or (
-                event.data.get("to") == "fixed" and event.data.get("person")
-            ):
-                times[event.data.get("item")] = event.ts
-        if all(item.label in times for item in items):
-            return max(times[item.label] for item in items)
-        return None
+        events = [(e.ts, e.data) for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+        return review_stats.settled_at(self.store.review_items(rv["id"]), events)
 
     def board(self, room: Room, rv: dict[str, Any]) -> dict[str, Any]:
         """One board of the room as data, open or closed: the review, its items and whether it's

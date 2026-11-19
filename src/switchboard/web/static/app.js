@@ -9515,6 +9515,101 @@
     return [today, week];
   }
 
+  // A span of seconds the way a person reads it: "40 s", "12 min", "3.5 h", "2 d". Anything that is
+  // not a finite, non-negative number is not shown (the broker sends null when there is no data).
+  function usageSpan(v) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
+    const one = function (n) { return String(Math.round(n * 10) / 10); };
+    if (v < 60) return Math.round(v) + ' s';
+    if (v < 3600) return Math.round(v / 60) + ' min';
+    if (v < 86400) return one(v / 3600) + ' h';
+    return one(v / 86400) + ' d';
+  }
+
+  // The lines of one window of the review figures (#863, §61.5). A window with nothing says so.
+  function reviewLines(w) {
+    w = w || {};
+    const lines = [];
+    const opened = whole(w.opened), settled = whole(w.settled), raised = whole(w.raised);
+    const reopened = whole(w.reopened), merged = whole(w.merged), unknown = whole(w.unknown);
+    if (opened || settled) {
+      let t = 'Boards: ' + opened + ' opened, ' + settled + ' settled';
+      const span = usageSpan(w.settle_s);
+      if (span) t += ', median ' + span + ' to settle';
+      lines.push(t);
+    }
+    if (raised) {
+      let t = 'Findings: ' + raised + ' raised, ' + whole(w.confirmed) + ' confirmed, '
+        + whole(w.contested) + ' contested, ' + whole(w.dropped) + ' dropped';
+      if (typeof w.share_confirmed === 'number' && Number.isFinite(w.share_confirmed)) {
+        t += ' \u00b7 ' + Math.round(w.share_confirmed * 100) + '% confirmed';
+      }
+      lines.push(t);
+    }
+    if (reopened || settled) {
+      let t = 'Fixes: ' + reopened + ' reopened';
+      if (typeof w.heads === 'number' && Number.isFinite(w.heads)) {
+        t += ', median ' + (Math.round(w.heads * 10) / 10) + (w.heads === 1 ? ' commit' : ' commits') + ' before settling';
+      }
+      lines.push(t);
+    }
+    const stages = [['first finding', w.first_finding_s], ['settled', w.to_settled_s], ['merged', w.to_merged_s]]
+      .map(function (s) { return [s[0], usageSpan(s[1])]; })
+      .filter(function (s) { return s[1]; });
+    if (stages.length) {
+      lines.push('Time to merge: ' + stages.map(function (s) { return s[0] + ' ' + s[1]; }).join(' \u2192 '));
+    }
+    if (merged || unknown) lines.push('Merged: ' + merged + ' reported, ' + unknown + ' unknown');
+    return lines.length ? lines : ['No review activity'];
+  }
+
+  function reviewWindow(title, w) {
+    const box = el('div', 'usage-counts usage-review');
+    box.append(el('strong', 'usage-review-h', title));
+    for (const t of reviewLines(w)) box.append(el('span', 'usage-review-line', t));
+    return box;
+  }
+
+  function renderReviews(root, reviews) {
+    root.append(el('h2', 'usage-h', 'Reviews'));
+    root.append(el('p', 'usage-note', 'How review boards went. A finding counts in the window it was raised in, '
+      + 'for the agent that raised it. The share confirmed is confirmed over confirmed plus dropped: a rough '
+      + 'measure of a reviewer\u2019s precision. Merged is what an agent reported, so it reads unknown until then.'));
+    const rooms = reviews && Array.isArray(reviews.rooms) ? reviews.rooms : [];
+    const agents = reviews && Array.isArray(reviews.agents) ? reviews.agents : [];
+    if (!rooms.length) {
+      root.append(el('p', 'usage-none', 'No review board moved in the last 7 days.'));
+      return;
+    }
+    for (const [id, title, rows] of [['usage-review-rooms', 'By room', rooms], ['usage-review-agents', 'By agent', agents]]) {
+      root.append(el('h3', 'usage-h3', title));
+      if (!rows.length) {
+        root.append(el('p', 'usage-none', 'No agent held or raised anything.'));
+        continue;
+      }
+      const list = el('ol', 'usage-list');
+      list.id = id;
+      for (const row of rows) {
+        const li = el('li');
+        const line = el('div', 'usage-row usage-review-row');
+        const who = el('div', 'usage-name');
+        if (row.room !== undefined) {
+          who.textContent = label(row.name || '', row.host || '') + ' \u00b7 ' + harnessOf(row.harness)[1];
+          const room = el('div', 'usage-name');
+          room.append(usageJump(typeof row.room === 'string' ? row.room : ''));
+          line.append(who, room);
+        } else {
+          who.append(usageJump(typeof row.name === 'string' ? row.name : ''));
+          line.append(who, el('div'));
+        }
+        line.append(reviewWindow('Today', row.today), reviewWindow('7 days', row.week));
+        li.append(line);
+        list.append(li);
+      }
+      root.append(list);
+    }
+  }
+
   function renderUsage() {
     const root = $('usage');
     root.replaceChildren();
@@ -9583,6 +9678,7 @@
       }
       root.append(list);
     }
+    renderReviews(root, data.reviews);
   }
 
   function showUsage() {
