@@ -56,8 +56,9 @@ def test_every_download_is_a_pinned_checksummed_archive() -> None:
     assert set(digests) == {"UV_SHA256_X86_64", "UV_SHA256_AARCH64", "NODE_SHA256_X64", "NODE_SHA256_ARM64"}
     # curl appears only inside fetch(), which checks the SHA-256 before anything uses the file
     assert [line.strip() for line in text.splitlines() if "curl " in line] == ['curl -fsSL "$2" -o "$tmp/$1"']
-    assert 'sha256sum -c --quiet -' in text
-    assert "| sh" not in text and "| bash" not in text
+    assert "sha256sum -c --quiet -" in text
+    # nothing downloaded is piped into a shell (`| sha256sum` is the check, not a shell)
+    assert not re.search(r"\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b", text)
     assert "latest" not in text
     for call in re.findall(r"^\s*fetch (\S+) \"([^\"]+)\" \"\$(\w+)\"$", text, re.MULTILINE):
         assert "$UV_VERSION" in call[1] or "$NODE_VERSION" in call[1], call
