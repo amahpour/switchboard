@@ -44,7 +44,6 @@ A failing test leaves a Playwright trace and a screenshot of each open page in `
 ```bash
 docker build -t switchboard:dev -f deploy/image/Dockerfile .
 SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # about 20 seconds; unset, it builds switchboard:test itself
-uv run pytest -m compat tests/compat/test_oldest_release.py   # the newest plugin against a real v1.0.0 broker; needs the tag (git fetch --tags), no network
 ```
 
 The same image job also checks Litestream recovery against MinIO (#689): an old schema is replicated,
@@ -160,6 +159,16 @@ SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<file> \
 - **The result** is printed as a table and written, as JSON and Markdown, into `$SWITCHBOARD_SELFTEST_OUT` (or a temp folder the run names). A step with words passes on 60% of the expected content words, because speech-to-text of text-to-speech is close, not exact; a step that can't start because an earlier one failed counts as failed. The test fails if any step does, and names them.
 - **Whatever happens,** both bots leave the call and both containers are removed, also when the run is stopped with SIGTERM. A run killed harder can leave containers: `docker ps -a --filter label=switchboard-selftest` lists them, and `docker rm -f <name>` removes one.
 - **`SWITCHBOARD_LIVE=all` does not include it.** It needs a call, and a call needs an account, so only `meeting` runs it. A plain `pytest` skips it with the line that says how. `tests/unit/test_meeting_selftest.py` runs on every run and checks everything about it that needs no call: the word comparison, the link file's checks, the scrubbing, when a failed step keeps the logs, and the report. It never runs in CI.
+
+### Plugin and server compatibility (opt-in real run)
+
+The oldest release of the major is also run for real, locally (#850). It needs the release's git tag in your checkout (`git fetch --tags`) and `curl`, and no network or Docker; CI does the offline half on every pull request (it fetches the tag itself):
+
+```bash
+uv run pytest -m compat tests/compat   # the newest plugin's listener against a real v1.0.0 broker run from its tag
+```
+
+When the major goes up, move `tests/fixtures/compat/` and the tag the `Fetch the oldest release` step in `.github/workflows/test.yml` fetches to the new major's first release.
 
 ### Evals (real agents, graded from the database, opt-in)
 

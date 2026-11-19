@@ -94,6 +94,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
+      - name: Fetch the oldest release of this major (the plugin compatibility check, #850)
+        run: git fetch --no-tags --depth=1 origin +refs/tags/v1.0.0:refs/tags/v1.0.0
       - uses: ./.github/actions/setup-uv-python
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
@@ -139,6 +141,9 @@ jobs:
       # the Windows scripts' tests (tests/integration/test_agent_plugins.py) run under pwsh, which
       # GitHub's runners have; where it is missing they skip, and here that fails the run instead
       SWITCHBOARD_REQUIRE_PWSH: "1"
+      # the compatibility check (tests/integration/test_plugin_server_compat.py) compares its fixtures with
+      # the oldest release of this major, fetched below; a missing tag fails the run instead of skipping
+      SWITCHBOARD_REQUIRE_COMPAT_TAG: "1"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:

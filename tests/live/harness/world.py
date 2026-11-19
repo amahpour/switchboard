@@ -86,6 +86,7 @@ class Broker:
         self.home = self.base / "home"
         self.port = 0
         self.proc: subprocess.Popen[bytes] | None = None
+        self.version = ""  # what the broker's own ``sys.ping`` reports
         self.web: httpx.Client | None = None
         self.hdr: dict[str, str] = {}
         self.url = ""
@@ -137,6 +138,7 @@ class Broker:
             info = ping(self.paths.sock, timeout=1.0)
             if info:
                 self.port = info["port"]
+                self.version = str(info.get("version", ""))
                 break
             if self.proc.poll() is not None:
                 break

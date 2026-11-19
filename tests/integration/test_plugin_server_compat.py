@@ -15,18 +15,34 @@ fixtures are for a major other than the package's, so the move is not forgotten.
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 import pytest
 from conftest import InProcBroker, child_env
-from test_agent_plugins import CLAUDE_PLUGIN, Stub, claude_hooks, impl, run_listen  # noqa: F401
-from test_agents_http import make_token
+from test_agent_plugins import (  # noqa: F401
+    CLAUDE_PLUGIN,
+    Stub,
+    claude_hooks,
+    fill,
+    impl,
+    load,
+    run_listen,
+    run_session,
+)
+from test_agent_plugins import (
+    FIXTURES as PAYLOADS,
+)
+from test_agents_http import make_token, sse_result
 from test_agents_http_claude import SESSION_1, Claude
 from test_agents_http_wake import participant, until
 
@@ -47,37 +63,93 @@ def major(version: str) -> int:
     return int(version.split(".")[0])
 
 
-def test_the_fixtures_are_the_oldest_release_of_the_current_major() -> None:
-    """The fixtures are for this package's major, and are the release's bytes where the tag is in
-    the checkout (a developer's; CI's shallow clone has no tags). A fixture for another major would
-    check nothing; one edited by hand would check what nobody ever shipped. Fails after a major bump
-    until the fixtures are replaced, and if a fixture file differs from the tag."""
+def git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True)
+
+
+def tag_is_here() -> bool:
+    """Whether the oldest release's tag is in this checkout. A developer's usually is; CI fetches it and
+    sets SWITCHBOARD_REQUIRE_COMPAT_TAG=1 (as for PWSH), so a missing tag fails there."""
+    if git("rev-parse", "-q", "--verify", f"refs/tags/{TAG}").returncode == 0:
+        return True
+    if os.environ.get("SWITCHBOARD_REQUIRE_COMPAT_TAG") == "1":
+        pytest.fail(
+            f"{TAG} is not in this checkout, and SWITCHBOARD_REQUIRE_COMPAT_TAG=1 says CI must have it"
+        )
+    return False
+
+
+TAG = f"v{OLD_SERVER['release']}"
+SURFACE = """
+import asyncio, json, sys
+sys.path.insert(0, sys.argv[1] + "/src")
+from fastmcp import Client
+import switchboard
+from switchboard.mcp import server as srv
+from switchboard.broker import agent_http
+from switchboard.broker.reviews import ACTIONS as R
+from switchboard.board import ACTIONS as B
+class Backend:
+    harness = "claude"
+async def main():
+    async with Client(srv.build_server(Backend()), mode="legacy") as c:
+        tools = await c.list_tools()
+    print(json.dumps({"release": switchboard.__version__,
+      "tools": {t.name: {"properties": sorted(t.input_schema["properties"]),
+                         "required": sorted(t.input_schema.get("required", []))} for t in tools},
+      "review_actions": list(R), "board_actions": list(B), "hook_fields": sorted(agent_http.HOOK_FIELDS),
+      "listen_path": agent_http.LISTEN_PATH, "session_path": agent_http.SESSION_PATH,
+      "session_fields": list(agent_http.SESSION_FIELDS)}))
+asyncio.run(main())
+"""
+
+
+def test_the_fixtures_are_the_oldest_release_of_the_current_major(tmp_path: Path) -> None:
+    """The fixtures are for this package's major, and are what the release shipped: where the tag is in the
+    checkout (CI fetches it and requires it), its plugin files are compared byte for byte, and the recorded
+    tool surface and listener contract are derived again from the tag's own source and must equal the JSON.
+    A fixture edited by hand, to make a compatibility check pass, fails here. A fixture for another major
+    fails after a major bump, until the fixtures move to the new major's first release."""
     assert major(OLD_SERVER["release"]) == major(__version__), (
         "move the fixtures to the new major's first release"
     )
     assert OLD_SERVER["release"] == f"{major(__version__)}.0.0"
-    tag = f"v{OLD_SERVER['release']}"
-    have = subprocess.run(
-        ["git", "-C", str(ROOT), "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], capture_output=True
-    )
-    if have.returncode != 0:
-        pytest.skip(f"{tag} is not in this checkout")
+    if not tag_is_here():
+        pytest.skip(f"{TAG} is not in this checkout")
     for rel in ("bin/listen", "bin/session", "bin/headers", "hooks/hooks.json"):
-        shown = subprocess.run(
-            ["git", "-C", str(ROOT), "show", f"{tag}:plugins/claude/{rel}"], capture_output=True, check=True
-        ).stdout
+        shown = git("show", f"{TAG}:plugins/claude/{rel}").stdout
         assert (OLD_PLUGIN / rel).read_bytes() == shown, rel
+    archive = tmp_path / "src.tar"
+    assert git("archive", "-o", str(archive), TAG, "src").returncode == 0
+    subprocess.run(["tar", "-x", "-C", str(tmp_path), "-f", str(archive)], check=True)
+    out = subprocess.run(
+        [sys.executable, "-c", SURFACE, str(tmp_path)],
+        env={**child_env(), "PYTHONPATH": str(tmp_path / "src")},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    derived = json.loads(out)
+    for key, value in derived.items():
+        assert OLD_SERVER[key] == value, key
+    # the listener's statuses and the headers it reads, from the release's own source
+    listener = git("show", f"{TAG}:src/switchboard/broker/agent_http.py").stdout.decode()
+    for status in OLD_SERVER["listen"]["answers"]:
+        assert re.search(rf"\b{status}\b", listener), status
+    for header in OLD_SERVER["listen"]["headers_read"]:
+        assert f'b"{header}"' in listener, header
 
 
 def test_the_newest_server_still_offers_everything_the_oldest_release_did() -> None:
     """The contract's first half (#850): a release of the same major removes or renames no tool, no
-    action and no required parameter, keeps the listen path and takes every field a hook may send.
-    The oldest release's surface is recorded; this checkout must still hold all of it. Fails when a
-    change removes or renames one of them without a major version."""
+    action and no required parameter, keeps the listen and session paths and takes every field a hook may
+    send. The oldest release's surface is recorded (and checked against the tag, above); this checkout must
+    still hold all of it. Fails when a change removes or renames one of them without a major version."""
     import asyncio
 
     from fastmcp import Client
 
+    from switchboard.broker.agent_http import SESSION_FIELDS, SESSION_PATH
     from switchboard.mcp.server import build_server
 
     class Backend:
@@ -92,7 +164,6 @@ def test_the_newest_server_still_offers_everything_the_oldest_release_did() -> N
         assert name in now, f"the tool {name} existed in {OLD_SERVER['release']}"
         props = set(now[name]["properties"])
         assert set(old["properties"]) <= props, (name, set(old["properties"]) - props)
-        # a parameter that was required then is still named; it may only have become optional
         assert set(old["required"]) <= props, name
         # a parameter that is required now would have broken an agent written for the old tool
         assert set(now[name].get("required", [])) <= set(old["required"]) | {"ctx"}, (
@@ -102,6 +173,8 @@ def test_the_newest_server_still_offers_everything_the_oldest_release_did() -> N
     assert set(OLD_SERVER["board_actions"]) <= set(board_module.ACTIONS)
     assert set(OLD_SERVER["hook_fields"]) <= set(HOOK_FIELDS)
     assert LISTEN_PATH == OLD_SERVER["listen_path"]
+    assert SESSION_PATH == OLD_SERVER["session_path"]
+    assert set(OLD_SERVER["session_fields"]) <= set(SESSION_FIELDS)
     assert set(OLD_SERVER["tools"]) <= set(TOOL_NAMES)
 
 
@@ -109,53 +182,94 @@ def old_plugin_hooks() -> dict[str, list[dict[str, Any]]]:
     return json.loads((OLD_PLUGIN / "hooks" / "hooks.json").read_text())["hooks"]
 
 
-def test_the_oldest_plugins_hooks_send_only_what_the_newest_server_takes() -> None:
-    """Every mcp_tool hook of the oldest release's plugin calls the hook tool with fields this
-    server still takes, and the same tool name. Fails when a server drops a field an old plugin's
-    template still sends, which would make every old session's hook an error."""
-    seen = 0
-    for groups in old_plugin_hooks().values():
+# the recorded Claude Code payload each hook event of the old plugin is filled from (tests/fixtures/payloads)
+OLD_HOOK_PAYLOADS = {
+    "UserPromptSubmit": "UserPromptSubmit.json",
+    "PreToolUse": "PreToolUse_bash.json",
+    "PostToolUse": "PostToolUse_bash.json",
+    "PostToolUseFailure": "PostToolUseFailure_bash.json",
+    "Notification": "Notification_permission_prompt.json",
+    "Stop": "Stop.json",
+}
+
+
+def test_the_oldest_plugins_hooks_are_answered_by_the_newest_server(broker: InProcBroker) -> None:
+    """Every mcp_tool hook of the oldest release's plugin, filled from the recorded payload of its event
+    (empty where Claude Code leaves a field out) and sent as Claude Code sends a hook call, is answered by
+    this server's hook tool without an error, and uses only fields it still takes. Fails when the hook
+    tool's signature or an event's handling stops accepting what an old session's hooks send, which would
+    make every old session's hook an error."""
+    broker.call("room.create", {"name": "#build"})
+    claude = Claude(broker, make_token(broker, "laptop"), SESSION_1)
+    assert claude.call("join", room="#build", screen_name="claude-1")["ok"]
+    claude.call("read", room="#build")
+    rec = load(PAYLOADS / "mcp_http" / "claude_hook_post_tool.json")
+    sent = 0
+    for event, groups in old_plugin_hooks().items():
         for group in groups:
             for h in group["hooks"]:
                 if h["type"] != "mcp_tool":
                     continue
-                seen += 1
-                assert h["tool"] == "hook"
-                assert set(h["input"]) <= set(HOOK_FIELDS), set(h["input"]) - set(HOOK_FIELDS)
-    assert seen
+                assert h["tool"] == "hook" and set(h["input"]) <= set(HOOK_FIELDS), (event, h["input"])
+                payload = {**load(PAYLOADS / "payloads" / "claude" / OLD_HOOK_PAYLOADS[event])}
+                payload["session_id"] = SESSION_1
+                args = fill(h["input"], payload, missing="")
+                body = copy.deepcopy(rec["body"])
+                body["id"] = next(claude.ids)
+                body["params"] = {**body["params"], "arguments": args}
+                r = claude.post(body, rec["headers"], "hook")
+                assert r.status_code == 200, (event, r.text)
+                result = sse_result(r)
+                assert "error" not in result and not result["result"].get("isError"), (event, result)
+                sent += 1
+    assert sent >= 6
 
 
-def run_old_listen(
-    broker: InProcBroker, token: str, session: str, *, round_s: int | None = None
-) -> subprocess.CompletedProcess[str]:
-    """The oldest plugin's ``bin/listen``, started as Claude Code starts it (``sh``, the hook's input on
-    stdin, the plugin's options in the environment)."""
-    env = {
+def old_env(url: str, token: str, extra: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment Claude Code gives a command hook, with curl's own configuration pointed at an empty
+    folder: the archived scripts are byte-exact and call curl with its defaults, so a developer's
+    ``~/.curlrc`` must not reach them."""
+    home = Path(tempfile.mkdtemp(prefix="sb-compat-home-"))
+    return {
         "PATH": child_env()["PATH"],
-        "CLAUDE_PLUGIN_OPTION_SERVER_URL": broker.base,
+        "HOME": str(home),
+        "CURL_HOME": str(home),
+        "XDG_CONFIG_HOME": str(home),
+        "CLAUDE_PLUGIN_OPTION_SERVER_URL": url,
         "CLAUDE_PLUGIN_OPTION_TOKEN": token,
-        "CLAUDE_PID": str(__import__("os").getpid()),
+        "CLAUDE_PID": str(os.getpid()),
+        **(extra or {}),
     }
-    if round_s is not None:
-        env["SWITCHBOARD_LISTEN_S"] = str(round_s)
-    stop = json.dumps(
-        {"session_id": session, "hook_event_name": "Stop", "source": "", "stop_hook_active": False}
+
+
+def run_old_script(
+    name: str, url: str, token: str, session: str, event: str, *, round_s: int | None = None, **fields: str
+) -> subprocess.CompletedProcess[str]:
+    """The oldest plugin's ``bin/<name>``, started as Claude Code starts it (``sh``, the hook's input on
+    stdin, the plugin's options in the environment)."""
+    env = old_env(url, token, {"SWITCHBOARD_LISTEN_S": str(round_s)} if round_s is not None else None)
+    hook = json.dumps(
+        {"session_id": session, "hook_event_name": event, "source": "", "stop_hook_active": False, **fields}
     )
-    return subprocess.run(
-        ["sh", str(OLD_PLUGIN / "bin" / "listen")],
-        input=stop,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        return subprocess.run(
+            ["sh", str(OLD_PLUGIN / "bin" / name)],
+            input=hook,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    finally:
+        shutil.rmtree(env["HOME"], ignore_errors=True)
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="the listener needs curl")
-def test_the_oldest_plugins_listener_is_woken_by_the_newest_server(broker: InProcBroker) -> None:
-    """The oldest release's listener script, unchanged, parks on this server and exits 2 with the
-    message that wakes the session; with a wrong token, or for a session that never joined, it wakes
-    nothing. Fails when a protocol change (the endpoint, a header, a status) strands old plugins."""
+def test_the_oldest_plugins_scripts_work_against_the_newest_server(broker: InProcBroker) -> None:
+    """The oldest release's listener and session scripts, unchanged, against this server. The listener
+    parks and exits 2 with the message that wakes the session; with a wrong token, or for a session that
+    never joined, it wakes nothing. The session script's SessionEnd takes the session offline through
+    ``/mcp/session``. Fails when a protocol change (an endpoint, a header, a status) strands old plugins."""
     broker.call("room.create", {"name": "#build"})
     token = make_token(broker, "laptop")
     claude = Claude(broker, token, SESSION_1)
@@ -163,76 +277,152 @@ def test_the_oldest_plugins_listener_is_woken_by_the_newest_server(broker: InPro
     claude.call("read", room="#build")
     pid = participant(broker, "claude-1").id
     with ThreadPoolExecutor(1) as pool:
-        waiting = pool.submit(run_old_listen, broker, token, SESSION_1)
+        waiting = pool.submit(run_old_script, "listen", broker.base, token, SESSION_1, "Stop")
         until(lambda: bool(broker.on_loop(broker.state.engine.sinks.parks_for, pid)), timeout=30)
         broker.call("human.say", {"room": "#build", "text": "@claude-1 wake up"})
         r = waiting.result(60)
     assert r.returncode == 2 and "wake up" in r.stderr, r
-    refused = run_old_listen(broker, "sbat_" + "y" * 43, SESSION_1)
-    assert (refused.returncode, refused.stderr) == (0, ""), refused
-    nobody = run_old_listen(broker, token, "00000000-0000-4000-8000-0000000000ff")
+    refused = run_old_script("listen", broker.base, "sbat_" + "y" * 43, SESSION_1, "Stop")
+    assert refused.returncode == 2 and "401" in refused.stderr, refused  # with a home, a refusal is said once
+    nobody = run_old_script("listen", broker.base, token, "00000000-0000-4000-8000-0000000000ff", "Stop")
     assert (nobody.returncode, nobody.stderr) == (0, ""), nobody
+    ended = run_old_script("session", broker.base, token, SESSION_1, "SessionEnd", reason="prompt_input_exit")
+    assert (ended.returncode, ended.stdout, ended.stderr) == (0, "", ""), ended
+    until(lambda: participant(broker, "claude-1").status == "offline")
+
+
+def stood_in(status: int) -> tuple[int, str]:
+    """The oldest release's answer for a status, as the fixture records it."""
+    return status, OLD_SERVER["listen"]["answers"][str(status)]["body"]
+
+
+def check_old_server_would_accept(requests: list[tuple[str, str, dict[str, str], bytes]], path: str) -> None:
+    """What the oldest release's listener checked before it answered a wait: POST, its path, a bearer
+    token, the session header, and no Origin; its wait header a number. A stand-in that answered any
+    request would let a listener that dropped one of these pass."""
+    assert requests
+    for method, got_path, headers, _ in requests:
+        h = {k.lower(): v for k, v in headers.items()}
+        assert (method, got_path) == (OLD_SERVER["listen"]["method"], path)
+        assert h.get("authorization") == f"Bearer {TOKEN}", "the old server needs the bearer token"
+        assert h.get("x-switchboard-session") == SESSION_1, "the old server needs the session header"
+        assert h.get("x-switchboard-wait", "").isdigit()
+        assert h.get("x-switchboard-again") in ("0", "1")
+        assert "origin" not in h
+        sent = {k for k in h if k.startswith("x-switchboard") or k == "authorization"}
+        assert sent <= set(OLD_SERVER["listen"]["headers_read"]), sent - set(
+            OLD_SERVER["listen"]["headers_read"]
+        )
 
 
 @pytest.mark.usefixtures("impl")
 def test_the_newest_plugins_listener_speaks_the_oldest_servers_protocol(tmp_path: Path) -> None:
-    """A stand-in answers as the oldest release's listener did (``server-1.0.0.json``: 408 means
-    listen again, 200 is the message, 409 ends the listener quietly), and the newest plugin's listener
-    is run against it. It must wake on the message after a 408, must send only headers that release
-    read, and must end without waking on a 409. Fails when the plugin's script depends on a status
-    or a header that an older server of the same major does not have."""
-    read = set(OLD_SERVER["listen"]["headers_read"])
-    stub = Stub([(408, ""), (200, "the message")])
+    """A stand-in answers with the statuses and bodies the fixture records for the oldest release's
+    listener (408 listen again, 200 the message, 409 end quietly, 410 say who ended it), and the newest
+    plugin's listener is run against it. Every request is checked as that release would have checked it
+    (``check_old_server_would_accept``). Fails when the plugin's script depends on a status or a header an
+    older server of the same major lacks, or drops what that server requires."""
+    (tmp_path / "h").mkdir()
+    again, wake = stood_in(408), stood_in(200)
+    stub = Stub([again, wake])
     try:
-        r = run_listen(None, TOKEN, SESSION_1, url=stub.url, round_s=10)
+        r = run_listen(None, TOKEN, SESSION_1, url=stub.url, round_s=10, home=tmp_path / "h")
     finally:
         stub.close()
-    assert (r.returncode, r.stderr) == (2, "the message"), r
+    assert (r.returncode, r.stderr) == (2, wake[1]), r
     assert stub.again == ["0", "1"]
-    for method, path, headers, _ in stub.requests:
-        assert (method, path) == (OLD_SERVER["listen"]["method"], OLD_SERVER["listen_path"])
-        sent = {
-            k.lower()
-            for k in headers
-            if k.lower().startswith("x-switchboard") or k.lower() == "authorization"
-        }
-        assert sent <= read, sent - read
-    quiet = Stub([(409, '{"error":"nothing","message":"nothing to wake for"}')])
+    check_old_server_would_accept(stub.requests, OLD_SERVER["listen_path"])
+    quiet = Stub([stood_in(409)])
     try:
-        r = run_listen(None, TOKEN, SESSION_1, url=quiet.url, round_s=10)
+        r = run_listen(None, TOKEN, SESSION_1, url=quiet.url, round_s=10, home=tmp_path / "h")
     finally:
         quiet.close()
     assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), r
-    ended = Stub([(410, "another listener ended this session")])
+    ended = Stub([stood_in(410)])
+    data = tmp_path / "data"
+    data.mkdir()
     try:
-        (tmp_path / "data").mkdir()
-        r = run_listen(None, TOKEN, SESSION_1, url=ended.url, round_s=10, data=tmp_path / "data")
+        r = run_listen(None, TOKEN, SESSION_1, url=ended.url, round_s=10, data=data, home=tmp_path / "h")
     finally:
         ended.close()
-    assert r.returncode == 2 and "another listener ended this session" in r.stderr, r
+    assert r.returncode == 2 and stood_in(410)[1] in r.stderr, r
+
+
+@pytest.mark.usefixtures("impl")
+def test_the_newest_plugins_session_script_posts_what_the_oldest_server_reads(tmp_path: Path) -> None:
+    """The newest ``bin/session`` posts SessionStart and SessionEnd to the route and with the fields the
+    oldest release's ``/mcp/session`` read, and its bearer token. Fails when the script moves the route or
+    sends a field an older server of the same major would not know."""
+    (tmp_path / "h").mkdir()
+    stub = Stub([(200, "{}"), (200, "{}")])
+    try:
+        run_session(
+            None, TOKEN, SESSION_1, "SessionStart", url=stub.url, source="startup", home=tmp_path / "h"
+        )
+        run_session(
+            None,
+            TOKEN,
+            SESSION_1,
+            "SessionEnd",
+            url=stub.url,
+            reason="prompt_input_exit",
+            home=tmp_path / "h",
+        )
+    finally:
+        stub.close()
+    assert len(stub.requests) == 2
+    for method, path, headers, body in stub.requests:
+        assert (method, path) == ("POST", OLD_SERVER["session_path"])
+        assert {k.lower(): v for k, v in headers.items()}.get("authorization") == f"Bearer {TOKEN}"
+        sent = json.loads(body)
+        assert set(sent) <= set(OLD_SERVER["session_fields"]), set(sent) - set(OLD_SERVER["session_fields"])
+        assert sent["session_id"] == SESSION_1
+    assert [json.loads(b)["event"] for *_, b in stub.requests] == ["SessionStart", "SessionEnd"]
+
+
+def tools_named_by(text: str) -> set[str]:
+    """The switchboard tools a skill names: a backticked ``name`` or ``name(``, with the prefix a harness
+    gives it (Cursor's ``switchboard_``, Claude Code's and Codex's ``mcp__..__``)."""
+    names: set[str] = set()
+    for word in re.findall(r"`([A-Za-z0-9_]+)(?:\(|`)", text):
+        for prefix in ("mcp__plugin_switchboard_switchboard__", "mcp__switchboard__", "switchboard_"):
+            word = word.removeprefix(prefix)
+        if word in TOOL_NAMES:
+            names.add(word)
+    return names
+
+
+def test_the_skill_scan_sees_a_tool_behind_a_harnesss_prefix() -> None:
+    """The scan below must not lose a tool because a harness prefixes it: a tool added after the oldest
+    release is found whether a skill writes it plain, as Cursor lists it, or as Claude Code names it."""
+    for written in (
+        "`rooms`",
+        "`switchboard_rooms`",
+        "`mcp__switchboard__rooms`",
+        "`mcp__plugin_switchboard_switchboard__rooms(`",
+    ):
+        assert tools_named_by(f"call {written} first") == {"rooms"}, written
+    assert "rooms" not in OLD_SERVER["tools"]  # so such a skill would be refused by the check below
 
 
 def test_the_newest_plugins_skills_name_only_tools_the_oldest_server_has() -> None:
-    """Every switchboard tool a skill of this checkout's plugins names (in backticks, as the tool or
-    ``mcp__..``) exists on the oldest release of the major. A new tool needs a minor release that adds
-    it, and a skill that names it would steer an agent on an older server to a tool it lacks: it fails
-    until the skill is generic about it (#850, "Feature guidance lives on the server")."""
+    """Every switchboard tool a skill of this checkout's plugins names exists on the oldest release of the
+    major. A skill that names a tool added since would steer an agent on an older server to a tool it lacks:
+    it fails until the skill is generic about it (#850, "Feature guidance lives on the server")."""
     named: dict[str, set[str]] = {}
     for plugin in ("claude", "codex", "cursor"):
         for skill in (ROOT / "plugins" / plugin / "skills").glob("*/SKILL.md"):
-            text = skill.read_text()
-            words = set(re.findall(r"`(?:switchboard_)?([a-z_]+)(?:\(|`)", text))
-            for tool in words & set(TOOL_NAMES):
+            for tool in tools_named_by(skill.read_text()):
                 named.setdefault(tool, set()).add(f"{plugin}/{skill.parent.name}")
     assert named  # the skills do name tools
     missing = {t: sorted(w) for t, w in named.items() if t not in OLD_SERVER["tools"]}
     assert not missing, missing
 
 
-def test_the_plugins_hook_templates_are_what_the_oldest_plugin_sent_or_add_fields_the_server_takes() -> None:
-    """The newest plugin's mcp_tool hooks send only fields the oldest server's hook tool took, or the
-    newest server adds: a hook field the old server did not know is refused by it (a plugin ahead of
-    its server). Fails when a hook template gains a field with no major version."""
+def test_the_plugins_hook_templates_send_only_fields_the_oldest_server_takes() -> None:
+    """The newest plugin's mcp_tool hooks send only fields the oldest server's hook tool took: a field it
+    did not know is refused by it (a plugin ahead of its server). Fails when a hook template gains a field
+    with no major version."""
     old = set(OLD_SERVER["hook_fields"])
     for groups in claude_hooks().values():
         for group in groups:

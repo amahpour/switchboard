@@ -201,10 +201,30 @@
    "origin"
   ],
   "answers": {
-   "200": "text/plain: the message that wakes the session",
-   "408": "JSON: a round ran out, listen again",
-   "409": "JSON: refused, the listener ends and wakes nothing",
-   "410": "text/plain: another listener ended the session, printed once"
+   "200": {
+    "body": "the message that wakes the session",
+    "meaning": "text/plain: wake the session with this text"
+   },
+   "408": {
+    "body": "",
+    "meaning": "a round ran out with nothing: listen again"
+   },
+   "409": {
+    "body": "{\"error\":\"nothing\",\"message\":\"nothing to wake for\"}",
+    "meaning": "refused: the listener ends and wakes nothing"
+   },
+   "410": {
+    "body": "another listener ended this session",
+    "meaning": "text/plain: someone else ended the session, printed once"
+   }
   }
- }
+ },
+ "session_path": "/mcp/session",
+ "session_fields": [
+  "event",
+  "session_id",
+  "source",
+  "reason",
+  "permission_mode"
+ ]
 }
