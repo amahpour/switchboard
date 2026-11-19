@@ -432,3 +432,18 @@ def test_the_talk_on_a_call_skill_is_the_same_file_in_the_three_plugins_and_teac
     assert "one or two short sentences" in text.lower() and "normal `say()` without `@call`" in text
     assert "The rest is in the room." in text and "a person turns voice on" in text
     assert len(text) < 1800
+
+
+def test_skills_defer_to_the_server_for_what_it_accepts() -> None:
+    """#850: a plugin may run against an older server of the same major. The board and review skills say
+    the server's own list (its tool description, or a refusal) is the one that counts, and the board skill
+    carries no size or rate numbers that a server states itself when it refuses. A skill that goes back to
+    a hard-coded limit, or loses the pointer, would steer agents to what an older server refuses."""
+    root = Path(__file__).resolve().parents[2]
+    for name in ("claude", "codex", "cursor"):
+        for skill in ("board", "review-board"):
+            text = (root / "plugins" / name / "skills" / skill / "SKILL.md").read_text()
+            assert "the server you are on accepts" in text, (name, skill)
+        board_text = (root / "plugins" / name / "skills" / "board" / "SKILL.md").read_text()
+        for stale in ("8000 characters", "16000 bytes", "150 elements", "up to five at once"):
+            assert stale not in board_text, (name, stale)

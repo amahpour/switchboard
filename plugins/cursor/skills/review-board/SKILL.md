@@ -17,6 +17,8 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 
 ## Actions
 
+The tool's description and a refused call both list the actions the server you are on accepts. This list describes the newest server: if an action here is not in that list, the server is older, so use the ones it has.
+
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.
 - `show`: read one board, including a closed one. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.

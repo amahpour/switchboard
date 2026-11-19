@@ -183,7 +183,7 @@ class RoomBoard:
         """One ``board`` call from a member. A saved change spends its participant's board budget."""
         action = params.get("action")
         if not isinstance(action, str) or action not in board.ACTIONS:
-            raise ServiceError("bad_request", "unknown action")
+            raise ServiceError("bad_request", f"unknown action: use one of {', '.join(board.ACTIONS)}")
         if action == "read":
             seq, elements = self.state.store.board_load(room.id)
             return {"seq": seq, "text": sanitize(board.summary(elements, seq), limit=None)}

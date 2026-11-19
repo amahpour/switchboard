@@ -175,6 +175,22 @@ async def test_two_pages_and_an_agent_converge_and_a_hostile_shape_is_dropped(
         web.close()
 
 
+async def test_an_unknown_board_action_is_refused_with_the_actions_this_server_has(
+    broker: InProcBroker,
+) -> None:
+    """#850: a plugin's board skill can name an action that a server of the same major, older than the
+    plugin, lacks. The server knows what it accepts, so its refusal lists every action it has, as review's
+    does. A bare "unknown action" leaves the agent guessing, and people read it as a broken tool."""
+    from switchboard import board
+
+    async with FakeAgent(broker.home, "drawer") as drawer:
+        await drawer.join("#build", "claude-1")
+        refused = await drawer.call("board", room="#build", action="hologram")
+    assert refused["ok"] is False
+    for action in board.ACTIONS:
+        assert action in refused["error"], action
+
+
 def test_a_private_room_refuses_a_board_from_anyone_else() -> None:
     """A page whose person is not in the room cannot write its board, and the socket is told to
     close. A person who is in it can, and the link they sent is still stored as null."""
