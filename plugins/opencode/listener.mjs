@@ -51,19 +51,29 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
   received = () => {}, settle = async () => {},
   request = globalThis.fetch, sleep: pause = sleep, now = () => performance.now(), warn = console.warn}) {
   let again = '0', backoff = 1000, unreachableSince = null;
-  async function retry() {
+  async function retry(began, answered) {
     const failedAt = now();
-    unreachableSince ??= failedAt;
-    const remaining = OUTAGE_MS - (failedAt - unreachableSince);
-    if (remaining <= 0) {
-      warn('[switchboard] Switchboard has been unreachable for at least 2 minutes. The listener stopped.');
-      return false;
+    if (answered || failedAt - began >= 10000) unreachableSince = null;
+    if (failedAt - began >= 10000) {
+      backoff = 1000;
+      return !signal.aborted;
     }
-    await pause(Math.min(backoff, remaining), signal);
+    let delay = backoff;
+    if (!answered) {
+      unreachableSince ??= failedAt;
+      const remaining = OUTAGE_MS - (failedAt - unreachableSince);
+      if (remaining <= 0) {
+        warn('[switchboard] Switchboard has been unreachable for at least 2 minutes. The listener stopped.');
+        return false;
+      }
+      delay = Math.min(delay, remaining);
+    }
+    await pause(delay, signal);
     backoff = Math.min(backoff * 2, 60000);
     return !signal.aborted;
   }
   while (!signal.aborted) {
+    const began = now();
     let response;
     try {
       response = await request(`${url}/mcp/listen`, {method: 'POST', redirect: 'error',
@@ -87,7 +97,7 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
         text = await readWake(response, signal);
       } catch {
         await settle('wake.dropped', receipt);
-        if (signal.aborted || !await retry()) return;
+        if (signal.aborted || !await retry(began, true)) return;
         continue; // headers arrived, but no wake body: a proxy cut the round, so wait again
       }
       let queued = false;
@@ -109,7 +119,7 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
       await pause(1000, signal);
     } else if (!response || [429, 500, 502, 503, 504].includes(response.status)) {
       await response?.body?.cancel();
-      if (!await retry()) return;
+      if (!await retry(began, Boolean(response))) return;
     } else {
       await response.body?.cancel();
       if (response.status !== 409) warn(`[switchboard] listener stopped (HTTP ${response.status})`);

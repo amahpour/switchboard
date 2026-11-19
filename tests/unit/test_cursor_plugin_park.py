@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from conftest import FakeClock
 from engine_agents import listener, result, stop, woke
 from engine_world import World
@@ -106,3 +107,36 @@ def test_stop_retries_a_restart_within_the_original_park(
     assert json.loads(capsys.readouterr().out) == {"followup_message": "one wake"}
     assert [wait for wait, _ in requests] == [630, 629, 627]
     assert all(timeout > wait for wait, timeout in requests)
+
+
+@pytest.mark.parametrize("status", [0, 504])
+def test_stop_retries_repeated_proxy_cuts(monkeypatch: Any, capsys: Any, status: int) -> None:
+    """Four 60-second proxy cuts leave time for a wake in the same Cursor Stop."""
+    spec = importlib.util.spec_from_file_location("cursor_hook", PLUGIN / "lib" / "hook.py")
+    assert spec is not None and spec.loader is not None
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+    now = 0.0
+    requests = []
+
+    def pause(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def answer(request: Any, *, timeout: float) -> io.BytesIO:
+        nonlocal now
+        requests.append(json.loads(request.data)["wait_s"])
+        if len(requests) == 5:
+            return io.BytesIO(b'{"followup_message":"wake after proxy cuts"}')
+        now += 60
+        if status:
+            raise urllib.error.HTTPError(request.full_url, status, "proxy timeout", {}, io.BytesIO())
+        raise ConnectionResetError()
+
+    monkeypatch.setenv("SWITCHBOARD_URL", "http://switchboard.localhost")
+    monkeypatch.setenv("SWITCHBOARD_AGENT_TOKEN", "token")
+    monkeypatch.setattr(urllib.request, "urlopen", answer)
+    monkeypatch.setattr(hook, "time", SimpleNamespace(monotonic=lambda: now, sleep=pause), raising=False)
+    assert hook.park({"wait_s": 630}) == {"followup_message": "wake after proxy cuts"}
+    assert requests == [630, 570, 510, 450, 390]
+    assert capsys.readouterr().err == ""

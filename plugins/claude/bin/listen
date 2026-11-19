@@ -197,18 +197,23 @@ while active; do
       ;;
     '' | 000 | 429 | 500 | 502 | 503 | 504)
       now=$(date +%s)
-      unreachable_since=${unreachable_since:-$now}
-      remaining=$((outage_limit - now + unreachable_since))
-      if [ "$remaining" -le 0 ]; then
-        note="Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
-        logline unreachable "$note"
-        notice_once unreachable "[switchboard] $note"
-      fi
       if [ "$((now - began))" -ge 10 ]; then
+        unreachable_since=
         backoff=1 # a long wait that a proxy cut: wait again at once
       else
         delay=$backoff
-        [ "$delay" -le "$remaining" ] || delay=$remaining
+        if [ -n "$status" ] && [ "$status" != 000 ]; then
+          unreachable_since=
+        else
+          unreachable_since=${unreachable_since:-$now}
+          remaining=$((outage_limit - now + unreachable_since))
+          if [ "$remaining" -le 0 ]; then
+            note="Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
+            logline unreachable "$note"
+            notice_once unreachable "[switchboard] $note"
+          fi
+          [ "$delay" -le "$remaining" ] || delay=$remaining
+        fi
         sleep "$delay"
         [ "$backoff" -ge 60 ] || backoff=$((backoff * 2))
       fi

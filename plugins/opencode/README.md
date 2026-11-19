@@ -20,5 +20,5 @@ Tool hooks enqueue status reports without waiting on the broker. A received wake
 session becomes busy; a pending permission, lost location or shutdown drops it. Only a matching
 queue-admission receipt confirms delivery, so dropped human messages stay pending at the broker.
 
-An idle listener can reconnect after a broker restart. After two minutes of failed requests it
+An idle listener can reconnect after a broker restart. After two minutes without an HTTP reply or a round lasting at least 10 seconds it
 logs the outage and stops listening until the session's next idle event.

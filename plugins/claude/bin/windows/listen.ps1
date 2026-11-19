@@ -224,17 +224,24 @@ while (Alive) {
         }
         { $_ -in '', '429', '500', '502', '503', '504' } {
             $now = Get-Date
-            if ($null -eq $unreachableSince) { $unreachableSince = $now }
-            $remaining = $outageLimit - ($now - $unreachableSince).TotalSeconds
-            if ($remaining -le 0) {
-                $note = "Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
-                LogLine 'unreachable' $note
-                NoticeOnce 'unreachable' "[switchboard] $note"
-            }
             if (($now - $began).TotalSeconds -ge 10) {
+                $unreachableSince = $null
                 $backoff = 1 # a long wait that a proxy cut: wait again at once
             } else {
-                Start-Sleep -Milliseconds ([int](1000 * [Math]::Min($backoff, $remaining)))
+                $delay = $backoff
+                if ($status) {
+                    $unreachableSince = $null
+                } else {
+                    if ($null -eq $unreachableSince) { $unreachableSince = $now }
+                    $remaining = $outageLimit - ($now - $unreachableSince).TotalSeconds
+                    if ($remaining -le 0) {
+                        $note = "Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
+                        LogLine 'unreachable' $note
+                        NoticeOnce 'unreachable' "[switchboard] $note"
+                    }
+                    $delay = [Math]::Min($delay, $remaining)
+                }
+                Start-Sleep -Milliseconds ([int](1000 * $delay))
                 if ($backoff -lt 60) { $backoff = $backoff * 2 }
             }
         }

@@ -70,21 +70,34 @@ def park(body):
     stop_deadline = time.monotonic() + body["wait_s"]
     retry_deadline = None
     backoff = 1
-    while (remaining := int(stop_deadline - time.monotonic())) >= 10:
+    while True:
+        began = time.monotonic()
+        remaining = int(stop_deadline - began)
+        if remaining < 10:
+            break
         try:
             return send("/mcp/event", {**body, "wait_s": remaining}, remaining + 10, retry_stop=True)
-        except OSError:
+        except OSError as err:
             now = time.monotonic()
-            if retry_deadline is None:
-                retry_deadline = now + OUTAGE_LIMIT_S
-            if now >= retry_deadline:
-                print(
-                    "[switchboard] Switchboard has been unreachable for at least 2 minutes. "
-                    "The listener stopped. Start a turn in Cursor to listen again.",
-                    file=sys.stderr,
-                )
-                return None
-            time.sleep(min(backoff, retry_deadline - now, max(0, stop_deadline - now - 10)))
+            if now - began >= 10:
+                retry_deadline = None
+                backoff = 1
+                continue
+            delay = backoff
+            if isinstance(err, urllib.error.HTTPError):
+                retry_deadline = None
+            else:
+                if retry_deadline is None:
+                    retry_deadline = now + OUTAGE_LIMIT_S
+                if now >= retry_deadline:
+                    print(
+                        "[switchboard] Switchboard has been unreachable for at least 2 minutes. "
+                        "The listener stopped. Start a turn in Cursor to listen again.",
+                        file=sys.stderr,
+                    )
+                    return None
+                delay = min(delay, retry_deadline - now)
+            time.sleep(min(delay, max(0, stop_deadline - now - 10)))
             backoff = min(backoff * 2, 60)
     return None
 

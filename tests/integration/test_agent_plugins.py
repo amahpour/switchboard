@@ -15,6 +15,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -981,6 +982,9 @@ class Stub:
                     stub.release.wait(30)
                     reply = release_reply
                 status, text, *more = reply
+                if status == 0:  # a cut before any HTTP response
+                    self.close_connection = True
+                    return
                 data = text.encode()
                 try:
                     self.send_response(status)
@@ -1096,6 +1100,45 @@ rm "$CLAUDE_PLUGIN_DATA/listening-{SESSION_1}"
     assert stub.again == ["0"]
 
 
+@pytest.mark.parametrize("status", [0, 504])
+def test_listener_retries_repeated_proxy_cuts(
+    impl: str, status: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Four 60-second cuts still leave the listener ready for a wake in the fifth round."""
+    date = tmp_path / "date"
+    date.write_text("""#!/bin/sh
+if [ "$1" != +%s ]; then exec /bin/date "$@"; fi
+count=$(cat "${0%/*}/calls" 2>/dev/null || echo 0)
+echo "$((count + 1))" >"${0%/*}/calls"
+echo "$((1000 + count / 2 * 60))"
+""")
+    date.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    if impl == "pwsh":
+        original = script_run
+
+        def with_clock(name: str, env: dict[str, str]) -> tuple[list[str], Path | None]:
+            argv, home = original(name, env)
+            env["TEST_LISTENER"] = argv[-1]
+            return [
+                *argv[:-2],
+                "-Command",
+                "function Get-Date { "
+                "[DateTimeOffset]::FromUnixTimeSeconds([long](& date +%s)).UtcDateTime }; "
+                "& $env:TEST_LISTENER; exit $LASTEXITCODE",
+            ], home
+
+        monkeypatch.setattr(sys.modules[__name__], "script_run", with_clock)
+
+    stub = Stub([(status, "")] * 4 + [(200, "wake after proxy cuts")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path, home=tmp_path)
+    finally:
+        stub.close()
+    assert (r.returncode, r.stdout, r.stderr) == (2, "", "wake after proxy cuts"), r
+    assert stub.again == ["0", "1", "1", "1", "1"]
+
+
 def test_listener_explains_a_two_minute_outage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A continuous outage ends the shell listener with one plain notice, before another retry."""
     if shutil.which("curl") is None:
@@ -1109,7 +1152,7 @@ if [ "$count" -lt 3 ]; then echo 1000; else echo 1121; fi
 """)
     date.chmod(0o700)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
-    stub = Stub([(503, "restarting"), (503, "restarting"), (200, "late wake")])
+    stub = Stub([(0, ""), (0, ""), (200, "late wake")])
     try:
         r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path)
     finally:
