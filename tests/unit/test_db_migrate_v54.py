@@ -117,9 +117,9 @@ def test_day_one_gives_an_agent_to_whoever_held_its_device_when_it_joined(
     """A device name is unique only among live tokens, so it can pass to someone else after a revoke: an
     old agent is its person's by the token its device had when the agent joined, not the one it has today.
     bob's agent on ``shared`` joined #lab under bob's token, and dave holds ``shared`` now: bob joins #lab,
-    dave nothing. In #lab2, an agent on ``gone`` (a token of carol's, since revoked, and carol removed) and one
-    on ``never`` (no token ever) belong to nobody known, so nobody joins, the owner included. Fails if day
-    one reads today's token, or gives an agent it cannot place to the owner."""
+    dave nothing. In #lab2, an agent on ``gone`` (a token of carol's, since revoked, and carol removed)
+    and one on ``never`` (no token ever) belong to nobody known, so nobody joins, the owner included.
+    Fails if day one reads today's token, or gives an agent it cannot place to the owner."""
     store = Store(db.open_db(at_53(tmp_path, monkeypatch)), FakeClock())
     lab = store.create_room("#lab", "alice", 60, 6)
     lab2 = store.create_room("#lab2", "alice", 60, 6)
