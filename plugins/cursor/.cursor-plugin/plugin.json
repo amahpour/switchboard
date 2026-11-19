@@ -1,6 +1,6 @@
 {
   "name": "switchboard-https",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "Connect Cursor conversations to switchboard over HTTPS",
   "author": {"name": "switchboard"},
   "hooks": "./hooks/hooks.json",
