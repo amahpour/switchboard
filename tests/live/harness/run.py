@@ -104,12 +104,14 @@ class Run:
 
     # ----------------------------------------------------------------- setup
     def start(self) -> Run:
-        self.broker.start()
         self.base = self.broker.base
+        self.broker.start()
         self.credentials()
         self.ws = self.base / "ws"
         self.ws.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=self.ws, env=clean_env(self.path), check=True)
+        subprocess.run(
+            ["git", "init", "-q"], cwd=self.ws, env=clean_env(self.path, HOME=str(self.base)), check=True
+        )
         (self.ws / "README.md").write_text("scratch workspace for a switchboard live test\n")
         (self.ws / "hold.sh").write_text(HOLD_SH)
         self.results["version"] = self.version()
@@ -127,7 +129,7 @@ class Run:
     def version(self) -> str:
         r = subprocess.run(
             [self.binaries[0], "--version"],
-            env=clean_env(self.path),
+            env=clean_env(self.path, HOME=str(self.base)),
             capture_output=True,
             text=True,
             timeout=30,

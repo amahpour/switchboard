@@ -6,16 +6,16 @@ import { writeFileSync, appendFileSync } from "node:fs";
 export default Plugin.define({
   id: "switchboard-live-driver",
   async setup(ctx) {
-    let release;
-    let holding = false;
+    const holds = new Map();
     const registration = await ctx.tool.transform(editor => editor.add({
       name: "probe_hold",
       description: "Keep the private live-test server alive until its driver finishes.",
-      input: { type: "object", properties: {}, additionalProperties: false },
+      input: { type: "object", properties: { label: { type: "string", enum: ["bootstrap", "restart"] } },
+        required: ["label"], additionalProperties: false },
       options: { codemode: false },
-      execute: async () => {
-        holding = true;
-        await new Promise(resolve => { release = resolve; });
+      execute: async ({ label }) => {
+        await new Promise(resolve => { holds.set(label, resolve); });
+        holds.delete(label);
         return { content: "LIVE_DONE" };
       },
     }));
@@ -35,7 +35,7 @@ export default Plugin.define({
         for await (const chunk of req) text += chunk;
         const body = text ? JSON.parse(text) : {};
         let result;
-        if (req.url === "/ready") result = { holding };
+        if (req.url === "/ready") result = { holding: holds.has(body.label ?? "bootstrap") };
         else if (req.url === "/create") {
           result = await ctx.session.create({ title: "switchboard live probe" });
           await ctx.session.switchModel({ sessionID: result.id, model: { providerID: "openai", id: "gpt-5.4-nano" } });
@@ -43,7 +43,7 @@ export default Plugin.define({
         else if (req.url === "/state") result = { info: await ctx.session.get(body),
           context: await ctx.session.context(body), pending: await ctx.permission.list(body) };
         else if (req.url === "/remove") { await ctx.session.remove(body); result = {}; }
-        else if (req.url === "/release") { release?.(); result = {}; }
+        else if (req.url === "/release") { holds.get(body.label ?? "bootstrap")?.(); result = {}; }
         else if (req.url === "/ask") {
           // The driver's private session asks; nothing answers it, and no real config is involved.
           await ctx.session.update({ sessionID: body.sessionID,
@@ -62,7 +62,8 @@ export default Plugin.define({
     await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
     writeFileSync(process.env.PROBE_READY, String(server.address().port));
     return async () => {
-      release?.(); events.abort(); server.close(); await registration.dispose();
+      for (const release of holds.values()) release();
+      events.abort(); server.close(); await registration.dispose();
     };
   },
 });

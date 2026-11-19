@@ -2397,7 +2397,8 @@ class Store:
         """Restart semantics (§4): expire open offers and mark everyone offline. A session over HTTPS
         is not tied to a process the broker could probe (§49.3), so none ends here: each comes back
         with its next hook or call, and one that never does is ended by its device (the token's
-        revocation, a kick, a closed room)."""
+        revocation, a kick, a closed room). Remember the last idle state so a returning listener can
+        repark without overriding a busy or approval-blocked session."""
         now = self.clock.now()
         with db.tx(self.con):
             reverted = self.con.execute(
@@ -2409,7 +2410,8 @@ class Store:
                 (now,),
             ).rowcount
             offline = self.con.execute(
-                "UPDATE participants SET status='offline', status_at=?, status_src='restart'"
+                "UPDATE participants SET status='offline', status_at=?, status_src="
+                " CASE WHEN status='idle' OR status_src='restart:idle' THEN 'restart:idle' ELSE 'restart' END"
                 " WHERE ended_at IS NULL",
                 (now,),
             ).rowcount
@@ -3524,6 +3526,79 @@ class Store:
             (since, until, *ids),
         )
         return {int(r["room_id"]): int(r["n"]) for r in rows}
+
+    def usage_reviews(
+        self, room_ids: Sequence[int], *, since: float, until: float
+    ) -> tuple[list[dict[str, Any]], list[tuple[int, reviews.Item]], list[tuple[int, float, dict[str, Any]]]]:
+        """The review boards that did anything in ``[since, until]``, with their items and events (§61.5).
+
+        A board is in when it was opened in the window, when one of its ``review`` events falls in
+        it (``events_kind_ts`` serves ``kind`` and the ``ts`` bounds), or when it gained an item in
+        it (searched per board through ``reviews_room`` and the items' own key, so a room's boards
+        are read and no message or batch is). Then every item of those boards and every ``review``
+        event of them, however old: a board that settled today was opened last week. Read only.
+        Returns ``(boards, [(board id, item)], [(board id, ts, data)])``.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return [], [], []
+        marks = ",".join("?" * len(ids))
+        board_of = "CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.board') END"
+        boards = [
+            dict(r)
+            for r in self.con.execute(
+                f"SELECT * FROM reviews r WHERE r.room_id IN ({marks}) AND ("
+                " r.opened_at BETWEEN ? AND ?"
+                f" OR r.id IN (SELECT {board_of} FROM events e"
+                "   WHERE e.kind = 'review' AND e.ts BETWEEN ? AND ?)"
+                " OR EXISTS (SELECT 1 FROM review_items i WHERE i.review_id = r.id"
+                "   AND i.created_at BETWEEN ? AND ?))",
+                (*ids, since, until, since, until, since, until),
+            )
+        ]
+        if not boards:
+            return [], [], []
+        board_ids = [int(b["id"]) for b in boards]
+        bmarks = ",".join("?" * len(board_ids))
+        items = [
+            (int(r["review_id"]), _review_item(r))
+            for r in self.con.execute(
+                f"SELECT * FROM review_items WHERE review_id IN ({bmarks}) ORDER BY review_id, kind, n",
+                board_ids,
+            )
+        ]
+        low = min(float(b["opened_at"]) for b in boards)
+        events: list[tuple[int, float, dict[str, Any]]] = []
+        for r in self.con.execute(
+            f"SELECT e.ts AS ts, e.data AS data, {board_of} AS board FROM events e"
+            f" WHERE e.kind = 'review' AND e.ts >= ? AND e.ts <= ? AND e.room_id IN ({marks})"
+            f" AND {board_of} IN ({bmarks}) ORDER BY e.id",
+            (low, until, *ids, *board_ids),
+        ):
+            try:
+                data = json.loads(r["data"] or "{}")
+            except ValueError:
+                continue
+            if isinstance(data, dict) and isinstance(r["board"], int):
+                events.append((r["board"], r["ts"], data))
+        return boards, items, events
+
+    def usage_agents(self, room_ids: Sequence[int]) -> dict[tuple[int, str], tuple[str, str]]:
+        """The harness and host of each agent name in those rooms, the newest membership winning,
+        keyed ``(room id, lower-cased name)``: who an agent on the review figures is."""
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        out: dict[tuple[int, str], tuple[str, str]] = {}
+        for r in self.con.execute(
+            "SELECT m.room_id AS room_id, m.screen_name AS name, p.harness AS harness, p.host AS host"
+            " FROM memberships m JOIN participants p ON p.id = m.participant_id"
+            f" WHERE m.room_id IN ({marks}) ORDER BY m.id",
+            ids,
+        ):
+            out[(int(r["room_id"]), str(r["name"]).casefold())] = (r["harness"] or "", r["host"] or "")
+        return out
 
     # ------------------------------------------------------------------ report (§12.5, §12.6; #167)
     # Read-only queries behind `switchboard report` (report.py), on its own query-only

@@ -77,6 +77,9 @@ def test_every_command_hook_is_one_of_the_two_commands_all_three_shells_understa
             ("SessionStart", LISTEN_COMMAND),
             ("Stop", LISTEN_COMMAND),
             ("SessionEnd", SESSION_COMMAND),
+            ("UserPromptSubmit", LISTEN_COMMAND),
+            ("Notification", LISTEN_COMMAND),
+            ("SessionEnd", LISTEN_COMMAND),
         ]
     )
 

@@ -1,11 +1,12 @@
 """The usage page's data (DESIGN.md §61, #818).
 
 A read of stored rows for the one person asking: the open rooms they can see (§44), the
-wake batches and agent messages in those rooms, and how often each room's budget ran out.
+wake batches and agent messages in those rooms, how often each room's budget ran out, and the
+review boards that moved in the window (§61.5).
 It writes nothing. The windows and the ranking are pure (:mod:`switchboard.usage`).
 
 The room list is taken on the broker's event loop, where the one visibility rule already
-runs. The three counts run on a connection of their own, so the caller can put them on a
+runs. The counts run on a connection of their own, so the caller can put them on a
 worker thread and leave the broker's connection to the loop. A long history then does not
 stall every other request.
 """
@@ -16,7 +17,7 @@ import os
 from collections.abc import Sequence
 from typing import Any
 
-from switchboard import db
+from switchboard import db, review_stats
 from switchboard.clock import Clock
 from switchboard.models import Room
 from switchboard.store import Store
@@ -42,7 +43,7 @@ def counts(
     try:
         store = Store(con, clock)
         ids = [r.id for r in rooms]
-        return shape(
+        page = shape(
             rooms,
             store.usage_wakes(ids, since=week, today=today, until=now),
             store.usage_posts(ids, since=week, today=today, until=now),
@@ -52,5 +53,18 @@ def counts(
             today_start=today,
             week_start=week,
         )
+        boards, items, events = store.usage_reviews(ids, since=week, until=now)
+        page["reviews"] = review_stats.shape(
+            rooms,
+            boards,
+            [item for _, item in items],
+            {item.id: board for board, item in items},
+            events,
+            store.usage_agents(ids),
+            now=now,
+            today_start=today,
+            week_start=week,
+        )
+        return page
     finally:
         con.close()

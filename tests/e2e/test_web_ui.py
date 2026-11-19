@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
+from conftest import PHASE_REPORTS, TEST_HUMAN, InProcBroker, sanitize_env
 from fakes.waiting import wait_for
 from playwright.sync_api import (
     Browser,
@@ -495,6 +495,52 @@ def test_a_dropped_socket_shows_everywhere_until_it_is_back(ui: UI) -> None:
         expect(page.locator("#buddy-list")).not_to_have_class(re.compile(r"\bstale\b"))
     finally:
         back_up()  # nothing left waiting when the context closes
+
+
+def test_a_tab_reports_a_long_broker_restart_and_catches_up(ui: UI, broker: InProcBroker) -> None:
+    """A real shutdown leaves the tab open. After two minutes it explains the outage, then
+    catches up to a message posted before the socket returned, exactly once without reloading."""
+    browser = ui.context()
+    page = browser.new_page()
+    page.clock.install()
+    broker.call("room.create", {"name": "#restart"})
+    page.goto(broker.login_url())
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    open_room(page, "restart")
+    broker.call("human.say", {"room": "#restart", "text": "before the restart"})
+    expect(page.get_by_text("before the restart", exact=True)).to_be_visible()
+    held: list[Route] = []
+    restarting = True
+
+    def hold(route: Route) -> None:
+        # Keep the reconnect check paused so a message can arrive before the new socket.
+        if restarting:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/**", hold)
+    navigations = []
+    page.on("framenavigated", lambda frame: navigations.append(frame) if frame == page.main_frame else None)
+
+    with page.expect_request("**/api/me"):
+        broker.stop()
+    expect(page.locator("#st-conn")).to_have_text("Reconnecting…")
+    banner = page.locator("#banner-offline")
+    expect(banner).to_contain_text("reconnecting…")
+    page.clock.fast_forward(120_000)
+    expect(banner).to_contain_text("Switchboard has been unreachable for at least 2 minutes.")
+
+    broker.start()
+    broker.call("human.say", {"room": "#restart", "text": "after the restart"})
+    restarting = False
+    while held:
+        held.pop().continue_()
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    expect(banner).to_be_hidden()
+    expect(page.get_by_text("before the restart", exact=True)).to_have_count(1)
+    expect(page.get_by_text("after the restart", exact=True)).to_have_count(1)
+    assert not navigations
 
 
 def test_room_badges_count_only_what_is_addressed_to_you(ui: UI) -> None:
