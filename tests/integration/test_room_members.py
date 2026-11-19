@@ -413,18 +413,21 @@ def test_an_upgraded_broker_fills_the_members_once_at_its_start(tmp_home: Path) 
 
 
 def test_a_room_with_members_can_still_be_deleted(team: tuple[InProcBroker, Browser, Browser]) -> None:
-    """Deleting a room removes its members' rows with it (§28.6): a room id is reused, and a row left
-    behind would make someone a member of the next room, or fail the delete's foreign key check."""
+    """Deleting a room removes its members' rows with it (§28.6), and says so: the plan, the result and
+    the ``room_delete`` record count them, as they count its agents' memberships. A room id is reused, and
+    a row left behind would make someone a member of the next room, or fail the delete's foreign key
+    check. Fails if the rows stay, or if the plan and the record leave them out."""
     b, alice, bob = team
     assert people(bob, "build", "add", "bob").status_code == 200
     room = b.state.store.get_room("#build")
     assert room is not None
 
-    def delete() -> dict[str, int]:
+    def delete() -> tuple[dict[str, int], dict[str, int]]:
         store = b.state.store
         for m in store.room_memberships(room.id):
             store.end_membership(m.id, "kick")
-        return store.delete_room(
+        plan = store.room_delete_counts(room.id)
+        return plan, store.delete_room(
             room.id,
             name=room.name,
             created_at=room.created_at,
@@ -432,5 +435,10 @@ def test_a_room_with_members_can_still_be_deleted(team: tuple[InProcBroker, Brow
             event={},
         )
 
-    b.on_loop(delete)
+    plan, removed = b.on_loop(delete)
+    assert plan["room_people"] == removed["room_people"] == 2
     assert b.state.store.room_people(room.id) == []
+    record = b.state.store.con.execute(
+        "SELECT data FROM events WHERE kind='room_delete' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert '"room_people": 2' in record[0]

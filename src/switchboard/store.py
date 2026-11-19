@@ -55,8 +55,19 @@ from switchboard.search import SNIPPET_TOKENS, markers
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
-# of ``delete_room``'s result. Participants are never deleted.
-ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
+# of ``delete_room``'s result, which its plan, its output and its ``room_delete`` record show; the
+# people's rows (``room_people``, §44, §62) beside the agents' memberships. Every other row naming the
+# room goes too (``_ROOM_ROWS``), uncounted. Participants are never deleted.
+ROOM_DELETE_TABLES = (
+    "rooms",
+    "messages",
+    "memberships",
+    "deliveries",
+    "batches",
+    "events",
+    "files",
+    "room_people",
+)
 STATUS_LINE_STALE_S = 30 * 60
 # Enough time for a broker rollout and a client retry, with short-lived receipts.
 SAY_KEY_TTL_S = 5 * 60
