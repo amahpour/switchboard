@@ -1,6 +1,6 @@
 # Review rules: the web UI
 
-Applies to `src/switchboard/web/static/`. The root [REVIEW.md](../../../../REVIEW.md) applies too.
+Applies to `src/switchboard/web/`, the UI in `static/`. The root [REVIEW.md](../../../REVIEW.md) applies too. This file sits above `static/` so it is not served at `/static`.
 
 ## Flag
 
@@ -14,5 +14,5 @@ Applies to `src/switchboard/web/static/`. The root [REVIEW.md](../../../../REVIE
 
 ## Skip
 
-- `vendor/` (the vendored board and Mermaid files): review a bump by its pinned version and the OSV check, not line by line.
+- Line-by-line review of `static/vendor/` (the vendored board and Mermaid builds). Instead, for a change there: the lockfile (`scripts/board/package-lock.json` for the board) or the upstream release it names, the hashes the static tests pin, and advisories for the dependency that changed. `scripts/security_scan.py` queries OSV for Mermaid only, not the board's Excalidraw and React.
 - Formatting that ESLint accepts.
