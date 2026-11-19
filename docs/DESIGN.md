@@ -206,6 +206,9 @@ tts_voice = "bm_george"        # the Kokoro voice agents speak with in a call; a
 max_calls = 1                  # calls followed at once, across all rooms, 1 to 50; or SWITCHBOARD_MEETING_MAX_CALLS (§52)
 stt_model = ""                 # the Whisper model joinly transcribes with: base, small, distil-large-v3, large-v3-turbo; empty is joinly's own; or SWITCHBOARD_MEETING_STT_MODEL (§52)
 
+[notify]
+allow_private_webhooks = false # §62: a person's webhook may point at a private or loopback address (a home network); off: public addresses only
+
 [files]
 max_mb = 25                    # one file, 1 to 1024; a proxy in front needs a body limit at least this (§53)
 room_mb = 500                  # a room's stored files, 1 to 1048576; how long they're kept is an admin setting
@@ -3815,7 +3818,7 @@ The maintainer's 2026-11-16 idea on #723 is the browser's own permission prompt 
 - **The words, by default (#837).** The title says who and where ("scout in #build") and the body is the message's first line: the card's `text` (`home._first_line`, already plain), cut by the page again to 100 characters with its Markdown marks and control characters taken out. A `Notification` body is plain text the browser draws, so it is never HTML and no text path of the page changes. What an agent wrote is untrusted and a notification can be seen by anyone near the screen, so it is a per-person choice, on by default and kept in one more `broker_settings` row (`notify_text:<person>`, `{"text": false}` on `PUT /api/me/notify` beside `on`, either or both, and `notify_text` in `GET /api/me`). Anything but `true` in `/api/me` hides the words (fail closed). Off, the notification says "scout needs you in #build" and "A message for you" as before. A review board call says how many items need the person's call and names the first.
 - **The sender's avatar as the icon (#837).** From the broker, never a remote image: an admin's upload (`/api/agent-icons/<harness>/<scheme>?v=<hash>`, §29.11, in the scheme the page is showing), else Codex's, Cursor's or Devin's built-in file under `/static/agents/`, else (Claude Code, OpenCode, a person) a PNG tile the page draws on a canvas and passes as a `data:` URL, in the harness's color with its letters, or the person's initial. The notification is made once the avatar is known; the CSP, the static lint and the allowlists of fields stay as they were, except that `/api/me/notify` takes one more key and `/api/me` gives one more.
 - **A click opens the item:** it focuses the window and goes to the room, at the message for a question.
-- **Not in this level:** the later channels (email, a webhook, a text), "got it" ending them, a notification for an agent's request to reach its person, and any push with the tab closed.
+- **Not in this level:** the later channels (a webhook is §62; email and a text are not built), "got it" ending them, a notification for an agent's request to reach its person, and any push with the tab closed.
 
 Tests: `tests/e2e/test_notifications_ui.py` with the browser's `Notification` stubbed.
 
@@ -4179,3 +4182,34 @@ The three reads (`Store.usage_wakes`, `usage_posts`, `usage_exhausted`) are limi
 **The page.** **Usage** is the sidebar row under Home. Its address is `#/usage`, so a room named `#usage` still opens from `#usage`. The rows are buttons: Enter or a click opens that room. On a phone the four figures stack in one column and the buttons are at least 44 px tall. Search can cover the page and closes back to it. The page says it does not measure tokens or dollars, and it never sends a model or a model override (§11).
 
 **Tests.** `tests/unit/test_usage.py` (the windows, the counts against stored rows on a `FakeClock`, a quiet hour shown as refilled without a write, the query plan using the window indexes, a room the caller did not pass dropped, two casings summed). `tests/unit/test_db_migrate_v52.py` (a database already at schema 51 gains the indexes). `tests/integration/test_usage_page.py` (a private room's counts for a member and not for anyone else, a session required, a bad offset read as UTC). `tests/e2e/test_usage_ui.py` (the figures, light and dark, the phone, no sideways scroll, Enter opens the room).
+
+## 62. Reaching a person: a webhook (#723)
+
+The maintainer's 2026-11-18 choice on #723 for the first channel outside switchboard: a webhook, each person's own setting. Email, a text and the loud second channel are not in this change. When something needs a person and they have not seen it after a wait (5 minutes by default), the broker makes one JSON POST to that person's own URL: who and where, with a link, and never the message. It reaches a Slack incoming webhook, a Discord webhook or an ntfy topic as it is, and Zapier or n8n can carry it further. `notify.py` is the pure policy, `broker/webhook.py` the edge.
+
+### 62.1 What counts, and what stops it
+
+`home.needs` gives the items, from the rows Home already reads (§55.2): a question addressed to the person (keyed by its room and message; a newer one is another item), a review board waiting for their call (one per board; **Not now** counts as got it), and an agent of theirs waiting on an approval (its `owner` is them, or nobody on a broker with one person; each new prompt is its own item). A person never gets another person's, nor a private room's they are not in (§44). `notify.Policy.due` gives the ones to send: an item that has been needing the person for `wait_s` and was not sent. **Got it** stops it, from anywhere: it stops needing them (they answered, decided, the seen mark of §55.8 moved, the prompt cleared; it is then dropped, and if it comes back it is new), or they opened its room after it began (`POST /api/rooms/{slug}/seen` calls `Notifier.opened`, which is `Policy.ack_room`; an approval does not clear by being read, so opening the room is what ends it). A person who is looking at the page is not detected: the wait is what covers them, and the browser notification of §55.9 comes first.
+
+A send that fails is tried again `RETRY_S` (5 minutes) later, at most 3 times, then given up, so a dead address is not hammered. One POST names at most 5 items. The sent keys are kept in `broker_settings` (`webhook_sent:<person>`), so a restart does not send them again; the time an item was first seen is in memory, so a restart restarts the wait. Not built: quiet hours, urgent kinds, the loud second channel, an agent's request to page its person.
+
+### 62.2 What a person sets, and where
+
+Settings → Profile → Webhook: the address and the wait (1 to 120 minutes), **Send a test** and **Remove**. Three routes of the signed-in person, never anyone else's (the key is the session's): `PUT /api/me/webhook` (`url`, `wait_min`, either; a body with another field is a 400), `DELETE /api/me/webhook`, and `POST /api/me/webhook/test`. **A room message, an agent or a slash command can never set it**: nothing but these routes writes the row (`tests/integration/test_webhook.py`). The settings live in `broker_settings` rows keyed by person (`webhook:<key>`, `webhook_status:<key>`, `webhook_sent:<key>`; 0 is the owner): no schema change. Removing a person removes theirs. `GET /api/me` gives `webhook: {set, host, wait_min, last}`: the address is **never** returned, only its host (the path and the query are where the secret is), and the page's field is always empty. `last` is `{at, ok, error}` of the last post, shown to that person only, never in a room; `error` is one of a fixed set of sentences (`notify.fail_reason`), never built from an exception, which can carry the address.
+
+### 62.3 The POST, and what it may reach
+
+The body is `{"text", "content", "items": [{"kind", "room", "who", "url"}]}`: `text` (Slack) and `content` (Discord) are the same line, `"scout has a message for you in #build: https://…/#build"`. **No message text**, no token, no file. The link is the room's address (`/#room`, the page's own), so tapping it opens the room, which is the seen mark above. A tap works only where the broker can be reached (#89).
+
+The broker now makes a request on a person's behalf, so the request is the risk (SECURITY.md). Every send, and the save, goes through `notify.url_problem` and `webhook.checked_addresses`:
+
+1. **https only**, no name or password in the address, at most 500 characters, no whitespace.
+2. **The host is resolved at every send, and every address it resolves to must be allowed** (`notify.address_problem`): by default only public ones. Loopback, private, link-local (the cloud metadata address is one), carrier-grade NAT, multicast, reserved and unspecified are refused, and so is an IPv6 form that wraps one (IPv4-mapped, 6to4, Teredo, NAT64). Known cloud metadata addresses that are not link-local (Azure's 168.63.129.16, Oracle's 192.0.0.192, Alibaba's 100.100.100.200, ECS's 169.254.170.2, AWS's `fd00:ec2::254`) are refused always, even with the operator's setting on. A name that resolves to one public and one internal address is refused. Checking only when saved would let a name point somewhere else later (DNS rebinding).
+3. **The connection goes to the address that was checked**, not to the name again, and the certificate is verified for the name in the URL (`_Pinned`).
+4. A 5 second timeout, **no redirect followed** (a 3xx is a failure and its Location is never requested), the answer read to 1 KB and dropped.
+5. At most **12 posts a person an hour** (`notify.Limiter`, a test included).
+6. An operator who wants a webhook on a home network turns on `[notify] allow_private_webhooks` (default off): that allows private and loopback addresses, never link-local, unspecified, multicast or reserved.
+
+**Fails closed:** a need list that could not be worked out, a wait outside 1 to 120 minutes, a stored row that does not parse or does not pass the checks send nothing. The address is a secret: it is stored in the database like the other secrets that must be read back (so a backup holds it, §57), never returned, never logged (a failure logs only that it failed), and never in a room.
+
+Tests: `tests/unit/test_notify_policy.py` (every rule, with a `FakeClock`), `tests/integration/test_webhook.py` (a real HTTPS receiver on the loopback: the wait, got it, the approval, the secret never shown, internal addresses, rebinding, redirects, the cap, a room message), `tests/e2e/test_webhook_ui.py` (the settings: light, dark and the phone).

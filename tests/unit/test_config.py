@@ -616,3 +616,13 @@ def test_the_transcriber_environment_variable_wins_over_the_file_and_a_bad_one_s
     monkeypatch.setenv("SWITCHBOARD_MEETING_TRANSCRIBER", "voxtral")
     with pytest.raises(ConfigError, match="SWITCHBOARD_MEETING_TRANSCRIBER"):
         config.load(paths)
+
+
+def test_private_webhooks_are_off_unless_the_operator_turns_them_on() -> None:
+    """``[notify] allow_private_webhooks`` (§62) defaults to off, takes true, and refuses anything that is not
+    a boolean (a string "false" must not read as on). Fails if the default is permissive."""
+    assert Config().notify.allow_private_webhooks is False
+    assert from_dict({"notify": {"allow_private_webhooks": True}}).notify.allow_private_webhooks is True
+    for bad in ("false", 1, "yes"):
+        with pytest.raises(ConfigError):
+            from_dict({"notify": {"allow_private_webhooks": bad}})
