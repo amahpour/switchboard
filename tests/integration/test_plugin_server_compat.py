@@ -136,8 +136,17 @@ def test_the_fixtures_are_the_oldest_release_of_the_current_major(tmp_path: Path
     listener = git("show", f"{TAG}:src/switchboard/broker/agent_http.py").stdout.decode()
     for status in OLD_SERVER["listen"]["answers"]:
         assert re.search(rf"\b{status}\b", listener), status
-    for header in OLD_SERVER["listen"]["headers_read"]:
-        assert f'b"{header}"' in listener, header
+    # the headers the listener reads are exactly the recorded ones: the constants its class names, the
+    # Origin it refuses, and the token header and Authorization that the door reads
+    constants = dict(re.findall(r'^(\w+_HEADER) = b"([\w-]+)"', listener, re.M))
+    body = listener[listener.index("class Listener:") : listener.index("class HideHook")]
+    used = {constants[n] for n in re.findall(r"_header\(scope, (\w+_HEADER)\)", body)}
+    assert "origin" in body and 'b"origin"' in body
+    assert set(OLD_SERVER["listen"]["headers_read"]) == used | {
+        "origin",
+        "authorization",
+        constants["TOKEN_HEADER"],
+    }
 
 
 def test_the_newest_server_still_offers_everything_the_oldest_release_did() -> None:
@@ -225,11 +234,20 @@ def test_the_oldest_plugins_hooks_are_answered_by_the_newest_server(broker: InPr
     assert sent >= 6
 
 
+def isolated_home(path: Path) -> Path:
+    """A home for a script under test with an empty ``.curlrc`` in it: curl reads that one and goes no
+    further, where an empty or missing folder lets it fall back to the account's own home (``getpwuid``)
+    and the developer's real configuration."""
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".curlrc").write_text("")
+    return path
+
+
 def old_env(url: str, token: str, extra: dict[str, str] | None = None) -> dict[str, str]:
     """The environment Claude Code gives a command hook, with curl's own configuration pointed at an empty
     folder: the archived scripts are byte-exact and call curl with its defaults, so a developer's
     ``~/.curlrc`` must not reach them."""
-    home = Path(tempfile.mkdtemp(prefix="sb-compat-home-"))
+    home = isolated_home(Path(tempfile.mkdtemp(prefix="sb-compat-home-")))
     return {
         "PATH": child_env()["PATH"],
         "HOME": str(home),
@@ -315,37 +333,42 @@ def check_old_server_would_accept(requests: list[tuple[str, str, dict[str, str],
         )
 
 
-@pytest.mark.usefixtures("impl")
-def test_the_newest_plugins_listener_speaks_the_oldest_servers_protocol(tmp_path: Path) -> None:
-    """A stand-in answers with the statuses and bodies the fixture records for the oldest release's
-    listener (408 listen again, 200 the message, 409 end quietly, 410 say who ended it), and the newest
-    plugin's listener is run against it. Every request is checked as that release would have checked it
-    (``check_old_server_would_accept``). Fails when the plugin's script depends on a status or a header an
-    older server of the same major lacks, or drops what that server requires."""
-    (tmp_path / "h").mkdir()
-    again, wake = stood_in(408), stood_in(200)
-    stub = Stub([again, wake])
+def listen_once(
+    tmp_path: Path, replies: list[tuple[int, str]]
+) -> tuple[subprocess.CompletedProcess[str], Stub]:
+    """The newest ``bin/listen`` against a stand-in that answers ``replies``, with an isolated home and
+    a plugin data folder (where a notice is kept), and every request it made checked as the oldest release
+    would have checked it."""
+    home = isolated_home(tmp_path / "home")
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    stub = Stub(list(replies))
     try:
-        r = run_listen(None, TOKEN, SESSION_1, url=stub.url, round_s=10, home=tmp_path / "h")
+        r = run_listen(None, TOKEN, SESSION_1, url=stub.url, round_s=10, data=data, home=home)
     finally:
         stub.close()
+    check_old_server_would_accept(stub.requests, OLD_SERVER["listen_path"])
+    return r, stub
+
+
+@pytest.mark.usefixtures("impl")
+def test_the_newest_plugins_listener_speaks_the_oldest_servers_protocol(tmp_path: Path) -> None:
+    """A stand-in answers with the statuses the fixture records for the oldest release's listener (408
+    listen again, 200 the message, 409 end quietly, 410 say who ended it; the bodies are examples), and the
+    newest plugin's listener is run against it in each scenario. Every request, in every scenario, is
+    checked as that release would have checked it (``check_old_server_would_accept``). Fails when the
+    plugin's script depends on a status or a header an older server of the same major lacks, or drops
+    what that server requires."""
+    again, wake = stood_in(408), stood_in(200)
+    r, stub = listen_once(tmp_path / "a", [again, wake])
     assert (r.returncode, r.stderr) == (2, wake[1]), r
     assert stub.again == ["0", "1"]
-    check_old_server_would_accept(stub.requests, OLD_SERVER["listen_path"])
-    quiet = Stub([stood_in(409)])
-    try:
-        r = run_listen(None, TOKEN, SESSION_1, url=quiet.url, round_s=10, home=tmp_path / "h")
-    finally:
-        quiet.close()
+    r, stub = listen_once(tmp_path / "b", [stood_in(409)])
     assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), r
-    ended = Stub([stood_in(410)])
-    data = tmp_path / "data"
-    data.mkdir()
-    try:
-        r = run_listen(None, TOKEN, SESSION_1, url=ended.url, round_s=10, data=data, home=tmp_path / "h")
-    finally:
-        ended.close()
+    assert len(stub.requests) == 1
+    r, stub = listen_once(tmp_path / "c", [stood_in(410)])
     assert r.returncode == 2 and stood_in(410)[1] in r.stderr, r
+    assert len(stub.requests) == 1
 
 
 @pytest.mark.usefixtures("impl")
@@ -353,7 +376,7 @@ def test_the_newest_plugins_session_script_posts_what_the_oldest_server_reads(tm
     """The newest ``bin/session`` posts SessionStart and SessionEnd to the route and with the fields the
     oldest release's ``/mcp/session`` read, and its bearer token. Fails when the script moves the route or
     sends a field an older server of the same major would not know."""
-    (tmp_path / "h").mkdir()
+    isolated_home(tmp_path / "h")
     stub = Stub([(200, "{}"), (200, "{}")])
     try:
         run_session(

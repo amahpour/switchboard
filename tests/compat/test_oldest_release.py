@@ -47,6 +47,7 @@ def test_the_newest_plugin_is_woken_by_a_real_oldest_release() -> None:
 
     tmp = Path(tempfile.mkdtemp(prefix="sb-compat-"))
     (tmp / "h").mkdir()
+    (tmp / "h" / ".curlrc").write_text("")  # curl reads this and goes no further than the test's home
     old = Broker("compat", hosted=True, src=tmp / "old" / "src")
     try:
         archive = tmp / "src.tar"

@@ -217,7 +217,8 @@
     "body": "another listener ended this session",
     "meaning": "text/plain: someone else ended the session, printed once"
    }
-  }
+  },
+  "_bodies": "the statuses and their meanings are recorded from the release's Listener; the bodies are synthetic examples of what it sends"
  },
  "session_path": "/mcp/session",
  "session_fields": [

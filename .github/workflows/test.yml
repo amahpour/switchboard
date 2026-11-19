@@ -94,8 +94,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2
-      - name: Fetch the oldest release of this major (the plugin compatibility check, #850)
-        run: git fetch --no-tags --depth=1 origin +refs/tags/v1.0.0:refs/tags/v1.0.0
       - uses: ./.github/actions/setup-uv-python
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
         with:
@@ -149,6 +147,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 2   # the PR's merge commit and main (its first parent), for the plugin version check
+      - name: Fetch the oldest release of this major (the plugin compatibility check, #850)
+        run: git fetch --no-tags --depth=1 origin +refs/tags/v1.0.0:refs/tags/v1.0.0
       # A dispatch checks out the branch itself, not a PR merge commit. Fetch main and the
       # full history so the plugin check can find their fork point even on a long-lived branch.
       - name: Fetch the manual run's comparison base
