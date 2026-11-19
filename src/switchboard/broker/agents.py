@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import claims, envelope, search
+from switchboard import claims, db, envelope, search
 from switchboard.broker.restarts import RESTART_MESSAGE
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError, when_text
 from switchboard.delivery import rules
@@ -600,7 +600,11 @@ class AgentService:
                 "bind", room_id=room.id, membership_id=m.id, participant_id=p.id, data={"what": "rotate"}
             )
         else:
-            m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
+            # the membership and its person's (§63) in one transaction: committed apart, a failure between
+            # them leaves the agent in the room and its person out, and the session's retry is a rejoin
+            with db.tx(self.store.con):
+                m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
+                member = self.svc.agent_joined(room, person, name)
             self.svc.join_hands_free(room, m.id)
             self.store.add_event(
                 "join",
@@ -627,6 +631,8 @@ class AgentService:
                 text=f"joined ({where}, {shown})" + (", back after a restart" if resumed is not None else ""),
                 sender_host=host or None,
             )
+            if member:  # its person is a member now: their pages list the room (§63)
+                self.svc.rooms_changed()
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []
