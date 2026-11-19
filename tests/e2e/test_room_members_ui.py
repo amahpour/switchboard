@@ -299,6 +299,36 @@ def test_members_lists_the_rooms_people_with_leave_and_add(
         no_sideways_scroll(page)
 
 
+@pytest.mark.parametrize("options", [THEMES[0], THEMES[2]])
+def test_leave_from_your_row_in_people_puts_the_keyboard_on_join(
+    ui: UI, team: Team, options: dict[str, Any]
+) -> None:
+    """Leave on alice's own row under People, confirmed, makes the room a preview with the keyboard on its
+    Join button, as Leave from the room's menu does. On a phone People is in the Members sheet, which keeps
+    the page behind it inert, so the sheet closes first; on a desktop Members is a column and stays. Fails if
+    the sheet stays up over the room with the keyboard nowhere (review F1 on #879), or if a desktop's
+    Members column closes with it."""
+    gone = team.room("alice", "gone")
+    page = alices_page(ui, team, **options)
+    sidebar(page)
+    mine(page, gone).click()
+    app = page.locator("#app")
+    sheet_open = re.compile(r"\bsheet-open\b")
+    if is_phone(options):
+        page.click("#buddy-toggle")
+        expect(app).to_have_class(sheet_open)
+    page.click("#room-people-leave")
+    expect(page.locator("#app-dialog-title")).to_have_text(f"Leave {gone}?")
+    page.click("#app-dialog-action")
+    expect(page.locator("#log")).to_contain_text(f"alice left {gone}")
+    expect(page.locator("#preview-bar")).to_be_visible()
+    expect(app).not_to_have_class(sheet_open)
+    assert page.evaluate("document.getElementById('main').inert") is False
+    expect(page.locator("#preview-join")).to_be_focused()
+    if not is_phone(options):
+        expect(page.locator("#pane")).to_be_visible()
+
+
 def test_at_humans_badges_only_your_rooms_and_home_waits_only_on_them(ui: UI, team: Team) -> None:
     """bob writes @humans in a room alice is in and in one she is not: the first has her red count and a
     card in Home's Waiting on you; the second has neither. Fails if a room she never joined pings her."""

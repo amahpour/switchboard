@@ -2044,7 +2044,8 @@
   }
 
   // Leave, after a confirm that says what changes. They stay in the room, now a preview, and the keyboard
-  // goes to its Join button.
+  // goes to its Join button. From their row under People on a phone, Members is a sheet that keeps the page
+  // behind it inert, so it closes first: Join could not take the keyboard under it.
   async function leaveRoom(r) {
     if (!state.me || !canLeave(r)) return;
     const ok = await openDialog({ title: 'Leave ' + r.name + '?',
@@ -2055,6 +2056,7 @@
     if (!ok) return;
     if (r.name === state.active) state.otherOpen = true;  // the room on screen stays in view, under Other rooms
     if (await roomPeople(r, 'remove', state.me.human) && r.name === state.active && !isMember(r)) {
+      if (narrow()) setSheet(false);
       $('preview-join').focus();
     }
   }
