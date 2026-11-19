@@ -4218,7 +4218,7 @@ What does not:
 
 - **Who agents answer to.** `RoomService.room_humans` is unchanged: everyone on the broker in a public room (§32.1), a private room's own people. The join text, `who()`, the batch header, @mention matching and delivery all read it. A person's message is a person's message wherever they post it.
 - **Who sees what** (§44): a public room is still everyone's to read, search (§58), use in `/catchup` (whose subjects are agents, §26) and list for an agent (`rooms()`, §59).
-- **Becoming a member starts from now.** When a person joins, is added, or their agent makes them a member, their seen mark (§55.8) moves to the room's newest message, so what was said before is the room's history, read when they open it, not waiting on them or counted unread.
+- **Becoming a member starts from now.** When a person joins, is added, or their agent makes them a member, their seen mark (§55.8) moves to the room's newest message, so what was said before is the room's history, read when they open it, not waiting on them or counted unread. With one person on the broker an agent's join moves nothing, since that person was a member already.
 
 ### 62.4 Joining, adding and leaving
 

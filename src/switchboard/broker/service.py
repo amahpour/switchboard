@@ -465,16 +465,12 @@ class RoomService:
         room is theirs, and nothing about joining or leaving shows (§62)."""
         return not self.store.people()
 
-    def member(self, room: Room, key: int) -> bool:
-        """Is the person ``key`` a member of ``room`` (``is_member``)."""
-        return is_member(room, self.store.person_rooms(key), self.one_person())
-
     def agent_joined(self, room: Room, key: int, agent: str) -> None:
         """An agent of the person ``key`` joined ``room``: they are a member of it now (§62, the
         maintainer's call on #843), and their sidebar says "joined with <agent>" until they open it.
         Nothing is posted: the agent's own join line is in the room. A private room's agents are its
         people's already (§44.3). With one person, the row is kept quietly for the day a second
-        person comes, and nothing is shown."""
+        person comes, and nothing is shown or moved."""
         if room.private:
             return
         one = self.one_person()
@@ -482,8 +478,8 @@ class RoomService:
             self.store.add_event(
                 "room_people", room_id=room.id, data={"what": "join", "person": key, "with": agent}
             )
-            self._member_from_now(room, key)
             if not one:
+                self._member_from_now(room, key)
                 self.rooms_changed()
 
     def _member_from_now(self, room: Room, key: int) -> None:
@@ -515,15 +511,10 @@ class RoomService:
                     "conflict",
                     f"you're in {room.name} already" if key == by else f"{who} is in {room.name} already",
                 )
-            what, text = (
-                ("join", f"{who} joined {room.name}")
-                if key == by
-                else (
-                    "add",
-                    f"{by_name} added {who} to {room.name}",
-                )
-            )
-            reply = f"you joined {room.name}" if key == by else f"added {who}"
+            if key == by:
+                what, text, reply = "join", f"{who} joined {room.name}", f"you joined {room.name}"
+            else:
+                what, text, reply = "add", f"{by_name} added {who} to {room.name}", f"added {who}"
         else:
             if key not in people:
                 raise ServiceError("not_found", f"{who} isn't in {room.name}")
