@@ -186,9 +186,9 @@ async def test_an_unknown_board_action_is_refused_with_the_actions_this_server_h
     async with FakeAgent(broker.home, "drawer") as drawer:
         await drawer.join("#build", "claude-1")
         refused = await drawer.call("board", room="#build", action="hologram")
-    assert refused["ok"] is False
-    for action in board.ACTIONS:
-        assert action in refused["error"], action
+    assert refused["ok"] is False and refused["code"] == "bad_request"
+    listed = [a.strip() for a in refused["error"].split("use one of", 1)[1].split(",")]
+    assert listed == list(board.ACTIONS)
 
 
 def test_a_private_room_refuses_a_board_from_anyone_else() -> None:

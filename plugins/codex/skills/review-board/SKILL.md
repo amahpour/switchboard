@@ -17,7 +17,7 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 
 ## Actions
 
-The tool's description and a refused call both list the actions the server you are on accepts. This list describes the newest server: if an action here is not in that list, the server is older, so use the ones it has.
+The tool's description lists the actions the server you are on accepts; a refusal of an unknown action may list them too. This list describes the newest server: if an action here is not in that list, the server is older, so use the ones it has.
 
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.

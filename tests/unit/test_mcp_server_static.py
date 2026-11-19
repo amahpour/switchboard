@@ -235,7 +235,7 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     # and that read lists frames by title and id in the order they were made
     assert "arrow's label" in text
     assert "returns two ids" in text
-    assert "order the frames were made" in text
+    assert "how the list is ordered depends on the server" in text  # 1.0.0 sorted frames by position (#867)
     # the recipes ride next to the skill in each plugin, byte for byte
     refs = [p.with_name("reference.md").read_bytes() for p in paths]
     assert refs[0] == refs[1] == refs[2] and b"draw_mermaid" in refs[0]
@@ -430,7 +430,7 @@ def test_the_talk_on_a_call_skill_is_the_same_file_in_the_three_plugins_and_teac
     text = bodies[0].decode()
     assert "name: talk-on-a-call" in text and "@call" in text
     assert "one or two short sentences" in text.lower() and "normal `say()` without `@call`" in text
-    assert "The rest is in the room." in text and "a person turns voice on" in text
+    assert "the server may say the rest is in the room" in text and "a person turns voice on" in text
     assert len(text) < 1800
 
 
@@ -444,6 +444,7 @@ def test_skills_defer_to_the_server_for_what_it_accepts() -> None:
         for skill in ("board", "review-board"):
             text = (root / "plugins" / name / "skills" / skill / "SKILL.md").read_text()
             assert "the server you are on accepts" in text, (name, skill)
+            assert "may list them too" in text, (name, skill)  # 1.0.0's board refusal named none
         board_text = (root / "plugins" / name / "skills" / "board" / "SKILL.md").read_text()
         for stale in ("8000 characters", "16000 bytes", "150 elements", "up to five at once"):
             assert stale not in board_text, (name, stale)
