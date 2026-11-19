@@ -434,6 +434,37 @@ def test_an_upgraded_broker_fills_the_members_once_at_its_start(tmp_home: Path) 
         b.stop()
 
 
+def test_the_one_persons_post_and_its_quiet_row_commit_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    """While alice is alone, her post in #said and the quiet row that keeps #said hers are one write: when
+    the row fails, the post is not stored either (and nothing was published), so trying again stores both,
+    and the day bob is added #said is still hers. Fails if the post commits on its own: day one has run,
+    so nothing would ever record that she used #said."""
+    b = hosted_broker()
+    alice = set_up(b)
+    bob: Browser | None = None
+    try:
+        store, svc = b.state.store, b.state.service
+
+        def old_room() -> None:  # made before members counted, so nobody has a row for it
+            store.create_room("#said", "alice", 60, 6)
+
+        b.on_loop(old_room)
+        with monkeypatch.context() as mp:
+            mp.setattr(store, "room_person_used", boom)
+            with pytest.raises(sqlite3.OperationalError):
+                b.on_loop(lambda: svc.human_say("#said", "hello", via="web"))
+        msgs = alice.get("/api/rooms/said/messages").json()["messages"]
+        assert [m["text"] for m in msgs if m["kind"] == "chat"] == []
+        assert alice.post("/api/rooms/said/say", {"text": "hello"}).status_code == 200
+        bob = join_as_bob(b, alice)
+        assert rooms(alice)["#said"]["member"] is True
+    finally:
+        if bob is not None:
+            bob.close()
+        alice.close()
+        stop(b)
+
+
 def test_a_room_with_members_can_still_be_deleted(team: tuple[InProcBroker, Browser, Browser]) -> None:
     """Deleting a room removes its members' rows with it (§28.6), and says so: the plan, the result and
     the ``room_delete`` record count them, as they count its agents' memberships. A room id is reused, and

@@ -1280,21 +1280,32 @@ class RoomService:
         }
 
     def _post(
-        self, room: Room, *, level: str | None = None, file_ids: tuple[str, ...] | list[str] = (), **kw: Any
+        self,
+        room: Room,
+        *,
+        level: str | None = None,
+        file_ids: tuple[str, ...] | list[str] = (),
+        quiet_member: int | None = None,
+        **kw: Any,
     ) -> Message:
         """Persist, then publish. Every broker-side message goes through here.
 
         ``level`` (a notice's 'info'/'warn') rides on the published frame only; it
         isn't stored (history re-derives 'warn' for the engine's fixed-phrase warnings,
         ``WARN_NOTICE_PREFIXES``). ``file_ids`` are pending uploads this text named; a
-        ``switchboard:file/<id>`` in the text is bound the same way (§53)."""
-        msg = self.store.insert_message(room.id, **kw)
-        if file_ids:
-            self.store.bind_files(room.id, msg.id, file_ids)
-        else:
-            self.store.bind_file_refs(room.id, msg.id, msg.text)
-        if msg.kind == "chat":
-            self.store.add_event("msg", room_id=room.id, data={"id": msg.id, "via": msg.via})
+        ``switchboard:file/<id>`` in the text is bound the same way (§53). ``quiet_member``: the
+        broker's one person posted, and the room is recorded as theirs (``Store.room_person_used``,
+        §63). What is stored is one transaction, and the frame goes out after it commits."""
+        with db.tx(self.store.con):
+            msg = self.store.insert_message(room.id, **kw)
+            if file_ids:
+                self.store.bind_files(room.id, msg.id, file_ids)
+            else:
+                self.store.bind_file_refs(room.id, msg.id, msg.text)
+            if msg.kind == "chat":
+                self.store.add_event("msg", room_id=room.id, data={"id": msg.id, "via": msg.via})
+            if quiet_member is not None:
+                self.store.room_person_used(room.id, quiet_member)
         frame = self.message_frame(msg)
         if level is not None and msg.kind == "notice":
             frame["level"] = level
@@ -1383,9 +1394,11 @@ class RoomService:
             mentions=mentions,
             skip_memberships=skip,
             sender_person_id=person[1] if person is not None else None,
+            # the broker's one person posted here: a room they used, in the message's transaction (§63)
+            quiet_member=self.person_key(person[1] if person is not None else None)
+            if self.solo_room(room)
+            else None,
         )
-        if self.solo_room(room):  # the broker's one person posted here: a room they used (§63)
-            self.store.room_person_used(room.id, self.person_key(person[1] if person is not None else None))
         for note in self.not_connected_notes(room, mentions):
             self.post_notice(room, note, level="warn")
         before = room.hop_count
