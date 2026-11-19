@@ -2086,6 +2086,23 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    @app.get("/api/rooms/{slug}/review/past")
+    async def past_room_review(request: Request, slug: str, url: str | None = None) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            room = state.service.room_for(slug, viewer(request))
+            if url is None:
+                return _ok({"boards": state.boards.past_boards(room)})
+            rv = state.boards.past_board(room, url)
+            if rv is None:
+                return _err(404, "not_found", "No past board for this link")
+            return _ok({"board": rv})
+        except ServiceError as e:
+            return _svc_err(e)
+        except ReviewError as e:
+            return _err(400, "bad_request", str(e))
+
     @app.post("/api/rooms/{slug}/review")
     async def room_review_move(request: Request, slug: str) -> Response:
         w = who(request)
