@@ -159,29 +159,40 @@ def test_no_version_stays_unsaid_and_an_mcp_call_never_erases_one(build: InProcB
     harnesses are not nagged for silence, as today). A version a hook or the listener reported is kept
     through the next MCP call, which carries an empty header. Fails if silence becomes ``unknown`` over a
     reported version, or if a note appears for a plugin that never said."""
+    client: Any = None
     if harness == "opencode":
         token = opencode_member(build)
         name, send = "opencode-1", lambda v: opencode_status(build, token, v)
-        again = lambda: OpenCode(build, token).start()  # noqa: E731 - a fresh MCP connection
     else:
         name, joiner, event = CASES[harness]
         token, client = joiner(build)
         send = lambda v: event(build, token, v)  # noqa: E731
-        again = lambda: None  # noqa: E731
     silent = seen(build, name, send, None)
     assert "plugin_state" not in silent or silent["plugin_note"] == ""
     said = seen(build, name, send, OLD)
     assert said["plugin_state"] == "major"
-    again()
+    assert mcp_who(build, harness, token, client)["ok"]
+    member = inspector(build, name)
+    assert (member["plugin_state"], member["plugin_version"]) == ("major", OLD)
+
+
+def mcp_who(b: InProcBroker, harness: str, token: str, client: Any) -> dict[str, Any]:
+    """A ``who`` call the broker accepts, over MCP and with no plugin header, as the harness makes it."""
     if harness == "cursor":
-        invoke(
-            client,
-            "switchboard_who",
-            {"room": "#build", "switchboard_session_id": SID_A, "switchboard_tool_use_id": "missing"},
-        )
-    elif harness == "devin":
-        client.call("who", {"room": "#build"})
-    assert inspector(build, name)["plugin_state"] == "major"
+        pre = {"harness": "cursor", "event": "preToolUse", "session_id": SID_A, "tool_use_id": "u2"}
+        report = _post(b, token, "/mcp/pretool", {**pre, "tool_name": "switchboard_who"}, None)
+        assert report.status_code == 200
+        args = {"room": "#build", "switchboard_session_id": SID_A, "switchboard_tool_use_id": "u2"}
+        return invoke(client, "switchboard_who", args)
+    if harness == "devin":
+        # the pretool report by hand: the real script would send its version, and this call must not
+        pre = {"harness": "devin", "event": "PreToolUse", "session_id": "devin-sid", "tool_use_id": "use-2"}
+        assert _post(b, token, "/mcp/pretool", {**pre, "tool_name": "who"}, None).status_code == 200
+        args = {"room": "#build", "switchboard_session_id": "devin-sid", "switchboard_tool_use_id": "use-2"}
+        return client.call("who", args)
+    c = OpenCode(b, token)
+    c.start()
+    return c.call("who", SESSION_A, room="#build")
 
 
 def test_every_harness_has_a_versioned_plugin_with_its_own_update_words() -> None:
