@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -17,6 +18,8 @@ from test_passkeys import HOST, Browser, hosted_broker, stop
 from test_people import join_as_bob, set_up
 
 from switchboard import db
+from switchboard.paths import Paths
+from switchboard.store import Store
 
 
 @pytest.fixture
@@ -367,6 +370,46 @@ def test_what_the_one_person_used_stays_theirs_when_a_second_arrives() -> None:
             bob.close()
         alice.close()
         stop(b)
+
+
+OLD_DB = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
+
+
+def test_an_upgraded_broker_fills_the_members_once_at_its_start(tmp_home: Path) -> None:
+    """Day one is the broker's own start: a broker started on the 0.37.2 database (schema 28), with a post
+    of bob's added in #bench, migrates it and makes each person a member of the public rooms they used:
+    the owner #build, #bench (her posts) and the closed #old (her agent), bob #bench, and #secret keeps its
+    own people. bob then leaves #bench, and a restart on the same home does not put him back. Fails if the
+    start never fills the members (every sidebar on an upgraded broker would empty), or fills them again
+    at every start."""
+    paths = Paths.from_home(tmp_home)
+    paths.ensure()
+    old = sqlite3.connect(paths.db)
+    try:
+        old.executescript(OLD_DB.read_text())
+        old.execute(
+            "INSERT INTO messages(room_id, ts, sender_name, sender_kind, via, kind, text, sender_person_id)"
+            " VALUES(2, 1790000016.0, 'bob', 'human', 'web', 'chat', 'on it', 1)"
+        )
+        old.commit()
+    finally:
+        old.close()
+    b = InProcBroker(tmp_home).start()
+    try:
+        store = b.state.store
+        assert {r: sorted(b.on_loop(store.room_people, r)) for r in (1, 2, 3, 4)} == {
+            1: [0],
+            2: [0, 1],
+            3: [0],
+            4: [0, 1],
+        }
+        assert b.on_loop(store.room_person_remove, 2, 1)
+        b.restart()
+        store = b.state.store
+        assert b.on_loop(store.room_people, 2) == [0]
+        assert b.on_loop(store.meta_get, Store.DAY_ONE_KEY) is not None
+    finally:
+        b.stop()
 
 
 def test_a_room_with_members_can_still_be_deleted(team: tuple[InProcBroker, Browser, Browser]) -> None:
