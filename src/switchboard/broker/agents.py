@@ -771,9 +771,8 @@ class AgentService:
     def review(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         """One move on the room's review board (DESIGN.md §37). A move that's another agent's to
         answer (a raise, a concession to another owner, a fix) is posted as this agent's message
-        to them alone, so it wakes them as a say() would, under the room's budget and loop guard;
-        a raise or an ask waits a few seconds for this agent's next ones and goes with them (§37.17).
-        Any other move is a notice that wakes no one. Not rate-limited like ``say``: the board
+        to them alone, so it wakes them as a say() would, under the room's budget and loop guard
+        (§37.17). Any other move is a notice that wakes no one. Not rate-limited like ``say``: the board
         caps its own size."""
         p, m, room = self._member(conn, params)
         poster = {
@@ -1101,13 +1100,7 @@ class AgentService:
         key_hash: str | None = None,
     ) -> Message:
         """Post an agent's say: what it had pending counts as answered, and the message goes out
-        like any other (the delivery, the wake budget and the loop guard). The lines its board moves
-        made and are still held go first (§37.17), so the room reads them before what it says."""
-        if self.state.boards is not None:
-            try:
-                self.state.boards.flush_actor(room.id, m.screen_name)
-            except Exception:  # a board's lines can never fail the say
-                log.exception("posting held review board lines failed in %s", room.name)
+        like any other (the delivery, the wake budget and the loop guard)."""
         now = self.state.clock.now()
         asked = self.store.question_batch(m.id)
         if asked is None:

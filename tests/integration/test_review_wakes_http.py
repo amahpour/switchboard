@@ -1,17 +1,18 @@
 """Who a board's move wakes, through the real ``review`` tool and broker (#884, DESIGN.md §37.17).
 
 Three scripted agents in one room: claude-1 opened the board for its pull request, codex-1 reviews it,
-and grok-1 is in the room for another one. codex-1's raises reach claude-1 alone, as one message when
-they come together, and claude-1's moves on the board answer them, though it never says a word.
+and grok-1 is in the room for another one. codex-1's raises reach claude-1 alone, eleven of them as one
+wake, and claude-1's moves on the board answer them, though it never says a word.
 """
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from conftest import FakeClock, InProcBroker
+from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
 
 from switchboard.config import Config
@@ -88,49 +89,40 @@ async def test_a_raise_reaches_the_author_alone_and_its_board_moves_answer_it(tm
         b.stop()
 
 
-async def test_raises_made_together_go_as_one_message_after_the_quiet_period(tmp_home: Path) -> None:
-    """Three raises at the same moment by the broker's clock: nothing is posted until the room's quiet
-    period has passed on that clock, then one message names all three. A say by the reviewer goes after
-    the lines it made, not before them. Fails if each raise posted at once (eleven lines in #884)."""
-    clock = FakeClock()
-    b = start(tmp_home, Config(human_name="alice"), clock=clock)
+async def test_eleven_quick_raises_reach_the_author_as_one_wake(tmp_home: Path) -> None:
+    """Eleven raises in a row through the real tool, with the broker's own delivery settings: each is
+    its own line to claude-1 alone, and claude-1, waiting in wait(), is answered once. Its next read()
+    has the rest. One wake for the eleven, from the engine's own batching, and nothing for the agent
+    that isn't on the pull request."""
+    b = start(tmp_home, Config(human_name="alice"))
     try:
-        async with FakeAgent(b.home, "author") as author, FakeAgent(b.home, "reviewer") as reviewer:
+        async with (
+            FakeAgent(b.home, "author") as author,
+            FakeAgent(b.home, "reviewer") as reviewer,
+            FakeAgent(b.home, "bystander") as bystander,
+        ):
             await author.join("#build", "claude-1")
             await reviewer.join("#build", "codex-1")
+            await bystander.join("#build", "grok-1")
             await author.call("review", room="#build", action="open", url=PR)
-            for n in (1, 2, 3):
+            # its wait() may open before the raises or among them: either way it is answered once
+            waiting = asyncio.create_task(author.call("wait", room="#build", timeout_s=30))
+            for n in range(1, 12):
                 await reviewer.call("review", room="#build", action="raise", title=f"finding {n}")
-            assert board_lines(b) == []
-            clock.advance(3.0)
-            b.on_loop(b.state.boards.flush_due)
-            [line] = board_lines(b)
-            assert line["text"].startswith(
-                "Review board: F1 to F3 raised. @claude-1: concede or contest each."
+            got = await waiting
+            lines = board_lines(b)
+            assert len(lines) == 11 and all(x["mentions"] == '["claude-1"]' for x in lines)
+            assert f"id={lines[0]['id']} " in got["text"]
+            rest = await author.call("read", room="#build")
+            seen = got["text"] + rest["text"]
+            assert all(f"id={x['id']} " in seen for x in lines)
+            wakes = rows(
+                b,
+                "SELECT COUNT(*) AS n FROM batches b JOIN memberships m ON m.id=b.membership_id"
+                " WHERE m.screen_name=? AND b.kind='wake'",
+                "claude-1",
             )
-            await reviewer.call("review", room="#build", action="raise", title="finding 4")
-            await reviewer.call("say", room="#build", text="That is all from me.")
-            texts = [r["text"] for r in board_lines(b)]
-            assert (
-                texts[1].startswith("Review board: F4 raised: finding 4.")
-                and texts[2] == "That is all from me."
-            )
+            assert wakes[0]["n"] == 1
+            assert all(delivery(b, "grok-1", x["id"]) is None for x in lines)
     finally:
         b.stop()
-
-
-async def test_a_held_line_is_posted_when_the_broker_stops(tmp_home: Path) -> None:
-    """A restart inside the few seconds a burst waits posts it rather than lose the raise's wake."""
-    clock = FakeClock()
-    b = start(tmp_home, Config(human_name="alice"), clock=clock)
-    try:
-        async with FakeAgent(b.home, "author") as author, FakeAgent(b.home, "reviewer") as reviewer:
-            await author.join("#build", "claude-1")
-            await reviewer.join("#build", "codex-1")
-            await author.call("review", room="#build", action="open", url=PR)
-            await reviewer.call("review", room="#build", action="raise", title="off by one")
-            assert board_lines(b) == []
-    finally:
-        b.stop()
-    [line] = board_lines(b)
-    assert "F1 raised: off by one" in line["text"]

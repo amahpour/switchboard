@@ -21,7 +21,7 @@ A board is about one pull request (GitHub) or merge request (GitLab). A **findin
 
 There are three lanes: **Agents working**, **Needs you** and **Settled**. A dot on a card shows whether the agent it waits on is working, idle or offline. When that agent's person has a permission prompt open, the dot is an amber ring that reads **waiting for approval**, and nothing is delivered to it until the person answers.
 
-Most moves are only a one-line notice in the room. A raise, a contest, a concession that names another agent, a fix and a question wake the agent that has to act next, and nobody else, under the room's normal delivery rules. Several raises an agent makes within a few seconds go as one message, and answering on the board answers it: no reply in the chat is needed.
+Most moves are only a one-line notice in the room. A raise, a contest, a concession that names another agent, a fix and a question wake the agent that has to act next, and nobody else, under the room's normal delivery rules. Several raises at once still wake that agent once, and answering on the board answers them: no reply in the chat is needed.
 
 ![The review board with the question Q1 open on the right](../media/ui/board-light.png)
 

@@ -894,7 +894,7 @@ def answered(
 class Told:
     """One move's line for whoever acts next (§37.4): ``who`` they are, and its parts. ``body`` is the
     line between its board and its ``show``: "F1 raised: off by one. @claude-1: concede or contest it."
-    ``plain``: a raise with no fix options, which asks the same of the same agents as every other one."""
+    ``state``: the item's state the line is about; the line is answered once the item moves on."""
 
     who: tuple[str, ...]
     label: str
@@ -903,8 +903,7 @@ class Told:
     body: str
     on: str
     show: str
-    plain: bool = False
-    state: str = ""  # the item's state the line is about: it is answered once the item moves on
+    state: str = ""
 
     @property
     def line(self) -> str:
@@ -982,8 +981,7 @@ def told(
     if not who:
         return None
     body = f"{item.label} {verb}. {' '.join('@' + a for a in who)}: {then}."
-    plain = item.state == "raised" and not item.options
-    return Told(who, item.label, item.kind, item.title, body, on, show, plain, item.state)
+    return Told(who, item.label, item.kind, item.title, body, on, show, item.state)
 
 
 def handoff(
@@ -999,69 +997,6 @@ def handoff(
     None (``told``)."""
     t = told(item, actor, agents, board_url, action=action, side=side)
     return None if t is None else (t.who, t.line)
-
-
-def label_list(labels: Sequence[str]) -> str:
-    """Labels of one kind as a line names them: "F1 to F11", "F1 and F3 to F5", "Q2". A run of three
-    or more numbers in a row reads "from to"."""
-    parts: list[str] = []
-    run: list[str] = []
-
-    def num(label: str) -> int:
-        return int(label[1:])
-
-    def close() -> None:
-        if len(run) >= 3:
-            parts.append(f"{run[0]} to {run[-1]}")
-        else:
-            parts.extend(run)
-
-    for label in labels:
-        if run and num(label) != num(run[-1]) + 1:
-            close()
-            run = []
-        run.append(label)
-    if run:
-        close()
-    return names(parts)
-
-
-def burst_text(entries: Sequence[Told]) -> str:
-    """One message for several lines one agent's moves on one board made within a few seconds
-    (#884), so whoever acts next hears them once: "Review board: F1 to F11 raised. @claude-1: concede
-    or contest each." and the titles under it, when every one is a plain raise for the same agents;
-    else each line under one that names them all. A single line is that line, as it always was."""
-    if len(entries) == 1:
-        return entries[0].line
-    on, show = entries[0].on, entries[0].show
-    findings = [t.label for t in entries if t.kind == "finding"]
-    questions = [t.label for t in entries if t.kind == "question"]
-    if all(t.plain for t in entries) and len({t.who for t in entries}) == 1:
-        mention = " ".join("@" + a for a in entries[0].who)
-        rows = "\n".join(f"- {t.label}: {t.title}" for t in entries)
-        return f"{on} {label_list(findings)} raised. {mention}: concede or contest each.\n{rows}\n{show}"
-    said = [f"{label_list(findings)} raised"] if findings else []
-    if questions:
-        said.append(f"{label_list(questions)} asked")
-    rows = "\n".join(f"- {t.body}" for t in entries)
-    return f"{on} {' and '.join(said)}.\n{rows}\n{show}"
-
-
-# A board's lines from one agent's raises and asks wait for the room's quiet period (``[delivery]
-# quiet_s``, 3 s) after its last one, and at most this long after its first, then go as one (#884):
-# a few seconds is all a first wake waits.
-BURST_MAX_S = 5.0
-
-
-def burst_due(first_at: float, last_at: float, now: float, quiet_s: float, max_s: float) -> bool:
-    """True once a burst of lines may go: quiet for ``quiet_s`` since its last, or ``max_s`` since its
-    first, whichever comes first."""
-    return now - last_at >= quiet_s or now - first_at >= max_s
-
-
-def burst_wait(first_at: float, last_at: float, now: float, quiet_s: float, max_s: float) -> float:
-    """Seconds until ``burst_due`` is true, 0 when it is already."""
-    return max(0.0, min(last_at + quiet_s, first_at + max_s) - now)
 
 
 def person_move(item: Item, move: str) -> str:

@@ -1,15 +1,15 @@
 """Who a review board's move wakes, and when its line is answered (#884, DESIGN.md §37.17).
 
-A raise is the author's side's to answer, not every agent's in the room; one agent's raises within a
-few seconds go as one message; and a line stops counting as unanswered for an agent once the board has
-moved on without it. The pure rules first, then the real ``Boards``, store and engine on a ``FakeClock``,
-with no broker and no I/O: a bystander reviewer is never woken and never gets ``again=yes``.
+A raise is the author's side's to answer, not every agent's in the room; many raises at once cost the
+author one wake, through the engine's own batching; and a line stops counting as unanswered for an
+agent once the board has moved on without it. The pure rules first, then the real ``Boards``, store and
+engine on a ``FakeClock``, with no broker and no I/O: a bystander reviewer is never woken and never gets
+``again=yes``.
 """
 
 from __future__ import annotations
 
-import sqlite3
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,13 +20,14 @@ from engine_agents import listener, result, session, stop, woke
 from engine_world import World
 
 from switchboard import reviews
-from switchboard.broker.reviews import RETRY_S, Boards, loop_call_later
+from switchboard.broker.reviews import Boards
 from switchboard.config import Config
 from switchboard.delivery import rules
-from switchboard.models import Membership, Participant, closed_room_name
+from switchboard.models import Membership, Participant
 from switchboard.reviews import Item
 
 PR = "https://github.com/example/shop/pull/866"
+PR_B = "https://github.com/example/shop/pull/867"
 ROOM = ("dispatch", "codex-review", "grok-reviewer")
 
 
@@ -161,74 +162,7 @@ def test_a_line_is_answered_once_its_cards_moved_on_or_the_agent_has_no_move_on_
 
 
 # ------------------------------------------------------------------ one message
-def test_labels_in_a_row_read_as_a_range() -> None:
-    assert reviews.label_list([f"F{n}" for n in range(1, 12)]) == "F1 to F11"
-    assert reviews.label_list(["F1", "F2"]) == "F1 and F2"
-    assert reviews.label_list(["F1", "F3", "F4", "F5", "F9"]) == "F1, F3 to F5 and F9"
-
-
-def test_one_agents_plain_raises_go_as_one_line_with_their_titles() -> None:
-    lines = [reviews.told(finding(n=n), "codex-review", ROOM, side=("dispatch",)) for n in (1, 2, 3)]
-    assert all(t is not None for t in lines)
-    text = reviews.burst_text(lines)  # type: ignore[arg-type]
-    assert text == (
-        "Review board: F1 to F3 raised. @dispatch: concede or contest each.\n"
-        "- F1: finding 1\n- F2: finding 2\n- F3: finding 3\n"
-        'review(action="show") shows the board.'
-    )
-    assert reviews.burst_text(lines[:1]) == lines[0].line  # type: ignore[list-item,union-attr]
-
-
-def test_mixed_lines_keep_each_ones_own_ask() -> None:
-    """A raise with fix options and a question ask more agents than a plain raise: each keeps its line."""
-    a = reviews.told(finding(), "codex-review", ROOM, side=("dispatch",))
-    b = reviews.told(finding(n=2, options=("x", "y"), recommend=0), "codex-review", ROOM, side=("dispatch",))
-    q = reviews.told(question(), "codex-review", ROOM)
-    assert a is not None and b is not None and q is not None
-    text = reviews.burst_text([a, b, q])
-    assert text.startswith("Review board: F1 and F2 raised and Q1 asked.\n- F1 raised: finding 1. @dispatch:")
-    assert f"- {b.body}\n" in text and f"- {q.body}\n" in text and "@grok-reviewer" in text
-
-
-def test_a_burst_goes_after_the_quiet_period_or_at_most_a_few_seconds_after_its_first_line() -> None:
-    assert not reviews.burst_due(0.0, 2.0, 4.9, 3.0, 5.0)
-    assert reviews.burst_due(0.0, 2.0, 5.0, 3.0, 5.0)  # the most a first line waits
-    assert reviews.burst_due(0.0, 0.5, 3.5, 3.0, 5.0)  # quiet since its last
-    assert reviews.burst_wait(0.0, 0.5, 1.0, 3.0, 5.0) == pytest.approx(2.5)
-    assert reviews.burst_wait(0.0, 4.0, 4.5, 3.0, 5.0) == pytest.approx(0.5)
-    assert reviews.burst_wait(0.0, 0.0, 9.0, 3.0, 5.0) == 0.0
-
-
 # ------------------------------------------------------------- the engine, for real
-@dataclass
-class Timer:
-    at: float
-    callback: Any
-    cancelled: bool = False
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-
-@dataclass
-class Timers:
-    """``call_later`` on the test's clock: ``run()`` fires what the clock has reached."""
-
-    clock: FakeClock
-    armed: list[Timer] = field(default_factory=list)
-
-    def __call__(self, delay: float, callback: Any) -> Timer:
-        t = Timer(self.clock.now() + delay, callback)
-        self.armed.append(t)
-        return t
-
-    def run(self) -> None:
-        for t in sorted(self.armed, key=lambda t: t.at):
-            if not t.cancelled and t.at <= self.clock.now():
-                t.cancelled = True
-                t.callback()
-
-
 class Service:
     """The broker's posting, as far as a board uses it: store, classify, and hand it to the engine."""
 
@@ -253,7 +187,6 @@ class Service:
 class Review:
     w: World
     boards: Boards
-    timers: Timers
     agents: dict[str, tuple[Participant, Membership]]
 
     def move(self, who: str, **params: Any) -> dict[str, Any]:
@@ -271,14 +204,16 @@ class Review:
         }
         return self.boards.agent(self.w.room, who, {"url": PR, **params}, poster=poster)
 
-    def read(self, who: str) -> None:
-        """``who`` calls read(), as a stubbed line tells it to: what it shows reaches its context."""
+    def read(self, who: str) -> list[int]:
+        """``who`` calls read(), as a stubbed line tells it to: what it shows reaches its context.
+        Returns the ids of the lines it showed."""
         p, m = self.agents[who]
         self.w.actions += self.w.engine.before_call(self.w.p(p))
-        _text, bid, _n, _more, acts = self.w.engine.pull(self.w.p(p), self.w.m(m), "read", 50)
+        text, bid, _n, _more, acts = self.w.engine.pull(self.w.p(p), self.w.m(m), "read", 50)
         self.w.actions += acts
         if bid is not None:
             self.w.actions += self.w.engine.on_confirm(bid, "next_call")
+        return [x.id for x in self.lines() if f"id={x.id} " in text]
 
     def lines(self) -> list[Any]:
         """The board's lines in the room: the movers' chat messages."""
@@ -288,23 +223,29 @@ class Review:
         m = self.agents[who][1]
         return next((d for d in self.w.store.deliveries(m.id) if d["message_id"] == msg.id), None)
 
+    def wakes(self, who: str) -> int:
+        """How many wakes (counted batches, §8.3) ``who`` has had."""
+        m = self.agents[who][1]
+        row = self.w.store.con.execute(
+            "SELECT COUNT(*) FROM batches WHERE membership_id=? AND kind='wake'", (m.id,)
+        ).fetchone()
+        return int(row[0])
+
     def later(self, s: float) -> None:
-        """``s`` seconds pass: the board's timers, then the engine's tick (holds, the watchdog)."""
+        """``s`` seconds pass, and the engine ticks (holds, the watchdog)."""
         self.w.clock.advance(s)
-        self.timers.run()
         self.w.actions += self.w.engine.tick()
 
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config(human_name="alice"))  # the real quiet period: 3 s
+    return World(tmp_path, clock, Config(human_name="alice"))  # the real delivery settings
 
 
 def review_room(w: World, clock: FakeClock) -> tuple[Review, Any, Any]:
     """#switchboard-reviews from #884: the dispatching session (claude, its Stop hook parked on the
     broker), the PR's reviewer (codex, busy reviewing) and another reviewer not on this PR (parked too).
     Returns the review and the two parks."""
-    timers = Timers(clock)
     dispatch_p, dispatch_m, dispatch_park = listener(w, "dispatch", "claude", status="idle")
     codex = session(w, "codex-review", "codex", status="busy")
     grok_p, grok_m, grok_park = listener(w, "grok-reviewer", "claude", status="idle")
@@ -313,60 +254,57 @@ def review_room(w: World, clock: FakeClock) -> tuple[Review, Any, Any]:
     )
     r = Review(
         w,
-        Boards(state, call_later=timers),
-        timers,
+        Boards(state),
         {"dispatch": (dispatch_p, dispatch_m), "codex-review": codex, "grok-reviewer": (grok_p, grok_m)},
     )
     r.move("dispatch", action="open")  # the dispatching session opened the board: it holds it
     return r, dispatch_park, grok_park
 
 
-def test_many_raises_wake_only_the_author_side_once_and_a_bystander_never(w: World, clock: FakeClock) -> None:
-    """The scene of #884: codex-review raises eleven findings at once. The dispatching session, which
-    opened the board, is woken once, by one message; grok-reviewer, the other reviewer, gets no delivery
-    of it at all, so no wake now, none when the unaddressed hold would end, and no again=yes. Then the
-    dispatcher answers every card on the board and ends its turn: nothing comes back to it either.
-    Fails on each part of #884: a raise that names every agent, a line per raise, and a board move that
-    the broker doesn't take as the answer."""
+def test_eleven_raises_wake_the_author_side_once_and_a_bystander_never(w: World, clock: FakeClock) -> None:
+    """The scene of #884: codex-review raises eleven findings, a fifth of a second apart. Each is its
+    own line, posted at once and addressed to the dispatching session alone, which opened the board.
+    The first wakes it; the engine holds the rest while that wake is in flight (one offer at a time,
+    §8.2), and its follow-up turn reads them all at once: one wake for eleven raises. grok-reviewer,
+    the other reviewer, gets no delivery of any, so no wake now, none when the unaddressed hold would
+    end, and no again=yes. Then the dispatcher answers every card on the board and ends its turn:
+    nothing comes back to it either. Fails on each part of #884: a raise that names every agent, and
+    a board move the broker doesn't take as the answer."""
     r, dispatch_park, grok_park = review_room(w, clock)
     for n in range(1, 12):
         r.move("codex-review", action="raise", title=f"finding {n}", where=f"a.py:{n}")
         clock.advance(0.2)
-    assert r.lines() == [] and not woke(w, dispatch_park)  # held for the rest of the burst
-    r.later(3.0)
-    [line] = r.lines()
-    assert line.text.startswith("Review board: F1 to F11 raised. @dispatch: concede or contest each.\n")
-    assert all(f"- F{n}: finding {n}" in line.text for n in range(1, 12))  # none dropped
+    lines = r.lines()
+    assert len(lines) == 11 and all(set(x.mentions) == {"dispatch"} for x in lines)
+    assert all(r.delivered("grok-reviewer", x) is None for x in lines)  # not addressed: not delivered
     assert woke(w, dispatch_park) and not woke(w, grok_park)
-    assert r.delivered("grok-reviewer", line) is None  # not addressed: not delivered
+    res = result(w, dispatch_park)
+    assert res is not None and f"id={lines[0].id} " in res["text"]
+    w.actions += w.engine.on_hook_ack(res["batch_id"], res["ack"])  # its Stop hook printed the follow-up
+    assert sorted(r.read("dispatch")) == [x.id for x in lines]  # the follow-up's turn reads all eleven
+    assert r.wakes("dispatch") == 1 and r.wakes("grok-reviewer") == 0
     r.later(400.0)  # past the unaddressed hold (270 s) and the watchdog (120 s)
     assert not woke(w, grok_park)
 
-    res = result(w, dispatch_park)
-    assert res is not None and f"id={line.id} " in res["text"]
-    w.actions += w.engine.on_hook_ack(res["batch_id"], res["ack"])  # its Stop hook printed the follow-up
-    r.read("dispatch")  # the follow-up's turn reads the stubbed line: it is in context now
-    assert r.delivered("dispatch", line)["state"] == "in_context"  # type: ignore[index]
     p = r.agents["dispatch"][0]
     for n in range(1, 12):
         r.move("dispatch", action="concede", item=f"F{n}")  # its own to fix: a notice each, no wake
-        assert r.delivered("dispatch", line)["state"] == ("handled" if n == 11 else "in_context")  # type: ignore[index]
+    assert all(r.delivered("dispatch", x)["state"] == "handled" for x in lines)  # type: ignore[index]
     park = stop(w, p)  # its turn ends without say() or pass(): the board was its answer
     assert w.store.recent_events(kinds=("requeue",), limit=5) == []
     r.later(400.0)
     assert not woke(w, park) and not woke(w, grok_park)
-    assert len(r.lines()) == 1  # the eleven concessions were notices: nothing more for anyone to answer
+    assert r.wakes("dispatch") == 1 and len(r.lines()) == 11  # the concessions were notices
 
 
 def test_the_author_side_keeps_its_line_while_a_card_still_waits_on_it(w: World, clock: FakeClock) -> None:
     """Not waking the agent who must act is the other half: a dispatcher that answered five of eleven
-    and ended its turn gets the line again (again=yes), as before. Fails if a board move answered the
-    whole line."""
+    and ended its turn gets the other six again (again=yes), as before. Fails if a board move answered
+    lines about cards it did not move."""
     r, dispatch_park, _grok = review_room(w, clock)
     for n in range(1, 12):
         r.move("codex-review", action="raise", title=f"finding {n}")
-    r.later(3.0)
-    [line] = r.lines()
+    lines = r.lines()
     res = result(w, dispatch_park)
     w.actions += w.engine.on_hook_ack(res["batch_id"], res["ack"])  # type: ignore[index]
     r.read("dispatch")
@@ -374,10 +312,11 @@ def test_the_author_side_keeps_its_line_while_a_card_still_waits_on_it(w: World,
     for n in range(1, 6):
         r.move("dispatch", action="concede", item=f"F{n}")
     stop(w, p)
-    d = r.delivered("dispatch", line)
-    assert d is not None and d["redelivered"] == 1  # requeued once: it comes back as again=yes
+    states = [r.delivered("dispatch", x) for x in lines]
+    assert all(d is not None and d["state"] == "handled" for d in states[:5])
+    assert all(d is not None and d["redelivered"] == 1 for d in states[5:])  # back once, as again=yes
     [ev] = w.store.recent_events(kinds=("requeue",), limit=5)
-    assert ev.data["reason"] == "redeliver"
+    assert ev.data["reason"] == "redeliver" and ev.data["n"] == 6
 
 
 def test_a_stubbed_line_answered_on_the_board_gets_no_reminder(w: World, clock: FakeClock) -> None:
@@ -386,7 +325,6 @@ def test_a_stubbed_line_answered_on_the_board_gets_no_reminder(w: World, clock: 
     answered, so nothing comes. Fails if only a say() or pass() could answer a board's line."""
     r, dispatch_park, _grok = review_room(w, clock)
     r.move("codex-review", action="raise", title="off by one")
-    r.later(3.0)
     [line] = r.lines()
     res = result(w, dispatch_park)
     w.actions += w.engine.on_hook_ack(res["batch_id"], res["ack"])  # type: ignore[index]
@@ -405,7 +343,6 @@ def test_when_the_board_knows_no_author_everyone_hears_and_the_first_answer_free
     as before. Once the dispatcher concedes it, the board knows its side, and grok-reviewer's copy of
     the line is answered: its turn's end brings nothing back. Fails if a bystander kept owing a line
     someone else answered (the again=yes reminders of #884)."""
-    timers = Timers(clock)
     dispatch_p, dispatch_m, _ = listener(w, "dispatch", "claude", status="idle")
     codex = session(w, "codex-review", "codex", status="busy")
     grok_p, grok_m = session(w, "grok-reviewer", "claude", status="busy")
@@ -415,12 +352,10 @@ def test_when_the_board_knows_no_author_everyone_hears_and_the_first_answer_free
     w.store.open_review(w.room.id, PR, "", "switchboard")
     r = Review(
         w,
-        Boards(state, call_later=timers),
-        timers,
+        Boards(state),
         {"dispatch": (dispatch_p, dispatch_m), "codex-review": codex, "grok-reviewer": (grok_p, grok_m)},
     )
     r.move("codex-review", action="raise", title="off by one")
-    r.later(3.0)
     [line] = r.lines()
     assert set(line.mentions) == {"dispatch", "grok-reviewer"}
     out = w.hook(grok_p, "PostToolUse", ok=True)  # grok is busy: it hears of it after a tool call
@@ -441,7 +376,6 @@ def test_a_concur_answers_the_question_for_that_agent_only(w: World, clock: Fake
     r.move(
         "codex-review", action="ask", title="Before or after tax?", options=["before", "after"], recommend=0
     )
-    r.later(3.0)
     [line] = r.lines()
     assert set(line.mentions) == {"dispatch", "grok-reviewer"}
     r.move("grok-reviewer", action="concur", item="Q1", recommend=0)
@@ -449,157 +383,12 @@ def test_a_concur_answers_the_question_for_that_agent_only(w: World, clock: Fake
     assert r.delivered("dispatch", line)["state"] != "handled"  # type: ignore[index]
 
 
-def test_the_first_line_waits_a_few_seconds_at_most_and_nothing_is_lost(w: World, clock: FakeClock) -> None:
-    """A reviewer that raises one finding a second for eight seconds: the first message goes 5 s after
-    the first raise, not after the last, and every raise is in one of the messages. Fails if a burst
-    held its first line for as long as raises kept coming, or dropped one."""
-    r, dispatch_park, _g = review_room(w, clock)
-    first_at = clock.now()
-    for n in range(1, 9):
-        r.move("codex-review", action="raise", title=f"finding {n}")
-        r.later(1.0)
-        if clock.now() - first_at < 5.0:
-            assert r.lines() == []
-    assert woke(w, dispatch_park)
-    msgs = r.lines()
-    assert msgs[0].ts - first_at == pytest.approx(5.0)
-    r.later(3.0)
-    text = "\n".join(x.text for x in r.lines())
-    assert all(f"- F{n}: finding {n}" in text for n in range(1, 9))
-    assert len(r.lines()) == 2
-
-
-def test_a_say_and_any_other_move_come_after_the_lines_already_made(w: World, clock: FakeClock) -> None:
-    """The room reads in order: a held burst is posted before the raiser's next say, and before anyone's
-    other move on the board, rather than a few seconds after it."""
-    r, _d, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    r.boards.flush_actor(w.room.id, "codex-review")  # what AgentService.say does first
-    assert [x.text.split(":")[0] for x in r.lines()] == ["Review board"]
-    r.move("codex-review", action="raise", title="rounding")
-    r.move("dispatch", action="concede", item="F1")  # another move flushes the room's bursts first
-    assert [x.text for x in r.lines()][1].startswith("Review board: F2 raised: rounding. @dispatch:")
-
-
-def test_shutdown_posts_what_is_held(w: World, clock: FakeClock) -> None:
-    """A restart within the burst's few seconds posts it rather than lose it."""
-    r, dispatch_park, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    r.boards.close()
-    [line] = r.lines()
-    assert "F1 raised: off by one" in line.text and woke(w, dispatch_park)
-    assert all(t.cancelled for t in r.timers.armed)
-
-
-def test_without_a_quiet_period_each_line_goes_at_once(tmp_path: Path, clock: FakeClock) -> None:
-    """``quiet_s = 0`` (the integration tests' fast config) turns the wait off: nothing is held."""
-    w = World(tmp_path, clock, Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0))
-    r, _d, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    assert len(r.lines()) == 1 and r.timers.armed == []
-
-
-def test_closing_the_board_answers_every_line_on_it(w: World, clock: FakeClock) -> None:
-    """A closed board takes no moves, so nobody owes its lines: the dispatcher that closes it with a
-    finding open is not reminded of that finding."""
-    r, dispatch_park, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    r.later(3.0)
-    [line] = r.lines()
-    r.move("dispatch", action="close", reason="superseded by #867")
-    assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
-    assert rules.redeliver_ids(w.store.in_context_items(r.agents["dispatch"][1].id)) == []
-
-
-def test_without_a_running_loop_a_line_is_posted_at_once(w: World, clock: FakeClock) -> None:
-    """Nothing would run a timer outside the broker's loop: the line goes now, rather than wait for a
-    move or a shutdown that may be far off. Fails if a burst were held with no timer to send it."""
-    assert loop_call_later(1.0, lambda: None) is None
-    r, dispatch_park, _g = review_room(w, clock)
-    r.boards = Boards(r.boards.state)  # the broker's own scheduler, with no loop running here
-    r.move("codex-review", action="raise", title="off by one")
-    [line] = r.lines()
-    assert "F1 raised: off by one" in line.text and woke(w, dispatch_park)
-
-
-def test_a_line_held_for_a_room_closed_meanwhile_is_not_posted(w: World, clock: FakeClock) -> None:
-    """A room closed within the burst's few seconds has nobody in it to act: nothing is posted there."""
-    r, dispatch_park, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    room = w.store.room_by_id(w.room.id)
-    assert room is not None
-    w.store.rename_room(room.id, closed_room_name(room.name, room.id), expect=room.name)
-    r.later(3.0)
-    assert r.lines() == [] and not woke(w, dispatch_park)
-
-
-# --------------------------------------------- what the first review of #889 found (F1 to F5)
-PR_B = "https://github.com/example/shop/pull/867"
-
-
-def leave(w: World, m: Membership) -> None:
-    w.store.end_membership(m.id, "leave")
-    w.actions += w.engine.on_membership_ended(m.id, "leave")
-
-
-def test_a_raise_held_when_the_broker_crashed_is_posted_at_the_next_start(w: World, clock: FakeClock) -> None:
-    """The raise is stored at once; its line waits a few seconds. A crash in those seconds used to
-    lose the line, and with it the author's only wake (F1). The held raise is a record written with
-    the card, so the next start posts it, once."""
-    r, dispatch_park, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    for t in r.timers.armed:  # the crash: the broker's memory and its timers are gone
-        t.cancel()
-    r.boards = Boards(r.boards.state, call_later=r.timers)
-    assert r.lines() == []
-    assert r.boards.recover() == 1
-    [line] = r.lines()
-    assert "F1 raised: off by one. @dispatch:" in line.text and woke(w, dispatch_park)
-    assert Boards(r.boards.state, call_later=r.timers).recover() == 0 and len(r.lines()) == 1  # not twice
-
-
-def test_a_post_that_fails_is_kept_and_tried_again(w: World, clock: FakeClock) -> None:
-    """A burst used to leave memory before its post: a failed post lost it (F1). It stays until it is
-    posted, and is tried again a few seconds later."""
-    r, dispatch_park, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    service = r.boards.state.service
-    posting = service._post
-
-    def broken(room: Any, **kw: Any) -> Any:
-        raise sqlite3.OperationalError("disk I/O error")
-
-    service._post = broken
-    r.later(3.0)
-    assert r.lines() == [] and not woke(w, dispatch_park)
-    service._post = posting
-    r.later(RETRY_S)
-    [line] = r.lines()
-    assert "F1 raised" in line.text and woke(w, dispatch_park)
-
-
-def test_an_author_that_left_while_the_line_was_held_is_not_the_only_one_named(
-    w: World, clock: FakeClock
-) -> None:
-    """Who a held line names is worked out when it goes (F2). The dispatcher that opened the board
-    leaves before then: the board knows no author in the room, so grok-reviewer, the agent left to
-    answer it, is named and woken. Fails if the line still named only the agent that left, which
-    nobody then receives."""
-    r, _dispatch_park, grok_park = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    leave(w, r.agents["dispatch"][1])
-    r.later(3.0)
-    [line] = r.lines()
-    assert set(line.mentions) == {"grok-reviewer"} and woke(w, grok_park)
-
-
 def test_a_pick_still_due_keeps_the_raise_line_after_the_author_concedes(w: World, clock: FakeClock) -> None:
     """A finding with fix options asks every agent to pick, and a pick counts until it is fixed or
     dropped (§37.12). The dispatcher conceding it does not answer the line for grok-reviewer, which
-    has yet to pick, nor for the dispatcher itself: each answers it by picking (F3)."""
+    has yet to pick, nor for the dispatcher itself: each answers it by picking (F3 on #889)."""
     r, _d, _g = review_room(w, clock)
     r.move("codex-review", action="raise", title="rounding", options=["half up", "half even"], recommend=0)
-    r.later(3.0)
     [line] = r.lines()
     assert set(line.mentions) == {"dispatch", "grok-reviewer"}
     r.move("dispatch", action="concede", item="F1")
@@ -611,46 +400,15 @@ def test_a_pick_still_due_keeps_the_raise_line_after_the_author_concedes(w: Worl
     assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
 
 
-def test_a_board_opened_for_a_posted_link_comes_after_the_lines_held_for_the_first(
-    w: World, clock: FakeClock
-) -> None:
-    """A line held while the room had one board says "review(action=\\"show\\")" with no url. A link
-    posted meanwhile opens a second board: the held line goes first, while it is still the only one
-    (F4). Fails if the line went out after the second board opened, naming no board."""
-    r, _d, _g = review_room(w, clock)
-    w.store.set_room_review_on_link(w.room.id, True)
-    r.move("codex-review", action="raise", title="off by one")
-    room = w.store.room_by_id(w.room.id)
-    assert room is not None
-    r.boards.on_agent_say(room, "codex-review", f"Opened {PR_B} for the follow-up.")
-    chat = r.lines()
-    assert [x.sender_name for x in chat] == ["codex-review", "switchboard"]  # the line, then the request
-    assert chat[0].text.startswith("Review board: F1 raised: off by one.")
-    assert len(w.store.open_reviews(w.room.id)) == 2
-
-
-def test_a_held_line_names_its_board_when_another_opened_before_it_went(w: World, clock: FakeClock) -> None:
-    """However a second board opened, a line that goes out after it names its own board and passes its
-    url, so the move it asks for lands on the right board (F4)."""
-    r, _d, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="off by one")
-    w.store.open_review(w.room.id, PR_B, "", "dispatch")
-    r.later(3.0)
-    [line] = r.lines()
-    assert line.text.startswith(f"Review board {PR}: F1 raised: off by one.")
-    assert f'url="{PR}"' in line.text
-
-
 def test_a_claim_holder_that_hears_a_line_keeps_it_until_it_answers(w: World, clock: FakeClock) -> None:
     """A message that names a member's live claim reaches it as an @mention would, and is answered
     with a say or a pass (§8.1). A board's line is such a message too: a move on the board answers it
-    only for the agents the line was addressed to (F5). Fails if the claim holder's copy was handled
-    before it could read it."""
+    only for the agents the line was addressed to (F5 on #889). Fails if the claim holder's copy was
+    handled before it could read it."""
     r, _d, _g = review_room(w, clock)
     w.store.open_review(w.room.id, PR_B, "", "dispatch")  # two boards: a line names its board's url
     w.store.move_claim(w.room.id, r.agents["grok-reviewer"][1].id, PR, 600)
     r.move("codex-review", action="raise", title="off by one")
-    r.later(3.0)
     [line] = r.lines()
     assert set(line.mentions) == {"dispatch"}
     assert r.delivered("grok-reviewer", line) is not None  # it names grok-reviewer's claim
@@ -659,18 +417,25 @@ def test_a_claim_holder_that_hears_a_line_keeps_it_until_it_answers(w: World, cl
     assert r.delivered("grok-reviewer", line)["state"] != "handled"  # type: ignore[index]
 
 
-def test_a_raise_that_moved_on_before_its_line_went_gets_none(w: World, clock: FakeClock) -> None:
-    """A card already answered when its held line goes (after a restart) asks nothing of anyone: no
-    line is posted for it, and its record is closed so no later start posts it either."""
-    r, dispatch_park, _g = review_room(w, clock)
+def test_an_author_that_left_is_not_named(w: World, clock: FakeClock) -> None:
+    """Who a line names is worked out when it is posted (F2 on #889): the dispatcher that opened the
+    board has left, so the board knows no author in the room, and grok-reviewer, the agent left to
+    answer, is named and woken."""
+    r, _dispatch_park, grok_park = review_room(w, clock)
+    m = r.agents["dispatch"][1]
+    w.store.end_membership(m.id, "leave")
+    w.actions += w.engine.on_membership_ended(m.id, "leave")
     r.move("codex-review", action="raise", title="off by one")
-    for t in r.timers.armed:
-        t.cancel()
-    board = w.store.review_for_url(w.room.id, PR)
-    assert board is not None
-    item = w.store.review_item(board["id"], "finding", 1)
-    assert item is not None
-    w.store.move_review_item(item.id, "conceded", owner="dispatch")
-    fresh = Boards(r.boards.state, call_later=r.timers)
-    assert fresh.recover() == 1 and r.lines() == [] and not woke(w, dispatch_park)
-    assert Boards(r.boards.state, call_later=r.timers).recover() == 0
+    [line] = r.lines()
+    assert set(line.mentions) == {"grok-reviewer"} and woke(w, grok_park)
+
+
+def test_closing_the_board_answers_every_line_on_it(w: World, clock: FakeClock) -> None:
+    """A closed board takes no moves, so nobody owes its lines: the dispatcher that closes it with a
+    finding open is not reminded of that finding."""
+    r, _dispatch_park, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    [line] = r.lines()
+    r.move("dispatch", action="close", reason="superseded by #867")
+    assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
+    assert rules.redeliver_ids(w.store.in_context_items(r.agents["dispatch"][1].id)) == []
