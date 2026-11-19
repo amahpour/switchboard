@@ -428,6 +428,7 @@ def review_request(agents: list[str], url: str, note: str) -> str:
         ' option with review(action="concur"), or abstain with review(action="abstain") when you'
         ' have no view. review(action="show") shows the board. The room may'
         " have other boards open: give every call this pull request's link as its url."
+        " If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch."
     )
     return text + (f"\n\nNote: {note}" if note else "")
 
