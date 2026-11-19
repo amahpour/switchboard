@@ -324,6 +324,48 @@ def test_with_one_person_every_public_room_is_theirs(broker: InProcBroker) -> No
         web.close()
 
 
+def test_what_the_one_person_used_stays_theirs_when_a_second_arrives() -> None:
+    """With one person on the broker every public room is theirs, so opening one or posting in one is
+    recorded as membership, quietly, the way day one counts it: the day bob is added, alice is still in
+    #seen (she opened it) and #said (she posted there), and not in #idle, which she never touched, nor in
+    #gone, which she left while someone else was here, though she opened it since. Fails if what the one
+    person used is lost when a second person arrives, or if recording it undoes a Leave."""
+    b = hosted_broker()
+    alice = set_up(b)
+    bob: Browser | None = None
+    try:
+
+        def old_rooms() -> None:  # rooms from before members counted, that nobody had used by day one
+            store = b.state.store
+            for n in ("#seen", "#said", "#idle", "#gone"):
+                room = store.create_room(n, "alice", 60, 6)
+                store.insert_message(
+                    room.id,
+                    sender_name="switchboard",
+                    sender_kind="system",
+                    via="system",
+                    kind="notice",
+                    text="made before members counted",
+                )
+            gone = store.get_room("#gone")
+            store.add_event("room_people", room_id=gone.id, data={"what": "leave", "person": 0, "by": 0})
+
+        b.on_loop(old_rooms)
+        assert all(x["member"] for x in rooms(alice).values())  # alone, every public room is hers
+        for slug in ("seen", "gone"):
+            last = rooms(alice)[f"#{slug}"]["last_id"]
+            assert alice.post(f"/api/rooms/{slug}/seen", {"id": last}).status_code == 200
+        assert alice.post("/api/rooms/said/say", {"text": "hello"}).status_code == 200
+        bob = join_as_bob(b, alice)
+        got = {n: x["member"] for n, x in rooms(alice).items()}
+        assert got == {"#seen": True, "#said": True, "#idle": False, "#gone": False}
+    finally:
+        if bob is not None:
+            bob.close()
+        alice.close()
+        stop(b)
+
+
 def test_a_room_with_members_can_still_be_deleted(team: tuple[InProcBroker, Browser, Browser]) -> None:
     """Deleting a room removes its members' rows with it (§28.6): a room id is reused, and a row left
     behind would make someone a member of the next room, or fail the delete's foreign key check."""

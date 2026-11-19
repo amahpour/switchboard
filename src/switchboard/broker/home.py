@@ -319,10 +319,11 @@ def mark_room_seen(state: Any, person_key: int, room: Room, upto: Any) -> int:
     """Move a person's mark in a room forward to the message id ``upto`` (the caller has checked they may see
     the room). A value that is not a whole number from 0 up is refused; one past the room's newest message
     is cut to it, so the mark can never hide a message that has not been written yet. Reading past where an
-    agent's join started them also clears its "joined with" note (§62, ``Store.room_opened``)."""
+    agent's join started them also clears its "joined with" note, and the broker's one person opening a
+    public room makes it one of theirs for the day a second person comes (§62, ``Store.room_opened``)."""
     if isinstance(upto, bool) or not isinstance(upto, int) or not 0 <= upto < 2**53:
         raise ServiceError("bad_request", "give id, a message id")
-    return state.store.room_opened(person_key, room.id, upto)
+    return state.store.room_opened(person_key, room.id, upto, used=state.service.solo_room(room))
 
 
 def snooze_board(state: Any, person_key: int, room: Room, url: Any) -> float:

@@ -465,6 +465,12 @@ class RoomService:
         room is theirs, and nothing about joining or leaving shows (§62)."""
         return not self.store.people()
 
+    def solo_room(self, room: Room) -> bool:
+        """A public room on a broker with one person: theirs with or without a row (``is_member``), so what
+        they open or post there is recorded as a row (``Store.room_person_used``), and the day a second
+        person is added their rooms are the ones they used, as day one counts them (§62)."""
+        return not room.private and self.one_person()
+
     def agent_joined(self, room: Room, key: int, agent: str) -> bool:
         """An agent of the person ``key`` joined ``room``: they are a member of it now (§62, the
         maintainer's call on #843), and their sidebar says "joined with <agent>" until they open it.
@@ -1378,6 +1384,8 @@ class RoomService:
             skip_memberships=skip,
             sender_person_id=person[1] if person is not None else None,
         )
+        if self.solo_room(room):  # the broker's one person posted here: a room they used (§62)
+            self.store.room_person_used(room.id, self.person_key(person[1] if person is not None else None))
         for note in self.not_connected_notes(room, mentions):
             self.post_notice(room, note, level="warn")
         before = room.hop_count

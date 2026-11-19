@@ -169,14 +169,35 @@ class Store:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
-    def room_opened(self, person_key: int, room_id: int, seen_id: int) -> int:
+    def room_person_used(self, room_id: int, person_id: int) -> bool:
+        """The one person on the broker opened ``room_id`` or posted in it: a member of it from now, quietly
+        (§62), the way day one counts use, so that the day a second person is added the rooms they used
+        are rows (while they are alone every public room is theirs, row or not). Never a room they left
+        once (its ``room_people`` leave event): that Leave stands until they join it again by hand. True
+        when a row was added."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT ?, ?, ?, ?"
+                " WHERE NOT EXISTS (SELECT 1 FROM room_people WHERE room_id=? AND person_id=?)"
+                " AND NOT EXISTS (SELECT 1 FROM events WHERE kind='room_people' AND room_id=?"
+                "  AND json_valid(data) AND json_extract(data, '$.what')='leave'"
+                "  AND json_extract(data, '$.person')=?)",
+                (room_id, person_id, person_id, self.clock.now(), room_id, person_id, room_id, person_id),
+            )
+            return cur.rowcount == 1
+
+    def room_opened(self, person_key: int, room_id: int, seen_id: int, *, used: bool = False) -> int:
         """The person read ``room_id`` up to the message ``seen_id`` (the page's seen request, §55.8): their
         mark moves forward as ``home_mark_seen`` moves it, and the "joined with" note (§62) goes once the
         mark moves past where it stood. An agent's join made the note and set the mark to the room's newest
         message in one transaction, before the agent's join line, so a request for what a page showed
         before that join (sent late, or from another browser) leaves the note, and one that reaches the
-        join line clears it. One transaction. Returns the mark now."""
+        join line clears it. ``used``: the person is the broker's one, and opening the room is recorded
+        as membership (``room_person_used``). One transaction. Returns the mark now."""
         with db.tx(self.con):
+            if used:
+                self.room_person_used(room_id, person_key)
             r = self.con.execute(
                 "SELECT seen_id FROM home_seen WHERE person_key=? AND room_id=?", (person_key, room_id)
             ).fetchone()
