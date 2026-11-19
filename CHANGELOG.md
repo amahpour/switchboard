@@ -2,6 +2,26 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.10.0 (2026-11-19)
+
+### Added
+
+- **The room says when the meeting bot is muted, and you can unmute it.** Zoom's Mute all mutes the bot too, so `@call` lines were turned into speech that nobody heard, and the room showed nothing wrong. While voice is on, the next `@call` line posts "The bot is muted in the call, so @call lines are not heard." once for that call. That notice needs the updated joinly `server.py` patch. `/meeting unmute`, in the web UI, asks the server's bot to unmute itself, and that uses joinly's own tool. A call hosted on your machine says it has no unmute yet.
+- **A webhook tells you when something has waited on you.** Settings → Profile → Webhook takes an https address (a Slack incoming webhook, a Discord webhook, an ntfy topic) and a wait (5 minutes to start). When a message to you, a review that needs your call, or an agent waiting on an approval has waited that long and you have not opened it, switchboard sends one JSON POST: who and where, with a link, never the message. Opening the item stops it. The address is never shown back, only its host. It only posts to public addresses (checked at every send), follows no redirects, and sends at most 12 an hour; `[notify] allow_private_webhooks = true` lets a home network use a private one. See the [guide](https://amahpour.github.io/switchboard/guide/webhook/) and [#723](https://github.com/amahpour/switchboard/issues/723).
+
+### Changed
+
+- **`/help` lists `/meeting talker` only when your server has a talker key.** Without a key the command can only refuse, so the list no longer points to it. The talker is parked (#854): it stays opt-in and works as before when an operator sets `SWITCHBOARD_TALKER_API_KEY`.
+- **A plugin works with a server of the same major version.** `/who`, the Inspector and an agent's `join` answer warn only when the plugin's major version differs from the server's, or when Claude Code sends no version. A different minor or patch says nothing, whether the plugin is ahead of the server or behind it. A plugin from an older major includes the command that updates it. A plugin from a newer major names both versions and does not include that command, because updating the plugin would leave it on the new major. A major version is for a change to the listen protocol (its endpoint, headers or status meanings) or for removing or renaming a tool, an action or a required parameter.
+- **Reviewers are pointed to a repo's own review rules.** The request that `/review` and a new board's link send to the room's agents now says: if the repo has `REVIEW.md` files, read the ones nearest the changed files, from the default branch. The review-board skill and guide say the same. A repo without `REVIEW.md` files is unaffected.
+- **A `wait()` on Claude Code and Codex is held 60 seconds at most by default (it was 600 and 280).** A `wait()` holds the whole session, and a Stop listener wakes an idle one anyway. A capped wait says "For a longer wait, end your turn; switchboard wakes the session when a message comes." `wait_cap_s` in `config.toml` can still raise the cap. (#878)
+- **The join text says what answers a message.** It counts only once it is posted with `say()` (or `pass()` when there is nothing to add); acting on it in chat does not answer it. (#878)
+- **A board call with an action the server does not have now lists the ones it does.** It used to say only "unknown action". The board and review skills now tell an agent that the server's own action list is the one that counts, and no longer repeat a size or rate limit the server states when it refuses a call. This helps a plugin that is newer than its server within the same major version.
+
+### Fixed
+
+- **A killed session's name can be taken back.** A Codex session killed before any of its hooks ran (for example, its plugin's hooks were not trusted yet) never left its room, so a new session joining with the right `resume` code was refused with "name taken". The code now takes the name from an offline member and ends its old membership. A session that is still connected keeps its name, and the refusal says why.
+
 ## 1.9.1 (2026-11-18)
 
 ### Fixed
