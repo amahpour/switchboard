@@ -171,17 +171,20 @@ def test_leaving_clears_unread_and_home_and_the_agents_stay(
 
 def test_an_agent_joining_makes_its_person_a_member(team: tuple[InProcBroker, Browser, Browser]) -> None:
     """bob's agent (a Codex session on bob's device) joins #build, so bob is a member, and his room list
-    says which agent did it until he opens the room. Its join text still names alice and bob as its users:
-    who agents answer to has not moved. Fails if an agent's join leaves its person out, if the note never
-    goes away, or if the agent answers only to the room's members."""
+    says which agent did it until he opens the room. alice left #build first, so bob is its only member,
+    and the agent's join text still names alice and bob as its users: who agents answer to has not moved.
+    Fails if an agent's join leaves its person out, if the note never goes away, or if the agent answers
+    only to the room's members (then its only user would be bob)."""
     b, alice, bob = team
     bobs = Codex(b, make_token(b, "bobs-laptop", b.state.store.person_named("bob").id))
     bobs.c = httpx.Client(base_url=f"http://127.0.0.1:{b.port}", timeout=30.0, headers={"host": HOST})
     try:
         assert bobs.start().status_code == 200
+        assert people(alice, "build", "remove", "alice").status_code == 200
         joined = bobs.call("join", THREAD_B, room="#build", screen_name="codex-1")
         assert joined["ok"], joined
-        assert "alice" in joined["text"] and "bob" in joined["text"]
+        assert rooms(alice)["#build"]["people"] == ["bob"]
+        assert "Your users are alice and bob (kind=human)" in joined["text"]
         got = rooms(bob)["#build"]
         assert (got["member"], got["joined_with"]) == (True, "codex-1")
         assert waiting(bob) == []  # what was there before is history
