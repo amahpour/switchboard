@@ -33,6 +33,7 @@ from switchboard.adapters.https import (
     HttpsCodexAdapter,
     HttpsCursorAdapter,
     HttpsDevinAdapter,
+    HttpsOpenCodeAdapter,
     rearm_text,
 )
 from switchboard.adapters.testagent import ACK_MODES, TestAgentAdapter
@@ -440,11 +441,12 @@ def test_a_join_says_an_answer_counts_only_once_it_is_posted_and_stop_listeners_
         (HttpsClaudeAdapter, "claude"),
         (HttpsCodexAdapter, "codex"),
         (HttpsCursorAdapter, "cursor"),
+        (HttpsOpenCodeAdapter, "opencode"),
         (HttpsDevinAdapter, "devin"),
     ):
         text = cls(CFG).join_guidance(part(harness=harness), "#build")
         assert "answered only once you post in the room with say(), or pass()" in text, harness
     assert HttpsClaudeAdapter(CFG).long_wait_note == HttpsCodexAdapter(CFG).long_wait_note != ""
     assert "end your turn" in HttpsClaudeAdapter(CFG).long_wait_note
-    for cls in (HttpsCursorAdapter, HttpsDevinAdapter):
+    for cls in (HttpsCursorAdapter, HttpsOpenCodeAdapter, HttpsDevinAdapter):
         assert cls(CFG).long_wait_note == ""
