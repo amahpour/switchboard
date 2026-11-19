@@ -10,8 +10,10 @@ The real ``~/.cursor`` must not change.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from harness import scenarios
@@ -63,23 +65,36 @@ def test_3_woken_while_idle_by_a_mention(model: CursorRun) -> None:
 
 def test_3b_still_woken_after_more_than_eleven_minutes_parked(model: CursorRun) -> None:
     """SLOW: about 12 minutes of real time (#885). The Stop hook was held 10 minutes before the plugin's wait
-    was raised to an hour, so an idle Cursor stopped hearing the room then. Park it, check the broker still
-    shows it parked 11.5 minutes on (no re-park, no typing), then an @mention wakes it and it answers. Fails
-    on a plugin that still holds 630 s, where the park has ended by then and the mention only queues."""
+    was raised to an hour, so an idle Cursor stopped hearing the room then. This reads the broker's own record
+    of the hold, its ``park`` event: the Stop hook asked to be held about an hour (3600 s or more; a plugin
+    that still asks 630 s parks for 625 and fails here at once), and 11.5 minutes on, that park is still the
+    session's newest (no re-park, no turn, nothing typed) and the session idle. Then an @mention wakes it and
+    it answers. Not the ``parked`` flag: that means "needs a poke" and is false while a hook is held."""
     assert model.joined, "the join scenario did not complete"
     model.wait_settled()
-    since: list[float] = []
+    pid = model.broker.q(
+        "SELECT participant_id FROM memberships WHERE screen_name=? ORDER BY id DESC LIMIT 1", model.name
+    )[0]["participant_id"]
 
-    def parked_long() -> bool:
+    def last_park() -> Any:
+        rows = model.broker.q(
+            "SELECT id, ts, data FROM events WHERE kind='park' AND participant_id=? ORDER BY id DESC LIMIT 1",
+            pid,
+        )
+        return rows[0] if rows else None
+
+    park = model.wait(last_park, 120, "Cursor's Stop hook to park")
+    secs = json.loads(park["data"])["secs"]
+    assert secs >= 3600, f"the Stop hook asked to be held {secs} s, not about an hour"
+
+    def held_long() -> bool:
+        newest = last_park()
+        assert newest is not None and newest["id"] == park["id"], "Cursor parked again: its hold ended early"
         m = model.member()
-        if not (m and m["parked"]):
-            since.clear()
-            return False
-        if not since:
-            since.append(time.monotonic())
-        return time.monotonic() - since[0] >= 11.5 * 60
+        assert m and m["status"] == "idle" and not m["queued"], m
+        return time.time() - park["ts"] >= 11.5 * 60
 
-    model.wait(parked_long, 15 * 60, "Cursor to stay parked for 11.5 minutes", step=5)
+    model.wait(held_long, 13 * 60, "Cursor's park to stay held for 11.5 minutes", step=10)
     word = f"pong-{nonce()}"
     asked = model.mention(say_text(word))
     answer = model.reply(word, after=asked)
