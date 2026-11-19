@@ -19,10 +19,10 @@ from engine_agents import listener, result, session, stop, woke
 from engine_world import World
 
 from switchboard import reviews
-from switchboard.broker.reviews import Boards
+from switchboard.broker.reviews import Boards, loop_call_later
 from switchboard.config import Config
 from switchboard.delivery import rules
-from switchboard.models import Membership, Participant
+from switchboard.models import Membership, Participant, closed_room_name
 from switchboard.reviews import Item
 
 PR = "https://github.com/example/shop/pull/866"
@@ -508,3 +508,25 @@ def test_closing_the_board_answers_every_line_on_it(w: World, clock: FakeClock) 
     r.move("dispatch", action="close", reason="superseded by #867")
     assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
     assert rules.redeliver_ids(w.store.in_context_items(r.agents["dispatch"][1].id)) == []
+
+
+def test_without_a_running_loop_a_line_is_posted_at_once(w: World, clock: FakeClock) -> None:
+    """Nothing would run a timer outside the broker's loop: the line goes now, rather than wait for a
+    move or a shutdown that may be far off. Fails if a burst were held with no timer to send it."""
+    assert loop_call_later(1.0, lambda: None) is None
+    r, dispatch_park, _g = review_room(w, clock)
+    r.boards = Boards(r.boards.state)  # the broker's own scheduler, with no loop running here
+    r.move("codex-review", action="raise", title="off by one")
+    [line] = r.lines()
+    assert "F1 raised: off by one" in line.text and woke(w, dispatch_park)
+
+
+def test_a_line_held_for_a_room_closed_meanwhile_is_not_posted(w: World, clock: FakeClock) -> None:
+    """A room closed within the burst's few seconds has nobody in it to act: nothing is posted there."""
+    r, dispatch_park, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    room = w.store.room_by_id(w.room.id)
+    assert room is not None
+    w.store.rename_room(room.id, closed_room_name(room.name, room.id), expect=room.name)
+    r.later(3.0)
+    assert r.lines() == [] and not woke(w, dispatch_park)

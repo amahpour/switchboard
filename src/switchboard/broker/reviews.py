@@ -765,11 +765,11 @@ class Boards:
                 self._flush(key)
 
     def _settle(self, room: Room, rv: dict[str, Any], *, closed: bool = False) -> None:
-        """Answer the board's earlier lines that the agents they reached no longer owe (#884): an agent
-        with no move left on any card a line named (``reviews.answered``) has its delivery of that line
-        handled, as a say or a pass would handle it, so the line neither comes back to it as
-        ``again=yes`` nor sets off the watchdog. ``closed``: the board takes no more moves, so every
-        line is answered. An agent that still has a move keeps its line."""
+        """Answer the board's earlier lines that the agents they reached no longer owe (#884): once a
+        line's cards have moved on, or the agent has no move left on them (``reviews.answered``), its
+        delivery of that line is handled, as a say or a pass would handle it, so the line neither comes
+        back to it as ``again=yes`` nor sets off the watchdog. ``closed``: the board takes no more
+        moves, so every line is answered. An agent that still has the move a line asked keeps it."""
         lines = self.store.review_lines_open(room.id, rv["id"], rv["opened_at"])
         if not lines:
             return
