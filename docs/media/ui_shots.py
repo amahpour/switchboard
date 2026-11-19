@@ -4222,6 +4222,64 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
             room.id, sender_name="alice", sender_kind="human", via="web", text="how far did the build get?"
         )
         store.create_batch(target.id, path="wait", kind="wake", counted=True, items=[(msg.id, 1)])
+        plant_reviews(store, room)
+
+    def plant_reviews(store: Any, room: Any) -> None:
+        """#863: two review boards a few hours old, one settled and merged, one still open. The clock is
+        swapped while they are written, so the figures read in minutes and hours."""
+        from conftest import FakeClock
+
+        real = store.clock
+        now = float(real.now())
+        clock = FakeClock(now)
+        store.clock = clock
+        try:
+
+            def at(ago_min: float) -> None:
+                clock.t = now - ago_min * 60
+
+            def event(rv: dict[str, Any], ago_min: float, **data: Any) -> None:
+                at(ago_min)
+                store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
+
+            def board(n: int, holder: str, ago_min: float) -> dict[str, Any]:
+                at(ago_min)
+                rv = store.open_review(
+                    room.id, f"https://github.com/example/shop/pull/{n}", "a1b2c3d", holder
+                )
+                event(rv, ago_min, open=rv["url"], head="a1b2c3d", by=holder, how="opened")
+                return rv
+
+            def finding(rv: dict[str, Any], ago_min: float, by: str) -> Any:
+                at(ago_min)
+                return store.add_review_item(rv["id"], "finding", "raised", title="finding", raised_by=by)
+
+            def move(
+                rv: dict[str, Any], ago_min: float, item: Any, to: str, state: str, **fields: Any
+            ) -> None:
+                at(ago_min)
+                store.move_review_item(item.id, state, **fields)
+                event(rv, ago_min, item=item.label, to=to, by="x")
+
+            a = board(7, "codex-1", 190)
+            one, two, three = (finding(a, 180 - 5 * i, "claude-1") for i in range(3))
+            for item in (one, three):
+                move(a, 150, item, "conceded", "conceded", owner="codex-1")
+                move(a, 120, item, "fixed", "fixed", commit_sha="abc1234", proof="t")
+            move(a, 110, three, "reopened", "conceded")
+            event(a, 100, open=a["url"], head="e4f5a6b", by="codex-1", how="moved")
+            move(a, 95, three, "fixed", "fixed", commit_sha="abc1235", proof="t")
+            move(a, 90, one, "confirmed", "fixed", confirmed_by="claude-1")
+            move(a, 85, two, "dropped", "dropped", reason="covered")
+            move(a, 80, three, "confirmed", "fixed", confirmed_by="claude-1")
+            event(a, 35, report={"pr_state": "merged"}, by="codex-1")
+            at(35)
+            store.set_review(a["id"], pr_state="merged", reported_by="codex-1", reported_at=clock.t)
+            b = board(8, "claude-1", 25)
+            four = finding(b, 20, "codex-1")
+            move(b, 15, four, "contested", "contested", reason="intended")
+        finally:
+            store.clock = real
 
     world.broker.on_loop(plant)
 
@@ -4254,6 +4312,19 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
         page = open_usage(PHONE, scheme)
         try:
             shot(page, out, f"usage-phone-{scheme}.png")
+        finally:
+            page.context.close()
+    # #863: the Reviews section, scrolled into view
+    for name, options, scheme in (
+        ("usage-reviews-light.png", {"viewport": {"width": 1200, "height": 900}}, "light"),
+        ("usage-reviews-dark.png", {"viewport": {"width": 1200, "height": 900}}, "dark"),
+        ("usage-reviews-phone.png", PHONE, "light"),
+    ):
+        page = open_usage(options, scheme)
+        try:
+            page.locator("#usage-review-rooms").scroll_into_view_if_needed()
+            page.locator("#usage .usage-h", has_text="Reviews").scroll_into_view_if_needed()
+            shot(page, out, name)
         finally:
             page.context.close()
 
