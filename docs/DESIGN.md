@@ -4249,7 +4249,7 @@ What follows membership:
 - **Browser notifications for what waits on the person** (a question to them, a review-board call: §55.9, browser notifications) are made from that list, so they follow it with no change of their own.
 - **A person's webhook** (§62): `home.needs` takes its question and board items from the same member rooms (`is_member`), so a public room the person never joined, or left, sends them nothing.
 - **The page's red badges and quiet dots** are counted by the page from the messages it holds (`appendMsg`), not from Home. They follow membership only with the page's part, the second pull request for #843 (§63.6); until it lands, a public room the person is not in still counts its unread in their sidebar as before. This part changes what pings through Home, not the page's own count.
-- **`@humans`** is the literal mention it always was (`HUMANS_MENTION`); it reaches a person only through the three above, so it reaches members only. So does an @mention of a person, or a reply to one: a person who is not in a room is not pinged there.
+- **`@humans`** is the literal mention it always was (`HUMANS_MENTION`). Through Home's Waiting on you, the browser notifications made from it and a person's webhook, it reaches members only, and so does an @mention of a person or a reply to one: a person who is not in a room gets no card, notification or webhook from it. The page's own marks are not gated in this part: the sidebar's red count (`addressedToMe`, `addressesHumans`), as the badge bullet above says, until #879 (§63.6), and the highlight on the line in the room's log (`chatRow`), which marks it for whoever has the room open.
 
 What does not:
 
