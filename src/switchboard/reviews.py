@@ -5,6 +5,10 @@ board is settled, what the agents' picks among an item's options add up to (§37
 a board (§37.14), and how a board reads as text. The store keeps the rows (``store.py``), the
 broker applies the moves (``broker/reviews.py``). switchboard never fetches the pull request,
 judges a finding, holds a token or posts anything: the agents and the people do (§37.1).
+
+Every string a board takes from outside is read through ``text`` (``url``, ``proof``, ``head``, ``where``
+and ``options`` call it too), which cuts obvious secrets out with ``say``'s patterns (``redact``, §11,
+#890), so a card, a move's event, a notice and a line posted in the room never hold one.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from switchboard import envelope
+from switchboard.redact import redact
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
@@ -143,8 +148,8 @@ class Item:
         )
 
 
-def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
-    """A string from outside: stripped, and refused (not cut) when it's too long."""
+def _string(value: Any, what: str, limit: int, *, required: bool = False) -> str:
+    """A string from outside: stripped, and refused (not cut) when it's too long. Not yet redacted."""
     if value is None:
         value = ""
     if not isinstance(value, str):
@@ -157,20 +162,55 @@ def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
     return value
 
 
+def _redacted(value: str, what: str, limit: int) -> tuple[str, list[str]]:
+    """``value`` with each obvious secret replaced by its marker, and the kinds removed (#890). After the
+    length check, so text over the limit is refused before anything searches it, as for ``say``; and the
+    limit again after, since a card's column has it as a CHECK (§37.3) and a marker can be a little
+    longer than the secret it replaced. That refusal names the kind, never the value."""
+    out, kinds = redact(value)
+    if len(out) > limit:
+        raise ReviewError(
+            f"{what} is too long once what looks like a secret ({', '.join(kinds)}) is cut out"
+            f" ({len(out)} > {limit} characters): leave the secret out"
+        )
+    return out, kinds
+
+
+def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
+    """A string from outside: stripped, refused (not cut) when it's too long, and with every obvious
+    secret cut out (``redact``, DESIGN.md §11, #890). Every field of a board, an agent's or a person's,
+    is read here, so what is stored, shown on the page and posted in the room holds ``[redacted: <kind>]``
+    and never the value."""
+    return _redacted(_string(value, what, limit, required=required), what, limit)[0]
+
+
+def _link(what: str, kinds: list[str]) -> None:
+    """A link is refused when it held a secret: a marker can't stand in a link, and a board's URL is the
+    board's name (§37.14), so a redacted one would name nothing that opens."""
+    if kinds:
+        raise ReviewError(
+            f"{what} holds what looks like a secret ({', '.join(kinds)}): give the link without it"
+        )
+
+
 def url(value: Any) -> str:
-    u = text(value, "url", MAX_URL, required=True)
+    u, kinds = _redacted(_string(value, "url", MAX_URL, required=True), "url", MAX_URL)
+    _link("url", kinds)
     if not URL_RE.match(u):
         raise ReviewError("url must be an http(s) link to the pull request or merge request")
     return u
 
 
 def proof(value: Any) -> str:
-    """A test's name or an http(s) proof link; the broker checks shape, not its contents."""
-    p = text(value, "proof", MAX_PROOF)
+    """A test's name or an http(s) proof link; the broker checks shape, not its contents. A name is
+    redacted like any text, and a link that held a secret is refused (``_link``)."""
+    p, kinds = _redacted(_string(value, "proof", MAX_PROOF), "proof", MAX_PROOF)
     if not p:
         raise ProofRequired("proof is required")
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p) and not URL_RE.fullmatch(p):
-        raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p):
+        _link("proof link", kinds)
+        if not URL_RE.fullmatch(p):
+            raise ReviewError("proof link must be an http(s) URL, or give the test's name")
     return p
 
 
@@ -250,8 +290,9 @@ def lines(value: Any) -> str:
 
 
 def where(value: Any) -> tuple[str, str]:
-    """Split a compact finding location, then apply the existing file and line checks."""
-    location = text(value, "where", MAX_FILE + MAX_LINES + 1)
+    """Split a compact finding location, then apply the existing file and line checks. It is split before
+    either part is redacted: a marker has a colon in it, and the last colon is the one before the lines."""
+    location = _string(value, "where", MAX_FILE + MAX_LINES + 1)
     if not location:
         return "", ""
     path, sep, span = location.rpartition(":")
