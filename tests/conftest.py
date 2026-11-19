@@ -568,11 +568,14 @@ class SubprocBroker:
             if self.proc.poll() is not None:
                 break
             time.sleep(0.05)
+        # A child that dies at once is not the loaded-machine timeout #857 raised the ceiling for.
+        # Reading the exit before kill() keeps a signalled stop from looking like that crash.
+        code = self.proc.poll()
         self.kill()
-        raise RuntimeError(
-            f"subprocess broker did not start within {self.START_TIMEOUT_S:g} s: "
-            + (self.home / "subproc.out").read_text()
-        )
+        output = (self.home / "subproc.out").read_text()
+        if code is not None:
+            raise RuntimeError(f"subprocess broker exited {code} before the socket answered: {output}")
+        raise RuntimeError(f"subprocess broker did not start within {self.START_TIMEOUT_S:g} s: {output}")
 
     def cli(
         self, *args: str, input: str | None = None, timeout: float = 20.0, under: Sequence[str] = ()
