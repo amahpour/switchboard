@@ -134,10 +134,10 @@ class Limiter:
 def _line(n: Need) -> str:
     who = n.who or "Someone"
     if n.kind == "approval":
-        return f"{who} is waiting for your approval in #{n.room}"
+        return f"{who} is waiting for your approval in {n.room}"
     if n.kind == "board":
-        return f"A review needs your call in #{n.room}"
-    return f"{who} has a message for you in #{n.room}"
+        return f"A review needs your call in {n.room}"
+    return f"{who} has a message for you in {n.room}"
 
 
 def link_for(base: str, slug: str) -> str:
@@ -212,6 +212,20 @@ def _ip_of(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
 _NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
 
 
+# cloud metadata services that are not link-local, so the general rules would let some through: never allowed
+_METADATA = {
+    ipaddress.ip_address(x)
+    for x in (
+        "169.254.169.254",
+        "169.254.170.2",  # ECS task credentials
+        "168.63.129.16",  # Azure's wireserver, a public address
+        "192.0.0.192",  # Oracle Cloud
+        "100.100.100.200",  # Alibaba
+        "fd00:ec2::254",  # AWS, IPv6
+    )
+}
+
+
 def address_problem(ip: str, allow_private: bool) -> str | None:
     """Why the broker may not connect to ``ip``, or None. A webhook runs from the broker, so by default it
     may reach only public addresses: no loopback, private, link-local (the cloud metadata address is one),
@@ -231,6 +245,8 @@ def address_problem(ip: str, allow_private: bool) -> str | None:
             return "That address points inside a network the broker may not reach."
         if a.teredo is not None:
             return "That address points inside a network the broker may not reach."
+    if a in _METADATA:
+        return "That address points inside a network the broker may not reach."
     if allow_private and a.is_loopback:
         return None  # ::1 sits in a range Python calls reserved
     if a.is_unspecified or a.is_multicast or a.is_link_local or a.is_reserved:

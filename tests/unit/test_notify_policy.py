@@ -17,7 +17,7 @@ BASE = "https://sb.example.com"
 def need(
     key: str = "q:build:7", kind: str = "question", slug: str = "build", at: float = 0.0, who: str = "scout"
 ) -> Need:
-    return Need(key, kind, slug, slug, who, at)
+    return Need(key, kind, f"#{slug}", slug, who, at)
 
 
 def test_nothing_is_sent_before_the_wait_and_one_is_sent_after() -> None:
@@ -196,6 +196,23 @@ def test_the_operators_setting_allows_private_and_loopback(ip: str) -> None:
 def test_the_operators_setting_never_allows_metadata_or_unspecified(ip: str) -> None:
     """Even a home network's setting never reaches link-local (metadata), unspecified or multicast."""
     assert notify.address_problem(ip, True) is not None
+
+
+def test_the_line_has_one_hash_before_a_room_name_that_already_has_it() -> None:
+    """A room's stored name is ``#build``: the line must not add a second ``#`` (F1)."""
+    n = Need("q:build:1", "question", "#build", "build", "scout", 0.0)
+    assert "##" not in str(notify.payload([n], BASE)["text"])
+    assert "in #build:" in str(notify.payload([n], BASE)["text"])
+
+
+@pytest.mark.parametrize(
+    "ip", ["168.63.129.16", "192.0.0.192", "100.100.100.200", "169.254.170.2", "fd00:ec2::254"]
+)
+@pytest.mark.parametrize("allow", [False, True])
+def test_known_cloud_metadata_addresses_are_never_allowed(ip: str, allow: bool) -> None:
+    """Azure's and Oracle's and Alibaba's metadata addresses, the ECS one and AWS's IPv6 one are refused with
+    or without the operator's private setting (F2). Fails if one is reachable."""
+    assert notify.address_problem(ip, allow) is not None
 
 
 def test_a_failure_reason_is_a_fixed_sentence() -> None:

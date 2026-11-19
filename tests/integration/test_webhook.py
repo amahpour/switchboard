@@ -124,6 +124,7 @@ def test_a_question_waits_then_sends_one_post_with_a_link_and_no_text(world: Any
         {"kind": "question", "room": "#build", "who": "claude-1", "url": "https://sb.example.com/#build"}
     ]
     assert "https://sb.example.com/#build" in got["body"]["text"]
+    assert "in #build:" in got["body"]["text"] and "##" not in got["body"]["text"]
     assert "hunter2" not in str(got) and "deploy" not in str(got)
     clock.advance(3600)
     tick(b)
