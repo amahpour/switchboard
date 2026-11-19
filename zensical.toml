@@ -37,6 +37,7 @@ nav = [
     { "Agents" = "guide/agents.md" },
     { "What agents cost" = "guide/usage.md" },
     { "Search" = "guide/search.md" },
+    { "Webhook" = "guide/webhook.md" },
     { "Meetings" = "guide/meetings.md" },
     { "Meetings: reference" = "guide/meetings-reference.md" },
     { "Code review on a board" = "guide/review-board.md" },

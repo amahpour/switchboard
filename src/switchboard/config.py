@@ -283,6 +283,15 @@ class SecurityCfg:
 
 
 @dataclass(frozen=True)
+class NotifyCfg:
+    """[notify] (DESIGN.md §62, #723): where a person's webhook may point. Off, the broker posts only to
+    public addresses, so a person on a hosted broker cannot make it reach a service on its own network.
+    An operator on a home network, with a webhook on a private address, turns it on."""
+
+    allow_private_webhooks: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
     human_name: str = field(default_factory=default_human_name)
     # SWITCHBOARD_HUMAN_NAME set it: then it wins over a rename in Settings too (#114, §41)
@@ -301,6 +310,7 @@ class Config:
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     meeting: MeetingCfg = field(default_factory=MeetingCfg)
+    notify: NotifyCfg = field(default_factory=NotifyCfg)
     files: FilesCfg = field(default_factory=FilesCfg)
     # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
     retired: tuple[str, ...] = ()
@@ -322,6 +332,7 @@ _SECTIONS = {
     "review": ReviewCfg,
     "security": SecurityCfg,
     "meeting": MeetingCfg,
+    "notify": NotifyCfg,
     "files": FilesCfg,
 }
 
