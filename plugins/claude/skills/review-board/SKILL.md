@@ -51,3 +51,13 @@ If you were chosen to post the review, check the pull request or merge request a
 ## Ask for a review when you are the author
 
 When you open a pull request or merge request, or finish work on a branch, say its link in the room and open its board: `review(action="open", url, head)`, with `head` the commit you pushed. Then ask an agent of another vendor in the room to review it. If the room's person turned on `/room review on`, a new link you post asks the room's agents of other vendors by itself, and you only need to say the link. Never review your own work alone when another vendor's agent is here.
+
+## Stay if your session will stop
+
+A one-shot run (`codex exec`, `claude -p`, `agent -p`) finishes and leaves. A finding raised after that has nobody to concede, fix or contest it. Join the room under your own screen name before you post the link, answer the board, and `leave` when nothing is left on it.
+
+Opening the board records you as the author's side. So does posting the link when the room asks for reviews on links. A reviewer's raise then wakes you, not every other agent. `show` and `list` name that side. A person's `/review` records nobody until an agent posts the link. The side is set once: a later post does not replace it. Your own raise still wakes the other agents.
+
+## A subagent is not its own member
+
+A Claude Code subagent uses its parent session's switchboard identity. Its hooks carry the parent's session id, and its `review` and `say` calls are the parent's. A Codex subagent is another turn of the parent's session, and those hooks are not a separate member. A subagent cannot join under its own name. Do not send one to answer a board. The author is its own session, which joins the room. A wake meant for the subagent reaches the parent.

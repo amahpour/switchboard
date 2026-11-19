@@ -614,6 +614,9 @@ def list_line(board: dict[str, Any], default: bool = False) -> str:
     if board.get("closed_at") is not None:
         who = f" by {board['closed_by']}" if board.get("closed_by") else ""
         bits.append(f"closed{who} on {when(board['closed_at'])}")
+    side = board.get("author_side")
+    if isinstance(side, str) and side:
+        bits.append(f"author's side {side}")
     mark = " <- your calls without url go here" if default else ""
     return f"{board['url']}{head_s} [{state}]: {', '.join(bits)}{mark}"
 
@@ -772,7 +775,13 @@ def agent_move(
 
 
 def handoff(
-    item: Item, actor: str, agents: Sequence[str], board_url: str = "", *, action: str = ""
+    item: Item,
+    actor: str,
+    agents: Sequence[str],
+    board_url: str = "",
+    *,
+    action: str = "",
+    author_side: str = "",
 ) -> tuple[tuple[str, ...], str] | None:
     """After an agent's move on ``item`` (its state now), who has to act next and the line
     that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
@@ -784,7 +793,9 @@ def handoff(
     step with the mover wakes nobody. ``agents``: the room's active agents. ``board_url``: given
     when the room has several open boards (§37.14), so the line names the board and every call it
     suggests carries its ``url``; the line is the mover's own message, so the board's URL, which
-    the mover wrote, may be in it."""
+    the mover wrote, may be in it. ``author_side``: the member the board records as the author's
+    side (#886). A reviewer's raise wakes that member when they are in the room; the author's own
+    raise, and a board with no side or a side that has left, still wakes every other agent."""
     on = f"Review board {board_url}:" if board_url else "Review board:"
     pass_url = f', url="{board_url}"' if board_url else ""
     show = f'review(action="show"{pass_url}) shows the board.'
@@ -801,7 +812,11 @@ def handoff(
             f" or pick another option, {concur_s}, or abstain if you have no view, {abstain_s}. {show}"
         )
     if item.state == "raised":
-        who = tuple(a for a in agents if a != actor)
+        others = tuple(a for a in agents if a != actor)
+        if author_side and author_side != actor and author_side in agents:
+            who = (author_side,)
+        else:
+            who = others
         verb, then = f"raised: {item.title}", "concede or contest it"
         if item.options:  # its fix options are theirs to agree with too (#423)
             then += ", and agree with its fix option, pick another, or abstain (concur or abstain)"
@@ -846,6 +861,16 @@ def person_move(item: Item, move: str) -> str:
 def settled(items: list[Item]) -> bool:
     """Nothing left to do: every finding fixed or dropped, every question answered or dropped."""
     return not open_items(items)
+
+
+def fills_open_slot(items: list[Item]) -> bool:
+    """Whether an open board takes one of the room's ``MAX_OPEN_BOARDS`` slots (§37.14, #886).
+
+    A board with cards, every one settled, does not: the review is finished, and leaving it open
+    must not block another pull request. An empty board does. ``settled`` is true of no cards, and
+    opening boards must not run past the cap.
+    """
+    return not items or not settled(items)
 
 
 def open_items(items: list[Item]) -> list[Item]:
@@ -977,6 +1002,9 @@ def render(
     if closed:  # kept, not gone (§37.14): any member may read it, and open(url) brings it back
         by = f" by {review['closed_by']}" if review.get("closed_by") else ""
         state += f" (closed{by} on {when(review['closed_at'])}; open(url) brings it back)"
+    side = review.get("author_side")
+    if isinstance(side, str) and side:
+        state += f". Author's side: {side}"
     out = [f"Review of {review['url']}{head_s}: {state}"]
     line = report_line(review, now if now is not None else float(review.get("reported_at") or 0))
     if line:

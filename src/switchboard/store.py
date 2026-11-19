@@ -3246,6 +3246,7 @@ class Store:
             "pr_ci",
             "reported_by",
             "reported_at",
+            "author_side",
         }
         if not fields or set(fields) - allowed:
             raise ValueError(f"unknown review fields: {sorted(set(fields) - allowed)}")

@@ -46,7 +46,7 @@ stateDiagram-v2
 
 Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
 
-- A **raised** finding wakes every other agent in the room: concede or contest it.
+- A **raised** finding wakes the author's side, when the board names one and that member is in the room: concede or contest it. Otherwise it wakes every other agent. The author's own raise still wakes the other agents.
 - A **contest** wakes the agent that raised the finding: drop it or insist.
 - A **concession** that names another agent wakes that agent: it is yours to fix.
 - A **fix**, including a revised fix, wakes the agent that raised the finding: check the proof.
@@ -91,10 +91,10 @@ Two more things to know. `/review` needs at least one agent in the room. And **H
 
 Two ways, both an agent's link in the room.
 
-- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent may not follow it.
+- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent that will stop after it posts (a one-shot run) is told to join the room first, under its own name, answer the board, and leave when nothing is left on it. Opening the board, or posting the link when this setting is on, records that member as the author's side, and a raise wakes them. An agent may not follow it. A subagent is not a separate member: it acts as its parent, so it should not be the one that answers the board.
 - **The room's setting.** `/room review on` makes it automatic, `/room review off` stops it, and bare `/room` shows it. It is off in every room until you turn it on, and only you can: an agent's `/room review on` is only text. When an agent posts a new pull or merge request link in the room, switchboard opens that pull request's board, held by `switchboard`, and posts one message from `switchboard` that names the room's agents of another vendor than the author's, asks them to review it on the board, and says who posted the link. The message has the checked link and none of the agent's own words.
 
-What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 open boards a note says why nothing was asked. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
+What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 boards with work (or with no cards yet) a note says why nothing was asked. A settled board does not count toward those 8. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
 
 ### Start a review
 
@@ -189,7 +189,7 @@ When a room has two or more open boards, a row of tabs sits at the top of the bo
 
 ![Two boards as tabs, with the first on show](../media/ui/guide-review-tabs.png)
 
-A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight open boards.
+A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count.
 
 ### When the head commit changes
 
@@ -330,7 +330,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 
 ## Limits
 
-- A room holds at most **8 open boards**. A ninth is refused until one is closed. A reopened board counts.
+- A room holds at most **8 boards that fill a slot**: an empty board, or one that still has work. A board whose cards are all settled stays open and does not count, so a finished review does not block the next pull request. Putting work back on a settled board at that cap is refused until one with work is closed. Reopening a closed settled board does not count; reopening one that still has work does.
 - A board holds at most **200 cards**.
 - A board is named by its link, exactly as written. `…/pull/7` and `…/pull/7/files` are two boards. The link has to start with `http://` or `https://` and has to be 500 characters or fewer.
 - A title is 200 characters at most. A detail is 4,000. A reason, and a proof, are 500. A follow-up ticket is 200. An option is 200, and a question has two to four, all different.
@@ -358,7 +358,7 @@ The button shows only while the room has an open board. Start one with `/review`
 - `usage: /review <url> [note]`: you gave no link. Put the link right after `/review`.
 - `url must be an http(s) link to the pull request or merge request`: the link is not an http or https link. Copy it from the browser's address bar.
 - `the note is too long`: the whole request has to fit in one message. Shorten the note.
-- `close one before opening another`: the room already has eight open boards. Close one, then run `/review` again.
+- `close one before opening another`: the room already has eight boards that still have work, or that have no cards yet. A settled board does not count. Close one that does, then run `/review` again.
 - A room that is paused sends the request only after `/resume`.
 
 ### I typed `/review` and it came out as plain text
@@ -392,7 +392,7 @@ The words beside the button say what is left. They name each kind of card with a
 
 ### A call is refused because several boards are open
 
-The agent gave no link, and nothing says which board it means. The refusal lists the open boards. Have the agent repeat the call with `url`. The `/review` request already asks for it. A ninth open board is refused with "close one before opening another". After a broker restart, agents forget their last board, so they need `url` again.
+The agent gave no link, and nothing says which board it means. The refusal lists the open boards. Have the agent repeat the call with `url`. The `/review` request already asks for it. A ninth board that still has work, or that has no cards yet, is refused with "close one before opening another". A board whose cards are all settled does not count toward that eight. After a broker restart, agents forget their last board, so they need `url` again.
 
 ### The CI status looks old, or wrong
 

@@ -81,7 +81,7 @@ async def test_closing_a_board_keeps_it_and_open_brings_back_its_items_history_a
             assert shown["ok"], shown
             head_line, *lines = shown["board"].splitlines()
             assert head_line.startswith(f"Review of {PR_A} at aaa1111: open (closed by codex-1 on ")
-            assert head_line.endswith("; open(url) brings it back)")
+            assert head_line.endswith("; open(url) brings it back). Author's side: codex-1")
             assert any(x.startswith("F2 [raised] rounding") for x in lines)
             assert any(x.startswith("F1 [fixed] wrong total") for x in lines)
             listed = (await tool(author, action="list"))["boards"]
@@ -161,6 +161,89 @@ async def test_a_room_holds_several_open_boards_and_a_call_without_url_goes_to_t
             assert [h["did"] for h in history[PR_B]] == ["raised it", "conceded it"]  # not each other's
     finally:
         web.close()
+
+
+async def test_a_settled_board_does_not_count_toward_the_open_limit(broker: InProcBroker) -> None:
+    """A board whose cards are all settled stays open but frees its slot, so a room at the cap can
+    take another pull request. An empty board still fills a slot, and putting work back on a
+    settled board at the cap is refused. A closed settled board can come back at the cap; a closed
+    one that still has work cannot. Fails if finished reviews keep blocking new boards, or if
+    empty boards or a reopened finding slip past the cap."""
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        urls = [f"https://github.com/example/shop/pull/{n}" for n in range(1, reviews.MAX_OPEN_BOARDS + 1)]
+        for u in urls:
+            assert (await tool(agent, action="open", url=u))["ok"]
+        extra = "https://github.com/example/shop/pull/90"
+        full = await tool(agent, action="open", url=extra)
+        assert full["ok"] is False and "the most it holds" in full["error"]
+        assert (await tool(agent, action="raise", url=urls[0], title="tax order"))["ok"]
+        assert (await tool(agent, action="drop", url=urls[0], item="F1", reason="not a bug"))["ok"]
+        assert (await tool(agent, action="open", url=extra))["ok"], "a settled board should free a slot"
+        still = await tool(agent, action="open", url="https://github.com/example/shop/pull/91")
+        assert still["ok"] is False and "the most it holds" in still["error"]
+        back = await tool(agent, action="raise", url=urls[0], title="another gap")
+        assert back["ok"] is False and "the most it holds" in back["error"]
+        assert (await tool(agent, action="close", url=urls[1]))["ok"]
+        assert (await tool(agent, action="raise", url=urls[0], title="another gap"))["ok"]
+        # settle it and close it, then fill the slot it held: bringing the settled board back
+        # needs no slot, and bringing back one that still has a finding does
+        assert (await tool(agent, action="drop", url=urls[0], item="F2", reason="withdrawn"))["ok"]
+        assert (await tool(agent, action="close", url=urls[0]))["ok"]
+        assert (await tool(agent, action="open", url=urls[1]))["ok"]
+        assert (await tool(agent, action="open", url=urls[0]))["ok"]
+        assert (await tool(agent, action="raise", url=extra, title="still open"))["ok"]
+        assert (await tool(agent, action="close", url=extra, reason="pausing it"))["ok"]
+        fresh = "https://github.com/example/shop/pull/92"
+        assert (await tool(agent, action="open", url=fresh))["ok"]
+        refused = await tool(agent, action="open", url=extra)
+        assert refused["ok"] is False and "the most it holds" in refused["error"], refused
+
+
+async def test_the_agent_that_opens_a_board_is_its_authors_side_and_a_raise_wakes_only_them(
+    broker: InProcBroker,
+) -> None:
+    """The member who opens a board is the author's side. A reviewer's raise wakes that member,
+    not every other agent, and ``show`` names them. A person opening a board names nobody, and a
+    later head move does not take the side. Fails if a raise still wakes the whole room, or if
+    the side is missing from the board the agents read."""
+    async with (
+        FakeAgent(broker.home, "k1") as author,
+        FakeAgent(broker.home, "k2") as reviewer,
+        FakeAgent(broker.home, "k3") as other,
+    ):
+        await author.join("#build", "grok-author")
+        await reviewer.join("#build", "codex-1")
+        await other.join("#build", "claude-1")
+        opened = await tool(author, action="open", url=PR_A, head="abc1234def")
+        assert opened["ok"] and "Author's side: grok-author" in opened["board"]
+        raised = await tool(reviewer, action="raise", url=PR_A, title="tax order")
+        assert raised["ok"]
+        told = q(broker, "SELECT text FROM messages WHERE kind='chat' AND sender_name='codex-1'")
+        assert told[-1]["text"].startswith("Review board: F1 raised: tax order. @grok-author:")
+        assert "@claude-1" not in told[-1]["text"] and "@codex-1" not in told[-1]["text"]
+        moved = await tool(reviewer, action="open", url=PR_A, head="def5678abc")
+        assert moved["ok"] and "Author's side: grok-author" in moved["board"]
+        row = q(broker, "SELECT author_side FROM reviews WHERE url=?", PR_A)[0]
+        assert row["author_side"] == "grok-author"
+        # the author raising a gap wakes the reviewers, not themselves
+        gap = await tool(author, action="raise", title="a gap I see")
+        assert gap["ok"]
+        own = q(broker, "SELECT text FROM messages WHERE kind='chat' AND sender_name='grok-author'")
+        assert "@codex-1" in own[-1]["text"] and "@claude-1" in own[-1]["text"]
+        assert "@grok-author" not in own[-1]["text"]
+        web = broker.web_client()
+        try:
+            started = web.post(
+                "/api/rooms/build/command",
+                json={"text": f"/review {PR_B}"},
+                headers=broker.write_headers(),
+            )
+            assert started.status_code == 200, started.text
+            person = q(broker, "SELECT opened_by, author_side FROM reviews WHERE url=?", PR_B)[0]
+            assert person["opened_by"] == "alice" and person["author_side"] == ""
+        finally:
+            web.close()
 
 
 async def test_a_room_holds_at_most_a_handful_of_open_boards(broker: InProcBroker) -> None:
@@ -329,8 +412,9 @@ async def test_a_boards_history_and_handoff_decisions_are_its_own_though_labels_
 async def test_reset_starts_a_fresh_board_and_keeps_the_old_one_in_the_database(broker: InProcBroker) -> None:
     """``reset`` is on purpose: the url, a reason, and the board's holder. The fresh board is empty and
     its history starts over, while the earlier board's items and events stay stored and nothing is
-    deleted. Fails if a bystander can reset, a reset needs no reason, the old rows are dropped, or the
-    fresh board's F1 reads the old F1's moves."""
+    deleted. The author's side is copied onto the fresh row. Fails if a bystander can reset, a reset
+    needs no reason, the old rows are dropped, the fresh board's F1 reads the old F1's moves, or the
+    side is lost."""
     web = broker.web_client()
     try:
         async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
@@ -352,7 +436,9 @@ async def test_reset_starts_a_fresh_board_and_keeps_the_old_one_in_the_database(
             assert [i["title"] for i in boards(web)[0]["items"]] == ["old finding"]  # nothing happened
 
             fresh = await tool(author, action="reset", url=PR_A, reason="the PR was rebuilt")
-            assert fresh["ok"] and fresh["board"].splitlines() == [f"Review of {PR_A}: settled"], fresh
+            assert fresh["ok"] and fresh["board"].splitlines() == [
+                f"Review of {PR_A}: settled. Author's side: claude-1"
+            ], fresh
             [board] = boards(web)
             assert board["items"] == [] and board["id"] == 2
             await tool(author, action="raise", title="new finding")

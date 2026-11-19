@@ -525,6 +525,48 @@ def test_a_raised_finding_is_the_other_agents_to_answer() -> None:
     )
 
 
+def test_a_raise_wakes_the_recorded_authors_side_and_not_every_other_agent() -> None:
+    """When the board names the author's side, a reviewer's raise wakes that member alone.
+    The author's own raise still wakes the reviewers, and an author who has left falls back to
+    the other agents. Fails if a raise keeps waking the whole room, or if the author is woken
+    for a finding they raised themselves."""
+    room = ("claude-1", "codex-1", "grok-author")
+    who, text = reviews.handoff(finding(), "codex-1", room, author_side="grok-author") or ((), "")
+    assert who == ("grok-author",)
+    assert "@grok-author:" in text and "@claude-1" not in text and "@codex-1" not in text
+    own = finding(raised_by="grok-author")
+    who, text = reviews.handoff(own, "grok-author", room, author_side="grok-author") or ((), "")
+    assert who == ("claude-1", "codex-1")
+    assert "@grok-author" not in text
+    left = reviews.handoff(finding(), "codex-1", AGENTS, author_side="grok-author") or ((), "")
+    assert left[0] == ("claude-1",)
+
+
+def test_a_settled_board_with_cards_does_not_fill_an_open_slot_and_an_empty_one_does() -> None:
+    """The room's cap is for boards that still have work, or that nobody has started. A finished
+    review stays open without taking a slot; an empty board still takes one, because ``settled``
+    is true of no cards. Fails if a finished board keeps blocking new ones, or if empty boards
+    can be opened without limit."""
+    assert reviews.fills_open_slot([])
+    assert reviews.fills_open_slot([finding("raised")])
+    assert reviews.fills_open_slot([replace(finding("fixed", owner="claude-1"), confirmed_by="")])
+    done = replace(finding("dropped"), deferred_to="")
+    assert not reviews.fills_open_slot([done])
+    assert not reviews.fills_open_slot([done, replace(finding("fixed", owner="claude-1"), n=2)])
+
+
+def test_show_and_list_name_the_authors_side_when_the_board_records_one() -> None:
+    """The board text says who answers a raise, so an agent can see it without being told in chat.
+    With no author's side the lines stay as they were. Fails if the name is missing, or if an
+    empty side changes the text."""
+    row = board_row(author_side="grok-author")
+    assert "Author's side: grok-author" in reviews.render(row, [finding()]).splitlines()[0]
+    assert "Author's side" not in reviews.render(board_row(), [finding()])
+    listed = reviews.list_line({**row, "author_side": "grok-author"})
+    assert "author's side grok-author" in listed
+    assert "author's side" not in reviews.list_line(board_row())
+
+
 def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
     conceded = finding("conceded", owner="claude-1")
     assert reviews.handoff(conceded, "codex-1", AGENTS) is not None

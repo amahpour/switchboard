@@ -12,7 +12,7 @@ Codex and Claude Code review a pull request on the room's board. Claude, which w
 
 A board is about one pull request (GitHub) or merge request (GitLab). A **finding** (F1, F2) is a problem an agent found. A **question** (Q1, Q2) is something only a person can decide.
 
-1. **Raise.** An agent raises a finding with a title, the file and lines, and the evidence. The other agents are woken to concede or contest it.
+1. **Raise.** An agent raises a finding with a title, the file and lines, and the evidence. If the board names an author's side, that member is woken to concede or contest it. Otherwise the other agents are.
 2. **Concede or contest.** To concede is to agree and name the agent that will fix it. To contest is to disagree, with a reason. A contest goes back to the agent that raised the finding, which drops it or insists.
 3. **Needs you.** The middle lane holds only what the agents cannot settle: your questions, findings both sides have argued, and fixes nobody else can check.
 4. **Fix, with proof.** The owner records the commit and a proof, a test name or a link. The agent that raised the finding is woken to check it.
@@ -53,6 +53,10 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **Work with several boards.** A room can have several open boards, one for each pull request. Tabs at the top of the board pick one. What you do applies to the board on show.
 
+**When the author will stop.** A one-shot run (`codex exec`, `claude -p`, `agent -p`) finishes and leaves, so a finding raised afterwards has nobody to answer it. Have that author join the room under its own name before it posts the link, answer the board, and leave when nothing is left on it. Opening the board, or posting the link when the room asks for reviews on links, records that member as the author's side. A reviewer's raise then wakes them. `show` names the side. A person's `/review` records nobody until an agent posts the link.
+
+**A subagent is the parent's member.** A Claude Code subagent uses its parent session's switchboard identity, and a Codex subagent is another turn of the parent's session. Neither can join under its own name. Don't send a subagent to answer a board: the moves are the parent's, and a wake meant for the subagent reaches the parent. The author should be its own session in the room.
+
 **When an agent posts a link.** Agents are asked, by the review-board skill, to post the link of a pull request they open and to ask an agent of another vendor to review it. You can also make the room do it: type `/room review on` (in the web page; an agent cannot). From then on, when an agent posts a new pull or merge request link, switchboard opens its board and posts one request that names the room's agents of other vendors, in the words `/review` uses. The agent's own vendor is not asked. A link for a pull request that has a board already, open or closed, asks nothing, and neither does a link that is not a pull or merge request. With no agent of another vendor in the room, nothing is asked and a note says so. `/room review off` stops it. The board it opens is held by switchboard, so you close it with **Close board**. switchboard still watches no forge: the trigger is an agent's message.
 
 **When the author pushes.** An agent opens the same link with the new head commit. Findings that still need work read **Outdated at** the new commit, so their owners look again. switchboard does not watch the pull request.
@@ -67,7 +71,7 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 ## Limits
 
-- A room holds at most 8 open boards, and a board at most 200 cards.
+- A room holds at most 8 boards that still have work, or that have no cards yet. A board whose cards are all settled stays open and does not count. A board holds at most 200 cards.
 - A board is named by its link, exactly as written: `…/pull/7` and `…/pull/7/files` are two boards.
 - You cannot raise a finding, ask a question or move the head commit from the page. Agents do.
 - The board never learns about the pull request by itself. The head commit, CI and merge state come from an agent's report.

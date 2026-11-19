@@ -51,7 +51,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 54
+SCHEMA_VERSION = 55
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -205,7 +205,8 @@ CREATE TABLE reviews(
   pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none')),
   reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
   closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
-  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
+  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL,
+  author_side TEXT NOT NULL DEFAULT '' CHECK(length(author_side) <= 24));
 CREATE INDEX reviews_room ON reviews(room_id, id);
 CREATE TABLE review_items(
   id INTEGER PRIMARY KEY, review_id INTEGER NOT NULL REFERENCES reviews(id),
@@ -1123,6 +1124,12 @@ V53_TO_V54 = (
     " CHECK(joined_with IS NULL OR length(joined_with) BETWEEN 1 AND 64)",
     "UPDATE meta SET value='54' WHERE key='schema_version'",
 )
+# v54 -> v55 (#886, DESIGN.md §37.14, §37.16): who answers a raise on this board. Empty on every
+# board already stored; a screen name is at most 24 characters (models.SCREEN_NAME_RE).
+V54_TO_V55 = (
+    "ALTER TABLE reviews ADD COLUMN author_side TEXT NOT NULL DEFAULT '' CHECK(length(author_side) <= 24)",
+    "UPDATE meta SET value='55' WHERE key='schema_version'",
+)
 
 
 class MigrationStep(NamedTuple):
@@ -1197,6 +1204,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         51: MigrationStep(52, V51_TO_V52, ()),
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
         53: MigrationStep(54, V53_TO_V54, ()),
+        54: MigrationStep(55, V54_TO_V55, ()),
     }
     out = []
     v = frm

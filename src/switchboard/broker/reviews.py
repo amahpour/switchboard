@@ -169,6 +169,8 @@ class Boards:
             "reported_by": rv["reported_by"],
             "reported_at": rv["reported_at"],
             "report": reviews.report_line(rv, now),
+            # who answers a raise (#886): empty when the board has no author's side
+            "author_side": rv.get("author_side") or "",
         }
 
     def _publish(self, room: Room) -> list[dict[str, Any]]:
@@ -266,6 +268,7 @@ class Boards:
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
+            self._guard_slot(room, rv)
             item = self._add(rv, actor, action, params)
             verb = "raised" if item.kind == "finding" else "asked"
             return self._told(room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}")
@@ -283,6 +286,8 @@ class Boards:
         to = reviews.agent_move(
             item, action, actor, owner_here=item.owner in here, raiser_here=item.raised_by in here
         )
+        if action == "reopen":
+            self._guard_slot(room, rv)
         if action == "take":
             self.store.take_review_item(item.id, actor)
             self._event(room, rv, item=item.label, to="taken", by=actor, previous_raiser=item.raised_by)
@@ -538,11 +543,16 @@ class Boards:
         holder = reviews.holder(rv)
         if actor != holder:
             raise ReviewError(f"{self._ref(rv)} was opened by {holder}: only {holder} can reset it")
-        self._check_room(room, closing=rv["closed_at"] is None)
+        freeing = rv["closed_at"] is None and reviews.fills_open_slot(self.store.review_items(rv["id"]))
+        self._check_room(room, freeing=freeing)
         if rv["closed_at"] is None:
             self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
         self._event(room, rv, reset=u, by=actor, reason=reason)
         fresh = self.store.open_review(room.id, u, head, actor)
+        side = rv.get("author_side") or ""
+        if side:
+            self.store.set_review(fresh["id"], author_side=side)
+            fresh = self.store.review_for_url(room.id, u) or fresh
         self._event(room, fresh, open=u, head=head, by=actor)
         self._notice(
             room,
@@ -589,7 +599,12 @@ class Boards:
         several = self._several(room)
         handoff = (
             reviews.handoff(
-                item, actor, self.store.active_names(room.id), rv["url"] if several else "", action=action
+                item,
+                actor,
+                self.store.active_names(room.id),
+                rv["url"] if several else "",
+                action=action,
+                author_side=str(rv.get("author_side") or ""),
             )
             if wake
             else None
@@ -614,20 +629,48 @@ class Boards:
             out["note"] = "The board was closed: it is open again, with its items and history."
         return out
 
-    def _check_room(self, room: Room, *, closing: bool = False) -> None:
-        """A room holds at most ``MAX_OPEN_BOARDS`` open boards (§37.14). ``closing``: the move also
-        closes one, so the count doesn't grow."""
-        open_ = len(self.store.open_reviews(room.id))
-        if open_ - (1 if closing else 0) >= reviews.MAX_OPEN_BOARDS:
+    def _filling_count(self, room: Room) -> int:
+        """Open boards that take a slot: empty ones, and any that still have work (§37.14)."""
+        return sum(
+            1
+            for rv in self.store.open_reviews(room.id)
+            if reviews.fills_open_slot(self.store.review_items(rv["id"]))
+        )
+
+    def _check_room(self, room: Room, *, freeing: bool = False, adding: bool = True) -> None:
+        """A room holds at most ``MAX_OPEN_BOARDS`` boards that fill a slot (§37.14). A settled
+        board with cards does not. ``freeing``: this move closes one that currently fills a slot.
+        ``adding``: the board being opened fills one. An empty board does; a settled reopen does not."""
+        filling = self._filling_count(room)
+        if filling - (1 if freeing else 0) + (1 if adding else 0) > reviews.MAX_OPEN_BOARDS:
             raise ReviewError(
-                f"{room.name} has {open_} open boards, the most it holds: close one before opening another"
+                f"{room.name} has {filling} open boards, the most it holds: close one before opening another"
             )
 
-    def _open_board(self, room: Room, by: str, url: str, head: str) -> tuple[dict[str, Any], str]:
+    def _guard_slot(self, room: Room, rv: dict[str, Any]) -> None:
+        """A move that puts work back on a settled board takes a slot. At the cap it is refused,
+        the same way opening another board is (#886)."""
+        if not reviews.fills_open_slot(self.store.review_items(rv["id"])):
+            self._check_room(room)
+
+    def _stamp_author(self, room: Room, rv: dict[str, Any], name: str) -> dict[str, Any]:
+        """Record ``name`` as the board's author's side, once. A person, ``switchboard``, or a
+        name that is not a member of the room is not a side. A side already recorded stays."""
+        if rv.get("author_side") or not name or name == "switchboard":
+            return rv
+        if self.store.find_member(room.id, name) is None:
+            return rv
+        self.store.set_review(rv["id"], author_side=name)
+        return self.store.review_for_url(room.id, rv["url"]) or {**rv, "author_side": name}
+
+    def _open_board(
+        self, room: Room, by: str, url: str, head: str, *, author: str = ""
+    ) -> tuple[dict[str, Any], str]:
         """The room's board for ``url``, opened by ``by`` (an agent or a person) with ``head``, and
         what happened to it: ``opened`` (a new board), ``reopened`` (a closed one is back, with its
         items and history), ``moved`` (an open one now at a newer head) or ``kept`` (open already).
-        Other boards of the room are left as they are (§37.14)."""
+        Other boards of the room are left as they are (§37.14). ``author`` is the member who posted
+        the link, when switchboard opens the board for them (#886)."""
         rv = self.store.review_for_url(room.id, url)
         new_head = bool(head) and (rv is None or head != rv["head"])
         if rv is not None and rv["posted_at"] is not None and new_head:
@@ -639,16 +682,20 @@ class Boards:
         if rv is None:
             self._check_room(room)
             rv = self.store.open_review(room.id, url, head, by)
+            rv = self._stamp_author(room, rv, author or by)
             self._notice(room, f"{by} opened a review board for {url}" + (f" at {head[:12]}" if head else ""))
             how = "opened"
         else:
             if rv["closed_at"] is not None:
-                self._check_room(room)
+                adding = reviews.fills_open_slot(self.store.review_items(rv["id"]))
+                self._check_room(room, adding=adding)
                 self.store.reopen_review(rv["id"], by)
                 self._notice(
                     room, f"{by} opened the review board for {url} again: its items and history are back"
                 )
                 how = "reopened"
+            if author:
+                rv = self._stamp_author(room, rv, author)
             if new_head:
                 # a new head: the same board, its checks now about a newer commit (§37.4)
                 items = self.store.review_items(rv["id"])
@@ -674,6 +721,12 @@ class Boards:
         boards = [rv["url"] for rv in self.store.room_reviews(room.id)]
         have = {reviews.canonical_url(u) for u in boards}
         for url in reviews.pr_links(text):
+            existing = next(
+                (rv for rv in self.store.room_reviews(room.id) if reviews.canonical_url(rv["url"]) == url),
+                None,
+            )
+            if existing is not None:
+                self._stamp_author(room, existing, author)
             if url in have:
                 continue
             if not reviews.trusted_forge(url, boards):
@@ -694,7 +747,7 @@ class Boards:
                 )
                 continue
             try:
-                self._open_board(room, "switchboard", url, "")
+                self._open_board(room, "switchboard", url, "", author=author)
             except ReviewError as e:
                 self._notice(room, f"not asking for a review of {url}: {e}")
                 continue

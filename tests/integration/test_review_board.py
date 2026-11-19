@@ -745,7 +745,8 @@ async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: I
             r = await reviewer.call("review", room="#build", action="show")
             assert (
                 r["board"].splitlines()[0]
-                == f"Review of {PR}: handed off to codex-1: post one review now, once"
+                == f"Review of {PR}: handed off to codex-1: post one review now, once."
+                " Author's side: codex-1"
             )
             assert "F2 Dropped: style nit" in r["board"]
     finally:
