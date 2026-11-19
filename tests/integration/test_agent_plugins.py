@@ -349,6 +349,7 @@ def run_listen(
         env["CLAUDE_PLUGIN_DATA"] = str(data)  # where the plugin keeps what it has said
     if home is not None:
         env["HOME"] = str(home)
+        env["CURL_HOME"] = str(home)  # so a developer's own curl configuration never reaches the script
     if tmp is not None:
         env["TMPDIR"] = str(tmp)
     stop = json.dumps(
@@ -1377,6 +1378,7 @@ def run_session(
     url: str | None = None,
     data: Path | None = None,
     owner: int | None = None,
+    home: Path | None = None,
     **fields: str,
 ) -> subprocess.CompletedProcess[str]:
     """``bin/session`` as Claude Code runs it: the hook's input on stdin (compact JSON, as Claude Code
@@ -1392,6 +1394,8 @@ def run_session(
         env["CLAUDE_PLUGIN_DATA"] = str(data)
     if owner is not None:
         env["CLAUDE_PID"] = str(owner)
+    if home is not None:
+        env.update(HOME=str(home), CURL_HOME=str(home))
     hook = json.dumps(
         {"session_id": session, "hook_event_name": event, "cwd": "/x/y", **fields}, separators=(",", ":")
     )

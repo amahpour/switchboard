@@ -64,3 +64,22 @@ async def test_speak_by_sentence_says_each_sentence_in_order_and_stops_when_told
     sent.clear()
     await joinly.speak_by_sentence(speak, "no end mark", lambda: True)
     assert sent == ["no end mark"]
+
+
+def test_mute_claimed_accepts_only_a_boolean() -> None:
+    """A mute notice is posted only for a real true. Anything else, including a missing button, is unknown.
+    Fails if a string or a missing field is taken as muted."""
+    from types import SimpleNamespace as NS
+
+    from switchboard.meeting import joinly
+
+    def result(text: str) -> NS:
+        return NS(data=text, content=[])
+
+    assert joinly.mute_claimed(result('{"muted": true}')) is True
+    assert joinly.mute_claimed(result('{"muted": false}')) is False
+    assert joinly.mute_claimed(result('{"muted": null}')) is None
+    assert joinly.mute_claimed(result('{"muted": "true"}')) is None
+    assert joinly.mute_claimed(result("not json")) is None
+    assert joinly.mute_claimed(result("")) is None
+    assert joinly.mute_claimed(NS(data=None, content=[])) is None

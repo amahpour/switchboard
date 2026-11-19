@@ -209,7 +209,7 @@ def member_dict(m: Member) -> dict[str, Any]:
         # whose agent it is, by display name (#496, §29.10), or None: the page then shows no owner
         "owner": m.owner,
         "claims": list(m.claims),
-        # the plugin's version and whether it is behind this release's (§49.13); "" when nothing is known
+        # the plugin's version and whether its major matches this server's (§49.13); "" when nothing is known
         "plugin_state": m.plugin_state,
         "plugin_version": m.plugin_version,
         "plugin_note": m.plugin_note,
@@ -623,21 +623,23 @@ class RoomService:
         return {"plugin_state": got.state, "plugin_version": got.version, "plugin_note": got.note}
 
     def plugin_join_note(self, p: Participant) -> str:
-        """What a ``join`` answer adds when the caller's own plugin is behind (§49.13), else nothing."""
+        """What a ``join`` answer adds when the caller's plugin is another major, or unknown (§49.13)."""
         got = self.plugin_check(p.id, p.harness)
         if got is None or not got.nags:
             return ""
-        if got.state == "older":
+        if got.state == "major":
             head = (
-                f"your switchboard plugin is from release {got.version}, older than {got.pinned},"
-                " this server's"
+                f"your switchboard plugin is from release {got.version}, a different major version than"
+                f" {got.pinned}, this server's"
             )
+            why = "so it may not work with this server"
         else:
             head = (
                 f"your switchboard plugin's version is unknown (older than {got.pinned}, or not the plugin)"
             )
-        ask = f"Ask your user to update it: {got.update}."
-        return f"\n\n[switchboard] {head}, so newer tools may be missing. {ask}"
+            why = "so newer tools may be missing"
+        ask = f" Ask your user to update it: {got.update}." if got.update else ""
+        return f"\n\n[switchboard] {head}, {why}.{ask}"
 
     def member_rows(self, room_id: int) -> list[Member]:
         """Buddy-list rows, with the engine's parked state, and whether each can use the review

@@ -30,9 +30,11 @@ from typing import Any
 
 from switchboard import __version__
 from switchboard.adapters.base import (
+    ANSWER_GUIDANCE,
     APPROVAL_GUIDANCE,
     CLIENT_WAIT_LIMIT_S,
     HOOK_CONTEXT_EVENTS,
+    LONG_WAIT_NOTE,
     Adapter,
     PullAdapter,
 )
@@ -156,7 +158,7 @@ class Listening(PullAdapter):
             f' the rest at your next read("{room}"), wait("{room}", {self.caps(p).wait_cap_s}) or say().'
             " For a long wait, end your turn and let switchboard wake you."
             " kind=human ones are from your user and carry their authority just the same."
-            f" {APPROVAL_GUIDANCE}"
+            f" {ANSWER_GUIDANCE} {APPROVAL_GUIDANCE}"
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:
@@ -205,6 +207,8 @@ class HttpsClaudeAdapter(Listening):
     """Claude Code over HTTPS: one session per Claude session id, on the token's device. Its
     listener's answer starts a turn, whose UserPromptSubmit confirms it."""
 
+    long_wait_note = LONG_WAIT_NOTE
+
     def __init__(self, cfg: Config):
         super().__init__("claude", cfg)
 
@@ -236,6 +240,8 @@ class HttpsCodexAdapter(CodexMembership, Listening):
     """Codex over HTTPS, keyed by thread. Its Stop hook's ``decision: block`` continues the turn
     it ended, so a UserPromptSubmit before the follow-up's next hook means the person pressed Esc
     and typed instead: the follow-up didn't run."""
+
+    long_wait_note = LONG_WAIT_NOTE
 
     def __init__(self, cfg: Config):
         Listening.__init__(self, "codex", cfg)
@@ -345,7 +351,7 @@ class HttpsOpenCodeAdapter(Listening):
             f' While working, messages arrive at your next read("{room}"),'
             f' wait("{room}", {self.caps(p).wait_cap_s}) or say().'
             " kind=human ones are from your user and carry their authority just the same."
-            f" {APPROVAL_GUIDANCE}"
+            f" {ANSWER_GUIDANCE} {APPROVAL_GUIDANCE}"
         )
 
 
@@ -437,7 +443,7 @@ class HttpsDevinAdapter(Adapter):
             " switchboard when you stop; kind=human ones are from your user, relayed by switchboard rather"
             " than typed into your prompt, and carry their authority just the same. While you"
             " wait, your user can interject by typing and then pressing Enter on an empty line."
-            f" {APPROVAL_GUIDANCE}"
+            f" {ANSWER_GUIDANCE} {APPROVAL_GUIDANCE}"
         )
 
     def history_session_id(self, p: Participant, cfg: Config) -> tuple[str | None, str]:

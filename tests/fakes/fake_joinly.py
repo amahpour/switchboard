@@ -112,6 +112,14 @@ class FakeJoinly:
         self.share_raw: list[str] = []  # and the text it was given: what travelled
         self.share_stops = 0
         self.share_error: str | None = None
+        # the call page's own mute button (#853): True muted, False not, None the button was not read.
+        # mute_tool False is a joinly without mute_status. unmute_tool False is one without unmute_yourself.
+        self.muted: bool | None = False
+        self.mute_tool = True
+        self.mute_reads = 0
+        self.unmute_tool = True
+        self.unmutes = 0
+        self.unmute_error: str | None = None
         self.hold_share = False  # share_image waits (counted in share_attempts) until release_share
         self.share_attempts = 0
         self._share_gate = asyncio.Event()
@@ -225,6 +233,25 @@ class FakeJoinly:
                 fake._note_loop()
                 fake.share_stops += 1
                 return "Stopped sharing the picture."
+
+        if fake.mute_tool:
+
+            @mcp.tool
+            async def mute_status() -> str:
+                fake._note_loop()
+                fake.mute_reads += 1
+                return json.dumps({"muted": fake.muted})
+
+        if fake.unmute_tool:
+
+            @mcp.tool
+            async def unmute_yourself() -> str:
+                fake._note_loop()
+                fake.unmutes += 1
+                if fake.unmute_error is not None:
+                    raise RuntimeError(fake.unmute_error)
+                fake.muted = False
+                return "Unmuted yourself."
 
         @mcp.resource(URI)
         def transcript() -> str:

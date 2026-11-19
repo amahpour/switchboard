@@ -2707,7 +2707,7 @@
     }
     if (m.inflight) fact(dl, 'In flight', plural(m.inflight, 'message', 'messages'));
     if (m.away) fact(dl, 'Away', m.away);
-    // the plugin's version, when it is behind this release's or never said (the server sets plugin_note, §49.13)
+    // the plugin's version, when its major differs or it never said (the server sets plugin_note, §49.13)
     if (m.plugin_note) fact(dl, 'Plugin', m.plugin_note);
     const qNote = el('p', 'fine' + (ui.queueOpen && queued ? '' : ' hidden'),
       'Peer messages wait while it is busy and go out as one batch when it is idle.');
@@ -4362,6 +4362,106 @@
         return;
       }
       show();
+    });
+    show();
+    buildWebhookSetting(box);
+  }
+
+  // Settings → Profile → Webhook (#723, DESIGN.md §62): a URL the broker posts "you're needed" to when something has
+  // waited on you and you have not opened it. The address is a secret: the page never gets it back, only its host.
+  function buildWebhookSetting(box) {
+    const w = function () { return (state.me && state.me.webhook) || { set: false, wait_min: 5, last: null }; };
+    box.append(el('h3', null, 'Webhook'),
+      el('p', 'fine', 'When something needs you (a message to you, a review that needs your call, an agent waiting for your'
+        + ' approval) and you have not opened it after the wait below, switchboard sends one short JSON POST to this address:'
+        + ' who and where, and a link. Never the message. Opening the item stops it. A Slack incoming webhook, a Discord'
+        + ' webhook or an ntfy topic works. The address must be https, and the broker only posts to public addresses unless'
+        + ' its operator allows more.'));
+    const urlLabel = el('label', 'settings-label', 'Webhook address');
+    urlLabel.setAttribute('for', 'settings-webhook-url');
+    const url = el('input');
+    url.type = 'text';
+    url.id = 'settings-webhook-url';
+    url.autocomplete = 'off';
+    url.spellcheck = false;
+    url.maxLength = 500;
+    url.autocapitalize = 'none';
+    const waitLabel = el('label', 'settings-label', 'Wait before sending (minutes)');
+    waitLabel.setAttribute('for', 'settings-webhook-wait');
+    const wait = el('input');
+    wait.type = 'number';
+    wait.id = 'settings-webhook-wait';
+    wait.min = '1';
+    wait.max = '120';
+    wait.step = '1';
+    const note = el('p', 'fine');
+    note.id = 'settings-webhook-note';
+    const status = el('p', 'fine');
+    status.id = 'settings-webhook-status';
+    status.setAttribute('role', 'status');
+    const save = btn('btn-primary', 'Save');
+    save.id = 'settings-webhook-save';
+    const test = btn('btn', 'Send a test');
+    test.id = 'settings-webhook-test';
+    const remove = btn('btn', 'Remove');
+    remove.id = 'settings-webhook-remove';
+    const bar = el('div', 'settings-actions');
+    bar.append(save, test, remove);
+    box.append(urlLabel, url, waitLabel, wait, note, bar, status);
+    function say(text, bad) {
+      status.textContent = text;
+      status.classList.toggle('bad', !!bad);
+    }
+    function show() {
+      const cur = w();
+      url.value = '';
+      url.placeholder = cur.set ? 'Set. Paste a new address to replace it.' : 'https://…';
+      wait.value = String(cur.wait_min || 5);
+      note.textContent = cur.set ? 'Posting to ' + cur.host + ' (the rest of the address is kept secret).'
+        : 'No webhook yet.';
+      test.disabled = remove.disabled = !cur.set;
+      const last = cur.last;
+      if (last) {
+        status.textContent = last.ok ? 'The last post went through.' : 'The last post failed: ' + last.error;
+        status.classList.toggle('bad', !last.ok);
+      } else {
+        status.textContent = '';
+        status.classList.remove('bad');
+      }
+    }
+    async function call(method, path, body) {
+      for (const b of [save, test, remove]) b.disabled = true;
+      try {
+        const res = await api(method, path, body);
+        return res;
+      } finally {
+        for (const b of [save, test, remove]) b.disabled = false;
+      }
+    }
+    save.addEventListener('click', async function () {
+      const body = { wait_min: Number(wait.value) };
+      if (url.value.trim()) body.url = url.value.trim();
+      else if (!w().set) { say('Paste the address to post to.', true); return; }
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', body);
+        show();
+        say('Saved.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    test.addEventListener('click', async function () {
+      try {
+        const res = await call('POST', '/api/me/webhook/test', {});
+        state.me.webhook = res.webhook;
+        show();
+        say(res.ok ? 'The test went through.' : 'The test failed: ' + res.error, !res.ok);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    remove.addEventListener('click', async function () {
+      try {
+        state.me.webhook = await call('DELETE', '/api/me/webhook');
+        show();
+        say('Removed.', false);
+      } catch (e) { say(String(e.message || e), true); }
     });
     show();
   }

@@ -139,11 +139,16 @@ jobs:
       # the Windows scripts' tests (tests/integration/test_agent_plugins.py) run under pwsh, which
       # GitHub's runners have; where it is missing they skip, and here that fails the run instead
       SWITCHBOARD_REQUIRE_PWSH: "1"
+      # the compatibility check (tests/integration/test_plugin_server_compat.py) compares its fixtures with
+      # the oldest release of this major, fetched below; a missing tag fails the run instead of skipping
+      SWITCHBOARD_REQUIRE_COMPAT_TAG: "1"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
         with:
           persist-credentials: false
           fetch-depth: 2   # the PR's merge commit and main (its first parent), for the plugin version check
+      - name: Fetch the oldest release of this major (the plugin compatibility check, #850)
+        run: git fetch --no-tags --depth=1 origin +refs/tags/v1.0.0:refs/tags/v1.0.0
       # A dispatch checks out the branch itself, not a PR merge commit. Fetch main and the
       # full history so the plugin check can find their fork point even on a long-lived branch.
       - name: Fetch the manual run's comparison base

@@ -76,6 +76,7 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
 **Releases.** A release is a pull request too (issue #46; before it, every merge was a release, #33).
 - **PR titles** follow [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>)!: <subject>`, with the type one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore` or `revert`. The `pr-title` check enforces it. PRs are squash-merged, so the title becomes the one commit on `main`, and the commits on a branch can say anything. A release PR's title is `release: vX.Y.Z`.
 - **The bump:** a release is a minor version (0.6.x to 0.7.0) when anything since the last release is a `feat:` or a breaking change (`!` after the type, also a minor while we're below 1.0), and a patch otherwise, docs included. From 1.0 a breaking change (`!`, or `BREAKING CHANGE` in the body) is a major (1.4.2 to 2.0.0). Below 1.0 the commits can never give a major, so the first one, 1.0.0, is cut on purpose: `python3 .github/scripts/release.py --open-pr --major` makes the release the next major (0.58.x to 1.0.0, 1.x to 2.0.0) whatever the commits say. Only the maintainer's explicit ask for that version runs it; `--major` works with `--open-pr` alone, the PR's title is still `release: vX.Y.Z`, and its body says it is a deliberate major.
+- **Plugin compatibility is the major version (#850).** Any plugin works with any server of the same major version. A change needs that major when it changes the listen protocol: its endpoint, its headers or the meaning of a status; or when it removes or renames a tool, an action or a required parameter. A minor release only adds, so within a major the order of updating the server and the plugin does not matter. The server warns a session when its plugin's major differs, or the version is unknown ([DESIGN.md §49.13](docs/DESIGN.md#4913-which-plugin-a-session-runs-789-850)); it does not warn for a different minor or patch. The maintainer's ask is still what cuts the major (`--major`, above).
 - **The notes:** write them for users in the PR itself, in a new file, `changes/<name>.md`, named after the branch, under the CHANGELOG's headings ([changes/README.md](changes/README.md)). The next release gathers every file into `## X.Y.Z (date)` and the GitHub Release's notes, and deletes them. With no notes at all, the notes are the PRs' titles.
 - **Never edit CHANGELOG.md in a PR.** Only a release writes it, and CI (`what changed`) fails a PR that does. In one shared section, notes conflicted between parallel PRs and a rebase could quietly file them under a release that was already out. To fix a release's notes after it's out, scope the title `(changelog)`.
 - **Cutting a release:** run `python3 .github/scripts/release.py --open-pr` from any clean checkout. It works in a temporary worktree on a fresh branch from `origin/main`, never your checkout, and:
@@ -169,6 +170,16 @@ SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<file> \
 - **The result** is printed as a table and written, as JSON and Markdown, into `$SWITCHBOARD_SELFTEST_OUT` (or a temp folder the run names). A step with words passes on 60% of the expected content words, because speech-to-text of text-to-speech is close, not exact; a step that can't start because an earlier one failed counts as failed. The test fails if any step does, and names them.
 - **Whatever happens,** both bots leave the call and both containers are removed, also when the run is stopped with SIGTERM. A run killed harder can leave containers: `docker ps -a --filter label=switchboard-selftest` lists them, and `docker rm -f <name>` removes one.
 - **`SWITCHBOARD_LIVE=all` does not include it.** It needs a call, and a call needs an account, so only `meeting` runs it. A plain `pytest` skips it with the line that says how. `tests/unit/test_meeting_selftest.py` runs on every run and checks everything about it that needs no call: the word comparison, the link file's checks, the scrubbing, when a failed step keeps the logs, and the report. It never runs in CI.
+
+### Plugin and server compatibility (opt-in real run)
+
+The oldest release of the major is also run for real, locally (#850). It needs the release's git tag in your checkout (`git fetch --tags`) and `curl`, and no network or Docker; CI does the offline half on every pull request (it fetches the tag itself):
+
+```bash
+uv run pytest -m compat tests/compat   # the newest plugin's listener against a real v1.0.0 broker run from its tag
+```
+
+When the major goes up, move `tests/fixtures/compat/` and the tag the `Fetch the oldest release` step in `.github/workflows/test.yml` fetches to the new major's first release.
 
 ### Evals (real agents, graded from the database, opt-in)
 

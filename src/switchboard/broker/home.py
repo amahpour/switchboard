@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from switchboard import reviews
+from switchboard import notify, reviews
 from switchboard.broker import agents_view
 from switchboard.broker.service import ServiceError
 from switchboard.envelope import clean
@@ -346,6 +346,46 @@ def mark_seen(state: Any, person_key: int, at: float | None) -> float:
         return old
     state.store.meta_set(seen_key(person_key), repr(at))
     return at
+
+
+def needs(state: Any, name: str, person_id: int | None) -> list[notify.Need]:
+    """What needs this person right now, for their webhook (§62): the home page's question and board cards,
+    and an agent of theirs waiting on an approval (``owner`` is them, or nobody on a broker with one person).
+    The same rows ``build`` reads, never a new record. A person never gets another person's, or a private
+    room they are not in (§44)."""
+    now = state.clock.now()
+    key = state.service.person_key(person_id)
+    rooms = [r for r in state.store.list_rooms() if state.service.visible(r, key)]
+    read = state.store.home_seen_marks(key)
+    snoozed = state.store.home_snoozes(key)
+    cards: list[dict[str, Any]] = []
+    for room in rooms:
+        questions, _ = state.store.home_lines(
+            room.id, name, now - WAIT_DAYS * DAY_S, now, CANDIDATES, BOARD_LINE, read.get(room.id, 0)
+        )
+        cards += _question_cards(name, room, questions)
+        cards += _board_cards(state, room, snoozed)
+    out: list[notify.Need] = []
+    for c in cards:
+        if c["kind"] == "question":
+            out.append(
+                notify.Need(f"q:{c['slug']}:{c['id']}", "question", c["room"], c["slug"], c["from"], c["ts"])
+            )
+        else:
+            out.append(notify.Need(f"b:{c['slug']}:{c['url']}", "board", c["room"], c["slug"], "", c["ts"]))
+    alone = len(state.service.people_names()) <= 1
+    for a in agents_view.build(state, rooms, now)["agents"]:
+        if a["state"] != "waiting" or not a["rooms"]:
+            continue
+        if not (a["owner"] == name if a["owner"] else alone):
+            continue
+        r = a["rooms"][0]
+        out.append(
+            notify.Need(
+                f"a:{a['id']}:{a['since']}", "approval", r["room"], r["slug"], a["name"], a["since"] or now
+            )
+        )
+    return out
 
 
 def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str, Any]:

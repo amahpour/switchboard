@@ -24,7 +24,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:1.9.0
+  ghcr.io/amahpour/switchboard:1.9.1
 docker logs switchboard
 ```
 
@@ -152,7 +152,7 @@ own storage and CPU before relying on either limit.
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:1.9.0`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:1.9.1`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -181,7 +181,7 @@ What the manifest relies on:
 - **Replacing the pod is stop-then-start.** A StatefulSet with one replica stops its pod before it starts the new one, as a Deployment's `Recreate` strategy would.
 - **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The WebSocket needs no timeout annotation, because the broker pings the UI's every 20 seconds.
 - **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. If a proxy cuts a Claude Code or OpenCode listener round after at least 10 seconds, the listener starts its next round immediately and resets its two-minute outage clock. A shorter timeout can interrupt every round and cause extra requests. Another controller has its own setting for this, such as a load balancer's idle timeout.
-- **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 600 seconds for Claude Code with its current plugin and 280 for Codex (`wait_cap_s` in `config.toml` changes that, but never past what each harness's own client allows, [USAGE.md](USAGE.md) has the limits, and a route's timeout has to stay above whatever it is set to), and a route that cuts sooner fails it with `upstream request timeout`. The same listener retry rules apply to gateway cuts. Set the timeout above the round length so the listener can finish each wait normally. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
+- **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 60 seconds by default for Claude Code and Codex (`wait_cap_s` in `config.toml` changes that, but never past what each harness's own client allows, [USAGE.md](USAGE.md) has the limits, and a route's timeout has to stay above whatever it is set to), and a route that cuts sooner fails it with `upstream request timeout`. The same listener retry rules apply to gateway cuts. Set the timeout above the round length so the listener can finish each wait normally. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
 - **Following live calls adds a second container to the pod:** a patch of this StatefulSet in [deploy/kubernetes/meetings/](https://github.com/amahpour/switchboard/tree/main/deploy/kubernetes/meetings/), which leaves this manifest as it is. See [Meetings on Kubernetes](#meetings-on-kubernetes), or `meetings.enabled` in [the Helm chart](#helm).
 
@@ -324,8 +324,8 @@ Remove `prerollFix` once a joinly release has the fix too. It is independent of 
 **A voice for each line.** The voice patch (two files, [described above](#a-meeting-bot)) is one ConfigMap with two keys. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 ```
 
@@ -826,7 +826,7 @@ That joinly is stock, and the bot's default is to read the call's own captions (
 
 ### A fast talker for calls
 
-Optional (#806, [DESIGN.md §52.11](DESIGN.md#5211-a-fast-talker-for-calls-806)). A person can turn on a **talker** for a call, a fast hosted model that answers short questions in about a second and hands work to the agents ([the guide](guide/meetings-reference.md#a-fast-talker)). It needs your key for the provider's API, and it is off until you set one.
+Optional (#806, [DESIGN.md §52.11](DESIGN.md#5211-a-fast-talker-for-calls-806)). A person can turn on a **talker** for a call, a fast hosted model that answers short questions in about a second and hands work to the agents ([the guide](guide/meetings-reference.md#a-fast-talker)). It needs your key for the provider's API, and it is off until you set one. It is parked (#854): leave the key unset unless you want it. Without a key, `/help` doesn't list `/meeting talker`.
 
 | Setting | Environment | Default | |
 |---|---|---|---|
@@ -907,8 +907,8 @@ switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` arg
 **A voice for each line (#713).** joinly 0.5.4 takes one voice when a bot session starts, and its `speak_text` tool has no voice argument, so every agent that speaks on a call has the same voice. The patch is two files of joinly (`server.py` and the Kokoro voice, `kokoro.py`): `speak_text` takes an optional `voice` for that line, and Kokoro uses it, falling back to the session's voice when it is not given or Kokoro has no voice of that name. Without a `voice` joinly behaves as 0.5.4, so the patch changes nothing on its own: it is the base for a voice per agent. The files are in this repository ([deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly), with joinly's MIT licence and a NOTICE saying what changed); until a joinly release has the argument, mount them over the image's copies, read-only, in the same `docker run` as the other files (use any or all):
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/server.py
-curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/kokoro.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
+curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/kokoro.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro" \
@@ -917,20 +917,22 @@ docker run -d --name joinly -p 127.0.0.1:8010:8000 \
 
 The patched `server.py` also puts switchboard's logo on the bot's tile (#820: it turns the bot's camera on after it joins, showing the favicon's mark). There is no new file to mount. `SWITCHBOARD_BOT_VIDEO=0` in the joinly container's environment (`-e SWITCHBOARD_BOT_VIDEO=0` on `docker run`, `environment:` in compose, `env:` in Kubernetes) leaves the tile grey; the plugin's compose passes the host's value through. A bot that is not given the new `server.py` behaves as before.
 
-The URL names a release tag, which does not move; the link works from the release that has the files on. Their sha256 sums are `641d0988ff85076bf1032dd5c0b685affd5e48bf8863df30d77af54154e80993` (`server.py`) and `d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3` (`kokoro.py`); check them after you download (`sha256sum server.py kokoro.py`), because a mount makes them run inside the bot. A hosted call's plugin ships the same two files and checks them against the same sums, so there is nothing to download there. Drop the mounts once a joinly release has a voice on `speak_text`, and move to that release.
+The same file adds `mute_status` (#853). It reads the call page's own mute button and does not click it, so the room can say when the bot is muted. Without the new `server.py` that notice is not posted. `/meeting unmute` uses joinly's own `unmute_yourself`, which is already in 0.5.4.
+
+The URL names a release tag, which does not move; the link works from the release that has the files on. Their sha256 sums are `2916dd7fd88e0fdf10bc37aaf83b9fa80d0158b7904d9d6c3ff3f088b52690c1` (`server.py`) and `d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3` (`kokoro.py`); check them after you download (`sha256sum server.py kokoro.py`), because a mount makes them run inside the bot. A hosted call's plugin ships the same two files and checks them against the same sums, so there is nothing to download there. Drop the mounts once a joinly release has a voice on `speak_text`, and move to that release.
 
 **Captions (#764).** The bot reads the call's own captions by default, so no speech model is loaded or run and no GPU is needed. It needs a new file of joinly, `captions.py` (the three small parts joinly builds a session from: a transcription controller that reads Zoom's caption box, and a speech-to-text and a voice-activity service that do nothing), and the patched `server.py` above, which points joinly at them when the broker asks for `captions` and answers whether the captions could be turned on. Both are in [deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly); `captions.py` is switchboard's own, MIT licensed like the rest. Mount them with the same `docker run` as the other files:
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/server.py
-curl -fsSLo captions.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/captions.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
+curl -fsSLo captions.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/captions.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/captions.py:/app/.venv/lib/python3.12/site-packages/joinly/captions.py:ro" \
   ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
 ```
 
-Their sha256 sums are `715d150ebf3c84ea626fd3346426877e4141b38a835be18d801aa3a3201ef882` (`captions.py`) and `641d0988ff85076bf1032dd5c0b685affd5e48bf8863df30d77af54154e80993` (`server.py`). **Zoom's automated captions must be allowed for the host's account**, or a guest has no Show Captions button and the call ends with a notice that says so. The bot turns captions on for the call, which **shows them to everyone in it**, and the room says so. Only Zoom's captions are read (Meet and Teams are a later change), so a Meet or Teams link ends with a notice too. **The default changed in this release:** earlier ones always ran Whisper. To get it back, set `[meeting] transcriber = "whisper"` or `SWITCHBOARD_MEETING_TRANSCRIBER=whisper`; an install that set `stt_model` keeps Whisper without that. It is experimental and off by default ([the section below](#the-speech-model-and-a-gpu)). Kubernetes and Helm take `captions.py` in the same ConfigMap as the voice patch (`--from-file=captions.py`); Compose has its mount line commented in beside the others. A call hosted on your own machine does not read captions and is unchanged.
+Their sha256 sums are `715d150ebf3c84ea626fd3346426877e4141b38a835be18d801aa3a3201ef882` (`captions.py`) and `2916dd7fd88e0fdf10bc37aaf83b9fa80d0158b7904d9d6c3ff3f088b52690c1` (`server.py`). **Zoom's automated captions must be allowed for the host's account**, or a guest has no Show Captions button and the call ends with a notice that says so. The bot turns captions on for the call, which **shows them to everyone in it**, and the room says so. Only Zoom's captions are read (Meet and Teams are a later change), so a Meet or Teams link ends with a notice too. **The default changed in this release:** earlier ones always ran Whisper. To get it back, set `[meeting] transcriber = "whisper"` or `SWITCHBOARD_MEETING_TRANSCRIBER=whisper`; an install that set `stt_model` keeps Whisper without that. It is experimental and off by default ([the section below](#the-speech-model-and-a-gpu)). Kubernetes and Helm take `captions.py` in the same ConfigMap as the voice patch (`--from-file=captions.py`); Compose has its mount line commented in beside the others. A call hosted on your own machine does not read captions and is unchanged.
 
 ### The speech model, and a GPU
 
@@ -1098,8 +1100,8 @@ Drop this patch once a joinly release has the fix too, and move the image to tha
 **A voice for each line.** The voice patch (#713, [described above](#a-meeting-bot)) is a fourth patch, [joinly-voice-patch.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-voice-patch.yaml): one ConfigMap with the two files of this repository as its keys, each mounted over joinly's copy with `subPath`, so a pod can't start without the ConfigMap. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.0/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
 ```
@@ -1198,7 +1200,7 @@ The key and the link are files in `calls/<fingerprint>/` of the plugin's data fo
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.9.0 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.9.1 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](https://github.com/amahpour/switchboard/blob/main/deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.

@@ -11,6 +11,8 @@ switchboard never fetches the pull request, never posts to it, and never holds a
 
 Pass `url` when the room has more than one board. Without it, a call is about the board you last acted on, or the room's only open board.
 
+If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch. The default branch, so a pull request cannot change the rules it is reviewed under.
+
 A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture explains it better than words.
 
 `where` is the location, as `shop/cart.py:40-58`, a path alone, or `:42` for one line. Do not pass `file` or `lines`.

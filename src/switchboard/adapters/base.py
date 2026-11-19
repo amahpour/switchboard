@@ -32,6 +32,17 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
 }
 
 
+# What a join says about answering (#878): an agent that acted on a message in its own chat left it
+# unanswered, and the Stop hook raised it again. Only a post in the room, or a pass, answers.
+ANSWER_GUIDANCE = (
+    "A message counts as answered only once you post in the room with say(), or pass() when you have"
+    " nothing to add; acting on it in your chat does not answer it."
+)
+
+# What a capped wait() result adds for a harness with a Stop listener (#878).
+LONG_WAIT_NOTE = "For a longer wait, end your turn; switchboard wakes the session when a message comes."
+
+
 # What a join tells an agent about a member that is waiting on its person (§7.4, §49.4): a fact about
 # the other member, and the choice left to the agent reading it. Switchboard never decides for it. Short,
 # because the join text has a budget (§8, #272).
@@ -101,6 +112,9 @@ class Adapter:
     sink_status = False
     # A scripted stand-in: it exists only in test mode (§9.6).
     test_only = False
+    # What a capped wait() says to do instead (#878): set by the harnesses whose Stop hook wakes an idle
+    # session, so ending the turn is the better way to wait. Empty: say nothing.
+    long_wait_note = ""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg

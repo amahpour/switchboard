@@ -1,0 +1,166 @@
+"""Settings → Profile → Webhook (#723, DESIGN.md §62), on the real page.
+
+The receiver is a local HTTPS server (``tests/fakes/tls_hook.py``) the broker is told to trust and to resolve
+to the loopback, with the operator's "allow private addresses" on only inside the tests that need it. Checks
+what a person sees and what the page never holds: the address is never shown back, a refused address and a
+failed post say so in the person's own settings, and the layout fits in light, dark and on a phone. Marker
+``e2e``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from typing import Any
+
+import pytest
+from conftest import PHASE_REPORTS, sanitize_env
+from fakes.tls_hook import HOST, TlsHook
+from playwright.sync_api import Browser, Page, expect
+from test_web_ui import PHONE, UI
+from ui_world import UIWorld
+
+from switchboard.config import NotifyCfg
+
+pytestmark = pytest.mark.e2e
+
+
+@pytest.fixture(scope="module")
+def world(playwright: Any, tmp_path_factory: pytest.TempPathFactory) -> Iterator[UIWorld]:
+    with pytest.MonkeyPatch.context() as mp:
+        sanitize_env(mp, tmp_path_factory)
+        w = UIWorld().start()
+        try:
+            yield w
+        finally:
+            w.stop()
+
+
+@pytest.fixture
+def hook(world: UIWorld) -> Iterator[TlsHook]:
+    h = TlsHook()
+    st = world.broker.state
+
+    def arm(private: bool) -> None:
+        st.cfg = st.cfg.replace(notify=NotifyCfg(allow_private_webhooks=private))
+        st.notifier.resolve = h.resolve
+        st.notifier.context = h.context
+
+    world.broker.on_loop(arm, True)
+    h.arm = arm  # type: ignore[attr-defined]
+    try:
+        yield h
+    finally:
+        h.stop()
+        world.broker.on_loop(lambda: st.notifier.forget(0))
+        web = world.broker.web_client()
+        try:
+            web.delete("/api/me/webhook", headers=world.broker.write_headers())
+        finally:
+            web.close()
+        world.broker.on_loop(lambda: setattr(st, "cfg", st.cfg.replace(notify=NotifyCfg())))
+
+
+@pytest.fixture
+def ui(browser: Browser, world: UIWorld, request: pytest.FixtureRequest) -> Iterator[UI]:
+    import shutil
+
+    u = UI(browser, world)
+    shutil.rmtree(u.artifacts_dir(request.node.nodeid), ignore_errors=True)
+    yield u
+    reports = request.node.stash.get(PHASE_REPORTS, {})
+    failed = any(r.failed for r in reports.values()) or bool(u.problems)
+    u.finish(failed, request.node.nodeid)
+    if u.problems:
+        pytest.fail("the browser reported problems:\n  " + "\n  ".join(u.problems), pytrace=False)
+
+
+def open_settings(ui: UI, **args: Any) -> Page:
+    page = ui.open(room=None, **args)
+    if not page.locator("#me-settings").is_visible():
+        page.click("#rooms-toggle")
+    page.click("#me-settings")
+    row = page.locator("#settings-row-profile")
+    if row.is_visible():
+        row.click()
+    field = page.locator("#settings-webhook-url")
+    field.scroll_into_view_if_needed()
+    expect(field).to_be_visible()
+    return page
+
+
+def test_save_test_and_remove_never_shows_the_address_back(ui: UI, hook: TlsHook) -> None:
+    """Saving shows the host and clears the field; the secret path is nowhere on the page; "Send a test" posts
+    and says so; Remove clears it. Fails if the address comes back into the page, or nothing is posted."""
+    page = open_settings(ui)
+    expect(page.locator("#settings-webhook-test")).to_be_disabled()
+    page.fill("#settings-webhook-url", hook.url)
+    page.fill("#settings-webhook-wait", "3")
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    expect(page.locator("#settings-webhook-note")).to_contain_text(HOST)
+    expect(page.locator("#settings-webhook-url")).to_have_value("")
+    assert "secretsecret" not in page.content() and "s3cr3t" not in page.content()
+    page.click("#settings-webhook-test")
+    expect(page.locator("#settings-webhook-status")).to_have_text("The test went through.")
+    assert len(hook.posts) == 1 and "test" in hook.posts[0]["body"]["text"]
+    page.reload()
+    page = open_settings(ui)
+    expect(page.locator("#settings-webhook-wait")).to_have_value("3")
+    assert "secretsecret" not in page.content()
+    page.click("#settings-webhook-remove")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Removed.")
+    expect(page.locator("#settings-webhook-test")).to_be_disabled()
+
+
+def test_a_failed_post_and_a_refused_address_are_said_in_settings(ui: UI, hook: TlsHook) -> None:
+    """A receiver that errors shows "The test failed" in red with a fixed sentence and no address. An address
+    on the loopback is refused when private addresses are off. Fails if either is silent or leaks it."""
+    page = open_settings(ui)
+    page.fill("#settings-webhook-url", hook.url)
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    hook.status = 500
+    page.click("#settings-webhook-test")
+    status = page.locator("#settings-webhook-status")
+    expect(status).to_have_text("The test failed: The webhook answered with an error.")
+    expect(status).to_have_class("fine bad")
+    assert "secretsecret" not in page.content()
+    hook.arm(False)  # type: ignore[attr-defined]
+    page.fill("#settings-webhook-url", f"https://127.0.0.1:{hook.port}/x")
+    page.click("#settings-webhook-save")
+    expect(status).to_contain_text("may not post to")
+    expect(status).to_have_class("fine bad")
+    page.fill("#settings-webhook-url", "http://hooks.example.com/x")
+    page.click("#settings-webhook-save")
+    expect(status).to_contain_text("https")
+    # the two refusals are the point of this test; the browser logs each 400 as a console error
+    refused = [p for p in ui.problems if "400 (Bad Request)" in p and "/api/me/webhook" in p]
+    assert len(refused) == 2, ui.problems
+    ui.problems[:] = [p for p in ui.problems if p not in refused]
+
+
+def test_the_form_fits_in_light_dark_and_on_a_phone(ui: UI, hook: TlsHook) -> None:
+    """The Webhook section is reachable and nothing overflows sideways in light, dark and on a phone. Fails if
+    the field or its buttons spill off the screen."""
+    for args in (
+        {"color_scheme": "light"},
+        {"color_scheme": "dark"},
+        {**PHONE, "color_scheme": "light"},
+    ):
+        page = open_settings(ui, **args)
+        save, remove = page.locator("#settings-webhook-save"), page.locator("#settings-webhook-remove")
+        expect(save).to_be_visible()
+        expect(remove).to_be_visible()
+        width = page.evaluate("window.innerWidth")
+        for sel in (
+            "#settings-webhook-url",
+            "#settings-webhook-save",
+            "#settings-webhook-test",
+            "#settings-webhook-remove",
+        ):
+            box = page.locator(sel).bounding_box()
+            assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= width + 1, (
+                sel,
+                box,
+                width,
+            )
