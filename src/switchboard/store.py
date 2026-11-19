@@ -185,10 +185,12 @@ class Store:
     def join_day_one(self) -> int:
         """Join each person to every public room they opened (a seen mark, §55.8), posted in, or have an
         agent in, on any day, once (§62, #843): what was already recorded, so nobody's sidebar empties
-        when membership starts to count. An agent is its person's as ``RoomService.host_person`` says:
-        the live agent token for its device, else the owner's (0). A removed person joins nothing. Runs
-        at the broker's start; a database that has done it says so in ``meta`` and is never filled
-        again. The rows added, 0 when it had run already."""
+        when membership starts to count. An agent on this machine (no host) is the owner's (0); one on a
+        device is the person's whose token that device had when the agent joined: a device name is unique
+        only among live tokens, so today's token may be someone else's. An agent no token placed then
+        joins nobody to anything, the owner included. A removed person joins nothing. Runs at the
+        broker's start; a database that has done it says so in ``meta`` and is never filled again. The
+        rows added, 0 when it had run already."""
         with db.tx(self.con):
             if self.con.execute("SELECT 1 FROM meta WHERE key=?", (self.DAY_ONE_KEY,)).fetchone():
                 return 0
@@ -199,8 +201,10 @@ class Store:
                 "  SELECT room_id, person_key AS person FROM home_seen"
                 "  UNION SELECT room_id, COALESCE(sender_person_id, 0) FROM messages"
                 "   WHERE sender_kind='human'"
-                "  UNION SELECT m.room_id, COALESCE((SELECT COALESCE(t.person_id, 0) FROM agent_tokens t"
-                "    WHERE t.device=p.host AND p.host!='' AND t.revoked_at IS NULL), 0)"
+                "  UNION SELECT m.room_id, CASE WHEN p.host='' THEN 0 ELSE ("
+                "    SELECT COALESCE(t.person_id, 0) FROM agent_tokens t WHERE t.device=p.host"
+                "     AND t.created_at<=m.joined_at AND (t.revoked_at IS NULL OR t.revoked_at>m.joined_at)"
+                "     ORDER BY t.created_at DESC, t.id DESC LIMIT 1) END"
                 "   FROM memberships m JOIN participants p ON p.id=m.participant_id"
                 " ) e JOIN rooms r ON r.id=e.room_id AND r.private=0"
                 " WHERE e.person=0 OR e.person IN (SELECT id FROM people WHERE removed_at IS NULL)",
