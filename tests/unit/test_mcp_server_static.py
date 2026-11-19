@@ -49,6 +49,9 @@ class Backend:
     def wait_cap(self) -> int:
         return 110
 
+    def wait_cap_note(self) -> str:
+        return ""
+
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
         self.calls.append((method, params))
         return {"ok": True, "room": "#build", "screen_name": "bot", "tier": "claude:https", "text": "hi"}
@@ -432,3 +435,17 @@ def test_the_talk_on_a_call_skill_is_the_same_file_in_the_three_plugins_and_teac
     assert "one or two short sentences" in text.lower() and "normal `say()` without `@call`" in text
     assert "The rest is in the room." in text and "a person turns voice on" in text
     assert len(text) < 1800
+
+
+async def test_a_capped_wait_for_a_stop_listener_harness_says_to_end_the_turn() -> None:
+    """#878: an agent used ``wait(300)`` to pass time and held its whole session. When the cap cuts a
+    wait and the harness's adapter has advice (Claude Code, Codex: a Stop listener wakes an idle session),
+    a timeout says it after the capped sentence. Without advice, or when nothing was cut, nothing is added.
+    Fails if the result stops at "(capped from ...)"."""
+    advice = "For a longer wait, end your turn; switchboard wakes the session when a message comes."
+    text = "[switchboard] #build: no new messages within 60 s."
+    res = {"ok": True, "status": "timeout", "timeout_s": 60, "text": text}
+    got = srv.note_wait_cap(300, res, advice)
+    assert got["text"] == f"[switchboard] #build: no new messages within 60 s (capped from 300 s). {advice}"
+    assert srv.note_wait_cap(300, res)["text"].endswith("(capped from 300 s).")
+    assert srv.note_wait_cap(60, res, advice) is res  # not cut: nothing added

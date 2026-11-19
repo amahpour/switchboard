@@ -599,6 +599,10 @@ class HttpTools:
         the like, §9.1), so a config value raises the tool's cap as well as lowers it (#547)."""
         return self.state.engine.adapter_for(self.harness or "unknown").caps().wait_cap_s
 
+    def wait_cap_note(self) -> str:
+        """What a capped ``wait()`` tells the caller to do for a longer wait: its adapter's line (#878)."""
+        return self.state.engine.adapter_for(self.harness or "unknown").long_wait_note
+
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
         c = self._caller.get()
         if c is None:
