@@ -367,7 +367,8 @@ class AgentService:
         Only with the code that membership's own join answer ended with (or the newest a reminder
         gave it), which only the session that read it has, and only for the same harness on the
         same device (so the same person): never a name another session or device used. Not
-        from a kicked agent, and not while the old membership is still in the room. The code is
+        from a kicked agent. A membership still in the room gives its name up only when its session is
+        offline, and not for ``RESTART_GRACE_S`` after a restart took it offline. The code is
         checked before anything about the holder is said, so a wrong one learns only that."""
         if code is None:
             return None, None
