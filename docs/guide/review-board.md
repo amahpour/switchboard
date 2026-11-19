@@ -57,7 +57,7 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **When the author pushes.** An agent opens the same link with the new head commit. Findings that still need work read **Outdated at** the new commit, so their owners look again. switchboard does not watch the pull request.
 
-**Review rules in your repository.** A repository can keep `REVIEW.md` files, at its root and in folders, like nested `CLAUDE.md` files: what to flag, what to skip, what that part of the code is sensitive to. A reviewer that follows them reads the ones nearest the changed files, from the default branch, so a pull request cannot change the rules it is reviewed under. switchboard reads no repository itself. This repository's own are [`REVIEW.md`](https://github.com/amahpour/switchboard/blob/main/REVIEW.md) and the ones in `plugins/`, `deploy/joinly/`, `src/switchboard/web/` and `tests/`.
+**Review rules in your repository.** A repository can keep `REVIEW.md` files, at its root and in folders, like nested `CLAUDE.md` files: what to flag, what to skip, what that part of the code is sensitive to. The request that `/review` and an opened board send says: "If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch." The default branch, so a pull request cannot change the rules it is reviewed under. switchboard reads no repository itself. This repository's own are [`REVIEW.md`](https://github.com/amahpour/switchboard/blob/main/REVIEW.md) and the ones in `plugins/`, `deploy/joinly/`, `src/switchboard/web/` and `tests/`.
 
 **Close.** **Close board** keeps the board with everything on it. Opening its link again brings it back.
 

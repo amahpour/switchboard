@@ -6,6 +6,7 @@ agent. Codex sessions over HTTPS (§49) against an in-process broker."""
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sqlite3
 import time
@@ -15,7 +16,7 @@ from typing import Any
 import pytest
 from conftest import InProcBroker
 from fakes.fake_agent import FakeAgent
-from test_agents_http import THREAD_A, THREAD_B, Codex, make_token
+from test_agents_http import EXIT_FIX, THREAD_A, THREAD_B, Codex, make_token
 
 from switchboard.config import Config
 from switchboard.models import join_code_hash, session_key
@@ -214,3 +215,92 @@ def test_a_wrong_code_is_told_it_isnt_the_names(broker: InProcBroker) -> None:
 
     text = asyncio.run(go())
     assert "isn't this name's" in text, text
+
+
+# ------------------------------------- a session killed before any hook ran (#868)
+def killed_session_in_build(b: InProcBroker) -> str:
+    """A Codex thread joins #build as planner and its MCP connection is closed (the recorded /quit
+    DELETE, the one signal a Codex that dies without its hooks can still send): the participant goes
+    offline the way it does on a server, and the membership stays. Returns its code."""
+    old = codex_session(b)
+    r = old.call("join", THREAD_A, room="#build", screen_name="planner")
+    assert r["ok"], r
+    code = join_code(r)
+    graceful = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    assert old.delete(graceful).status_code == 200
+    key = session_key("codex", "laptop", THREAD_A)
+    p = b.on_loop(b.state.store.find_participant, "codex", key)
+    assert p is not None and p.status == "offline" and p.status_src != "restart", p
+    return code
+
+
+def test_the_code_takes_back_a_name_from_an_offline_member_still_in_the_room(broker: InProcBroker) -> None:
+    """#868: a session killed with its hooks untrusted never left, so its membership stayed and
+    the right code was refused as ``name_taken``. The code of an offline member now takes the name
+    and ends that membership. Fails if the join is still refused."""
+    code = killed_session_in_build(broker)
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"] and r["screen_name"] == "planner", r
+    assert [m["name"] for m in broker.web.get("/api/rooms/build/members").json()["members"]] == ["planner"]
+    assert q(broker, "SELECT left_reason FROM memberships WHERE left_at IS NOT NULL")[0][0] == "resumed"
+
+
+def test_a_connected_member_or_a_wrong_code_keeps_its_name(broker: InProcBroker) -> None:
+    """The guard stays: a wrong code gets name_taken and learns nothing, and a member whose session
+    is still connected keeps its name even for the right code, with the reason said."""
+    code = killed_session_in_build(broker)
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume="yk:j" + "0" * 16)
+    # exactly the plain refusal: nothing about the holder (its status, its code) is said to a wrong code
+    assert r["code"] == "name_taken", r
+    assert r["error"] == "planner is taken in #build; pick another screen name", r
+    p = broker.state.store.find_participant("codex", session_key("codex", "laptop", THREAD_A))
+    assert p is not None
+    broker.state.store.upsert_participant("codex", p.session_key, host="laptop", status="idle")
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["code"] == "name_taken" and "still connected" in r["error"], r
+
+
+def test_a_member_offline_only_because_of_a_restart_keeps_its_name_for_a_while(broker: InProcBroker) -> None:
+    """#868 review F1: after a broker restart every session is offline until it reconnects, so a new
+    session with a copy of its code must not take its name at once. It can after the grace period.
+    Fails if a restart's offline member loses its name immediately."""
+    code = killed_session_in_build(broker)
+    st = broker.state.store
+    now = st.clock.now()
+    st.con.execute("UPDATE participants SET status_src='restart', status_at=?", (now,))
+    st.con.commit()
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["code"] == "name_taken" and "restarted" in r["error"], r
+    assert "still connected" not in r["error"], r
+    st.con.execute("UPDATE participants SET status_at=? WHERE status_src='restart'", (now - 700,))
+    st.con.commit()
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"], r
+
+
+def test_a_reclaim_tells_the_engine_the_old_membership_ended(broker: InProcBroker) -> None:
+    """#868 review F4: ending the old membership in the store alone left its open waits, parks and
+    queued says with the engine. The reclaim goes through ``on_membership_ended``. Fails if not."""
+    code = killed_session_in_build(broker)
+    old_id = q(broker, "SELECT id FROM memberships WHERE screen_name='planner'")[0][0]
+    seen: list[tuple[int, str]] = []
+    agents = broker.state.agents
+    real = agents.on_membership_ended
+    agents.on_membership_ended = lambda mid, why: (seen.append((mid, why)), real(mid, why))[1]  # type: ignore[method-assign]
+    r = codex_session(broker).call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"], r
+    assert seen == [(old_id, "resumed")], seen
+
+
+def test_a_session_that_never_went_offline_keeps_its_name(broker: InProcBroker) -> None:
+    """#868 review F2: a session killed before its first hook and never closed stays ``starting``,
+    not offline, so it is taken for connected: its name is not taken, and the refusal says why."""
+    old = codex_session(broker)
+    r = old.call("join", THREAD_A, room="#build", screen_name="planner")
+    r2 = codex_session(broker).call(
+        "join", RESTARTED, room="#build", screen_name="planner", resume=join_code(r)
+    )
+    assert r2["code"] == "name_taken" and "still connected" in r2["error"], r2
