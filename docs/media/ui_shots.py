@@ -2696,6 +2696,9 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
         added = c.post("/api/people", json={"name": "bob", "email": "bob@example.com"})
         assert added.status_code == 200, added.text
         bob_id = int(added.json()["person"]["id"])
+        # bob is in #build, as his agent there would make him (§62): People lists him
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob"})
+        assert joined.status_code == 200, joined.text
         admin_cookie = c.cookies.get("switchboard_session")
     assert admin_cookie
 
@@ -3009,6 +3012,9 @@ def shoot_real_names(browser: Any, out: Path, world: Any) -> None:
         signed = c.post("/api/signin/password", json={"name": "bob.lee@example.com", "password": bob_otp})
         assert signed.status_code == 200, signed.text
         assert c.post("/api/me/password", json={"password": "bob's own secret 1"}).status_code == 200
+        # he is in #build, so its People list has him (§62)
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob-lee"})
+        assert joined.status_code == 200, joined.text
         assert c.post("/api/rooms/build/say", json={"text": "The port check is in."}).status_code == 200
 
     base = {"timezone_id": "UTC", "locale": "en-US"}
