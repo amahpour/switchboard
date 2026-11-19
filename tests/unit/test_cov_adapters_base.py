@@ -428,3 +428,23 @@ def test_catchups_session_id_is_the_one_the_sessions_key_carries(harness: str) -
         None,
         why,
     )
+
+
+def test_a_join_says_an_answer_counts_only_once_it_is_posted_and_stop_listeners_carry_the_wait_advice() -> (
+    None
+):
+    """#878: an agent that acted on a message in its chat left it unanswered and the Stop hook raised it
+    again. Every HTTPS join says only say() or pass() answers. Claude Code and Codex, whose Stop hook wakes
+    them, also carry the advice a capped wait gives; the others carry none. Fails if either is missing."""
+    for cls, harness in (
+        (HttpsClaudeAdapter, "claude"),
+        (HttpsCodexAdapter, "codex"),
+        (HttpsCursorAdapter, "cursor"),
+        (HttpsDevinAdapter, "devin"),
+    ):
+        text = cls(CFG).join_guidance(part(harness=harness), "#build")
+        assert "answered only once you post in the room with say(), or pass()" in text, harness
+    assert HttpsClaudeAdapter(CFG).long_wait_note == HttpsCodexAdapter(CFG).long_wait_note != ""
+    assert "end your turn" in HttpsClaudeAdapter(CFG).long_wait_note
+    for cls in (HttpsCursorAdapter, HttpsDevinAdapter):
+        assert cls(CFG).long_wait_note == ""

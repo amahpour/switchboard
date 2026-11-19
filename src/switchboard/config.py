@@ -82,17 +82,20 @@ class DeliveryCfg:
             raise ConfigError("[delivery] listen_max_wakes must be an integer from 1 to 10000")
 
 
+# Claude Code and Codex have a Stop listener that wakes an idle session, so a long wait() is never
+# needed: it holds the whole session, and the person's typing and the harness's own notices don't end it.
+# Their default is 60 s (#878, DESIGN.md §6.1), well under what their clients allow. The measured limits:
 # wait() caps, measured with each harness's CLI in November 2026 (#547, DESIGN.md §6.1): Claude Code
 # uses the plugin timeout and background-result confirmation for a 600 s wait (#558); Codex
 # ends a call at its default tool_timeout_sec of 300 s; Cursor at 60 s; Devin at 120 s (§49.7).
 @dataclass(frozen=True)
 class ClaudeCfg:
-    wait_cap_s: int = 600
+    wait_cap_s: int = 60
 
 
 @dataclass(frozen=True)
 class CodexCfg:
-    wait_cap_s: int = 280
+    wait_cap_s: int = 60
     ctx_max_chars: int = 5000
 
 
