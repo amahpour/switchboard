@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from conftest import InProcBroker, make_tmp_home, sanitize_env
+from conftest import FakeClock, InProcBroker, make_tmp_home, sanitize_env
 from playwright.sync_api import Browser, Page, expect
 from test_web_ui import DESKTOP, PHASE_REPORTS, PHONE, UI
 
@@ -107,3 +107,97 @@ def test_usage_shows_the_wakes_the_posts_and_the_budget(ui: UI, meter: InProcBro
     opener.focus()
     page.keyboard.press("Enter")
     expect(page.locator("#room-title")).to_have_text("meter")
+
+
+@pytest.fixture(scope="module")
+def reviewed(playwright: Any, tmp_path_factory: pytest.TempPathFactory) -> Iterator[InProcBroker]:
+    """A broker with one settled and merged review board, planted with times a few minutes before now so
+    the 7-day window holds them whatever the hour. Two findings: one confirmed, one dropped."""
+    with pytest.MonkeyPatch.context() as mp:
+        sanitize_env(mp, tmp_path_factory)
+        home = make_tmp_home()
+        broker = InProcBroker(home).start()
+        try:
+
+            def plant() -> None:
+                store = broker.state.store
+                real = store.clock
+                t0 = float(real.now())
+                clock = FakeClock(t0)
+                store.clock = clock  # type: ignore[assignment]
+                try:
+                    room = store.create_room("#reviewed", "alice", 40, 0)
+                    for who in ("rev-1", "dev-1"):
+                        person = store.upsert_participant("claude", session_key("claude", "", who))
+                        store.create_membership(room.id, person.id, who)
+
+                    def at(offset: float) -> None:
+                        clock.t = t0 - offset
+
+                    def event(rv: dict[str, Any], offset: float, **data: Any) -> None:
+                        at(offset)
+                        store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
+
+                    at(300)
+                    rv = store.open_review(
+                        room.id, "https://github.com/example/shop/pull/7", "aaaaaaa", "rev-1"
+                    )
+                    event(rv, 300, open=rv["url"], head="aaaaaaa", by="rev-1", how="opened")
+                    at(280)
+                    one = store.add_review_item(rv["id"], "finding", "raised", title="a", raised_by="rev-1")
+                    at(270)
+                    two = store.add_review_item(rv["id"], "finding", "raised", title="b", raised_by="rev-1")
+                    for offset, item, to, state, fields in (
+                        (200, one, "conceded", "conceded", {"owner": "dev-1"}),
+                        (150, two, "dropped", "dropped", {"reason": "no"}),
+                        (120, one, "fixed", "fixed", {"commit_sha": "abc1234", "proof": "t"}),
+                        (100, one, "confirmed", "fixed", {"confirmed_by": "rev-1"}),
+                    ):
+                        at(offset)
+                        store.move_review_item(item.id, state, **fields)
+                        event(rv, offset, item=item.label, to=to, by="x")
+                    event(rv, 50, report={"pr_state": "merged"}, by="rev-1")
+                    at(50)
+                    store.set_review(rv["id"], pr_state="merged", reported_by="rev-1", reported_at=clock.t)
+                finally:
+                    store.clock = real
+
+            broker.on_loop(plant)
+            yield broker
+        finally:
+            broker.stop()
+            shutil.rmtree(home, ignore_errors=True)
+
+
+@pytest.mark.parametrize("mode", ["light", "dark", "phone"])
+def test_usage_shows_how_reviews_went(ui: UI, reviewed: InProcBroker, mode: str) -> None:
+    """One board settled in 200 s and merged 50 s after, with one finding confirmed and one dropped: the
+    page says so by room and by agent, in the light and dark themes and on a phone, with no sideways
+    scroll. The agent who only fixed (dev-1) raised nothing and has no row."""
+    opts: dict[str, Any] = dict(PHONE if mode == "phone" else DESKTOP)
+    opts["color_scheme"] = "light" if mode == "light" else "dark"
+    page = ui.context(**opts).new_page()
+    page.goto(reviewed.login_url())
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    if mode == "phone":
+        page.locator("#rooms-toggle").click()
+    page.locator("#usage-nav").click()
+    expect(page.locator("#room-title")).to_have_text("Usage")
+    for list_id in ("#usage-review-rooms li", "#usage-review-agents li"):
+        row = page.locator(list_id)
+        expect(row).to_have_count(1)
+        expect(row).to_contain_text("Boards: 1 opened, 1 settled, median 3 min to settle")
+        expect(row).to_contain_text(
+            "Findings: 2 raised, 1 confirmed, 0 contested, 1 dropped \u00b7 50% confirmed"
+        )
+        expect(row).to_contain_text("Fixes: 0 reopened, median 1 commit before settling")
+        expect(row).to_contain_text(
+            "Time to merge: first finding 20 s \u2192 settled 3 min \u2192 merged 50 s"
+        )
+        expect(row).to_contain_text("Merged: 1 reported, 0 unknown")
+    expect(page.locator("#usage-review-agents")).to_contain_text("rev-1")
+    expect(page.locator("#usage-review-agents")).not_to_contain_text("dev-1")
+    bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+    assert bg == ("rgb(255, 255, 255)" if mode == "light" else "rgb(28, 28, 31)")
+    if mode == "phone":
+        no_sideways_scroll(page)

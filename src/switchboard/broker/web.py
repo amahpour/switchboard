@@ -80,7 +80,7 @@ from switchboard.broker.passwords import (
     password_problem,
     verify_password,
 )
-from switchboard.broker.service import ServiceError
+from switchboard.broker.service import ServiceError, is_member
 from switchboard.delivery import rules
 from switchboard.files import (
     FILE_ID_RE,
@@ -1107,6 +1107,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
         state.hub.notice(None, "info", f"{name} added by {w.name}")
         people_changed(state)
+        state.service.rooms_changed()  # a second person: public rooms are now joined and left (§63)
         return _ok(
             {
                 "person": next(x for x in people.summary(state) if x["id"] == p.id),
@@ -1912,14 +1913,20 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     async def list_rooms(request: Request) -> Response:
         if session(request) is None:
             return unauthorized()
-        rooms = state.service.rooms(viewer(request))
+        me = viewer(request)
+        listed = state.service.visible_rooms(me)
+        rooms = [state.service.room_dict(r) for r in listed]
         # how far this person has read each room (§55.8): the page counts its red badge from there, so a
         # reload doesn't bring back what they already opened
-        w = who(request)
-        marks = state.store.home_seen_marks(state.service.person_key(w.person_id)) if w is not None else {}
-        for r in rooms:
+        marks = state.store.home_seen_marks(me)
+        # whether they are a member, pinged there, and the agent that made them one, until they open it
+        # (§63): the page lists the rooms they are in, and the others under Other rooms
+        joined, one = state.store.person_rooms(me), state.service.one_person()
+        for room, r in zip(listed, rooms, strict=True):
             r["seen"] = marks.get(r["id"], 0)
-        return _ok({"rooms": rooms, "closed": len(state.service.closed_room_dicts(viewer(request)))})
+            r["member"] = is_member(room, joined, one)
+            r["joined_with"] = joined.get(room.id) if r["member"] else None
+        return _ok({"rooms": rooms, "closed": len(state.service.closed_room_dicts(me))})
 
     # The home page (§55, #626): what waits on this person across their rooms, what got done since
     # they last looked, and what is live. A read of what is stored, for the one person asking;
@@ -2085,6 +2092,23 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _ok({"boards": state.boards.boards(room)})
         except ServiceError as e:
             return _svc_err(e)
+
+    @app.get("/api/rooms/{slug}/review/past")
+    async def past_room_review(request: Request, slug: str, url: str | None = None) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            room = state.service.room_for(slug, viewer(request))
+            if url is None:
+                return _ok({"boards": state.boards.past_boards(room)})
+            rv = state.boards.past_board(room, url)
+            if rv is None:
+                return _err(404, "not_found", "No past board for this link")
+            return _ok({"board": rv})
+        except ServiceError as e:
+            return _svc_err(e)
+        except ReviewError as e:
+            return _err(400, "bad_request", str(e))
 
     @app.post("/api/rooms/{slug}/review")
     async def room_review_move(request: Request, slug: str) -> Response:
@@ -2550,7 +2574,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
-    # A private room's people (§44.2): any of them adds or removes one, and anyone may leave.
+    # A private room's people (§44.2): any of them adds or removes one, and anyone may leave. A public
+    # room's members (§63): anyone joins (adds themself), a member adds someone, and a person leaves.
     @app.post("/api/rooms/{slug}/people")
     async def room_people(request: Request, slug: str) -> Response:
         w = who(request)

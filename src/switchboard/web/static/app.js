@@ -44,6 +44,7 @@
     $('whiteboard-toggle').addEventListener('click', function () {
       if (whiteboardOpen) { closeWhiteboard(); return; }
       if (!state.active) return;
+      state.pastBoards = null;
       state.boardOpen = false; renderBoard();
       whiteboardOpen = true;
       $('app').classList.add('whiteboard-open');
@@ -118,6 +119,7 @@
     mentionIntent: false, // an @ query can have no matches until a members frame arrives (#505)
     sheetOpener: null, // the control that opened the Closed or People sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
+    pastBoards: null,  // the room's past boards, list or selected read-only board
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
     everyone: [],        // every person on a hosted broker, from the `people` frame (#354); empty on a desktop
     online: new Set(),   // those of them with a page open now
@@ -2236,6 +2238,7 @@
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
     if (state.active !== name) {
+      state.pastBoards = null;
       state.boardOpen = false;
       state.boardSel = null;
     }
@@ -3751,7 +3754,10 @@
       // An older HTTP board read may still be in flight. Keep this live frame authoritative.
       r.boardGeneration = (r.boardGeneration || 0) + 1;
       setBoards(r, f.boards);
-      if (f.room === state.active) renderBoard();
+      if (f.room === state.active) {
+        if (state.pastBoards) loadPastBoards(state.pastBoards);
+        else renderBoard();
+      }
     } else if (f.t === 'icons') {
       // an agent's avatar was set or reset (§29.11): the stylesheet, and the list if Settings shows it
       refreshAgentIcons();
@@ -6553,6 +6559,7 @@
         renderLocal(verb, !res.ok, res.text);
         // a person's /review opened the room's board (#248): show it, in this page only
         if (res.ok && verb.toLowerCase() === '/review' && r.name === state.active) {
+          state.pastBoards = null;
           state.boardOpen = true;
           r.boardUrl = text.split(/\s+/)[1];  // the board it opened, or brought back, is the one on show
           loadBoard(r);
@@ -6663,7 +6670,7 @@
     }) : [];
     r.board = r.boards.find(function (x) { return x.url === r.boardUrl; }) || r.boards[0] || null;
     r.boardUrl = r.board ? r.board.url : null;
-    if (r.name === state.active && r.boardUrl !== before) state.boardSel = null;
+    if (r.name === state.active && !state.pastBoards && r.boardUrl !== before) state.boardSel = null;
   }
 
   function selectBoard(r, url) {
@@ -6775,6 +6782,92 @@
     return 'raised by ' + i.raised_by;
   }
 
+  async function loadPastBoards(view, focus) {
+    if (focus) view.focus = focus;
+    const generation = ++view.generation;
+    const path = '/api/rooms/' + encodeURIComponent(view.room.slug) + '/review/past';
+    try {
+      const res = await api('GET', path + (view.url ? '?url=' + encodeURIComponent(view.url) : ''));
+      if (state.pastBoards !== view || generation !== view.generation) return;
+      view.error = '';
+      view.board = res.board || null;
+      view.boards = res.boards || view.boards;
+    } catch (e) {
+      if (state.pastBoards !== view || generation !== view.generation) return;
+      view.error = view.url ? 'Could not load this past board.' : 'Could not load past boards.';
+      view.board = null;
+      view.boards = null;
+    }
+    renderBoard();
+    const after = view.focus;
+    view.focus = null;
+    if (after) after();
+  }
+
+  function pastBoardList(box, view) {
+    boardParts = null;
+    boardDetailCache = null;
+    const focused = document.activeElement;
+    const focusedId = focused && focused.dataset && focused.dataset.pastBoard;
+    const head = el('div', 'board-head');
+    head.append(el('h2', 'past-boards-title', 'Past boards'));
+    if (view.url) head.append(pastBoardsBack(view));
+    const list = el('ul', 'past-boards-list');
+    list.setAttribute('aria-label', 'Past boards');
+    let restore = null;
+    for (const b of view.url ? [] : view.boards || []) {
+      const row = el('li', 'past-board-row');
+      const f = b.forge;
+      const label = f && FORGE_NAME[f.kind] ? f.repo + ' ' + (f.kind === 'gitlab' ? '!' : '#') + f.number : b.url;
+      const open = btn('btn past-board-link', label);
+      open.dataset.pastBoard = String(b.id);
+      open.title = b.url;
+      open.addEventListener('click', function () {
+        view.url = b.url;
+        view.selected = String(b.id);
+        loadPastBoards(view, function () { tryFocus($('past-boards-back')); });
+      });
+      if (focusedId === String(b.id)) restore = open;
+      const merged = b.outcome === 'merged';
+      const outcome = el('span', 'chip' + (merged ? ' chip-ok' : ''), merged ? 'Merged' : 'Unknown');
+      const dates = el('dl', 'past-board-dates');
+      for (const [label, ts] of [['Opened', b.opened_at], ['Settled', b.settled_at], ['Closed', b.closed_at]]) {
+        const value = el('dd');
+        if (typeof ts !== 'number') value.textContent = '—';
+        else {
+          const day = new Date(ts * 1000);
+          const time = el('time', null, day.toLocaleString());
+          time.dateTime = day.toISOString();
+          value.append(time);
+        }
+        dates.append(el('dt', null, label), value);
+      }
+      row.append(open, outcome, dates);
+      list.append(row);
+    }
+    const message = view.error || (view.boards ? 'No past boards in this room.' : 'Loading past boards…');
+    box.replaceChildren(head, list.childNodes.length ? list : el('p', 'board-empty', message));
+    if (restore) tryFocus(restore);
+    else if (focused && focused.id === 'past-boards-back') tryFocus($('past-boards-back'));
+  }
+
+  function pastBoardsBack(view) {
+    const back = btn('btn', 'Back to past boards');
+    back.id = 'past-boards-back';
+    back.addEventListener('click', function () {
+      view.url = null;
+      view.board = null;
+      state.boardSel = null;
+      loadPastBoards(view, function () {
+        const row = Array.from(document.querySelectorAll('.past-board-link')).find(function (button) {
+          return button.dataset.pastBoard === view.selected;
+        });
+        tryFocus(row || $('past-boards-toggle'));
+      });
+    });
+    return back;
+  }
+
   function renderBoard() {
     // Hand off is in the header (#425); its button, or the line that replaced it, keeps the focus
     const handoffFocus = document.activeElement && (document.activeElement.id === 'board-handoff'
@@ -6783,6 +6876,7 @@
     // Close board is rebuilt with the rest of the header (#430): a keyboard user who tabbed to it
     // would otherwise be dropped to the top of the page by the next members or review frame
     const closeFocused = !!document.activeElement && document.activeElement.id === 'board-close';
+    const focusedBack = !!document.activeElement && document.activeElement.id === 'past-boards-back';
     // a card with keyboard focus keeps it through the rebuild: a members frame rebuilds the board on
     // every busy/idle change (#407), and a keyboard or screen-reader user would lose their place
     const focusedCard = document.activeElement && document.activeElement.closest
@@ -6792,21 +6886,31 @@
     const focusedTab = document.activeElement && document.activeElement.closest
       ? document.activeElement.closest('#board .board-tab') : null;
     const focusedBoard = focusedTab ? focusedTab.dataset.board : null;
-    const r = activeRoom();
+    const room = activeRoom();
+    const past = state.pastBoards;
+    const r = past ? Object.assign({}, room, { board: past.board }) : room;
     const b = r ? r.board : null;
     const toggle = $('board-toggle');
-    toggle.classList.toggle('hidden', !b);
-    if (!b) state.boardOpen = false;
-    const open = !!(b && state.boardOpen);
+    toggle.classList.toggle('hidden', !(room && room.board));
+    const pastToggle = $('past-boards-toggle');
+    pastToggle.classList.toggle('hidden', !room);
+    pastToggle.setAttribute('aria-pressed', String(!!past));
+    if (!room || !room.board) state.boardOpen = false;
+    const open = !!(b && (state.boardOpen || past));
     // keyboard focus inside the open card (a drawn diagram's button, the drop reason) survives the
     // rebuild below along with the card itself (boardDetailFor)
     const detailFocus = open && boardDetailCache && document.activeElement && boardDetailCache.el.contains
       && boardDetailCache.el.contains(document.activeElement) ? document.activeElement : null;
-    toggle.setAttribute('aria-pressed', String(open));
-    toggle.title = open ? 'Back to the conversation' : "Show this room's review board";
-    $('main').classList.toggle('board-open', open);
+    toggle.setAttribute('aria-pressed', String(open && !past));
+    toggle.title = open && !past ? 'Back to the conversation' : "Show this room's review board";
+    $('main').classList.toggle('board-open', open || !!past);
     const box = $('board');
-    box.classList.toggle('hidden', !open);
+    box.classList.toggle('hidden', !open && !past);
+    if (past && !b) {
+      box.classList.remove('has-tabs');
+      pastBoardList(box, past);
+      return;
+    }
     if (!open) {
       boardParts = null;
       boardDetailCache = null;
@@ -6861,9 +6965,14 @@
       if (ok) boardMove({ action: 'close', url: b.url });
     });
     // two or more open boards: tabs, on the header's first row (§37.14)
-    const tabbed = (r.boards || []).length > 1;
+    const tabbed = !past && (r.boards || []).length > 1;
     if (tabbed) head.append(boardTabs(r));
-    head.append(title, status, boardHandoff(r, b), close);
+    if (past) {
+      head.append(pastBoardsBack(past), title, el('span', 'chip', 'Read-only'),
+        el('span', 'chip' + (b.pr_state === 'merged' ? ' chip-ok' : ''), b.pr_state === 'merged' ? 'Merged' : 'Unknown'));
+    } else {
+      head.append(title, status, boardHandoff(r, b), close);
+    }
     box.classList.toggle('has-tabs', tabbed);
 
     const lanes = el('div', 'board-lanes');
@@ -6884,7 +6993,7 @@
         card.setAttribute('aria-pressed', String(state.boardSel === i.label));
         const top = el('span', 'board-card-top');
         top.append(el('span', 'board-label', i.label), el('span', boardStateClass(i), boardStateWord(i)));
-        const next = boardNext(i);
+        const next = !past && boardNext(i);
         if (next) top.append(boardPulse(next, (r.members || []).find(function (m) { return m.name === next; })));
         // a settled fix reads as done (#427): the check sits in the corner, only once someone has
         // confirmed it. icon() hides it from a screen reader; the card says "Fixed" and "confirmed by".
@@ -6937,6 +7046,7 @@
     }
     // every board event redraws the board: the divider and Close board keep the focus they had
     if (dividerFocused && boardParts) boardParts.divider.focus();
+    if (past && focusedBack) tryFocus($('past-boards-back'));
     if (closeFocused) {
       const again = $('board-close');
       if (again) again.focus();
@@ -6962,7 +7072,7 @@
   let boardDetailCache = null;  // { key, el } of the card on show, or null
   function boardDetailFor(r, i) {
     const key = JSON.stringify([i, (r.members || []).map(function (m) { return m.name; }), r.board.url,
-      r.board.forge]);
+      r.board.forge, r.board.closed_at]);
     if (boardDetailCache && boardDetailCache.key === key) return boardDetailCache.el;
     const card = boardDetail(r, i);
     boardDetailCache = { key: key, el: card };
@@ -7332,6 +7442,16 @@
       }
       d.append(ol);
     }
+    if (typeof b.closed_at === 'number') {
+      if (i.kind === 'question' && i.state === 'open') {
+        const options = el('ul', 'board-readonly-options');
+        for (const n of boardOptionOrder(i)) options.append(el('li', null, i.options[n] + boardOptionNote(i, n)));
+        d.append(options);
+        const consensus = boardConsensusLine(i);
+        if (consensus) d.append(consensus);
+      }
+      return d;
+    }
     const acts = el('div', 'board-actions');
     if (i.kind === 'question' && i.state === 'open') {
       // each option says what it is, the agreed one first and in the primary color (#423): an
@@ -7579,6 +7699,7 @@
     state.home = true;
     closeWhiteboard();
     state.active = null;
+    state.pastBoards = null;
     state.boardOpen = false;
     state.boardSel = null;
     $('app').classList.add('home-open');
@@ -8648,8 +8769,19 @@
     $('room-wake').addEventListener('click', openRoomWake);
     $('room-calls').addEventListener('click', openRoomCalls);
     if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
+    $('past-boards-toggle').addEventListener('click', function () {
+      const room = activeRoom();
+      if (!room) return;
+      closeWhiteboard();
+      state.boardOpen = false;
+      state.boardSel = null;
+      state.pastBoards = state.pastBoards ? null : { room: room, generation: 0 };
+      renderBoard();
+      if (state.pastBoards) loadPastBoards(state.pastBoards);
+    });
     $('board-toggle').addEventListener('click', function () {
       closeWhiteboard();
+      state.pastBoards = null;
       state.boardOpen = !state.boardOpen;
       state.boardSel = null;
       renderBoard();
@@ -9383,6 +9515,101 @@
     return [today, week];
   }
 
+  // A span of seconds the way a person reads it: "40 s", "12 min", "3.5 h", "2 d". Anything that is
+  // not a finite, non-negative number is not shown (the broker sends null when there is no data).
+  function usageSpan(v) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
+    const one = function (n) { return String(Math.round(n * 10) / 10); };
+    if (v < 60) return Math.round(v) + ' s';
+    if (v < 3600) return Math.round(v / 60) + ' min';
+    if (v < 86400) return one(v / 3600) + ' h';
+    return one(v / 86400) + ' d';
+  }
+
+  // The lines of one window of the review figures (#863, §61.5). A window with nothing says so.
+  function reviewLines(w) {
+    w = w || {};
+    const lines = [];
+    const opened = whole(w.opened), settled = whole(w.settled), raised = whole(w.raised);
+    const reopened = whole(w.reopened), merged = whole(w.merged), unknown = whole(w.unknown);
+    if (opened || settled) {
+      let t = 'Boards: ' + opened + ' opened, ' + settled + ' settled';
+      const span = usageSpan(w.settle_s);
+      if (span) t += ', median ' + span + ' to settle';
+      lines.push(t);
+    }
+    if (raised) {
+      let t = 'Findings: ' + raised + ' raised, ' + whole(w.confirmed) + ' confirmed, '
+        + whole(w.contested) + ' contested, ' + whole(w.dropped) + ' dropped';
+      if (typeof w.share_confirmed === 'number' && Number.isFinite(w.share_confirmed)) {
+        t += ' \u00b7 ' + Math.round(w.share_confirmed * 100) + '% confirmed';
+      }
+      lines.push(t);
+    }
+    if (reopened || settled) {
+      let t = 'Fixes: ' + reopened + ' reopened';
+      if (typeof w.heads === 'number' && Number.isFinite(w.heads)) {
+        t += ', median ' + (Math.round(w.heads * 10) / 10) + (w.heads === 1 ? ' commit' : ' commits') + ' before settling';
+      }
+      lines.push(t);
+    }
+    const stages = [['first finding', w.first_finding_s], ['settled', w.to_settled_s], ['merged', w.to_merged_s]]
+      .map(function (s) { return [s[0], usageSpan(s[1])]; })
+      .filter(function (s) { return s[1]; });
+    if (stages.length) {
+      lines.push('Time to merge: ' + stages.map(function (s) { return s[0] + ' ' + s[1]; }).join(' \u2192 '));
+    }
+    if (merged || unknown) lines.push('Merged: ' + merged + ' reported, ' + unknown + ' unknown');
+    return lines.length ? lines : ['No review activity'];
+  }
+
+  function reviewWindow(title, w) {
+    const box = el('div', 'usage-counts usage-review');
+    box.append(el('strong', 'usage-review-h', title));
+    for (const t of reviewLines(w)) box.append(el('span', 'usage-review-line', t));
+    return box;
+  }
+
+  function renderReviews(root, reviews) {
+    root.append(el('h2', 'usage-h', 'Reviews'));
+    root.append(el('p', 'usage-note', 'How review boards went. A finding counts in the window it was raised in, '
+      + 'for the agent that raised it. The share confirmed is confirmed over confirmed plus dropped: a rough '
+      + 'measure of a reviewer\u2019s precision. Merged is what an agent reported, so it reads unknown until then.'));
+    const rooms = reviews && Array.isArray(reviews.rooms) ? reviews.rooms : [];
+    const agents = reviews && Array.isArray(reviews.agents) ? reviews.agents : [];
+    if (!rooms.length) {
+      root.append(el('p', 'usage-none', 'No review board moved in the last 7 days.'));
+      return;
+    }
+    for (const [id, title, rows] of [['usage-review-rooms', 'By room', rooms], ['usage-review-agents', 'By agent', agents]]) {
+      root.append(el('h3', 'usage-h3', title));
+      if (!rows.length) {
+        root.append(el('p', 'usage-none', 'No agent held or raised anything.'));
+        continue;
+      }
+      const list = el('ol', 'usage-list');
+      list.id = id;
+      for (const row of rows) {
+        const li = el('li');
+        const line = el('div', 'usage-row usage-review-row');
+        const who = el('div', 'usage-name');
+        if (row.room !== undefined) {
+          who.textContent = label(row.name || '', row.host || '') + ' \u00b7 ' + harnessOf(row.harness)[1];
+          const room = el('div', 'usage-name');
+          room.append(usageJump(typeof row.room === 'string' ? row.room : ''));
+          line.append(who, room);
+        } else {
+          who.append(usageJump(typeof row.name === 'string' ? row.name : ''));
+          line.append(who, el('div'));
+        }
+        line.append(reviewWindow('Today', row.today), reviewWindow('7 days', row.week));
+        li.append(line);
+        list.append(li);
+      }
+      root.append(list);
+    }
+  }
+
   function renderUsage() {
     const root = $('usage');
     root.replaceChildren();
@@ -9451,6 +9678,7 @@
       }
       root.append(list);
     }
+    renderReviews(root, data.reviews);
   }
 
   function showUsage() {
@@ -9464,6 +9692,7 @@
     state.usage = true;
     closeWhiteboard();
     state.active = null;
+    state.pastBoards = null;
     state.boardOpen = false;
     state.boardSel = null;
     $('app').classList.add('usage-open');

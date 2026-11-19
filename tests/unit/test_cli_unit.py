@@ -170,6 +170,7 @@ COUNTS = {
     "batches": 57,
     "events": 960,
     "files": 0,
+    "room_people": 2,
 }
 CLOSED_PLAN = {
     "room_id": 7,
@@ -216,7 +217,7 @@ def test_rooms_delete_prints_the_plan_and_needs_a_terminal_or_yes(
         "switchboard rooms delete #build~closed-7:\n"
         "  #build~closed-7: was #build, closed 2026-09-28 14:02 by alice\n"
         "  removes 1 room, 412 message(s), 3 membership(s), 1830 delivery row(s),"
-        " 57 batch(es), 960 event(s), 0 file(s)\n"
+        " 57 batch(es), 960 event(s), 0 file(s), 2 person membership(s)\n"
         "  a checked backup of the whole database is written first: /h/switchboard.db.delete-build-7.bak\n"
         "  this can't be undone, except by restoring that backup\n"
         "not applied\n"
@@ -258,7 +259,7 @@ def test_rooms_delete_yes_applies_the_plans_room_id(
     assert lines[1] == "  #scratch: open, no agents, created 2026-09-28 13:00"
     assert lines[-2:] == [
         "deleted #scratch: 1 room, 2 message(s), 0 membership(s), 0 delivery row(s),"
-        " 0 batch(es), 1 event(s), 0 file(s)",
+        " 0 batch(es), 1 event(s), 0 file(s), 2 person membership(s)",
         "backup: /h/switchboard.db.delete-scratch-12.bak (0600, checked); it still holds the room:"
         " remove it once you no longer need it",
     ]

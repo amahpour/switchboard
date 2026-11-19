@@ -17,12 +17,23 @@ Today is your local calendar day. The 7 days are the seven local days ending tod
 
 Press a room's name, or press Enter on it, and that room opens.
 
+## How reviews went
+
+Below the agents, **Reviews** shows how the [review boards](review-board.md) went, by room and by agent, today and over the last 7 days. It reads the boards switchboard already keeps.
+
+- **Boards:** how many were opened and settled, and the median time from opening to settled.
+- **Findings:** raised, confirmed, contested and dropped, counted in the window they were raised in, for the agent that raised them. The percentage is confirmed out of confirmed plus dropped: a rough measure of how often that reviewer's findings hold up. It is empty until one has ended, and a finding that is still open or was deferred to a ticket is in neither.
+- **Fixes:** how many fixes were reopened (counted for the agent that made the fix), and the median number of commits a board went through before it settled.
+- **Time to merge:** from opening to the first finding, to settled, to merged. Merged comes from an agent reporting it. Until one does, the board reads as unknown.
+
+A board held by a person, or opened by a link, counts in its room and not in an agent's row. A room with no board activity in the 7 days is not listed.
+
 ## On a phone
 
 The page is one column. The room's name, its budget and the two counts stack, and each button is large enough to press. **Rooms** opens the sidebar.
 
 ## What it does not do
 
-It does not measure tokens or dollars, and it does not choose or change anyone's model. A wake the budget held back is not a number on the page, because switchboard does not store those one by one. A closed room is not listed; `switchboard report` reads one room, including a closed one. The last 30 days are not a separate column.
+It does not measure tokens or dollars, and it does not judge a review: the share confirmed is a rough hint, and it does not choose or change anyone's model. A wake the budget held back is not a number on the page, because switchboard does not store those one by one. A closed room is not listed; `switchboard report` reads one room, including a closed one. The last 30 days are not a separate column.
 
 On a hosted server you see the rooms you can see. A private room you are not in is not on your page, and its counts are not added into a room you can see.

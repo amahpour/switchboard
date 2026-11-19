@@ -59,7 +59,11 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **Review rules in your repository.** A repository can keep `REVIEW.md` files, at its root and in folders, like nested `CLAUDE.md` files: what to flag, what to skip, what that part of the code is sensitive to. The request that `/review` and an opened board send says: "If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch." The default branch, so a pull request cannot change the rules it is reviewed under. switchboard reads no repository itself. This repository's own are [`REVIEW.md`](https://github.com/amahpour/switchboard/blob/main/REVIEW.md) and the ones in `plugins/`, `deploy/joinly/`, `src/switchboard/web/` and `tests/`.
 
-**Close.** **Close board** keeps the board with everything on it. Opening its link again brings it back.
+**Close.** **Close board** keeps the board with everything on it. Opening its link again through `/review` brings it back.
+
+**Read past reviews.** Choose **Past boards** in the room header. Each row shows when the board opened, settled and closed, with **Merged** or **Unknown** as the outcome. A dash means the settlement time is unavailable. Choose a pull request to read its cards and history.
+
+**Record a merge.** After posting a review from **Hand off**, the agent checks the pull request again with its own `gh` or `glab`. When it sees a merge, it calls `review(action="report", url=..., state="merged")` even if the board has closed.
 
 ## Limits
 
