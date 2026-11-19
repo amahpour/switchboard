@@ -57,6 +57,7 @@ opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspec
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
 agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
+webhook-{empty,set,failed}-{light,dark,phone-light} (Settings → Profile → Webhook, #723; ``--only webhook``),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
@@ -697,6 +698,67 @@ def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
             shot(page, out, f"notifications-on-{theme}.png")
         finally:
             ctx.close()
+
+
+def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
+    """#723: Settings, Profile, Webhook: empty, saved (only the host is shown back), and a failed test. The
+    receiver is a local HTTPS server (``tests/fakes/tls_hook.py``) the broker is told to trust; its address and
+    secret path are made up."""
+    from fakes.tls_hook import TlsHook
+    from playwright.sync_api import expect
+
+    from switchboard.config import NotifyCfg
+
+    hook = TlsHook()
+    st = world.broker.state
+
+    def arm() -> None:
+        st.cfg = st.cfg.replace(notify=NotifyCfg(allow_private_webhooks=True))
+        st.notifier.resolve = hook.resolve
+        st.notifier.context = hook.context
+
+    world.broker.on_loop(arm)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    try:
+        for theme, ctx_args in (
+            ("light", {**DESKTOP, "color_scheme": "light"}),
+            ("dark", {**DESKTOP, "color_scheme": "dark"}),
+            ("phone-light", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = browser.new_context(**base, **ctx_args)
+            ctx.set_default_timeout(WAIT_MS)
+            try:
+                page = ctx.new_page()
+                sign_in(page, world.broker)
+                if not page.locator("#me-settings").is_visible():
+                    page.click("#rooms-toggle")
+                page.click("#me-settings")
+                row = page.locator("#settings-row-profile")
+                if row.is_visible():
+                    row.click()
+                field = page.locator("#settings-webhook-url")
+                field.scroll_into_view_if_needed()
+                expect(field).to_be_visible()
+                settle(page)
+                shot(page, out, f"webhook-empty-{theme}.png")
+                hook.status = 200
+                field.fill(hook.url)
+                page.fill("#settings-webhook-wait", "5")
+                page.click("#settings-webhook-save")
+                expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+                settle(page)
+                shot(page, out, f"webhook-set-{theme}.png")
+                hook.status = 500
+                page.click("#settings-webhook-test")
+                expect(page.locator("#settings-webhook-status")).to_contain_text("The test failed")
+                settle(page)
+                shot(page, out, f"webhook-failed-{theme}.png")
+                page.click("#settings-webhook-remove")
+                expect(page.locator("#settings-webhook-status")).to_have_text("Removed.")
+            finally:
+                ctx.close()
+    finally:
+        hook.stop()
 
 
 def shoot_board(browser: Any, out: Path, world: Any) -> None:
@@ -4493,6 +4555,7 @@ ONLY: dict[str, Any] = {
     "claim_board": shoot_claim_board,
     "not_connected": shoot_not_connected,
     "notifications": shoot_notifications,
+    "webhook": shoot_webhook,
     "real_names": shoot_real_names,
     "admin_names": shoot_admin_names,
     "admins": shoot_admins,

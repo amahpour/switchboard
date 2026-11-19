@@ -4,6 +4,8 @@ The project was built in milestones: Milestone 0 tested what each harness can do
 
 **Changes come as pull requests,** from a branch here or from a fork, and the maintainer reviews and merges each one. If a coding agent writes yours, point it at [CLAUDE.md](CLAUDE.md): how a change lands, where the code and the tests live, and what has to be right. The same file is for people.
 
+**Reviews follow the repository's own rules.** `REVIEW.md` files at the root and in `plugins/`, `deploy/joinly/`, `src/switchboard/web/` and `tests/` say what a review flags and what it skips, with the bug each line comes from. Reviewers, agents on a [review board](docs/guide/review-board.md) included, read the ones nearest the changed files, from the default branch, so a pull request cannot change the rules it is reviewed under. If a review keeps catching or missing something, add a line to the nearest one.
+
 ## Development
 
 Development needs uv 0.7.13 or newer: `pyproject.toml` sets `[tool.uv] required-version = ">=0.7.13"`. CI and the Linux test container stay on 0.7.13 with `--frozen`, so a newer uv that would change `uv.lock` fails CI instead of slipping through (uv 0.12 re-locks the current lock unchanged).
@@ -159,6 +161,16 @@ SWITCHBOARD_LIVE=meeting SWITCHBOARD_MEETING_URL_FILE=<file> \
 - **The result** is printed as a table and written, as JSON and Markdown, into `$SWITCHBOARD_SELFTEST_OUT` (or a temp folder the run names). A step with words passes on 60% of the expected content words, because speech-to-text of text-to-speech is close, not exact; a step that can't start because an earlier one failed counts as failed. The test fails if any step does, and names them.
 - **Whatever happens,** both bots leave the call and both containers are removed, also when the run is stopped with SIGTERM. A run killed harder can leave containers: `docker ps -a --filter label=switchboard-selftest` lists them, and `docker rm -f <name>` removes one.
 - **`SWITCHBOARD_LIVE=all` does not include it.** It needs a call, and a call needs an account, so only `meeting` runs it. A plain `pytest` skips it with the line that says how. `tests/unit/test_meeting_selftest.py` runs on every run and checks everything about it that needs no call: the word comparison, the link file's checks, the scrubbing, when a failed step keeps the logs, and the report. It never runs in CI.
+
+### Plugin and server compatibility (opt-in real run)
+
+The oldest release of the major is also run for real, locally (#850). It needs the release's git tag in your checkout (`git fetch --tags`) and `curl`, and no network or Docker; CI does the offline half on every pull request (it fetches the tag itself):
+
+```bash
+uv run pytest -m compat tests/compat   # the newest plugin's listener against a real v1.0.0 broker run from its tag
+```
+
+When the major goes up, move `tests/fixtures/compat/` and the tag the `Fetch the oldest release` step in `.github/workflows/test.yml` fetches to the new major's first release.
 
 ### Evals (real agents, graded from the database, opt-in)
 

@@ -65,8 +65,8 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from switchboard import __version__, board, build_info, db, ref_links
-from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people, usage
+from switchboard import __version__, board, build_info, db, notify, ref_links
+from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people, usage, webhook
 from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
@@ -1107,7 +1107,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
         state.hub.notice(None, "info", f"{name} added by {w.name}")
         people_changed(state)
-        state.service.rooms_changed()  # a second person: public rooms are now joined and left (§62)
+        state.service.rooms_changed()  # a second person: public rooms are now joined and left (§63)
         return _ok(
             {
                 "person": next(x for x in people.summary(state) if x["id"] == p.id),
@@ -1162,6 +1162,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _err(404, "not_found", "no such person")
         devices = [t.device for t in state.store.agent_tokens_of(p.id)]  # revoked with them (§49.1)
         gone = state.store.person_remove(p.id) or []
+        webhook.remove(state, p.id)  # their webhook goes with them (§62)
         # their agents over HTTPS leave, as on a revoke (§49.3)
         ended = sum(state.agents.end_device(d, "token revoked") for d in devices)
         state.service.person_gone(p.id)  # out of every private room, with their agents (§44.3)
@@ -1549,6 +1550,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "notify": state.store.setting_get(notify_key(w.person_id)) == "1",
                 # ... and whether a notification carries the message's first line (#837): on unless turned off
                 "notify_text": state.store.setting_get(notify_text_key(w.person_id)) != "0",
+                # this person's webhook (#723, §62): its host and wait, never the address itself
+                "webhook": webhook.public(state, state.service.person_key(w.person_id)),
             }
         )
         # Slide the browser cookie along with the server-side session.
@@ -1793,6 +1796,71 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             }
         )
 
+    # A person's own webhook (#723, §62): where the broker posts "you're needed" after a wait. Set only here,
+    # by the signed-in person, never by a room message. The address is a secret: it is never returned.
+    @app.put("/api/me/webhook")
+    async def set_webhook(request: Request) -> Response:
+        """Set the signed-in person's webhook: ``url`` (https, a public address unless the operator allows
+        more) and ``wait_min`` (1 to 120). Either may be left out once there is one (a new wait for the
+        address they have)."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        if not body or not set(body) <= {"url", "wait_min"}:
+            return _err(400, "bad_request", "give url, wait_min, or both")
+        key = state.service.person_key(w.person_id)
+        old = webhook.load(state, key)
+        wait_s = old["wait_s"] if old else notify.WAIT_DEFAULT_S
+        if "wait_min" in body:
+            m = body["wait_min"]
+            if (
+                isinstance(m, bool)
+                or not isinstance(m, int)
+                or not notify.WAIT_MIN_S <= m * 60 <= notify.WAIT_MAX_S
+            ):
+                return _err(400, "bad_request", "wait_min is a whole number of minutes, 1 to 120")
+            wait_s = m * 60.0
+        url = body.get("url", old["url"] if old else None)
+        if url is None:
+            return _err(400, "bad_request", "give the url first")
+        if "url" in body and (why := await webhook.check_for_save(state, url)) is not None:
+            return _err(400, "bad_webhook", why)
+        webhook.save(state, key, url, wait_s)
+        if state.notifier is not None and "url" in body:
+            state.notifier.forget(key)
+        return _ok(webhook.public(state, key))
+
+    @app.delete("/api/me/webhook")
+    async def delete_webhook(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        webhook.remove(state, state.service.person_key(w.person_id))
+        return _ok(webhook.public(state, state.service.person_key(w.person_id)))
+
+    @app.post("/api/me/webhook/test")
+    async def test_webhook(request: Request) -> Response:
+        """Post a test line to the signed-in person's webhook now, so they can see it works. It goes through
+        the same checks and the same hourly cap as a real one; the answer says how it went."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        key = state.service.person_key(w.person_id)
+        if state.notifier is None or webhook.load(state, key) is None:
+            return _err(400, "bad_request", "set a webhook first")
+        code = await state.notifier.post(key, notify.test_payload(state.web_origin.origin))
+        return _ok(
+            {
+                "ok": code is None,
+                "error": None if code is None else notify.fail_reason(code),
+                "webhook": webhook.public(state, key),
+            }
+        )
+
     @app.put("/api/me/preferences")
     async def set_preferences(request: Request) -> Response:
         w = who(request)
@@ -1852,7 +1920,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         # reload doesn't bring back what they already opened
         marks = state.store.home_seen_marks(me)
         # whether they are a member, pinged there, and the agent that made them one, until they open it
-        # (§62): the page lists the rooms they are in, and the others under Other rooms
+        # (§63): the page lists the rooms they are in, and the others under Other rooms
         joined, one = state.store.person_rooms(me), state.service.one_person()
         for room, r in zip(listed, rooms, strict=True):
             r["seen"] = marks.get(r["id"], 0)
@@ -1916,7 +1984,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             room = state.service.room_for(slug, viewer(request))
             key = state.service.person_key(w.person_id)
             seen = home.mark_room_seen(state, key, room, body["id"])
-            state.store.room_person_noted(room.id, key)  # they opened it: "joined with" has been seen (§62)
+            if state.notifier is not None:
+                state.notifier.opened(key, room.slug)  # opening the room is "got it" for their webhook (§62)
             return _ok({"seen": seen})
         except ServiceError as e:
             return _svc_err(e)
@@ -2489,7 +2558,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _svc_err(e)
 
     # A private room's people (§44.2): any of them adds or removes one, and anyone may leave. A public
-    # room's members (§62): anyone joins (adds themself), a member adds someone, and a person leaves.
+    # room's members (§63): anyone joins (adds themself), a member adds someone, and a person leaves.
     @app.post("/api/rooms/{slug}/people")
     async def room_people(request: Request, slug: str) -> Response:
         w = who(request)

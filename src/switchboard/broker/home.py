@@ -5,7 +5,7 @@ It is a query and a view over what the broker already stores (messages, the revi
 members and claims), never a new kind of record. What it keeps is per person: a "looked at" time in
 ``meta``, how far they have read each room, and which boards they set aside (§55.8, #663). Everything is
 for one viewer: nobody sees a private room they are not in, and each person's "waiting on you" is their
-own, from the rooms they are a member of (§62). It never decides anything for an agent: a card
+own, from the rooms they are a member of (§63). It never decides anything for an agent: a card
 only points at an answer the person gives through the routes the room already has (``say``, the
 board's person moves).
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from switchboard import reviews
+from switchboard import notify, reviews
 from switchboard.broker import agents_view
 from switchboard.broker.service import ServiceError, is_member
 from switchboard.envelope import clean
@@ -318,10 +318,12 @@ def seen_at(state: Any, person_key: int) -> float | None:
 def mark_room_seen(state: Any, person_key: int, room: Room, upto: Any) -> int:
     """Move a person's mark in a room forward to the message id ``upto`` (the caller has checked they may see
     the room). A value that is not a whole number from 0 up is refused; one past the room's newest message
-    is cut to it, so the mark can never hide a message that has not been written yet."""
+    is cut to it, so the mark can never hide a message that has not been written yet. Reading past where an
+    agent's join started them also clears its "joined with" note, and the broker's one person opening a
+    public room makes it one of theirs for the day a second person comes (§63, ``Store.room_opened``)."""
     if isinstance(upto, bool) or not isinstance(upto, int) or not 0 <= upto < 2**53:
         raise ServiceError("bad_request", "give id, a message id")
-    return state.store.home_mark_seen(person_key, room.id, upto)
+    return state.store.room_opened(person_key, room.id, upto, used=state.service.solo_room(room))
 
 
 def snooze_board(state: Any, person_key: int, room: Room, url: Any) -> float:
@@ -348,6 +350,50 @@ def mark_seen(state: Any, person_key: int, at: float | None) -> float:
     return at
 
 
+def needs(state: Any, name: str, person_id: int | None) -> list[notify.Need]:
+    """What needs this person right now, for their webhook (§62): the home page's question and board cards,
+    and an agent of theirs waiting on an approval (``owner`` is them, or nobody on a broker with one person).
+    The same rows ``build`` reads, never a new record. A person never gets another person's, or a private
+    room they are not in (§44), and the cards come only from the rooms they are a member of, as Waiting on
+    you does (§63): a public room they never joined, or left, does not reach them this way either."""
+    now = state.clock.now()
+    key = state.service.person_key(person_id)
+    rooms = [r for r in state.store.list_rooms() if state.service.visible(r, key)]
+    read = state.store.home_seen_marks(key)
+    snoozed = state.store.home_snoozes(key)
+    joined, one = state.store.person_rooms(key), state.service.one_person()
+    cards: list[dict[str, Any]] = []
+    for room in rooms:
+        if not is_member(room, joined, one):
+            continue
+        questions, _ = state.store.home_lines(
+            room.id, name, now - WAIT_DAYS * DAY_S, now, CANDIDATES, BOARD_LINE, read.get(room.id, 0)
+        )
+        cards += _question_cards(name, room, questions)
+        cards += _board_cards(state, room, snoozed)
+    out: list[notify.Need] = []
+    for c in cards:
+        if c["kind"] == "question":
+            out.append(
+                notify.Need(f"q:{c['slug']}:{c['id']}", "question", c["room"], c["slug"], c["from"], c["ts"])
+            )
+        else:
+            out.append(notify.Need(f"b:{c['slug']}:{c['url']}", "board", c["room"], c["slug"], "", c["ts"]))
+    alone = len(state.service.people_names()) <= 1
+    for a in agents_view.build(state, rooms, now)["agents"]:
+        if a["state"] != "waiting" or not a["rooms"]:
+            continue
+        if not (a["owner"] == name if a["owner"] else alone):
+            continue
+        r = a["rooms"][0]
+        out.append(
+            notify.Need(
+                f"a:{a['id']}:{a['since']}", "approval", r["room"], r["slug"], a["name"], a["since"] or now
+            )
+        )
+    return out
+
+
 def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str, Any]:
     """The home page for the person ``name`` (``person_id`` None is the owner)."""
     now = state.clock.now()
@@ -359,7 +405,7 @@ def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str
     snoozed = state.store.home_snoozes(key)
     since = max(seen if seen is not None else now - FIRST_LOOK_S, now - WAIT_DAYS * DAY_S)
 
-    # what waits on them comes only from the rooms they are a member of (§62): a public room they never
+    # what waits on them comes only from the rooms they are a member of (§63): a public room they never
     # joined, or left, is one they can read, not one that pings them
     joined, one = state.store.person_rooms(key), state.service.one_person()
 

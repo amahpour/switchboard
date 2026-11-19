@@ -1,4 +1,4 @@
-"""Schema 54 (#843, DESIGN.md §62): public rooms have members, in ``room_people`` like a private room's
+"""Schema 54 (#843, DESIGN.md §63): public rooms have members, in ``room_people`` like a private room's
 people. The step from 53 only adds ``joined_with``; the day-one members are filled once, at the broker's
 first start, from what a real old database recorded (``Store.join_day_one``)."""
 
@@ -109,6 +109,49 @@ def test_day_one_joins_each_person_to_the_rooms_they_used_once(
     assert store.join_day_one() == 0
     assert store.room_people(2) == [0]
     assert store.meta_get(Store.DAY_ONE_KEY) is not None
+
+
+def test_day_one_gives_an_agent_to_whoever_held_its_device_when_it_joined(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A device name is unique only among live tokens, so it can pass to someone else after a revoke: an
+    old agent is its person's by the token its device had when the agent joined, not the one it has today.
+    bob's agent on ``shared`` joined #lab under bob's token, and dave holds ``shared`` now: bob joins #lab,
+    dave nothing. In #lab2, an agent on ``gone`` (a token of carol's, since revoked, and carol removed)
+    and one on ``never`` (no token ever) belong to nobody known, so nobody joins, the owner included.
+    Fails if day one reads today's token, or gives an agent it cannot place to the owner."""
+    store = Store(db.open_db(at_53(tmp_path, monkeypatch)), FakeClock())
+    lab = store.create_room("#lab", "alice", 60, 6)
+    lab2 = store.create_room("#lab2", "alice", 60, 6)
+    with db.tx(store.con):
+        store.con.execute(
+            "INSERT INTO people(id, name, handle, created_at)"
+            " VALUES(3, 'dave', X'FFEEDDCCBBAA99887766554433221101', 1790000001.0)"
+        )
+        for tid, person, device, made, revoked in (
+            (10, 1, "shared", 1790000040.0, 1790000060.0),
+            (11, 3, "shared", 1790000070.0, None),
+            (12, 2, "gone", 1790000040.0, 1790000060.0),
+        ):
+            store.con.execute(
+                "INSERT INTO agent_tokens(id, person_id, device, token_hash, created_at, revoked_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (tid, person, device, f"{tid:064d}", made, revoked),
+            )
+        for pid, host, room in ((30, "shared", lab.id), (31, "gone", lab2.id), (32, "never", lab2.id)):
+            store.con.execute(
+                "INSERT INTO participants(id, harness, session_key, created_at, host)"
+                " VALUES(?, 'codex', ?, 1790000050.0, ?)",
+                (pid, f"codex@{host}:t{pid}", host),
+            )
+            store.con.execute(
+                "INSERT INTO memberships(room_id, participant_id, screen_name, joined_at, join_msg_id)"
+                " VALUES(?, ?, ?, 1790000050.0, 0)",
+                (room, pid, f"codex-{pid}"),
+            )
+    store.join_day_one()
+    assert store.room_people(lab.id) == [1]
+    assert store.room_people(lab2.id) == []
 
 
 def test_a_fresh_database_has_nothing_to_join(tmp_path: Path) -> None:

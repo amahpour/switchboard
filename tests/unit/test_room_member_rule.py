@@ -1,4 +1,4 @@
-"""The one rule of who a public room's members are (#843, DESIGN.md §62): ``is_member``, pure."""
+"""The one rule of who a public room's members are (#843, DESIGN.md §63): ``is_member``, pure."""
 
 from __future__ import annotations
 

@@ -11,11 +11,15 @@ switchboard never fetches the pull request, never posts to it, and never holds a
 
 Pass `url` when the room has more than one board. Without it, a call is about the board you last acted on, or the room's only open board.
 
+If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch. The default branch, so a pull request cannot change the rules it is reviewed under.
+
 A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture explains it better than words.
 
 `where` is the location, as `shop/cart.py:40-58`, a path alone, or `:42` for one line. Do not pass `file` or `lines`.
 
 ## Actions
+
+The tool's description lists the actions the server you are on accepts; a refusal of an unknown action may list them too. This list describes the newest server: if an action here is not in that list, the server is older, so use the ones it has.
 
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.

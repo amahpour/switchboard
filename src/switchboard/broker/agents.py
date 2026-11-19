@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from switchboard import claims, envelope, search
+from switchboard import claims, db, envelope, search
 from switchboard.broker.restarts import RESTART_MESSAGE
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError, when_text
 from switchboard.delivery import rules
@@ -71,6 +71,7 @@ ENDED_WHY = {
     "closed": "the room was closed",
     "person_left": "your user's account was removed",
     "not_allowed": "it is no longer allowed in that room",
+    "resumed": "a new session took its name back",
     "unreachable": "the server took its machine for unreachable",
     "removed": "its machine was removed",
     "token revoked": "its agent token was revoked",
@@ -220,7 +221,19 @@ RECLAIM_WHY = {
     ),
     "host": "that code is from a session on another machine: a code brings a name back only on the same one",
     "gone": "that session is no longer on record",
+    "restart": (
+        "that name's session went offline when the server restarted and may reconnect: its name is held"
+        " for a few minutes after the restart, then a code takes it"
+    ),
+    "online": (
+        "that name's session is still connected to this room: a code brings a name back only once"
+        " its session is offline or has left"
+    ),
 }
+
+
+# how long after a broker restart a session that hasn't reconnected is still taken to be running
+RESTART_GRACE_S = 600.0
 
 
 def name_reserved_text(name: str, room: str, code: str | None, why: str | None = None) -> str:
@@ -354,12 +367,11 @@ class AgentService:
         Only with the code that membership's own join answer ended with (or the newest a reminder
         gave it), which only the session that read it has, and only for the same harness on the
         same device (so the same person): never a name another session or device used. Not
-        from a kicked agent, and not while the old membership is still in the room. The code is
+        from a kicked agent. A membership still in the room gives its name up only when its session is
+        offline, and not for ``RESTART_GRACE_S`` after a restart took it offline. The code is
         checked before anything about the holder is said, so a wrong one learns only that."""
         if code is None:
             return None, None
-        if holder.active:
-            return None, "mismatch"  # the caller checks this first (name_taken); never a reclaim
         if holder.join_code_hash is None:
             return None, "no_code"
         if not hmac.compare_digest(holder.join_code_hash, join_code_hash(code)):
@@ -369,6 +381,18 @@ class AgentService:
         old = self.store.get_participant(holder.participant_id)
         if old is None:
             return None, "gone"
+        if holder.active:
+            # a membership still in the room gives its name up only when its session is gone: offline,
+            # which a killed process whose hooks never ran (untrusted plugin hooks) leaves it (#868)
+            if old.status != "offline":
+                return None, "online"
+            # offline only because the broker restarted: its session may be running and reconnect any
+            # moment, so it keeps its name until it has had RESTART_GRACE_S to do so
+            if (
+                old.status_src == "restart"
+                and self.state.clock.now() - (old.status_at or 0) < RESTART_GRACE_S
+            ):
+                return None, "restart"
         if old.harness != harness:
             return None, "harness"
         if (old.host or "") != (host or ""):
@@ -538,7 +562,16 @@ class AgentService:
         if cur is None:
             other = self.store.active_membership_by_name(room.id, name)
             if other is not None and (existing is None or other.participant_id != existing.id):
-                raise ServiceError("name_taken", f"{name} is taken in {room.name}; pick another screen name")
+                # a session that was killed without its hooks (SessionEnd never ran) is offline but
+                # still a member: the right code takes its name, and ends that membership (#868)
+                back, why = self._reclaim(other, code, h, host)
+                if back is None:
+                    extra = f" ({RECLAIM_WHY[why]})" if why in RECLAIM_WHY and why != "mismatch" else ""
+                    raise ServiceError(
+                        "name_taken", f"{name} is taken in {room.name}; pick another screen name{extra}"
+                    )
+                self.store.end_membership(other.id, "resumed")
+                self.on_membership_ended(other.id, "resumed")  # its open waits, parks and queued says
             holder = self.store.last_holder_of(
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
             )
@@ -567,7 +600,11 @@ class AgentService:
                 "bind", room_id=room.id, membership_id=m.id, participant_id=p.id, data={"what": "rotate"}
             )
         else:
-            m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
+            # the membership and its person's (§63) in one transaction: committed apart, a failure between
+            # them leaves the agent in the room and its person out, and the session's retry is a rejoin
+            with db.tx(self.store.con):
+                m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
+                member = self.svc.agent_joined(room, person, name)
             self.svc.join_hands_free(room, m.id)
             self.store.add_event(
                 "join",
@@ -594,8 +631,8 @@ class AgentService:
                 text=f"joined ({where}, {shown})" + (", back after a restart" if resumed is not None else ""),
                 sender_host=host or None,
             )
-            # its person is a member of the room now: pinged there, and the room is in their sidebar (§62)
-            self.svc.agent_joined(room, person, name)
+            if member:  # its person is a member now: their pages list the room (§63)
+                self.svc.rooms_changed()
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []

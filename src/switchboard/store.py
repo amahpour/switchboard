@@ -55,8 +55,19 @@ from switchboard.search import SNIPPET_TOKENS, markers
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
-# of ``delete_room``'s result. Participants are never deleted.
-ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
+# of ``delete_room``'s result, which its plan, its output and its ``room_delete`` record show; the
+# people's rows (``room_people``, §44, §63) beside the agents' memberships. Every other row naming the
+# room goes too (``_ROOM_ROWS``), uncounted. Participants are never deleted.
+ROOM_DELETE_TABLES = (
+    "rooms",
+    "messages",
+    "memberships",
+    "deliveries",
+    "batches",
+    "events",
+    "files",
+    "room_people",
+)
 STATUS_LINE_STALE_S = 30 * 60
 # Enough time for a broker rollout and a client retry, with short-lived receipts.
 SAY_KEY_TTL_S = 5 * 60
@@ -104,7 +115,7 @@ class Store:
     ) -> Room:
         """``private_for``: a private room (§44), whose first person is this one (0: the owner),
         in the same transaction, so it's never private with nobody in it. ``member``: a public
-        room's first member, its creator (§62)."""
+        room's first member, its creator (§63)."""
         now = self.clock.now()
         private = int(private_for is not None)
         first = private_for if private_for is not None else member
@@ -139,10 +150,10 @@ class Store:
         assert room is not None
         return room
 
-    # ----------------------------------------- a room's people: private (§44) and public (§62)
+    # ----------------------------------------- a room's people: private (§44) and public (§63)
     def room_people(self, room_id: int) -> list[int]:
         """A room's people, by id (0: the owner), in the order they were added: a private room's are
-        who sees it (§44), a public room's its members, who are pinged there (§62)."""
+        who sees it (§44), a public room's its members, who are pinged there (§63)."""
         rows = self.con.execute(
             "SELECT person_id FROM room_people WHERE room_id=? ORDER BY added_at, rowid", (room_id,)
         ).fetchall()
@@ -152,7 +163,7 @@ class Store:
         self, room_id: int, person_id: int, added_by: int, joined_with: str | None = None
     ) -> bool:
         """False if they were in it already. ``joined_with``: the agent whose join made them a member
-        (§62), shown to them once."""
+        (§63), shown to them once."""
         with db.tx(self.con):
             cur = self.con.execute(
                 "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at, joined_with)"
@@ -163,32 +174,65 @@ class Store:
 
     def person_rooms(self, person_id: int) -> dict[int, str | None]:
         """Every room ``person_id`` is in, private or public, by id, with the agent that made them a
-        member there while they have not opened it since (§62), else None."""
+        member there while they have not opened it since (§63), else None."""
         rows = self.con.execute(
             "SELECT room_id, joined_with FROM room_people WHERE person_id=?", (person_id,)
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
-    def room_person_noted(self, room_id: int, person_id: int) -> None:
-        """They opened the room: its "joined with" note has been seen (§62)."""
+    def room_person_used(self, room_id: int, person_id: int) -> bool:
+        """The one person on the broker opened ``room_id`` or posted in it: a member of it from now, quietly
+        (§63), the way day one counts use, so that the day a second person is added the rooms they used
+        are rows (while they are alone every public room is theirs, row or not). Never a room they left
+        once (its ``room_people`` leave event): that Leave stands until they join it again by hand. True
+        when a row was added."""
         with db.tx(self.con):
-            self.con.execute(
-                "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
-                " AND joined_with IS NOT NULL",
-                (room_id, person_id),
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT ?, ?, ?, ?"
+                " WHERE NOT EXISTS (SELECT 1 FROM room_people WHERE room_id=? AND person_id=?)"
+                " AND NOT EXISTS (SELECT 1 FROM events WHERE kind='room_people' AND room_id=?"
+                "  AND json_valid(data) AND json_extract(data, '$.what')='leave'"
+                "  AND json_extract(data, '$.person')=?)",
+                (room_id, person_id, person_id, self.clock.now(), room_id, person_id, room_id, person_id),
             )
+            return cur.rowcount == 1
 
-    # The meta key that says the day-one members were filled in (§62): once, so a person who left a
+    def room_opened(self, person_key: int, room_id: int, seen_id: int, *, used: bool = False) -> int:
+        """The person read ``room_id`` up to the message ``seen_id`` (the page's seen request, §55.8): their
+        mark moves forward as ``home_mark_seen`` moves it, and the "joined with" note (§63) goes once the
+        mark moves past where it stood. An agent's join made the note and set the mark to the room's newest
+        message in one transaction, before the agent's join line, so a request for what a page showed
+        before that join (sent late, or from another browser) leaves the note, and one that reaches the
+        join line clears it. ``used``: the person is the broker's one, and opening the room is recorded
+        as membership (``room_person_used``). One transaction. Returns the mark now."""
+        with db.tx(self.con):
+            if used:
+                self.room_person_used(room_id, person_key)
+            r = self.con.execute(
+                "SELECT seen_id FROM home_seen WHERE person_key=? AND room_id=?", (person_key, room_id)
+            ).fetchone()
+            if r is None or max(0, min(int(seen_id), self.last_message_id(room_id))) > int(r[0]):
+                self.con.execute(
+                    "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
+                    " AND joined_with IS NOT NULL",
+                    (room_id, person_key),
+                )
+            return self.home_mark_seen(person_key, room_id, seen_id)
+
+    # The meta key that says the day-one members were filled in (§63): once, so a person who left a
     # room they had posted in is not put back at the next start.
     DAY_ONE_KEY = "room_people_day_one"
 
     def join_day_one(self) -> int:
         """Join each person to every public room they opened (a seen mark, §55.8), posted in, or have an
-        agent in, on any day, once (§62, #843): what was already recorded, so nobody's sidebar empties
-        when membership starts to count. An agent is its person's as ``RoomService.host_person`` says:
-        the live agent token for its device, else the owner's (0). A removed person joins nothing. Runs
-        at the broker's start; a database that has done it says so in ``meta`` and is never filled
-        again. The rows added, 0 when it had run already."""
+        agent in, on any day, once (§63, #843): what was already recorded, so nobody's sidebar empties
+        when membership starts to count. An agent on this machine (no host) is the owner's (0); one on a
+        device is the person's whose token that device had when the agent joined: a device name is unique
+        only among live tokens, so today's token may be someone else's. An agent no token placed then
+        joins nobody to anything, the owner included. A removed person joins nothing. Runs at the
+        broker's start; a database that has done it says so in ``meta`` and is never filled again. The
+        rows added, 0 when it had run already."""
         with db.tx(self.con):
             if self.con.execute("SELECT 1 FROM meta WHERE key=?", (self.DAY_ONE_KEY,)).fetchone():
                 return 0
@@ -199,8 +243,10 @@ class Store:
                 "  SELECT room_id, person_key AS person FROM home_seen"
                 "  UNION SELECT room_id, COALESCE(sender_person_id, 0) FROM messages"
                 "   WHERE sender_kind='human'"
-                "  UNION SELECT m.room_id, COALESCE((SELECT COALESCE(t.person_id, 0) FROM agent_tokens t"
-                "    WHERE t.device=p.host AND p.host!='' AND t.revoked_at IS NULL), 0)"
+                "  UNION SELECT m.room_id, CASE WHEN p.host='' THEN 0 ELSE ("
+                "    SELECT COALESCE(t.person_id, 0) FROM agent_tokens t WHERE t.device=p.host"
+                "     AND t.created_at<=m.joined_at AND (t.revoked_at IS NULL OR t.revoked_at>m.joined_at)"
+                "     ORDER BY t.created_at DESC, t.id DESC LIMIT 1) END"
                 "   FROM memberships m JOIN participants p ON p.id=m.participant_id"
                 " ) e JOIN rooms r ON r.id=e.room_id AND r.private=0"
                 " WHERE e.person=0 OR e.person IN (SELECT id FROM people WHERE removed_at IS NULL)",
@@ -217,7 +263,7 @@ class Store:
             return cur.rowcount == 1
 
     def rooms_of_person(self, person_id: int) -> list[int]:
-        """The rooms ``person_id`` is in, private and public (§62), by id."""
+        """The rooms ``person_id`` is in, private and public (§63), by id."""
         rows = self.con.execute("SELECT room_id FROM room_people WHERE person_id=?", (person_id,)).fetchall()
         return [r[0] for r in rows]
 
@@ -3590,6 +3636,10 @@ class Store:
                 " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
             )
+
+    def setting_delete(self, key: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM broker_settings WHERE key=?", (key,))
 
     def settings_with_prefix(self, prefix: str) -> list[tuple[str, str]]:
         """The broker settings whose key starts with ``prefix``, by key (a literal prefix, not a LIKE)."""
