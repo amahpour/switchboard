@@ -10,11 +10,13 @@ The real ``~/.cursor`` must not change.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 
 import pytest
 from harness import scenarios
 from harness.cursor import CursorRun
+from harness.scenarios import delivery, latency, nonce, record, say_text
 from harness.world import skip_reason
 
 pytestmark = pytest.mark.live
@@ -57,6 +59,33 @@ def test_2_join_and_say(model: CursorRun) -> None:
 
 def test_3_woken_while_idle_by_a_mention(model: CursorRun) -> None:
     scenarios.idle_wake(model)
+
+
+def test_3b_still_woken_after_more_than_eleven_minutes_parked(model: CursorRun) -> None:
+    """SLOW: about 12 minutes of real time (#885). The Stop hook was held 10 minutes before the plugin's wait
+    was raised to an hour, so an idle Cursor stopped hearing the room then. Park it, check the broker still
+    shows it parked 11.5 minutes on (no re-park, no typing), then an @mention wakes it and it answers. Fails
+    on a plugin that still holds 630 s, where the park has ended by then and the mention only queues."""
+    assert model.joined, "the join scenario did not complete"
+    model.wait_settled()
+    since: list[float] = []
+
+    def parked_long() -> bool:
+        m = model.member()
+        if not (m and m["parked"]):
+            since.clear()
+            return False
+        if not since:
+            since.append(time.monotonic())
+        return time.monotonic() - since[0] >= 11.5 * 60
+
+    model.wait(parked_long, 15 * 60, "Cursor to stay parked for 11.5 minutes", step=5)
+    word = f"pong-{nonce()}"
+    asked = model.mention(say_text(word))
+    answer = model.reply(word, after=asked)
+    d = delivery(model, asked)
+    assert d["path"] in model.wake_paths, (d["path"], sorted(model.wake_paths), d)
+    record(model, "long_park_wake", path=d["path"], seconds=latency(model, asked, answer))
 
 
 def test_4_a_mention_mid_task_arrives_after_the_next_tool_call(model: CursorRun) -> None:

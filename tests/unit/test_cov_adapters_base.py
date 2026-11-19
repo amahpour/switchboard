@@ -219,18 +219,20 @@ def test_a_listening_join_says_a_long_wait_ends_the_turn() -> None:
 
 
 def test_cursors_idle_limit_is_said_in_its_note_its_parked_reason_and_its_join_text() -> None:
-    """#519: Cursor's Stop hook is held about ten minutes and nothing starts another park, so a mention after
-    that waits until the person types. The tier note, the parked reason and the join text must say so and how
-    to recover; fails if Cursor reads like Claude Code's listener, which comes back by itself. The other
-    listening harnesses keep their wording (their holds are a day or more)."""
+    """#519: Cursor's Stop hook is held about an hour (#885) and nothing starts another park, so a
+    mention after that waits until the person types. The tier note, the parked reason and the join text
+    must say so and how to recover; fails if Cursor reads like Claude Code's listener, which comes back
+    by itself. The other listening harnesses keep their wording (their holds are a day or more)."""
     a = HttpsCursorAdapter(CFG)
     p = part(harness="cursor")
     note = a.tier(p)[1] or ""
-    assert "about 10 min" in note and "type in Cursor" in note
+    assert "up to 1 hour" in note and "10 min with an older plugin copy" in note
+    assert "type in Cursor" in note
     why = a.route(p, WAKE, None, 0.0).reason or ""
-    assert "about 10 min" in why and "type in Cursor" in why and "no Stop hook waiting" in why
+    assert "up to 1 hour" in why and "older plugin copy" in why
+    assert "type in Cursor" in why and "no Stop hook waiting" in why
     guidance = a.join_guidance(p, "#build")
-    assert "Stop hook waits on switchboard for them, for about 10 minutes" in guidance
+    assert "for up to 1 hour after your turn ends (10 minutes with an older plugin copy)" in guidance
     assert "later mentions stay queued until your user types in Cursor" in guidance
     assert 'read("#build")' in guidance and "after your tool calls" in guidance
     for other in (HttpsClaudeAdapter(CFG), HttpsCodexAdapter(CFG)):

@@ -80,17 +80,22 @@ LISTEN_S = 86400.0  # the longest a Stop hook is held before it answers with not
 PARK_MARGIN_S = 5.0  # an answer this long before the hook's own deadline
 MIN_PARK_S = 5.0
 IDLE_WHY = "stopped and not listening: no Stop hook waiting (or call wait())"
-# Cursor's Stop hook is held for about ten minutes (its ``max_wait_s`` 630 less ``PARK_MARGIN_S``, 625 s) and
-# nothing starts another park until the session's next Stop, which needs a turn (#519). Cursor has no
-# background hook or timer to wake it from outside, so the limit is said where a person and an agent look.
-CURSOR_NOTE = "over HTTPS: woken at stop, for about 10 min; then type in Cursor"
+# Cursor's Stop hook is held for about an hour (its ``max_wait_s`` 3630 less ``PARK_MARGIN_S``, 3625 s; #885,
+# measured: Cursor keeps a held hook alive past 50 min) and nothing starts another park until the session's
+# next Stop, which needs a turn (#519). Cursor has no background hook or timer to wake it from outside, so
+# the limit is said where a person and an agent look. Cursor's plugin is copied into each project, so an old
+# copy (``max_wait_s`` 630) still runs against this server: the words are true for both, an hour for a
+# current copy and ten minutes for an old one.
+CURSOR_NOTE = (
+    "over HTTPS: woken at stop, for up to 1 hour (10 min with an older plugin copy); then type in Cursor"
+)
 CURSOR_IDLE_WHY = (
-    "not listening: no Stop hook waiting (Cursor's lasts about 10 min after a turn ends);"
-    " type in Cursor to start listening again"
+    "not listening: no Stop hook waiting (Cursor's lasts up to 1 hour after a turn ends, 10 min with an"
+    " older plugin copy); type in Cursor to start listening again"
 )
 CURSOR_PARK_LIMIT = (
-    ", for about 10 minutes after your turn ends. After that, later mentions stay queued"
-    " until your user types in Cursor (any message starts a new wait)"
+    ", for up to 1 hour after your turn ends (10 minutes with an older plugin copy). After that, later"
+    " mentions stay queued until your user types in Cursor (any message starts a new wait)"
 )
 
 
@@ -290,10 +295,11 @@ class HttpsCodexAdapter(CodexMembership, Listening):
 class HttpsCursorAdapter(Listening):
     """Cursor over HTTPS, keyed by the conversation ID its preToolUse hook puts on each call.
 
-    Its Stop hook is held about ten minutes, and when that runs out with nothing to deliver the hook
-    answers and the turn is over: nothing starts another park until the next Stop, which a person has
-    to cause by typing (#519). No other mechanism wakes an idle Cursor from outside, so the limit is
-    explicit in the tier note, the join text and the parked reason, as Devin's is (#514)."""
+    Its Stop hook is held about an hour (ten minutes for an older plugin copy, #885), and when that runs out
+    with nothing to deliver the hook answers and the turn is over: nothing starts another park until the
+    next Stop, which a person has to cause by typing (#519). No other mechanism wakes an idle Cursor from
+    outside, so the limit is explicit in the tier note, the join text and the parked reason, as Devin's is
+    (#514)."""
 
     reports_approval_mode = False
     idle_why = CURSOR_IDLE_WHY
