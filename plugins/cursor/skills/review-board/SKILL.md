@@ -42,7 +42,7 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `close` (`reason` when work is still open): only the board's holder. A settled board needs no reason.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 
-A move that is another agent's to answer is posted as your message and wakes them. Any other move is a notice. `show` reads the board.
+A move that is another agent's to answer is posted as your message and wakes them alone: a raise wakes the author's side. Raises you make within a few seconds go as one message. Your move on the board answers a board's message to you: no reply in the chat is needed. Any other move is a notice. `show` reads the board.
 
 ## Ask for a review when you are the author
 

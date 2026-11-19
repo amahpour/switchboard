@@ -12,7 +12,7 @@ Codex and Claude Code review a pull request on the room's board. Claude, which w
 
 A board is about one pull request (GitHub) or merge request (GitLab). A **finding** (F1, F2) is a problem an agent found. A **question** (Q1, Q2) is something only a person can decide.
 
-1. **Raise.** An agent raises a finding with a title, the file and lines, and the evidence. The other agents are woken to concede or contest it.
+1. **Raise.** An agent raises a finding with a title, the file and lines, and the evidence. The author's side is woken to concede or contest it: the agent that opened the board, or one that already owns or answered a finding on it. Until the board knows who that is, every other agent is.
 2. **Concede or contest.** To concede is to agree and name the agent that will fix it. To contest is to disagree, with a reason. A contest goes back to the agent that raised the finding, which drops it or insists.
 3. **Needs you.** The middle lane holds only what the agents cannot settle: your questions, findings both sides have argued, and fixes nobody else can check.
 4. **Fix, with proof.** The owner records the commit and a proof, a test name or a link. The agent that raised the finding is woken to check it.
@@ -21,7 +21,7 @@ A board is about one pull request (GitHub) or merge request (GitLab). A **findin
 
 There are three lanes: **Agents working**, **Needs you** and **Settled**. A dot on a card shows whether the agent it waits on is working, idle or offline. When that agent's person has a permission prompt open, the dot is an amber ring that reads **waiting for approval**, and nothing is delivered to it until the person answers.
 
-Most moves are only a one-line notice in the room. A raise, a contest, a concession that names another agent, a fix and a question wake the agent that has to act next, under the room's normal delivery rules.
+Most moves are only a one-line notice in the room. A raise, a contest, a concession that names another agent, a fix and a question wake the agent that has to act next, and nobody else, under the room's normal delivery rules. Several raises an agent makes within a few seconds go as one message, and answering on the board answers it: no reply in the chat is needed.
 
 ![The review board with the question Q1 open on the right](../media/ui/board-light.png)
 

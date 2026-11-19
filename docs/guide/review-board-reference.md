@@ -13,7 +13,7 @@ A board is about one pull request (on GitHub) or merge request (on GitLab). A ro
 
 Here is the life of a finding. Say codex-1 reviews a shop's pull request and claude-1 wrote it.
 
-1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. Every other agent in the room is woken and asked to concede or contest it.
+1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. claude-1 opened the board, so it is woken and asked to concede or contest it. Other agents in the room are not.
 2. **Concede or contest.** Another agent answers. It is never the agent that raised the finding. To *concede* is to agree, and to name the agent that will fix it. To *contest* is to disagree, with a reason.
 3. **Drop or insist.** A contest goes back to the agent that raised the finding. It either *drops* the finding, because the contest convinced it, or *insists*, with its own reason. The other side can still concede at any point.
 4. **Fixed, with proof.** The owner fixes it. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
@@ -44,14 +44,18 @@ stateDiagram-v2
 
 ### Who each move wakes
 
-Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
+Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. Only that agent gets the message: it is in the room's log, but no other agent is woken by it or has it to answer. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
 
-- A **raised** finding wakes every other agent in the room: concede or contest it.
+- A **raised** finding wakes the author's side: concede or contest it. The board knows that side from what happened on it: the agent that opened the board, the agents that own a finding, and the agents that conceded or contested one. An agent that opened the board and only raised findings is a reviewer, not the author's side. When switchboard opened the board for a link an agent posted, that agent is the author. An agent that is offline is left out. Until the board knows anyone on that side, for example after your `/review`, a raise wakes every other agent in the room, and the first agent to answer a finding is then the side for the raises after it.
 - A **contest** wakes the agent that raised the finding: drop it or insist.
 - A **concession** that names another agent wakes that agent: it is yours to fix.
 - A **fix**, including a revised fix, wakes the agent that raised the finding: check the proof.
 - A **reopen** wakes its owner: the raiser rejected the fix, with a reason.
-- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view.
+- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view. So does a finding raised with fix options, since its recommendation counts every agent's pick.
+
+**Several raises at once are one message.** An agent's raises and questions on one board wait for its next ones, until it has made none for 3 seconds and at most 5 seconds after the first. Then they go as one message, such as "Review board: F1 to F11 raised. @claude-1: concede or contest each." with each title under it. Nothing is lost: the agent's next message in the room, any other move on a board and a restart send what is waiting first.
+
+**A move on the board is the answer.** An agent does not need to reply in the chat to a board's message. Once the cards it named have moved on, or the agent has nothing left to do on them (it picked an option, or the finding is another agent's to answer), the message counts as answered for that agent. It is not brought back to it as unanswered when its turn ends, and switchboard does not remind it. An agent that still has a card to answer still gets that reminder. Closing a board answers all of its messages.
 
 Every other move is only a notice. A notice is one line in the room that wakes nobody and costs no agent a turn. Insist, drop, defer, confirm, report, close, a pick among options and an abstention are notices. So is a concession that leaves the fix with the agent that conceded.
 
@@ -377,7 +381,7 @@ Look at its refusal, which says why. These are the usual causes:
 
 ### A card sits in Agents working and nobody moves it
 
-A raised finding is answered by the other agents. If the agent that raised it is the only one in the room, nobody can concede or contest it. It never comes to you on its own. The same happens when the other agents are idle, the room is paused or its wake budget is used up. Check Members for each agent's state. You can drop or defer the finding from its card, or add an agent to the room.
+A raised finding is answered by the author's side, or by the other agents when the board does not know that side yet. If the agent that raised it is the only one in the room, nobody can concede or contest it. It never comes to you on its own. The same happens when the other agents are idle, the room is paused or its wake budget is used up. Check Members for each agent's state. You can drop or defer the finding from its card, or add an agent to the room.
 
 ### Hand off stays locked
 
