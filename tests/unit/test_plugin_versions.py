@@ -79,14 +79,14 @@ def test_a_lower_patch_of_the_same_major_is_not_behind(monkeypatch: pytest.Monke
 
 
 def test_a_harness_without_a_versioned_plugin_has_no_check() -> None:
-    """Only Claude Code's and Codex's plugins report a version; the others have none to compare."""
-    for harness in ("cursor", "devin", "opencode", "test", "unknown"):
+    """Every harness's plugin reports a version (#887); the test stand-in and an unknown client have none."""
+    for harness in ("test", "unknown"):
         assert pv.check(harness, "1.0.0") is None and pv.check(harness, None) is None
 
 
 def test_every_versioned_harness_has_its_own_update_command() -> None:
     """The note names the command that updates that harness's plugin, not another's."""
-    assert set(pv.PINNED) == set(pv.UPDATE) == {"claude", "codex"}
+    assert set(pv.PINNED) == set(pv.UPDATE) == {"claude", "codex", "cursor", "devin", "opencode"}
     assert "claude plugin update" in pv.UPDATE["claude"] and "codex plugin" in pv.UPDATE["codex"]
     assert "codex" not in pv.UPDATE["claude"].lower() and "claude" not in pv.UPDATE["codex"].lower()
 
@@ -137,3 +137,28 @@ def test_a_codex_session_that_sent_nothing_is_not_nagged_but_a_claude_one_is() -
     assert (claude.state, claude.nags) == ("unknown", True) and claude.note
     old_codex = pv.check("codex", "0.0.1")
     assert old_codex is not None and old_codex.nags and pv.UPDATE["codex"] in old_codex.note
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex", "cursor", "devin", "opencode"])
+def test_all_five_harnesses_use_the_same_major_rule(harness: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rule is one for every harness (#887): the same major is current in either direction, an older major
+    is told that harness's update steps, a newer one is not told to update. Fails if a harness is checked
+    differently, or its note names another harness's steps."""
+    monkeypatch.setattr(pv, "PINNED", dict.fromkeys(pv.PINNED, "1.9.1"))
+    assert pv.check(harness, "1.0.0").state == "current"  # type: ignore[union-attr]
+    assert pv.check(harness, "1.99.0").state == "current"  # type: ignore[union-attr]
+    behind, ahead = pv.check(harness, "0.1.1"), pv.check(harness, "2.0.0")
+    assert behind is not None and behind.state == "major" and pv.UPDATE[harness] in behind.note
+    assert ahead is not None and ahead.state == "major" and ahead.update == ""
+    others = {h for h in pv.UPDATE if h != harness}
+    assert not any(pv.UPDATE[o] in behind.note for o in others)
+
+
+def test_only_a_harness_that_always_reports_is_nagged_for_silence() -> None:
+    """Claude Code's plugin always sends its version, so silence from it means a stale plugin. The others'
+    silence is the usual case for a copied-in plugin from before the header (#887): said nowhere. Fails if
+    one of the three newer plugins is nagged for sending nothing."""
+    for harness in ("codex", "cursor", "devin", "opencode"):
+        got = pv.check(harness, None)
+        assert got is not None and (got.state, got.nags, got.note) == ("unknown", False, ""), harness
+    assert pv.check("claude", None).nags  # type: ignore[union-attr]

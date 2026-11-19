@@ -59,7 +59,10 @@ function Remember($name, [byte[]]$bytes) { # false when there is nowhere to writ
     } catch { $false }
 }
 function Alive { # Claude Code's own pid: a background hook outlives a Claude Code that quits
-    try { -not [Diagnostics.Process]::GetProcessById($owner).HasExited } catch { $false }
+    try {
+        -not [Diagnostics.Process]::GetProcessById($owner).HasExited -and
+            (-not $parkFile -or (Remembers "listening-$sid" "$PID"))
+    } catch { $false }
 }
 
 # whatever goes wrong, the listener ends with exit 0, never a code Claude Code would read as a wake, and says why in the log
@@ -74,6 +77,16 @@ function Field([string]$name) {
 }
 
 $event = Field 'hook_event_name'
+$sid = Field 'session_id'
+if ($sid -cnotmatch '^[A-Za-z0-9_-]+\z') { exit 0 }
+# A prompt or approval can miss its MCP status report while the broker is down.
+if ($event -cin 'UserPromptSubmit', 'SessionEnd', 'Notification') {
+    if ($dir -and ($event -cne 'Notification' -or
+            ((Field 'notification_type') -ceq 'permission_prompt' -and -not (Field 'agent_id')))) {
+        Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "listening-$sid")
+    }
+    exit 0
+}
 # Claude Code sets this to 0 for -p (observed with 2.1.307). A one-shot process waits for
 # background hooks at SessionStart and Stop; it cannot hear a later room message after it exits.
 # With the variable absent, keep listening for older Claude Code versions.
@@ -81,8 +94,6 @@ if ($env:CLAUDE_CODE_SESSION_ATTENDED -ceq '0') { exit 0 }
 # A /clear or compaction can happen mid-turn; its next Stop starts the listener. Starting one
 # here would report that busy session idle and could deliver a wake into the running turn.
 if ($event -cne 'Stop' -and -not ($event -ceq 'SessionStart' -and (Field 'source') -cin 'startup', 'resume')) { exit 0 }
-$sid = Field 'session_id'
-if ($sid -cnotmatch '^[A-Za-z0-9_-]+\z') { exit 0 }
 $url = First $env:CLAUDE_PLUGIN_OPTION_SERVER_URL $env:SWITCHBOARD_URL
 if ($url -and $url.EndsWith('/')) { $url = $url.Substring(0, $url.Length - 1) }
 $token = First $env:CLAUDE_PLUGIN_OPTION_TOKEN $env:SWITCHBOARD_AGENT_TOKEN
@@ -94,6 +105,7 @@ if ($env:SWITCHBOARD_LISTEN_GRACE_S -cmatch '^[0-9]{1,9}\z') { $grace = [int]$en
 $owner = 0
 if ($env:CLAUDE_PID -cmatch '^[0-9]{1,9}\z') { $owner = [int]$env:CLAUDE_PID }
 if ($owner -le 0) { LogLine 'no-owner' 'CLAUDE_PID is not set, so the listener can not tell when Claude Code quits'; exit 0 }
+$parkFile = Remember "listening-$sid" $utf8.GetBytes("$PID")
 # no typed token: the key bin/headers.cmd made for this Claude Code stands in for it
 $keyfile = ''
 if (-not $token) {
@@ -134,17 +146,20 @@ $handler.AllowAutoRedirect = $false # a redirect would carry the token to wherev
 $client = New-Object Net.Http.HttpClient $handler
 $client.Timeout = [TimeSpan]::FromSeconds($round + 30)
 
-function Round($again) { # one request: the status ('' when nothing answered) and the body; $null when Claude Code is gone
+function Round($again) { # one request: the status ('' when nothing answered) and the body; $null when the park was cancelled
     $req = New-Object Net.Http.HttpRequestMessage ([Net.Http.HttpMethod]::Post), "$url/mcp/listen"
     foreach ($h in @(@('Authorization', "Bearer $token"), @('X-Switchboard-Session', $sid), @('X-Switchboard-Wait', "$round"),
             @('X-Switchboard-Again', "$again"), @('User-Agent', 'switchboard-claude-plugin'))) {
         [void]$req.Headers.TryAddWithoutValidation($h[0], $h[1])
     }
+    if ($parkFile) { [void]$req.Headers.TryAddWithoutValidation('X-Switchboard-Resume-Idle', '1') }
     $req.Headers.ExpectContinue = $false
     $req.Content = New-Object Net.Http.ByteArrayContent (, [byte[]]@())
     $task = $client.SendAsync($req)
     try {
-        while (-not $task.Wait(2000)) { if (-not (Alive)) { return $null } }
+        while (-not $task.Wait(2000)) {
+            if (-not (Alive) -and -not $task.IsCompleted) { return $null }
+        }
         [pscustomobject]@{ Status = [string][int]$task.Result.StatusCode; Body = $task.Result.Content.ReadAsByteArrayAsync().Result }
     } catch {
         [pscustomobject]@{ Status = ''; Body = [byte[]]@() } # refused, reset, timed out
@@ -152,39 +167,47 @@ function Round($again) { # one request: the status ('' when nothing answered) an
 }
 
 function Stopped { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
-    # with it, because nothing else would tell it the listener is gone. The marker keeps the same
-    # reason from waking it again at every later Stop; a wake clears it.
     LogLine $status $said
     # only switchboard's own error word goes to the model, never the rest of the body: whatever
     # stood in the way (a proxy's page) is in the log
     $m = [regex]::Match($said, '"error":\s*"([A-Za-z0-9_-]*)"')
     $what = if ($m.Success) { $m.Groups[1].Value } else { '' }
     $reason = "$status $what"
+    $named = if ($what) { " ($what)" } else { '' }
+    NoticeOnce $reason ("[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status$named. $fix The listener starts again at the end of this session's next turn. Details: " + (Join-Path $dir 'listen.log'))
+}
+
+function NoticeOnce($reason, $text) {
+    # The same reason at the next Stop must stay quiet, or it could loop the session awake.
     if (Remembers "stopped-$sid" $reason) { exit 0 }
     if (-not (Remember "stopped-$sid" $utf8.GetBytes($reason))) { exit 0 }
-    $named = if ($what) { " ($what)" } else { '' }
-    SayText ("[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status$named. $fix The listener starts again at the end of this session's next turn. Details: " + (Join-Path $dir 'listen.log') + "`n")
+    SayText "$text`n"
     exit 2
 }
 
 $again = 0
 $backoff = 1
+$unreachableSince = $null
+$outageLimit = 120
 while (Alive) {
     $rounds++
     $began = Get-Date
     if ($keyfile) { $newest = ReadKey; if ($newest) { $token = $newest } } # a reconnect makes a new key: the newest one
     $answer = Round $again
-    if ($null -eq $answer -or -not (Alive)) { exit 0 }
-    $again = 1
+    if ($null -eq $answer) { exit 0 }
     $status = $answer.Status
     $body = [byte[]]$answer.Body
+    # The broker has already acknowledged a wake by the time its text arrives.
+    # A local hook may cancel the next park, but the completed wake still belongs to this session.
+    if ($status -ceq '200') {
+        if ($dir) { Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "stopped-$sid") }
+        Say $body
+        exit 2
+    }
+    if (-not (Alive)) { exit 0 }
+    $again = 1
     $said = Flat $utf8.GetString($body)
     switch -CaseSensitive ($status) {
-        '200' {
-            if ($dir) { Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "stopped-$sid") }
-            Say $body
-            exit 2
-        }
         '410' { # someone else ended the session: say so once, or it goes deaf without a word
             LogLine 410 $said
             if (Remembers "ended-$sid" $utf8.GetString($body)) { exit 0 }
@@ -192,12 +215,33 @@ while (Alive) {
             Say $body
             exit 2
         }
-        '408' { $backoff = 1; Start-Sleep -Seconds 1 }
+        '408' {
+            $unreachableSince = $null
+            if (Remembers "stopped-$sid" 'unreachable') {
+                Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir "stopped-$sid")
+            }
+            $backoff = 1; Start-Sleep -Seconds 1
+        }
         { $_ -in '', '429', '500', '502', '503', '504' } {
-            if (((Get-Date) - $began).TotalSeconds -ge 10) {
+            $now = Get-Date
+            if (($now - $began).TotalSeconds -ge 10) {
+                $unreachableSince = $null
                 $backoff = 1 # a long wait that a proxy cut: wait again at once
             } else {
-                Start-Sleep -Seconds $backoff
+                $delay = $backoff
+                if ($status) {
+                    $unreachableSince = $null
+                } else {
+                    if ($null -eq $unreachableSince) { $unreachableSince = $now }
+                    $remaining = $outageLimit - ($now - $unreachableSince).TotalSeconds
+                    if ($remaining -le 0) {
+                        $note = "Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
+                        LogLine 'unreachable' $note
+                        NoticeOnce 'unreachable' "[switchboard] $note"
+                    }
+                    $delay = [Math]::Min($delay, $remaining)
+                }
+                Start-Sleep -Milliseconds ([int](1000 * $delay))
                 if ($backoff -lt 60) { $backoff = $backoff * 2 }
             }
         }

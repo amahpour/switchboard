@@ -11,9 +11,11 @@ import json
 import os
 import re
 import select
+import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -325,6 +327,7 @@ def run_listen(
     source: str = "",
     grace_s: int | None = None,
     attended: str | None = None,
+    notification_type: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """``bin/listen`` as Claude Code runs it at Stop or SessionStart: the hook's input on stdin,
     the plugin's settings in ``CLAUDE_PLUGIN_OPTION_*``, and Claude Code's own pid in
@@ -350,7 +353,13 @@ def run_listen(
     if tmp is not None:
         env["TMPDIR"] = str(tmp)
     stop = json.dumps(
-        {"session_id": session, "hook_event_name": event, "source": source, "stop_hook_active": False}
+        {
+            "session_id": session,
+            "hook_event_name": event,
+            "source": source,
+            "stop_hook_active": False,
+            "notification_type": notification_type,
+        }
     )
     argv, throwaway = script_run("listen", env)
     try:
@@ -796,7 +805,8 @@ def test_claudes_plugin_reports_a_permission_prompt_and_registers_no_permission_
     real request drift apart, or either plugin registers a permission hook."""
     [group] = claude_hooks()["Notification"]
     assert group["matcher"] == "permission_prompt"
-    [hook] = group["hooks"]
+    hook, local_cancel = group["hooks"]
+    assert local_cancel == {"type": "command", "command": LISTEN_COMMAND, "timeout": 2}
     assert hook["input"] == {
         "event": "${hook_event_name}",
         "session_id": "${session_id}",
@@ -949,7 +959,12 @@ class Stub:
     request until the test lets it go), and records each POST's ``X-Switchboard-Again`` and the
     ``requests`` made: (method, path, headers, body)."""
 
-    def __init__(self, replies: list[tuple[int, str] | tuple[int, str, dict[str, str]] | None]) -> None:
+    def __init__(
+        self,
+        replies: list[tuple[int, str] | tuple[int, str, dict[str, str]] | None],
+        *,
+        release_reply: tuple[int, str] = (409, ""),
+    ) -> None:
         self.replies = list(replies)
         self.again: list[str] = []
         self.requests: list[tuple[str, str, dict[str, str], bytes]] = []
@@ -966,8 +981,11 @@ class Stub:
                 reply = stub.replies.pop(0) if stub.replies else (409, "")
                 if reply is None:
                     stub.release.wait(30)
-                    reply = (409, "")
+                    reply = release_reply
                 status, text, *more = reply
+                if status == 0:  # a cut before any HTTP response
+                    self.close_connection = True
+                    return
                 data = text.encode()
                 try:
                     self.send_response(status)
@@ -1025,6 +1043,125 @@ def test_the_listener_rides_out_a_server_that_is_away_and_says_which_round_it_is
         stub.close()
     assert (r.returncode, r.stderr) == (2, "the message"), r
     assert stub.again == ["0", "1", "1"]
+
+
+@pytest.mark.usefixtures("impl")
+@pytest.mark.parametrize("event", ["UserPromptSubmit", "Notification"])
+def test_local_activity_cancels_a_listener_even_when_its_broker_is_down(tmp_path: Path, event: str) -> None:
+    """The local hook stays quiet and prevents a retry when the broker missed the MCP status report."""
+    stub = Stub([None, (200, "wake that must stay pending")], release_reply=(503, "restarting"))
+    token = "sbat_" + "x" * 43
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            waiting = pool.submit(run_listen, None, token, SESSION_1, url=stub.url, data=tmp_path)
+            try:
+                until(lambda: stub.again == ["0"], timeout=20)
+                cancellation = run_listen(
+                    None,
+                    token,
+                    SESSION_1,
+                    url=stub.url,
+                    data=tmp_path,
+                    event=event,
+                    notification_type="permission_prompt",
+                )
+                assert (cancellation.returncode, cancellation.stdout, cancellation.stderr) == (0, "", "")
+            finally:
+                stub.release.set()
+            result = waiting.result(10)
+    finally:
+        stub.close()
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+    assert stub.again == ["0"]
+
+
+def test_local_activity_preserves_a_received_wake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Cancel the park after curl receives the wake and before it returns to the listener.
+
+    The broker already confirmed the message, so exiting quietly here would lose the wake.
+    """
+    curl = shutil.which("curl")
+    if curl is None:
+        pytest.skip("the listener needs curl")
+    wrapper = tmp_path / "curl"
+    wrapper.write_text(f"""#!/bin/sh
+{shlex.quote(curl)} "$@" || exit "$?"
+trap '' TERM
+rm "$CLAUDE_PLUGIN_DATA/listening-{SESSION_1}"
+""")
+    wrapper.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    stub = Stub([(200, "the confirmed wake")])
+    try:
+        result = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path)
+    finally:
+        stub.close()
+    assert not (tmp_path / f"listening-{SESSION_1}").exists()
+    assert (result.returncode, result.stdout, result.stderr) == (2, "", "the confirmed wake")
+    assert stub.again == ["0"]
+
+
+@pytest.mark.parametrize("status", [0, 504])
+def test_listener_retries_repeated_proxy_cuts(
+    impl: str, status: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Four 60-second cuts still leave the listener ready for a wake in the fifth round."""
+    date = tmp_path / "date"
+    date.write_text("""#!/bin/sh
+if [ "$1" != +%s ]; then exec /bin/date "$@"; fi
+count=$(cat "${0%/*}/calls" 2>/dev/null || echo 0)
+echo "$((count + 1))" >"${0%/*}/calls"
+echo "$((1000 + count / 2 * 60))"
+""")
+    date.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    if impl == "pwsh":
+        original = script_run
+
+        def with_clock(name: str, env: dict[str, str]) -> tuple[list[str], Path | None]:
+            argv, home = original(name, env)
+            env["TEST_LISTENER"] = argv[-1]
+            return [
+                *argv[:-2],
+                "-Command",
+                "function Get-Date { "
+                "[DateTimeOffset]::FromUnixTimeSeconds([long](& date +%s)).UtcDateTime }; "
+                "& $env:TEST_LISTENER; exit $LASTEXITCODE",
+            ], home
+
+        monkeypatch.setattr(sys.modules[__name__], "script_run", with_clock)
+
+    stub = Stub([(status, "")] * 4 + [(200, "wake after proxy cuts")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path, home=tmp_path)
+    finally:
+        stub.close()
+    assert (r.returncode, r.stdout, r.stderr) == (2, "", "wake after proxy cuts"), r
+    assert stub.again == ["0", "1", "1", "1", "1"]
+
+
+def test_listener_explains_a_two_minute_outage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A continuous outage ends the shell listener with one plain notice, before another retry."""
+    if shutil.which("curl") is None:
+        pytest.skip("the listener needs curl")
+    date = tmp_path / "date"
+    date.write_text("""#!/bin/sh
+if [ "$1" != +%s ]; then exec /bin/date "$@"; fi
+count=$(cat "${0%/*}/calls" 2>/dev/null || echo 0)
+echo "$((count + 1))" >"${0%/*}/calls"
+if [ "$count" -lt 3 ]; then echo 1000; else echo 1121; fi
+""")
+    date.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    stub = Stub([(0, ""), (0, ""), (200, "late wake")])
+    try:
+        r = run_listen(None, "sbat_" + "x" * 43, SESSION_1, url=stub.url, data=tmp_path)
+    finally:
+        stub.close()
+    note = "Switchboard has been unreachable for at least 2 minutes."
+    assert r.returncode == 2 and note in r.stderr, r
+    assert note in (tmp_path / "listen.log").read_text()
+    assert stub.again == ["0", "1"]
 
 
 @pytest.mark.usefixtures("impl")

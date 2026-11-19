@@ -25,7 +25,7 @@ The room opens at that message, with about twenty messages before it and twenty 
 
 ## What it finds
 
-Open rooms you can see, plus closed rooms you can reopen. A private room you are not in never appears, and is not counted. If you leave a room, its lines are gone from your results. A closed private room follows the same membership rule. A closed room whose name is taken by an open room stays out until its name is free; it cannot be reopened yet. Notices and join lines are not searched, and neither is the whiteboard.
+Open rooms you can see, plus closed rooms you can reopen. A private room you are not in never appears, and is not counted. If you leave a private room, its lines are gone from your results. A public room you are not a member of is still searched: being in a room decides what pings you, not what you can read ([Rooms you're in](rooms.md)). A closed private room follows the same membership rule. A closed room whose name is taken by an open room stays out until its name is free; it cannot be reopened yet. Notices and join lines are not searched, and neither is the whiteboard.
 
 Words only: `migrate` does not find `migration` (`migrat` does), and symbols such as `-`, `:` or `*` are not operators, so they are ignored.
 

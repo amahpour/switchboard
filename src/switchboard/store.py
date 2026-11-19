@@ -585,6 +585,7 @@ class Store:
         deliver_notice: bool = False,
         meeting_id: int | None = None,
         say_key_hash: str | None = None,
+        addressed_only: bool = False,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -602,6 +603,8 @@ class Store:
         ``meeting_id`` identifies the call whose source supplied a line (§52, §54): the line is stored
         with it, and the call's count of lines goes up in the same transaction.
         ``say_key_hash`` records an authenticated member's retry receipt in that same transaction (§8.4).
+        ``addressed_only``: a member the message does not address (no @mention, no live claim it names)
+        gets no delivery row: a review board's line for whoever acts next (§37.4, #884) reaches nobody else.
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
@@ -683,6 +686,8 @@ class Store:
                     ] in skip:
                         continue
                     mentioned = r["screen_name"].lower() in mentions_l or r["id"] in watching
+                    if addressed_only and not mentioned:
+                        continue
                     prio = 2 if sender_kind == "human" else (1 if mentioned else 0)
                     self.con.execute(
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
@@ -2397,7 +2402,8 @@ class Store:
         """Restart semantics (§4): expire open offers and mark everyone offline. A session over HTTPS
         is not tied to a process the broker could probe (§49.3), so none ends here: each comes back
         with its next hook or call, and one that never does is ended by its device (the token's
-        revocation, a kick, a closed room)."""
+        revocation, a kick, a closed room). Remember the last idle state so a returning listener can
+        repark without overriding a busy or approval-blocked session."""
         now = self.clock.now()
         with db.tx(self.con):
             reverted = self.con.execute(
@@ -2409,7 +2415,8 @@ class Store:
                 (now,),
             ).rowcount
             offline = self.con.execute(
-                "UPDATE participants SET status='offline', status_at=?, status_src='restart'"
+                "UPDATE participants SET status='offline', status_at=?, status_src="
+                " CASE WHEN status='idle' OR status_src='restart:idle' THEN 'restart:idle' ELSE 'restart' END"
                 " WHERE ended_at IS NULL",
                 (now,),
             ).rowcount
@@ -3272,6 +3279,68 @@ class Store:
             (since, room_id, review_id),
         ).fetchall()
         return [Event.from_row(r) for r in rows]
+
+    def review_lines_open(
+        self, room_id: int, review_id: int, since: float
+    ) -> list[tuple[int, list[tuple[str, str]], list[tuple[int, str]], list[str] | None]]:
+        """One board's lines for whoever acts next that some current member still has open (#884): each
+        as its message id, the cards it named (label, and the card's state then), the members it
+        reached whose delivery is pending, offered or in context, with their screen names, and the
+        agents it was addressed to (None when the record does not say). ``since``: when the board was
+        opened. A line is recorded by a ``review_line`` event (``{board, msg, items, states, to}``)
+        once its message is posted."""
+        lines: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]], list[str] | None]] = {}
+        for r in self.con.execute(
+            "SELECT data FROM events WHERE kind='review_line' AND ts>=? AND room_id=? AND json_valid(data)"
+            " AND json_extract(data, '$.board')=? ORDER BY id",
+            (since, room_id, review_id),
+        ):
+            data = json.loads(r["data"])
+            msg, labels, states = data.get("msg"), data.get("items"), data.get("states")
+            if type(msg) is not int or not isinstance(labels, list):
+                continue
+            if not isinstance(states, list) or len(states) != len(labels):
+                states = [""] * len(labels)
+            to = data.get("to")
+            names = [str(x) for x in to] if isinstance(to, list) else None
+            lines[msg] = (msg, [(str(a), str(b)) for a, b in zip(labels, states, strict=True)], [], names)
+        ids = list(lines)
+        # the room's current members, then their delivery of each line by its key (membership, message):
+        # never a scan of every delivery for a message id
+        for at in range(0, len(ids), 500):
+            chunk = ids[at : at + 500]
+            marks = ",".join("?" * len(chunk))
+            for r in self.con.execute(
+                "SELECT d.membership_id AS membership_id, d.message_id AS message_id, mb.screen_name AS name"
+                " FROM memberships mb JOIN deliveries d ON d.membership_id=mb.id"
+                f" WHERE mb.room_id=? AND mb.left_at IS NULL AND d.message_id IN ({marks})"
+                " AND d.state IN ('pending','offered','in_context') ORDER BY d.message_id, mb.screen_name",
+                (room_id, *chunk),
+            ):
+                lines[int(r["message_id"])][2].append((int(r["membership_id"]), str(r["name"])))
+        return [line for line in lines.values() if line[2]]
+
+    def answer_deliveries(self, pairs: Iterable[tuple[int, int]]) -> int:
+        """Those ``(membership_id, message_id)`` deliveries become handled, wherever they are short of
+        that: a board's line answered on the board (#884), as a say or a pass answers what reached a
+        member (``mark_handled``). One still offered is handled too: the batch's confirmation and expiry
+        move only offered rows, so it stays handled, and its member is not woken again for it."""
+        now = self.clock.now()
+        n = 0
+        members: set[int] = set()
+        with db.tx(self.con):
+            for membership_id, message_id in sorted(set(pairs)):
+                done = self.con.execute(
+                    "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
+                    " AND message_id=? AND state IN ('pending','offered','in_context')",
+                    (now, membership_id, message_id),
+                ).rowcount
+                if done:
+                    n += done
+                    members.add(membership_id)
+            for membership_id in sorted(members):
+                self._advance_cursor(membership_id)
+        return n
 
     def review_items(self, review_id: int) -> list[reviews.Item]:
         rows = self.con.execute(

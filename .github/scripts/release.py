@@ -90,6 +90,8 @@ PLUGIN_MANIFESTS = {
     "plugins/claude": "plugins/claude/.claude-plugin/plugin.json",
     "plugins/codex": "plugins/codex/.codex-plugin/plugin.json",
     "plugins/cursor": "plugins/cursor/.cursor-plugin/plugin.json",
+    "plugins/devin": "plugins/devin/plugin.json",
+    "plugins/opencode": "plugins/opencode/package.json",
 }
 PLUGIN_VERSION_RE = re.compile(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")')
 # with the notes files, all a release PR changes

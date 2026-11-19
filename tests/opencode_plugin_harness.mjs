@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { mkdtemp, symlink, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listedSessions, listen, setup } from '../plugins/opencode/listener.mjs';
+import { listedSessions, listen, pluginVersion, setup } from '../plugins/opencode/listener.mjs';
 
 const token = 'sbat_test-token-canary';
 const sessionID = 'ses_00000000000000000000000001';
@@ -53,6 +53,37 @@ test('listener rounds: 200, 408, 409, 401, unreachable; no credentials in output
   }
 });
 
+test('an OpenCode listener reports a two-minute outage and stops retrying', async () => {
+  let clock = 0;
+  const logs = [];
+  await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+    canWake: async () => true, ctx: {session: {prompt: async () => assert.fail('unexpected wake')}},
+    request: async () => {
+      if (clock >= 121000) return new Response('', {status: 409});
+      throw new Error('connection refused');
+    },
+    sleep: async ms => { clock += ms; }, now: () => clock, warn: text => logs.push(text)});
+  assert.equal(clock, 120000);
+  assert.deepEqual(logs, ['[switchboard] Switchboard has been unreachable for at least 2 minutes. The listener stopped.']);
+});
+
+for (const status of [0, 504]) {
+  test(`OpenCode keeps listening after four 60-second proxy cuts (status ${status})`, async () => {
+    let clock = 0, requests = 0;
+    const logs = [];
+    await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+      canWake: async () => true, ctx: {session: {prompt: async () => assert.fail('unexpected wake')}},
+      request: async () => {
+        if (++requests === 5) return new Response('', {status: 409});
+        clock += 60000;
+        if (!status) throw new Error('connection reset');
+        return new Response('', {status});
+      }, sleep: async ms => { clock += ms; }, now: () => clock, warn: text => logs.push(text)});
+    assert.equal(requests, 5);
+    assert.deepEqual(logs, []);
+  });
+}
+
 // Even a response already received cannot wake an approval-blocked, moved or deleted session.
 test('listener rechecks eligibility after 200 and rejects oversized or credential-bearing text', async () => {
   for (const [text, allowed] of [[wake, false], [token, true], ['x'.repeat(65537), true], ['', true]]) {
@@ -64,7 +95,7 @@ test('listener rechecks eligibility after 200 and rejects oversized or credentia
   }
 });
 
-// A gateway may send 200 headers and then drop the body; no turn was admitted, so this is still a retryable outage.
+// A gateway may send 200 headers and then drop the body; no turn was admitted, so the listener retries.
 test('a broken 200 body retries without losing the listener or logging credentials', async () => {
   const prompts = [], logs = [], delays = [];
   let requests = 0;
@@ -555,4 +586,27 @@ test('startup skips a row whose location is another directory, and a symlinked a
     await settle();
     assert.equal(w.gets.filter(id => id.startsWith('ses_f')).length, 0);
   } finally {await cleanup(); await rm(alias); await rm(root, {recursive: true});}
+});
+
+// DESIGN.md §49.13 (#887): the plugin says which release it is, on the requests the broker reads it from.
+test('the listener and the status reports carry the plugin version from its own package.json', async () => {
+  const {version} = JSON.parse(await readFile(new URL('../plugins/opencode/package.json', import.meta.url), 'utf8'));
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.equal(pluginVersion(), version);
+  const w = world();
+  const stop = await w.start();
+  w.emit('session.execution.succeeded');
+  while (!w.requests.some(r => r.url.endsWith('/mcp/listen'))) await turn();
+  const status = w.requests.find(r => r.url.endsWith('/mcp/status'));
+  const listening = w.requests.find(r => r.url.endsWith('/mcp/listen'));
+  assert.equal(status.options.headers['X-Switchboard-Plugin-Version'], version);
+  assert.equal(listening.options.headers['X-Switchboard-Plugin-Version'], version);
+  await stop();
+});
+
+test('a package.json without a plain X.Y.Z sends no version header', () => {
+  for (const pkg of [{version: '1.2.3-beta'}, {}, null, {version: 5}, {version: '1234567.0.0'}, {version: '01.2.3'}]) {
+    assert.equal(pluginVersion(pkg), undefined, JSON.stringify(pkg));
+  }
+  assert.equal(pluginVersion({version: '1.12.3'}), '1.12.3');
 });

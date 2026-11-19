@@ -29,6 +29,22 @@ field() {
   printf '%s' "$input" | grep -o "\"$1\": *\"[^\"]*\"" | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 event=$(field hook_event_name)
+sid=$(field session_id)
+case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
+# A new prompt or an approval can arrive while the broker is down and miss its
+# MCP status report. Invalidate the previous listener locally before it can repark.
+dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
+park_file=
+[ -z "$dir" ] || park_file="$dir/listening-$sid"
+case $event in
+  UserPromptSubmit | SessionEnd) [ -z "$park_file" ] || rm -f "$park_file" 2>/dev/null; exit 0 ;;
+  Notification)
+    if [ "$(field notification_type)" = permission_prompt ] && [ -z "$(field agent_id)" ]; then
+      [ -z "$park_file" ] || rm -f "$park_file" 2>/dev/null
+    fi
+    exit 0
+    ;;
+esac
 # Claude Code sets this to 0 for -p (observed with 2.1.307). Its background hooks hold the
 # one-shot process open, including after Stop; it cannot receive another turn once it exits.
 # With the variable absent, keep listening for older Claude Code versions.
@@ -40,8 +56,6 @@ case $event in
   SessionStart) case $(field source) in startup | resume) ;; *) exit 0 ;; esac ;;
   *) exit 0 ;;
 esac
-sid=$(field session_id)
-case $sid in '' | *[!A-Za-z0-9_-]*) exit 0 ;; esac
 url=${CLAUDE_PLUGIN_OPTION_SERVER_URL:-$SWITCHBOARD_URL}
 url=${url%/}
 token=${CLAUDE_PLUGIN_OPTION_TOKEN:-$SWITCHBOARD_AGENT_TOKEN}
@@ -52,13 +66,16 @@ case $round in '' | *[!0-9]*) round=900 ;; esac
 grace=${SWITCHBOARD_LISTEN_GRACE_S:-60} # how long a SessionStart listener asks again for a key the server doesn't know yet
 case $grace in '' | *[!0-9]*) grace=60 ;; esac
 owner=${CLAUDE_PID:-$PPID}
+if [ -n "$park_file" ] && { ! mkdir -p "$dir" 2>/dev/null || ! (printf '%s' "$$" >"$park_file") 2>/dev/null; }; then
+  park_file= # a listener without the local cancellation file cannot resume a pre-restart park
+fi
+active() {
+  kill -0 "$owner" 2>/dev/null && { [ -z "$park_file" ] || [ "$(cat "$park_file" 2>/dev/null)" = "$$" ]; }
+}
 body=$(mktemp) || exit 0
 code="$body.code"
 trap 'rm -f "$body" "$code"' EXIT
 trap 'exit 0' HUP INT TERM
-# the plugin's own data folder, or the user's; never a shared one like /tmp, where another account
-# could plant the name first
-dir=${CLAUDE_PLUGIN_DATA:-${HOME:+$HOME/.cache/switchboard}}
 # no typed token: the key bin/headers made for this Claude Code stands in for it
 keyfile=
 if [ -z "$token" ]; then
@@ -91,7 +108,7 @@ first=$(date +%s)
 if [ -n "$keyfile" ]; then
   until token=$(read_key); do
     # the helper runs as Claude Code connects the server, which can be just after this hook starts
-    if [ "$event" = SessionStart ] && [ $(($(date +%s) - first)) -lt "$grace" ] && kill -0 "$owner" 2>/dev/null; then
+    if [ "$event" = SessionStart ] && [ $(($(date +%s) - first)) -lt "$grace" ] && active; then
       sleep 1
     else
       logline nokey "no listener key in $keyfile"
@@ -105,28 +122,32 @@ else
   fix='Check the plugin settings, the server address and the agent token.'
 fi
 stopped() { # a reason nobody expects, such as a token that was refused: log it, and wake the session once
-  # with it, because nothing else would tell it the listener is gone. The marker keeps the same
-  # reason from waking it again at every later Stop; a wake clears it.
   logline "$status" "$said"
-  [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
-  marker="$dir/stopped-$sid"
   # only switchboard's own error word goes to the model, never the rest of the body: whatever
   # stood in the way (a proxy's page) is in the log
   what=$(printf '%s' "$said" | grep -o '"error": *"[A-Za-z0-9_-]*"' | head -n 1 | sed 's/.*"\([^"]*\)"$/\1/')
   reason="$status $what"
-  [ "$(cat "$marker" 2>/dev/null)" = "$reason" ] && exit 0
-  printf '%s' "$reason" 2>/dev/null >"$marker" || exit 0 # no marker, no wake: it could loop the session awake
-  printf '[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered %s%s. %s The listener starts again at the end of this session'"'"'s next turn. Details: %s/listen.log\n' \
-    "$status" "${what:+ ($what)}" "$fix" "$dir" >&2
+  notice_once "$reason" "[switchboard] The listener for this session stopped, so room messages can no longer wake it while it is idle: the server answered $status${what:+ ($what)}. $fix The listener starts again at the end of this session's next turn. Details: $dir/listen.log"
+}
+notice_once() {
+  # The same reason at the next Stop must stay quiet, or it could loop the session awake.
+  [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
+  marker="$dir/stopped-$sid"
+  [ "$(cat "$marker" 2>/dev/null)" = "$1" ] && exit 0
+  printf '%s' "$1" 2>/dev/null >"$marker" || exit 0
+  printf '%s\n' "$2" >&2
   exit 2
 }
-while kill -0 "$owner" 2>/dev/null; do
+unreachable_since=
+outage_limit=120
+while active; do
   rounds=$((rounds + 1))
   began=$(date +%s)
   if [ -n "$keyfile" ]; then k=$(read_key) && token=$k; fi # a reconnect makes a new key: the newest one
   printf 'header = "Authorization: Bearer %s"\n' "$token" |
-    curl -s --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
+    curl -s --connect-timeout 10 --max-time $((round + 30)) -K - -o "$body" -w '%{http_code}' -X POST \
       -H "X-Switchboard-Session: $sid" -H "X-Switchboard-Wait: $round" -H "X-Switchboard-Again: $again" \
+      -H "X-Switchboard-Resume-Idle: ${park_file:+1}" \
       "$url/mcp/listen" >"$code" &
   job=$!
   # dash (Debian and Ubuntu's sh) keeps a subshell on this script's TERM trap until the subshell
@@ -135,20 +156,29 @@ while kill -0 "$owner" 2>/dev/null; do
   # never finishes (#632). It also ends when this script does ($$ is the script, even here), and
   # its output is not the hook's, so a survivor can't keep Claude Code waiting on it.
   (
-    while kill -0 "$owner" 2>/dev/null && kill -0 "$$" 2>/dev/null; do
+    while active && kill -0 "$$" 2>/dev/null; do
       sleep 2
     done
     kill "$job" 2>/dev/null
   ) >/dev/null 2>&1 </dev/null &
   watch=$!
-  wait "$job" 2>/dev/null
+  if wait "$job" 2>/dev/null; then
+    status=$(cat "$code" 2>/dev/null)
+  else
+    status= # an interrupted transfer can report HTTP 200 with an incomplete body
+  fi
   kill "$watch" 2>/dev/null
-  kill -0 "$owner" 2>/dev/null || exit 0
+  # The broker has already acknowledged a wake by the time its text arrives.
+  # A local hook may cancel the next park, but the completed wake still belongs to this session.
+  if [ "$status" = 200 ]; then
+    [ -n "$dir" ] && rm -f "$dir/stopped-$sid" 2>/dev/null
+    cat "$body" >&2
+    exit 2
+  fi
+  active || exit 0
   again=1
-  status=$(cat "$code" 2>/dev/null)
   said=$(flat "$body")
   case $status in
-    200) [ -n "$dir" ] && rm -f "$dir/stopped-$sid" 2>/dev/null; cat "$body" >&2; exit 2 ;;
     410) # someone else ended the session: say so once, or it goes deaf without a word
       logline 410 "$said"
       [ -n "$dir" ] && mkdir -p "$dir" 2>/dev/null || exit 0
@@ -158,12 +188,33 @@ while kill -0 "$owner" 2>/dev/null; do
       cat "$body" >&2
       exit 2
       ;;
-    408) backoff=1; sleep 1 ;;
+    408)
+      unreachable_since=
+      if [ -n "$dir" ] && [ "$(cat "$dir/stopped-$sid" 2>/dev/null)" = unreachable ]; then
+        rm -f "$dir/stopped-$sid" 2>/dev/null
+      fi
+      backoff=1; sleep 1
+      ;;
     '' | 000 | 429 | 500 | 502 | 503 | 504)
-      if [ $(($(date +%s) - began)) -ge 10 ]; then
+      now=$(date +%s)
+      if [ "$((now - began))" -ge 10 ]; then
+        unreachable_since=
         backoff=1 # a long wait that a proxy cut: wait again at once
       else
-        sleep "$backoff"
+        delay=$backoff
+        if [ -n "$status" ] && [ "$status" != 000 ]; then
+          unreachable_since=
+        else
+          unreachable_since=${unreachable_since:-$now}
+          remaining=$((outage_limit - now + unreachable_since))
+          if [ "$remaining" -le 0 ]; then
+            note="Switchboard has been unreachable for at least 2 minutes. The listener stopped. It tries again at the end of this session's next turn."
+            logline unreachable "$note"
+            notice_once unreachable "[switchboard] $note"
+          fi
+          [ "$delay" -le "$remaining" ] || delay=$remaining
+        fi
+        sleep "$delay"
         [ "$backoff" -ge 60 ] || backoff=$((backoff * 2))
       fi
       ;;
