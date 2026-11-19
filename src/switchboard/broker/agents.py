@@ -71,6 +71,7 @@ ENDED_WHY = {
     "closed": "the room was closed",
     "person_left": "your user's account was removed",
     "not_allowed": "it is no longer allowed in that room",
+    "resumed": "a new session took its name back",
     "unreachable": "the server took its machine for unreachable",
     "removed": "its machine was removed",
     "token revoked": "its agent token was revoked",
@@ -220,6 +221,10 @@ RECLAIM_WHY = {
     ),
     "host": "that code is from a session on another machine: a code brings a name back only on the same one",
     "gone": "that session is no longer on record",
+    "online": (
+        "that name's session is still connected to this room: a code brings a name back only once"
+        " its session is offline or has left"
+    ),
 }
 
 
@@ -358,8 +363,6 @@ class AgentService:
         checked before anything about the holder is said, so a wrong one learns only that."""
         if code is None:
             return None, None
-        if holder.active:
-            return None, "mismatch"  # the caller checks this first (name_taken); never a reclaim
         if holder.join_code_hash is None:
             return None, "no_code"
         if not hmac.compare_digest(holder.join_code_hash, join_code_hash(code)):
@@ -369,6 +372,10 @@ class AgentService:
         old = self.store.get_participant(holder.participant_id)
         if old is None:
             return None, "gone"
+        if holder.active and old.status != "offline":
+            # a membership still in the room gives its name up only when its session is gone: offline,
+            # which a killed process whose hooks never ran (untrusted plugin hooks) leaves it (#868)
+            return None, "online"
         if old.harness != harness:
             return None, "harness"
         if (old.host or "") != (host or ""):
@@ -538,7 +545,15 @@ class AgentService:
         if cur is None:
             other = self.store.active_membership_by_name(room.id, name)
             if other is not None and (existing is None or other.participant_id != existing.id):
-                raise ServiceError("name_taken", f"{name} is taken in {room.name}; pick another screen name")
+                # a session that was killed without its hooks (SessionEnd never ran) is offline but
+                # still a member: the right code takes its name, and ends that membership (#868)
+                back, why = self._reclaim(other, code, h, host)
+                if back is None:
+                    extra = f" ({RECLAIM_WHY[why]})" if why in RECLAIM_WHY and why != "mismatch" else ""
+                    raise ServiceError(
+                        "name_taken", f"{name} is taken in {room.name}; pick another screen name{extra}"
+                    )
+                self.store.end_membership(other.id, "resumed")
             holder = self.store.last_holder_of(
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
             )

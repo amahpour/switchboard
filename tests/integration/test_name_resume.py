@@ -214,3 +214,43 @@ def test_a_wrong_code_is_told_it_isnt_the_names(broker: InProcBroker) -> None:
 
     text = asyncio.run(go())
     assert "isn't this name's" in text, text
+
+
+# ------------------------------------- a session killed before any hook ran (#868)
+def killed_session_in_build(b: InProcBroker) -> str:
+    """A Codex thread joins #build as planner and is killed: no Stop, no SessionEnd, no leave. Its
+    membership is still in the room and its participant is offline. Returns its code."""
+    old = codex_session(b)
+    r = old.call("join", THREAD_A, room="#build", screen_name="planner")
+    assert r["ok"], r
+    code = join_code(r)
+    p = b.state.store.find_participant("codex", session_key("codex", "laptop", THREAD_A))
+    assert p is not None
+    b.state.store.upsert_participant("codex", p.session_key, host="laptop", status="offline")
+    return code
+
+
+def test_the_code_takes_back_a_name_from_an_offline_member_still_in_the_room(broker: InProcBroker) -> None:
+    """#868: a session killed with its hooks untrusted never left, so its membership stayed and
+    the right code was refused as ``name_taken``. The code of an offline member now takes the name
+    and ends that membership. Fails if the join is still refused."""
+    code = killed_session_in_build(broker)
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"] and r["screen_name"] == "planner", r
+    assert [m["name"] for m in broker.web.get("/api/rooms/build/members").json()["members"]] == ["planner"]
+    assert q(broker, "SELECT left_reason FROM memberships WHERE left_at IS NOT NULL")[0][0] == "resumed"
+
+
+def test_a_connected_member_or_a_wrong_code_keeps_its_name(broker: InProcBroker) -> None:
+    """The guard stays: a wrong code gets name_taken and learns nothing, and a member whose session
+    is still connected keeps its name even for the right code, with the reason said."""
+    code = killed_session_in_build(broker)
+    new = codex_session(broker)
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume="yk:j" + "0" * 16)
+    assert r["code"] == "name_taken" and "connected" not in r["error"], r
+    p = broker.state.store.find_participant("codex", session_key("codex", "laptop", THREAD_A))
+    assert p is not None
+    broker.state.store.upsert_participant("codex", p.session_key, host="laptop", status="idle")
+    r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["code"] == "name_taken" and "still connected" in r["error"], r
