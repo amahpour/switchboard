@@ -282,8 +282,13 @@ def test_a_seen_mark_is_the_signed_in_persons_own_for_a_room_they_can_see(
     missing = bob.post("/api/rooms/nope/seen", {"id": 1})
     assert hidden.status_code == missing.status_code == 404
     assert hidden.json()["error"] == missing.json()["error"] == "not_found"
-    rows = b.on_loop(lambda: b.state.store.con.execute("SELECT COUNT(*) FROM home_seen").fetchone()[0])
-    assert rows == 1  # bob's one mark in #build; the probe of #secret stored nothing
+    secret = b.on_loop(lambda: b.state.store.get_room("#secret"))
+    rows = b.on_loop(
+        lambda: b.state.store.con.execute(
+            "SELECT COUNT(*) FROM home_seen WHERE room_id=?", (secret.id,)
+        ).fetchone()[0]
+    )
+    assert rows == 0  # the probe of #secret stored nothing
 
 
 def test_the_room_list_carries_each_persons_own_seen_mark(
@@ -299,10 +304,11 @@ def test_the_room_list_carries_each_persons_own_seen_mark(
         rooms = {r["name"]: r for r in who.get("/api/rooms").json()["rooms"]}
         return int(rooms["#build"]["seen"])
 
-    assert seen(alice) == seen(bob) == 0
+    joined = seen(bob)  # bob joined #build when it was made: a member starts from then (§62)
+    assert seen(alice) == 0 and 0 < joined < q
     assert alice.post("/api/rooms/build/seen", {"id": q}).status_code == 200
     assert seen(alice) == q
-    assert seen(bob) == 0
+    assert seen(bob) == joined
 
 
 def seed_board(b: InProcBroker) -> int:
