@@ -1,8 +1,9 @@
-"""The Inspector says when an agent's plugin is old (#789, DESIGN.md §49.13).
+"""The Inspector says when an agent's plugin is another major (#789, #850, DESIGN.md §49.13).
 
-A real page: an agent whose plugin reported a version behind the release's has a Plugin row in its
-Inspector with the sentence the server wrote, update command included; one that is current has no such
-row. Desktop and phone, light and dark (the row is plain text in the existing facts list).
+A real page: an agent whose plugin reported a different major has a Plugin row in its Inspector with
+the sentence the server wrote, update command included when the plugin's major is the older one; one
+of the same major has no such row. Desktop and phone, light and dark (the row is plain text in the
+existing facts list).
 
 Marker ``e2e``.
 """
@@ -65,10 +66,10 @@ def reported(ui: UI, name: str, version: str | None) -> None:
 
 @pytest.mark.parametrize("phone", [False, True], ids=["desktop", "phone"])
 @pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_the_inspector_has_a_plugin_row_only_for_an_old_plugin(ui: UI, scheme: str, phone: bool) -> None:
-    """An old plugin (and Claude Code with no version at all) gets a Plugin row with the update command;
-    a current plugin gets none. The page doesn't scroll sideways on the phone. Fails if the row is missing
-    for an old one, shows for a current one, or loses the command."""
+def test_the_inspector_has_a_plugin_row_only_for_another_major(ui: UI, scheme: str, phone: bool) -> None:
+    """A plugin from another major gets a Plugin row with the update command; one of this server's major
+    gets none. The page doesn't scroll sideways on the phone. Fails if the row is missing for the other
+    major, shows for the same major, or loses the command."""
     reported(ui, "claude-1", "0.1.0")
     reported(ui, "codex-1", plugin_versions.PINNED["codex"])
     args: dict[str, Any] = {"color_scheme": scheme, **(PHONE if phone else {})}
@@ -79,7 +80,7 @@ def test_the_inspector_has_a_plugin_row_only_for_an_old_plugin(ui: UI, scheme: s
         page.click('#buddy-list .member[data-name="claude-1"]')
     facts = page.locator("#insp-body .insp-facts")
     expect(facts).to_contain_text("Plugin")
-    expect(facts).to_contain_text("older than " + plugin_versions.PINNED["claude"])
+    expect(facts).to_contain_text("different major version than " + plugin_versions.PINNED["claude"])
     expect(facts).to_contain_text("claude plugin update switchboard@switchboard")
     if phone:
         no_horizontal_scroll(page)

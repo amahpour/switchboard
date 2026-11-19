@@ -3,7 +3,7 @@
 Switchboard's OpenCode V2 plugin reports session status and listens for broker wake messages.
 Tested with OpenCode 2.1.4. V1 is not supported.
 
-Update the broker first, then copy this folder into your project as `.opencode-switchboard/`.
+The plugin works with a broker of the same major version. Copy this folder into your project as `.opencode-switchboard/`.
 Follow [Agents over HTTPS](https://github.com/amahpour/switchboard/blob/main/docs/USAGE.md#agents-over-https-a-preview) for the `plugins` and
 `mcp.servers` entries. Set `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN` in OpenCode's environment
 before starting it. The token belongs only in the environment, never in a file or command argument.

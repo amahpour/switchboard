@@ -1,10 +1,11 @@
-"""The plugins say which version they are, and switchboard says when one is old (#789, DESIGN.md §49.13).
+"""The plugins say which version they are, and switchboard says when the major differs (#789, #850).
 
 Claude Code's and Codex's plugins send ``X-Switchboard-Plugin-Version`` on the MCP connection. The server
 treats it as a claim: cut to a length, parsed strictly, and never trusted to mean "current" unless it parses
-and is not behind the version this release pins. ``/who``, the Inspector and the ``join`` answer then say
-when a session's plugin is older, or never said, with that harness's update command. Driven with what the
-two harnesses send (``tests/fixtures/mcp_http/``) plus the one header.
+and its major matches this server's (DESIGN.md §49.13). ``/who``, the Inspector and the ``join`` answer then
+say when a session's plugin is another major, or never said. A plugin from an older major includes that
+harness's update command; one from a newer major does not. Driven with what the two harnesses send
+(``tests/fixtures/mcp_http/``) plus the one header.
 """
 
 from __future__ import annotations
@@ -70,25 +71,60 @@ def inspector(b: InProcBroker, name: str) -> dict[str, Any]:
         web.close()
 
 
-def test_an_older_plugin_is_named_in_who_the_inspector_and_the_join_answer(build: InProcBroker) -> None:
-    """A plugin behind this release's is said so in all three places, each with Claude Code's update
+def test_a_plugin_from_an_older_major_is_named_in_who_the_inspector_and_join(
+    build: InProcBroker,
+) -> None:
+    """A plugin from an earlier major is said so in all three places, each with Claude Code's update
     command. Fails if any of them stays quiet, names no version, or leaves out how to update."""
     claude, answer = joined(build, "0.1.0")
-    assert "plugin is from release 0.1.0, older than " + CLAUDE_NOW in answer["text"]
+    assert f"plugin is from release 0.1.0, a different major version than {CLAUDE_NOW}" in answer["text"]
+    assert "older than" not in answer["text"]
     assert "claude plugin update switchboard@switchboard" in answer["text"]
     who = claude.call("who", room="#build")["text"]
-    assert "plugin=older" in who and "claude plugin update switchboard@switchboard" in who
+    assert "plugin=major" in who and "claude plugin update switchboard@switchboard" in who
     member = inspector(build, "claude-1")
-    assert (member["plugin_state"], member["plugin_version"]) == ("older", "0.1.0")
+    assert (member["plugin_state"], member["plugin_version"]) == ("major", "0.1.0")
     assert "claude plugin update switchboard@switchboard" in member["plugin_note"]
     human = build.on_loop(build.state.service.who_text, build.on_loop(build.state.store.get_room, "#build"))
     assert "0.1.0" in human and "claude plugin update" in human
 
 
-@pytest.mark.parametrize("version", [CLAUDE_NOW, "99.0.0"])
+def test_a_plugin_of_the_same_major_is_not_nagged_in_who_the_inspector_or_join(
+    build: InProcBroker,
+) -> None:
+    """An earlier release of this server's major works with it (#850): who, the Inspector and join
+    stay quiet. Fails if a same-major plugin is still called older than the server."""
+    major = CLAUDE_NOW.split(".", 1)[0]
+    claude, answer = joined(build, f"{major}.0.0")
+    assert "switchboard plugin" not in answer["text"], answer
+    assert "plugin" not in claude.call("who", room="#build")["text"]
+    member = inspector(build, "claude-1")
+    assert (member["plugin_state"], member["plugin_note"]) == ("current", "")
+
+
+def test_a_plugin_from_a_newer_major_is_named_without_an_update_command(build: InProcBroker) -> None:
+    """A plugin whose major is ahead of the server's is said in who, the Inspector and join (#850).
+    It is not told to update: that command installs a plugin, which would stay on the newer major.
+    Fails if a newer major is treated as current, or is given the update command."""
+    version = f"{int(CLAUDE_NOW.split('.', 1)[0]) + 1}.0.0"
+    claude, answer = joined(build, version)
+    assert f"from release {version}, a different major version than {CLAUDE_NOW}" in answer["text"]
+    assert "claude plugin update" not in answer["text"]
+    who = claude.call("who", room="#build")["text"]
+    assert "plugin=major" in who and "claude plugin update" not in who
+    member = inspector(build, "claude-1")
+    assert (member["plugin_state"], member["plugin_version"]) == ("major", version)
+    assert "different major" in member["plugin_note"] and "claude plugin" not in member["plugin_note"]
+
+
+_MAJOR, _MINOR, _PATCH = (int(part) for part in CLAUDE_NOW.split("."))
+SAME_MAJOR_LATER = f"{_MAJOR}.{_MINOR + 1}.0"
+
+
+@pytest.mark.parametrize("version", [CLAUDE_NOW, SAME_MAJOR_LATER])
 def test_a_current_plugin_is_never_nagged(build: InProcBroker, version: str) -> None:
-    """A plugin as new as the release's, or newer (a server not yet upgraded), says nothing anywhere.
-    Fails if a plugin that is up to date gets a note, or is not recorded as current."""
+    """A plugin of this server's major, including a later minor, says nothing anywhere. Fails if a
+    plugin that works with this server gets a note, or is not recorded as current."""
     claude, answer = joined(build, version)
     assert "switchboard plugin" not in answer["text"], answer
     assert "plugin" not in claude.call("who", room="#build")["text"]
@@ -144,9 +180,10 @@ def test_codex_reports_its_own_version_and_its_own_update_command(build: InProcB
     codex = VersionedCodex(build, make_token(build, "laptop"), "0.0.1")
     assert codex.start().status_code == 200
     answer = codex.call("join", THREAD_A, room="#build", screen_name="codex-1")
-    assert answer["ok"] and f"older than {CODEX_NOW}" in answer["text"]
+    assert answer["ok"] and f"a different major version than {CODEX_NOW}" in answer["text"]
+    assert "older than" not in answer["text"]
     assert "codex plugin marketplace upgrade" in answer["text"] and "claude plugin" not in answer["text"]
-    assert inspector(build, "codex-1")["plugin_state"] == "older"
+    assert inspector(build, "codex-1")["plugin_state"] == "major"
 
 
 def test_the_expected_plugin_version_is_the_servers_own() -> None:
