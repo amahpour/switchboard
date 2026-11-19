@@ -228,6 +228,10 @@ RECLAIM_WHY = {
 }
 
 
+# how long after a broker restart a session that hasn't reconnected is still taken to be running
+RESTART_GRACE_S = 600.0
+
+
 def name_reserved_text(name: str, room: str, code: str | None, why: str | None = None) -> str:
     """Why a join was refused a reserved name, and what to do. A caller that gave ``code`` has the
     ``resume`` parameter already, and is told why it didn't work (``why``, a ``RECLAIM_WHY`` key,
@@ -372,7 +376,15 @@ class AgentService:
         old = self.store.get_participant(holder.participant_id)
         if old is None:
             return None, "gone"
-        if holder.active and old.status != "offline":
+        if holder.active and (
+            old.status != "offline"
+            # offline only because the broker restarted: its session may be running and reconnect any
+            # moment, so it keeps its name until it has had RESTART_GRACE_S to do so
+            or (
+                old.status_src == "restart"
+                and self.state.clock.now() - (old.status_at or 0) < RESTART_GRACE_S
+            )
+        ):
             # a membership still in the room gives its name up only when its session is gone: offline,
             # which a killed process whose hooks never ran (untrusted plugin hooks) leaves it (#868)
             return None, "online"
@@ -554,6 +566,7 @@ class AgentService:
                         "name_taken", f"{name} is taken in {room.name}; pick another screen name{extra}"
                     )
                 self.store.end_membership(other.id, "resumed")
+                self.on_membership_ended(other.id, "resumed")  # its open waits, parks and queued says
             holder = self.store.last_holder_of(
                 room.id, name, existing.id if existing else -1, now - NAME_REUSE_S
             )
