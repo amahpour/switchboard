@@ -5,6 +5,7 @@ keep their own people, and a broker with one person sees nothing new."""
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from typing import Any
 
@@ -194,6 +195,60 @@ def test_an_agent_joining_makes_its_person_a_member(team: tuple[InProcBroker, Br
         assert rooms(bob)["#build"]["joined_with"] is None
     finally:
         bobs.c.close()
+
+
+def boom(*_args: Any, **_kw: Any) -> Any:
+    """A write that fails the way a full disk or a crash between two commits would."""
+    raise sqlite3.OperationalError("disk I/O error")
+
+
+def test_an_agents_membership_and_its_persons_commit_together(
+    team: tuple[InProcBroker, Browser, Browser], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bob's agent joining #build and bob becoming a member are one write: when bob's half fails, the
+    agent is not left in the room either, so the join that is tried again is a new one and makes bob a
+    member. Fails if the agent's membership commits on its own: the retry is then the same session
+    joining again, which never adds its person."""
+    b, alice, bob = team
+    store = b.state.store
+    bobs = Codex(b, make_token(b, "bobs-laptop", store.person_named("bob").id))
+    bobs.c = httpx.Client(base_url=f"http://127.0.0.1:{b.port}", timeout=30.0, headers={"host": HOST})
+    try:
+        assert bobs.start().status_code == 200
+        with monkeypatch.context() as mp:
+            mp.setattr(store, "room_person_add", boom)
+            failed = bobs.raw("join", THREAD_B, room="#build", screen_name="codex-1")
+            assert '"ok": true' not in failed.text and '\\"ok\\": true' not in failed.text, failed.text
+        names = [m["name"] for m in alice.get("/api/rooms/build/members").json()["members"]]
+        assert "codex-1" not in names
+        joined = bobs.call("join", THREAD_B, room="#build", screen_name="codex-1")
+        assert joined["ok"], joined
+        assert rooms(bob)["#build"]["member"] is True
+    finally:
+        bobs.c.close()
+
+
+def test_joining_a_public_room_and_its_starting_mark_commit_together(
+    team: tuple[InProcBroker, Browser, Browser], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bob joining #build, its notice and his seen mark moving to the newest message are one write: when
+    the mark fails, he is not a member and nothing was said, and joining again works and starts him from
+    now, so the @humans from before he joined does not wait on him. Fails if the membership commits
+    without its mark: bob is then a member who sees old questions, and the retry is "you're in already"."""
+    b, alice, bob = team
+    agent_says(b, "@humans deploy at noon?", ["humans"])
+    svc = b.state.service
+    bob_id = b.state.store.person_named("bob").id
+    with monkeypatch.context() as mp:
+        mp.setattr(b.state.store, "home_mark_seen", boom)
+        with pytest.raises(sqlite3.OperationalError):
+            b.on_loop(lambda: svc.add_room_person(svc.room("#build"), "bob", bob_id))
+    assert rooms(bob)["#build"]["member"] is False
+    assert "bob joined #build" not in notices(alice, "build")
+    r = people(bob, "build", "add", "bob")
+    assert (r.status_code, r.json()["text"]) == (200, "you joined #build")
+    assert waiting(bob) == []
+    assert notices(alice, "build").count("bob joined #build") == 1
 
 
 def test_a_private_room_keeps_its_people(team: tuple[InProcBroker, Browser, Browser]) -> None:

@@ -465,22 +465,27 @@ class RoomService:
         room is theirs, and nothing about joining or leaving shows (§62)."""
         return not self.store.people()
 
-    def agent_joined(self, room: Room, key: int, agent: str) -> None:
+    def agent_joined(self, room: Room, key: int, agent: str) -> bool:
         """An agent of the person ``key`` joined ``room``: they are a member of it now (§62, the
         maintainer's call on #843), and their sidebar says "joined with <agent>" until they open it.
         Nothing is posted: the agent's own join line is in the room. A private room's agents are its
         people's already (§44.3). With one person, the row is kept quietly for the day a second
-        person comes, and nothing is shown or moved."""
+        person comes, and nothing is shown or moved. Only writes, so ``AgentService.join`` makes them
+        part of the agent's own membership's transaction: the agent and its person are in the room
+        together or not at all (a join tried again by the same session is a rejoin, which never adds
+        its person). True when pages should be told, with ``rooms_changed`` after the commit."""
         if room.private:
-            return
+            return False
         one = self.one_person()
-        if self.store.room_person_add(room.id, key, key, None if one else agent[:64]):
+        with db.tx(self.store.con):
+            if not self.store.room_person_add(room.id, key, key, None if one else agent[:64]):
+                return False
             self.store.add_event(
                 "room_people", room_id=room.id, data={"what": "join", "person": key, "with": agent}
             )
             if not one:
                 self._member_from_now(room, key)
-                self.rooms_changed()
+        return not one
 
     def _member_from_now(self, room: Room, key: int) -> None:
         """A new member starts from now: what was said before they joined is the room's history, read when
@@ -502,31 +507,43 @@ class RoomService:
         if key is None or who is None:
             raise ServiceError("not_found", f"no such person: {name.strip().lstrip('@')}")
         by_name = self.person_name(by) or "someone"
-        people = self.store.room_people(room.id)
-        if add:
-            if key != by and by not in people:
-                raise ServiceError("bad_request", f"join {room.name} first to add someone to it")
-            if not self.store.room_person_add(room.id, key, by):
-                raise ServiceError(
-                    "conflict",
-                    f"you're in {room.name} already" if key == by else f"{who} is in {room.name} already",
-                )
-            if key == by:
-                what, text, reply = "join", f"{who} joined {room.name}", f"you joined {room.name}"
+        # the row, its event, the notice and the seen mark are one transaction: a member who joined without
+        # their mark moving would see old questions, and trying again would only say "you're in already"
+        with db.tx(self.store.con):
+            people = self.store.room_people(room.id)
+            if add:
+                if key != by and by not in people:
+                    raise ServiceError("bad_request", f"join {room.name} first to add someone to it")
+                if not self.store.room_person_add(room.id, key, by):
+                    raise ServiceError(
+                        "conflict",
+                        f"you're in {room.name} already" if key == by else f"{who} is in {room.name} already",
+                    )
+                if key == by:
+                    what, text, reply = "join", f"{who} joined {room.name}", f"you joined {room.name}"
+                else:
+                    what, text, reply = "add", f"{by_name} added {who} to {room.name}", f"added {who}"
             else:
-                what, text, reply = "add", f"{by_name} added {who} to {room.name}", f"added {who}"
-        else:
-            if key not in people:
-                raise ServiceError("not_found", f"{who} isn't in {room.name}")
-            if key != by:
-                raise ServiceError(
-                    "bad_request", f"people leave {room.name} themselves: you can't take {who} out of it"
-                )
-            self.store.room_person_remove(room.id, key)
-            what, text, reply = "leave", f"{who} left {room.name}", f"you left {room.name}"
-        self.store.add_event("room_people", room_id=room.id, data={"what": what, "person": key, "by": by})
-        self.post_notice(room, text)
-        self._member_from_now(room, key)
+                if key not in people:
+                    raise ServiceError("not_found", f"{who} isn't in {room.name}")
+                if key != by:
+                    raise ServiceError(
+                        "bad_request", f"people leave {room.name} themselves: you can't take {who} out of it"
+                    )
+                self.store.room_person_remove(room.id, key)
+                what, text, reply = "leave", f"{who} left {room.name}", f"you left {room.name}"
+            self.store.add_event("room_people", room_id=room.id, data={"what": what, "person": key, "by": by})
+            notice = self.store.insert_message(
+                room.id,
+                sender_name="switchboard",
+                sender_kind="system",
+                via="system",
+                kind="notice",
+                text=text,
+            )
+            self._member_from_now(room, key)
+        # published once it is all stored (as /close and a rename do)
+        self.hub.message(room.name, self.message_frame(notice))
         self.rooms_changed()
         return reply
 
