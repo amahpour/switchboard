@@ -5,6 +5,11 @@ merge is Excalidraw's own: per element, the higher ``version`` wins, a tie goes 
 ``versionNonce``, and a delete is a tombstone that stays in the list. Shapes from outside are a
 claim: known fields only, text cut, coordinates clamped, ``link`` forced null, and an image,
 embed or frame-of-a-page never stored.
+
+Every string that can reach a stored shape (a shape's or a label's ``text`` and ``originalText``, a frame's
+``name``) is read by ``_text``, which cuts obvious secrets out with ``redact`` (§11, #893): the one place, so
+an agent's action, a Mermaid diagram and a person's page all pass it. ``customData`` and ``link`` are never
+kept, and a Mermaid source is never stored (only the shapes drawn from it), so there is nothing else to read.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from typing import Any
 from switchboard import board_checks, board_layout, board_style
 from switchboard.board_style import DEFAULT_STROKE, nearest_name
 from switchboard.envelope import clean
+from switchboard.redact import redact
 
 # The spike's caps (#622, question 7). Text is cut for everyone, so what an agent reads back
 # stays bounded; a person drawing by hand meets the same cut.
@@ -130,10 +136,34 @@ def _iint(v: Any, lo: int, hi: int) -> int | None:
     return v
 
 
+_SCAN_MAX = 100_000  # the most of one string that is read for secrets: text is cut at MAX_TEXT after
+
+
 def _text(v: Any) -> str:
+    """A string from outside, cleaned, with obvious secrets cut out (``redact``, §11, #893), then cut to
+    ``MAX_TEXT``. Redaction runs before the cut, so half a secret is never left at the cut. A value that
+    fit and that its marker would push past the limit is refused (``Reject``), naming the kind and never
+    the value: a cut there would leave half a marker, and a silent one would hide that it was redacted."""
     if not isinstance(v, str):
         return ""
-    return clean(v)[:MAX_TEXT]
+    text = clean(v)[:_SCAN_MAX]
+    out, kinds = redact(text)
+    if kinds and len(text) <= MAX_TEXT < len(out):
+        raise Reject(
+            f"text is too long once what looks like a secret ({', '.join(kinds)}) is cut out: "
+            "leave the secret out"
+        )
+    return out[:MAX_TEXT]
+
+
+def _unwrapped(text: str) -> str | None:
+    """``text`` redacted as one line when its line breaks hid a secret from ``redact`` (a wrapped label
+    holds a long token across two lines, or a space and a newline apart), else None."""
+    for sep in ("", " "):
+        out, kinds = redact(text.replace("\n", sep))
+        if kinds:
+            return out[:MAX_TEXT]
+    return None
 
 
 def _ident(v: Any) -> str | None:
@@ -303,6 +333,10 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
     for key in ("text", "originalText", "name"):
         if isinstance(raw.get(key), str):
             el[key] = _text(raw[key])
+    if "\n" in el.get("text", ""):  # ``text`` is the wrapped copy of ``originalText``: read it unwrapped too
+        flat = _unwrapped(el["text"])
+        if flat is not None:
+            el["text"] = flat
     size = _iint(raw.get("fontSize"), 8, 48)
     if size is not None:
         el["fontSize"] = size

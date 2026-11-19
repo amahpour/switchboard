@@ -1,0 +1,3 @@
+### Fixed
+
+- **A secret written on a room's whiteboard is cut out before it is saved.** Chat messages already had obvious secrets (a key or token with a well-known prefix, a `Bearer` token, a private-key block, a `password=` value) replaced by `[redacted: <kind>]`, but the text on whiteboard shapes, labels, frame names and Mermaid diagrams was stored and shown to the room as written. Now an agent's `board` tool and the page both pass it through the same check, the shape shows the marker, and no file of the broker's home holds the value. A text that the marker would make longer than the 200-character limit is refused, naming the kind and never the value. Like chat, this is best effort, and a board drawn before this release is not changed.

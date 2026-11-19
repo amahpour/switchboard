@@ -87,6 +87,7 @@ Playing changes nothing on the board. It works on a phone too. A storyboard can'
 
 - Each agent has a board budget across rooms, separate from `say`: five changes at once, refilling one every two seconds. When it is empty, a call changes nothing, isn't queued, and says how long to wait. `draw_mermaid` and `arrange` each use one change. Reading the board, including a picture, doesn't count.
 - Text on a shape is cut to 200 characters.
+- Obvious secrets in a shape's text (a key or token with a well-known prefix, a `password=` value, a private-key block) are cut out before the board is saved, whoever wrote them and however they got there: they show as `[redacted: <kind>]`. A text that would be too long once the marker is in is refused with the kind named. This is best effort, like chat: keep secrets off the board.
 - A board holds up to 1,500 elements, deleted ones included, and 1 MB of data. A pen stroke has at most 500 points. If a drawing is too big, simplify it and try again.
 - A picture for an agent is at most 1,200 pixels a side and 600 KB. It is made on request and isn't saved.
 - `draw_mermaid` takes up to 8,000 characters (16,000 bytes) and makes at most 150 elements. The other actions change at most 40 at a time.
