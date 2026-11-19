@@ -236,6 +236,8 @@ def test_a_release_pr_may_change_the_marketplaces() -> None:
     assert rel.is_release_file("plugins/claude/.claude-plugin/plugin.json")
     assert rel.is_release_file("plugins/codex/.codex-plugin/plugin.json")
     assert rel.is_release_file("plugins/cursor/.cursor-plugin/plugin.json")
+    assert rel.is_release_file("plugins/devin/plugin.json")
+    assert rel.is_release_file("plugins/opencode/package.json")
 
 
 # ------------------------------------------------------------------ a real repo
@@ -309,9 +311,13 @@ def make_repo(tmp_path: Path) -> Path:
         ("claude", ".claude-plugin", "1.2.9"),
         ("codex", ".codex-plugin", "0.8.4"),
         ("cursor", ".cursor-plugin", "0.3.8"),
+        ("devin", "", "0.1.0"),
+        ("opencode", "", "0.1.0"),
     ):
-        (repo / "plugins" / folder / manifest).mkdir(parents=True)
-        (repo / "plugins" / folder / manifest / "plugin.json").write_text(
+        where = repo / "plugins" / folder / manifest
+        where.mkdir(parents=True, exist_ok=True)
+        name = "package.json" if folder == "opencode" else "plugin.json"
+        (where / name).write_text(
             f'{{\n  "name": "switchboard",\n  "version": "{version}",\n  "description": "x 1.0.0"\n}}\n'
         )
     (repo / "src" / "switchboard" / "plugin_versions.py").write_text('"""x"""\n\nUPDATE = {}\n')
@@ -641,7 +647,8 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
 def test_a_release_sets_every_plugin_to_the_releases_version_changed_or_not(tmp_path: Path) -> None:
     """The plugin of switchboard X.Y.Z is X.Y.Z (#841; the maintainer, 2026-11-17: "They should trail with
     each other."). Claude Code and Codex keep an installed plugin by its manifest `version` alone, so every
-    release sets Claude Code's, Codex's and Cursor's to the release's own, whether or not a file of that
+    release sets Claude Code's, Codex's, Cursor's, Devin's and OpenCode's to the release's own, whether or
+    not a file of that
     plugin changed, and nothing but the number moves. A release PR skips the suite, so only the script can
     keep this. Fails if a manifest keeps its old version (a plugin with no change in it included), or the
     stamp touches anything else."""
@@ -649,11 +656,13 @@ def test_a_release_sets_every_plugin_to_the_releases_version_changed_or_not(tmp_
     git(repo, "commit", "-q", "--allow-empty", "-m", "fix(cli): a fix (#30)")  # no plugin file changed
     assert rel.release(repo, tmp_path / "notes.md", "2026-09-30") == "0.4.1"
     for folder, manifest in (
-        ("claude", ".claude-plugin"),
-        ("codex", ".codex-plugin"),
-        ("cursor", ".cursor-plugin"),
+        ("claude", ".claude-plugin/plugin.json"),
+        ("codex", ".codex-plugin/plugin.json"),
+        ("cursor", ".cursor-plugin/plugin.json"),
+        ("devin", "plugin.json"),  # #887: Devin's hook reads its version from here
+        ("opencode", "package.json"),  # #887: OpenCode's listener reads it from here
     ):
-        text = (repo / "plugins" / folder / manifest / "plugin.json").read_text()
+        text = (repo / "plugins" / folder / manifest).read_text()
         assert json.loads(text)["version"] == "0.4.1", folder
         assert text.replace("0.4.1", "9.9.9") == (
             '{\n  "name": "switchboard",\n  "version": "9.9.9",\n  "description": "x 1.0.0"\n}\n'

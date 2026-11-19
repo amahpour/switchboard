@@ -2,7 +2,11 @@
 // Only an agent-token header authenticates a request. Never print a caught error or response body:
 // either can contain credentials. No subprocess, file write, permission reply or permission rule is used.
 import { realpath } from 'node:fs/promises';
+// the release's version, stamped into this folder's package.json (no file API: a JSON import, DESIGN.md §49.13)
+import manifest from './package.json' with {type: 'json'};
 const ROUND_S = 900;
+const VERSION = /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/;
+const VERSION_HEADER = 'X-Switchboard-Plugin-Version'; // docs/DESIGN.md §49.13
 const OUTAGE_MS = 120000;
 const TEXT_MAX = 65536;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
@@ -47,7 +51,13 @@ async function readWake(response, signal) {
   return new TextDecoder().decode(bytes);
 }
 
-export async function listen({url, token, sessionID, ctx, signal, canWake,
+// This plugin's own version, for the header above: only X.Y.Z of digits, else none.
+export function pluginVersion(pkg = manifest) {
+  const version = pkg?.version;
+  return typeof version === 'string' && VERSION.test(version) ? version : undefined;
+}
+
+export async function listen({url, token, sessionID, ctx, signal, canWake, version,
   received = () => {}, settle = async () => {},
   request = globalThis.fetch, sleep: pause = sleep, now = () => performance.now(), warn = console.warn}) {
   let again = '0', backoff = 1000, unreachableSince = null;
@@ -80,7 +90,7 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
         signal: AbortSignal.any([signal, AbortSignal.timeout((ROUND_S + 30) * 1000)]),
         headers: {Authorization: `Bearer ${token}`, 'X-Switchboard-Session': sessionID,
           'X-Switchboard-Harness': 'opencode', 'X-Switchboard-Wait': String(ROUND_S),
-          'X-Switchboard-Again': again}});
+          'X-Switchboard-Again': again, ...(version ? {[VERSION_HEADER]: version} : {})}});
     } catch {
       if (signal.aborted) return;
     }
@@ -178,6 +188,7 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
   const token = env.SWITCHBOARD_AGENT_TOKEN; // the only source; never stored outside this process
   const url = serverURL(env.SWITCHBOARD_URL);
   if (!url || !token || /[\r\n]/.test(token)) return () => {};
+  const version = pluginVersion();
   const sessions = new Map();
   const events = new AbortController();
   const registrations = [];
@@ -217,7 +228,8 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     try {
       const r = await request(`${url}/mcp/status`, {method: 'POST', redirect: 'error',
         signal: AbortSignal.timeout(2000), headers: {Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'}, body: JSON.stringify({event, session_id: s.sessionID, ...fields})});
+          'Content-Type': 'application/json', ...(version ? {[VERSION_HEADER]: version} : {})},
+        body: JSON.stringify({event, session_id: s.sessionID, ...fields})});
       await r.body?.cancel();
       if (r.status !== 200) warn(`[switchboard] status report refused (HTTP ${r.status})`);
       return r.status === 200;
@@ -271,7 +283,7 @@ export async function setup(ctx, {env = process.env, request = globalThis.fetch,
     const controller = new AbortController();
     const listener = {controller, received: false};
     s.listener = listener;
-    const running = listen({url, token, sessionID: s.sessionID, ctx, signal: controller.signal, request,
+    const running = listen({url, token, version, sessionID: s.sessionID, ctx, signal: controller.signal, request,
       received: () => {listener.received = true;}, settle: (event, fields) => report(s, event, fields),
       sleep: pause, warn, canWake: async () => {
         if (closed || s.state === 'offline' || s.pending || !await own(s)) return false;

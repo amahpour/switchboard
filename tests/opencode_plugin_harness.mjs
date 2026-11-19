@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { mkdtemp, symlink, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { listedSessions, listen, setup } from '../plugins/opencode/listener.mjs';
+import { listedSessions, listen, pluginVersion, setup } from '../plugins/opencode/listener.mjs';
 
 const token = 'sbat_test-token-canary';
 const sessionID = 'ses_00000000000000000000000001';
@@ -586,4 +586,27 @@ test('startup skips a row whose location is another directory, and a symlinked a
     await settle();
     assert.equal(w.gets.filter(id => id.startsWith('ses_f')).length, 0);
   } finally {await cleanup(); await rm(alias); await rm(root, {recursive: true});}
+});
+
+// DESIGN.md §49.13 (#887): the plugin says which release it is, on the requests the broker reads it from.
+test('the listener and the status reports carry the plugin version from its own package.json', async () => {
+  const {version} = JSON.parse(await readFile(new URL('../plugins/opencode/package.json', import.meta.url), 'utf8'));
+  assert.match(version, /^\d+\.\d+\.\d+$/);
+  assert.equal(pluginVersion(), version);
+  const w = world();
+  const stop = await w.start();
+  w.emit('session.execution.succeeded');
+  while (!w.requests.some(r => r.url.endsWith('/mcp/listen'))) await turn();
+  const status = w.requests.find(r => r.url.endsWith('/mcp/status'));
+  const listening = w.requests.find(r => r.url.endsWith('/mcp/listen'));
+  assert.equal(status.options.headers['X-Switchboard-Plugin-Version'], version);
+  assert.equal(listening.options.headers['X-Switchboard-Plugin-Version'], version);
+  await stop();
+});
+
+test('a package.json without a plain X.Y.Z sends no version header', () => {
+  for (const pkg of [{version: '1.2.3-beta'}, {}, null, {version: 5}, {version: '1234567.0.0'}, {version: '01.2.3'}]) {
+    assert.equal(pluginVersion(pkg), undefined, JSON.stringify(pkg));
+  }
+  assert.equal(pluginVersion({version: '1.12.3'}), '1.12.3');
 });
