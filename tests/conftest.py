@@ -515,6 +515,13 @@ def ws_connect(
 class SubprocBroker:
     """``python -m switchboard start --foreground --test-mode`` in a child process."""
 
+    # How long start() waits for the socket to answer. It returns the moment ping succeeds, so this is a
+    # ceiling for a loaded machine, not a wait. It was 15 s, and a loaded suite (#857) gave up while the
+    # child was still starting: once after the ready line, and once before that line was printed. The ready
+    # line is printed before the lifespan creates the socket, so the line is not the event. The in-process
+    # fixture's ceiling is the same 60 s (#832).
+    START_TIMEOUT_S = 60.0
+
     def __init__(self, home: Path, *, trust: bool = True, test_mode: bool = True, args: Sequence[str] = ()):
         from switchboard.paths import Paths
 
@@ -551,7 +558,7 @@ class SubprocBroker:
         self.proc = subprocess.Popen(
             cmd, env=self.env, stdin=subprocess.DEVNULL, stdout=self.out, stderr=self.out
         )
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + self.START_TIMEOUT_S
         while time.monotonic() < deadline:
             info = ping(self.paths.sock, timeout=1.0)
             if info:
@@ -562,7 +569,10 @@ class SubprocBroker:
                 break
             time.sleep(0.05)
         self.kill()
-        raise RuntimeError("subprocess broker did not start: " + (self.home / "subproc.out").read_text())
+        raise RuntimeError(
+            f"subprocess broker did not start within {self.START_TIMEOUT_S:g} s: "
+            + (self.home / "subproc.out").read_text()
+        )
 
     def cli(
         self, *args: str, input: str | None = None, timeout: float = 20.0, under: Sequence[str] = ()
