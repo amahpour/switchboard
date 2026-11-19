@@ -273,7 +273,8 @@ def test_a_member_offline_only_because_of_a_restart_keeps_its_name_for_a_while(b
     st.con.commit()
     new = codex_session(broker)
     r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
-    assert r["code"] == "name_taken", r
+    assert r["code"] == "name_taken" and "restarted" in r["error"], r
+    assert "still connected" not in r["error"], r
     st.con.execute("UPDATE participants SET status_at=? WHERE status_src='restart'", (now - 700,))
     st.con.commit()
     r = new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)

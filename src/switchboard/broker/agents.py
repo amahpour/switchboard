@@ -221,6 +221,10 @@ RECLAIM_WHY = {
     ),
     "host": "that code is from a session on another machine: a code brings a name back only on the same one",
     "gone": "that session is no longer on record",
+    "restart": (
+        "that name's session went offline when the server restarted and may reconnect: its name is held"
+        " for a few minutes after the restart, then a code takes it"
+    ),
     "online": (
         "that name's session is still connected to this room: a code brings a name back only once"
         " its session is offline or has left"
@@ -376,18 +380,18 @@ class AgentService:
         old = self.store.get_participant(holder.participant_id)
         if old is None:
             return None, "gone"
-        if holder.active and (
-            old.status != "offline"
-            # offline only because the broker restarted: its session may be running and reconnect any
-            # moment, so it keeps its name until it has had RESTART_GRACE_S to do so
-            or (
-                old.status_src == "restart"
-                and self.state.clock.now() - (old.status_at or 0) < RESTART_GRACE_S
-            )
-        ):
+        if holder.active:
             # a membership still in the room gives its name up only when its session is gone: offline,
             # which a killed process whose hooks never ran (untrusted plugin hooks) leaves it (#868)
-            return None, "online"
+            if old.status != "offline":
+                return None, "online"
+            # offline only because the broker restarted: its session may be running and reconnect any
+            # moment, so it keeps its name until it has had RESTART_GRACE_S to do so
+            if (
+                old.status_src == "restart"
+                and self.state.clock.now() - (old.status_at or 0) < RESTART_GRACE_S
+            ):
+                return None, "restart"
         if old.harness != harness:
             return None, "harness"
         if (old.host or "") != (host or ""):
