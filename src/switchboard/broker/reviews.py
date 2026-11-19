@@ -138,6 +138,11 @@ class Boards:
         }
 
     def _board(self, room: Room, rv: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+        """One board as data, every string of it cut by ``reviews.scrub``: a card, a history line or a handoff
+        plan older than the check holds its words as they were written (#890)."""
+        return _scrubbed(self._board_raw(room, rv, ctx))
+
+    def _board_raw(self, room: Room, rv: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         items = self.store.review_items(rv["id"])
         agents, offline, now = ctx["agents"], ctx["offline"], ctx["now"]
         active = set(agents)
@@ -200,11 +205,20 @@ class Boards:
         rv = self.store.review_for_url(room.id, given)
         if rv is not None:
             return rv
-        safe = reviews.scrub(given)
-        same = {r["url"]: r for r in self.store.room_reviews(room.id) if reviews.scrub(r["url"]) == safe}
+        # not by what ``given`` would be cut to: two different links that read alike are two boards, and a
+        # link that was never registered finds none. Only the identifier a board is shown under (``scrub`` of
+        # its stored URL) is a name for it.
+        same = [r for r in self.store.room_reviews(room.id) if reviews.scrub(r["url"]) == given]
         if len(same) > 1:
-            raise ReviewError(f"{room.name} has more than one board that reads {safe}: use its full url")
-        return next(iter(same.values()), None)
+            raise ReviewError(f"{room.name} has more than one board that reads {given}: use its full url")
+        return same[0] if same else None
+
+    def _existing_or_new(self, room: Room, value: Any) -> str:
+        """The URL ``open`` and ``/review`` work with: an existing board's own stored URL, found as for any
+        lookup (so a closed older board comes back by the URL it was stored under or shown as), else a new
+        one's, which must pass the check a new board's URL gets (§37.14, #890)."""
+        rv = self._find(room, value)
+        return rv["url"] if rv is not None else reviews.url(value)
 
     def _board_for(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """The board an agent's call is about (§37.14): the one its ``url`` names, open or closed;
@@ -568,7 +582,13 @@ class Boards:
         if rv is None:
             u = reviews.scrub(reviews.lookup_url(params.get("url")))
             raise ReviewError(f'{room.name} has no board for {u}: open one with action="open"')
-        u = rv["url"]  # the board's own, never what was given: a reset writes nothing from the call's url
+        u = rv["url"]
+        if reviews.scrub(u) != u:
+            # a fresh row would hold a second copy of what the first holds: nothing is written, no value named
+            raise ReviewError(
+                f"{self._ref(rv)} was stored with a link that held a secret, so it can't be reset: close it"
+                " and open a new board with the link without the secret"
+            )
         holder = reviews.holder(rv)
         if actor != holder:
             raise ReviewError(f"{self._ref(rv)} was opened by {holder}: only {holder} can reset it")
@@ -605,7 +625,7 @@ class Boards:
         open_urls = [b["url"] for b in boards if b["closed_at"] is None]
         last = reviews.scrub(last) if last else last
         default = last if last in open_urls else open_urls[0] if len(open_urls) == 1 else None
-        return {"ok": True, "boards": reviews.list_text(boards, default)}
+        return {"ok": True, "boards": reviews.scrub(reviews.list_text(boards, default))}
 
     def _told(
         self,
@@ -713,7 +733,7 @@ class Boards:
             self.store.answer_deliveries(done)
 
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
-        url = reviews.url(params.get("url"))
+        url = self._existing_or_new(room, params.get("url"))
         head = reviews.head(params.get("head"))
         rv, how = self._open_board(room, actor, url, head)
         self._remember(room, actor, rv)
@@ -844,7 +864,7 @@ class Boards:
     def person_open(self, room: Room, name: str, url: str) -> str:
         """A person's ``/review`` (§37.8): the board opens, or comes back, or stays, for ``url``,
         and every page showing the room gets it at once. Returns what happened (``_open_board``)."""
-        rv, how = self._open_board(room, name, reviews.url(url), "")
+        rv, how = self._open_board(room, name, self._existing_or_new(room, url), "")
         self._publish(room)
         return how
 
@@ -1033,7 +1053,7 @@ class Boards:
         events = [{"data": e.data} for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
         plan = reviews.handoff_plan(items, events, self.store.room_agent_names_ever(room.id))
         ref = reviews.ref(reviews.forge(rv["url"])) if self._several(room) else ""
-        text = reviews.render_handoff(plan, chosen, self.state.cfg.delivery.max_msg_chars, ref)
+        text = reviews.scrub(reviews.render_handoff(plan, chosen, self.state.cfg.delivery.max_msg_chars, ref))
         self.store.set_review(rv["id"], posted_at=self.state.clock.now(), posted_by=chosen)
         self._event(room, rv, handoff=rv["url"], by=name, agent=chosen)
         # the agent chosen reads this board when it calls ``show``, not another that is open
@@ -1054,7 +1074,7 @@ class Boards:
             b = self.board(room, rv)
         items = self.store.review_items(b["id"])
         now = self.state.clock.now()
-        rendered = reviews.render(b, items, now, b["agents"], b["offline"])
+        rendered = reviews.scrub(reviews.render(b, items, now, b["agents"], b["offline"]))
         if selected not in (None, ""):
             kind, n = reviews.parse_label(selected)
             item = next((i for i in items if i.kind == kind and i.n == n), None)
@@ -1064,7 +1084,7 @@ class Boards:
                 {"ts": e.ts, "data": e.data}
                 for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])
             ]
-            rendered = reviews.render_item(b, item, events, now, b["agents"], b["offline"])
+            rendered = reviews.scrub(reviews.render_item(b, item, events, now, b["agents"], b["offline"]))
             touched = item.label
         out: dict[str, Any] = {"ok": True, "settled": b["settled"], "board": rendered}
         if touched:

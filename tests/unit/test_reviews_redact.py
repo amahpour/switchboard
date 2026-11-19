@@ -142,3 +142,11 @@ def test_where_refuses_a_secret_that_spans_its_colon() -> None:
     assert reviews.where("src/app.py:40-58") == ("src/app.py", "40-58")
     with pytest.raises(ReviewError, match="across its colon"):
         reviews.edit_changes(item(), "codex-1", {"where": '"token":' + "12345678"}, by_person=False)
+
+
+def test_scrub_cuts_a_links_whole_authority_before_a_marker_can_hide_the_rest() -> None:
+    """A token inside ``user:pass@`` becomes a marker with a space in it, and a space ends the credentials
+    match, so what followed the token was kept. The credentials go first. Fails if any part survives."""
+    out = reviews.scrub(f"see https://bob:{TOKEN}:hunter2@example.com/x")
+    assert "hunter2" not in out and TOKEN not in out and "example.com/x" in out
+    assert reviews.scrub(out) == out

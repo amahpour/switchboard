@@ -26,6 +26,8 @@ from switchboard.redact import redact
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
+# a lookup may be given a URL as shown, and cutting secrets out can make a URL longer than it was stored
+MAX_LOOKUP = 5 * MAX_URL
 MAX_TITLE = 200
 MAX_DETAIL = 4000
 MAX_FILE = 300
@@ -204,14 +206,15 @@ def scrub(value: str) -> str:
     refuses what it can't repair); what it says out loud, a notice, a line in the room, an event and a
     board's own URL as shown, goes through here as well, so a row stored before this check, or a value
     copied from one into a new message, is cut too."""
-    return _USERINFO_RE.sub(r"\1[redacted: url credentials]@", redact(value)[0])
+    # the credentials first: a marker has a space in it, and a space would end the match of what follows
+    return redact(_USERINFO_RE.sub(r"\1[redacted: url credentials]@", value))[0]
 
 
 def lookup_url(value: Any) -> str:
     """A URL given to find a board that exists (a lookup, never a write): a string of the right length,
     not checked for shape or secrets. A board of an older row may hold a URL ``url`` would now refuse, and
     its owner must still be able to open and close it, by the URL as ``scrub`` shows it or as stored."""
-    return _string(value, "url", MAX_URL, required=True)
+    return _string(value, "url", MAX_LOOKUP, required=True)
 
 
 def _no_credentials(what: str, link: str) -> None:
