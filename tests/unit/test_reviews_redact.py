@@ -108,3 +108,37 @@ def test_options_and_an_edit_are_redacted() -> None:
         "file": f"a/{GH}",
         "lines": "3",
     }
+
+
+def test_a_link_with_credentials_is_refused_for_a_url_and_a_proof() -> None:
+    """A password has no token's shape, so ``user:password@host`` passes every pattern and used to be stored
+    and shown as a link (#890). Fails if either reader keeps it, or if the refusal repeats the password."""
+    for link in ("https://alice:hunter2@example.com/shop/pull/7", "https://alice@example.com/shop/pull/7"):
+        for read in (reviews.url, reviews.proof):
+            with pytest.raises(ReviewError, match="user name or password") as e:
+                read(link)
+            assert "hunter2" not in str(e.value)
+    assert reviews.proof("https://ci.example.com/run/7?a=b@c") == "https://ci.example.com/run/7?a=b@c"
+    assert reviews.url("https://example.com/shop/pull/7@x") == "https://example.com/shop/pull/7@x"
+
+
+def test_scrub_cuts_secrets_and_link_credentials_and_is_idempotent() -> None:
+    """``scrub`` is for text that is only shown or posted, whatever an older row holds. Fails if a token or
+    a link's password survives, if it is not stable when applied twice, or if a plain link changes."""
+    out = reviews.scrub(f"see https://alice:hunter2@example.com/x and {TOKEN}")
+    assert "hunter2" not in out and TOKEN not in out and GH in out
+    assert reviews.scrub(out) == out
+    plain = "https://example.com/shop/pull/7 by @bob"
+    assert reviews.scrub(plain) == plain
+
+
+def test_where_refuses_a_secret_that_spans_its_colon() -> None:
+    """A pattern that reaches across the colon (a quoted name, then its value) is in neither half, so the
+    halves alone keep it, and the board draws them joined again. Fails if the value is stored as lines."""
+    for bad in ('"token":' + "12345678", "password=" + "12345678" + ":40"):
+        with pytest.raises(ReviewError, match="across its colon") as e:
+            reviews.where(bad)
+        assert "12345678" not in str(e.value)
+    assert reviews.where("src/app.py:40-58") == ("src/app.py", "40-58")
+    with pytest.raises(ReviewError, match="across its colon"):
+        reviews.edit_changes(item(), "codex-1", {"where": '"token":' + "12345678"}, by_person=False)

@@ -95,8 +95,8 @@ class Boards:
         return [
             {
                 "id": rv["id"],
-                "url": rv["url"],
-                "forge": reviews.forge(rv["url"]),
+                "url": reviews.scrub(rv["url"]),
+                "forge": reviews.forge(reviews.scrub(rv["url"])),
                 "opened_at": rv["opened_at"],
                 "settled_at": self._settled_at(room, rv),
                 "closed_at": rv["closed_at"],
@@ -106,7 +106,7 @@ class Boards:
         ]
 
     def past_board(self, room: Room, url: str) -> dict[str, Any] | None:
-        rv = self.store.review_for_url(room.id, reviews.url(url))
+        rv = self._find(room, url)
         if rv is None or rv["closed_at"] is None:
             return None
         return self.board(room, rv)
@@ -137,13 +137,14 @@ class Boards:
         items = self.store.review_items(rv["id"])
         agents, offline, now = ctx["agents"], ctx["offline"], ctx["now"]
         active = set(agents)
-        f = reviews.forge(rv["url"])
+        shown = reviews.scrub(rv["url"])  # an older row may hold what a new one is refused (#890)
+        f = reviews.forge(shown)
         events = [
             {"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])
         ]
         return {
             "id": rv["id"],
-            "url": rv["url"],
+            "url": shown,
             "forge": f,
             "head": rv["head"],
             "opened_by": rv["opened_by"],
@@ -184,16 +185,31 @@ class Boards:
 
     def _ref(self, rv: dict[str, Any]) -> str:
         """A board as a notice names it: ``#7`` or ``!7`` for a pull or merge request, else its URL."""
-        return reviews.ref(reviews.forge(rv["url"])) or rv["url"]
+        return reviews.ref(reviews.forge(rv["url"])) or reviews.scrub(rv["url"])
+
+    def _find(self, room: Room, value: Any) -> dict[str, Any] | None:
+        """The room's board a ``url`` names, to look at or to move (§37.14, #890), or None. Not the check a
+        new board's URL gets: a board stored before secrets were cut may hold a URL that check refuses, and
+        it must stay openable, by the URL as stored or as every list and page shows it (``reviews.scrub``).
+        Nothing is written from what is given here, and what is shown of it is scrubbed."""
+        given = reviews.lookup_url(value)
+        rv = self.store.review_for_url(room.id, given)
+        if rv is not None:
+            return rv
+        safe = reviews.scrub(given)
+        same = {r["url"]: r for r in self.store.room_reviews(room.id) if reviews.scrub(r["url"]) == safe}
+        if len(same) > 1:
+            raise ReviewError(f"{room.name} has more than one board that reads {safe}: use its full url")
+        return next(iter(same.values()), None)
 
     def _board_for(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """The board an agent's call is about (§37.14): the one its ``url`` names, open or closed;
         else the open board it last acted on or was told about; else the room's only open board.
         With several open boards and no way to tell, it asks for the url and lists them."""
         if params.get("url") not in (None, ""):
-            u = reviews.url(params.get("url"))
-            rv = self.store.review_for_url(room.id, u)
+            rv = self._find(room, params.get("url"))
             if rv is None:
+                u = reviews.scrub(reviews.lookup_url(params.get("url")))
                 raise ReviewError(f'{room.name} has no board for {u}: open one with action="open"')
             return rv
         open_ = self.store.open_reviews(room.id)
@@ -207,7 +223,7 @@ class Boards:
             raise ReviewError(f'{room.name} has no review board: open one with action="open" and the url')
         raise ReviewError(
             f"{room.name} has {len(open_)} open boards: say which with url=. "
-            + " | ".join(rv["url"] for rv in open_)
+            + " | ".join(reviews.scrub(rv["url"]) for rv in open_)
         )
 
     def _remember(self, room: Room, agent: str, rv: dict[str, Any]) -> None:
@@ -219,9 +235,9 @@ class Boards:
         """The open board a person's move is about: the one named by ``url``, else the room's only
         open board. The page always sends the url; without one and with several, it is refused."""
         if params.get("url") not in (None, ""):
-            u = reviews.url(params.get("url"))
-            rv = self.store.review_for_url(room.id, u)
+            rv = self._find(room, params.get("url"))
             if rv is None or rv["closed_at"] is not None:
+                u = reviews.scrub(reviews.lookup_url(params.get("url")))
                 raise ReviewError(f"{room.name} has no open board for {u}")
             return rv
         open_ = self.store.open_reviews(room.id)
@@ -234,7 +250,7 @@ class Boards:
     def _event(self, room: Room, rv: dict[str, Any], **data: Any) -> None:
         """A ``review`` event of ``rv``: it names its board, so a card's history and a handoff's
         decisions are read from this board's events alone (§37.14)."""
-        self.store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
+        self.store.add_event("review", room_id=room.id, data=_scrubbed({**data, "board": rv["id"]}))
 
     # ------------------------------------------------------------ agent moves
     def agent(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -261,7 +277,9 @@ class Boards:
             self._remember(room, actor, rv)
             return self._report(room, rv, actor, params)
         if rv["closed_at"] is not None:
-            raise ReviewError(f'the board for {rv["url"]} is closed: open it again with action="open" first')
+            raise ReviewError(
+                f'the board for {reviews.scrub(rv["url"])} is closed: open it again with action="open" first'
+            )
         self._remember(room, actor, rv)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
@@ -466,7 +484,7 @@ class Boards:
         result is said in the room, each in one line naming who reported it, so agents cite the
         board instead of passing CI on from memory. switchboard fetches nothing itself."""
         fields = reviews.report(params)
-        url = rv["url"]
+        url = reviews.scrub(rv["url"])
         was_closed = rv["closed_at"] is not None
         state = fields.get("pr_state")
         if was_closed and state != "merged":
@@ -493,7 +511,7 @@ class Boards:
         board is kept, with every item and move, and ``open`` brings it back (§37.14). Only the
         board's holder closes it: anyone else's close asks a person, in the room, and changes nothing."""
         if rv["closed_at"] is not None:
-            raise ReviewError(f"the board for {rv['url']} is closed already")
+            raise ReviewError(f"the board for {reviews.scrub(rv['url'])} is closed already")
         items = self.store.review_items(rv["id"])
         open_items = reviews.open_items(items)
         holder = reviews.holder(rv)
@@ -529,12 +547,13 @@ class Boards:
         """A fresh board for a URL that has one, on purpose (§37.14): the earlier board stays in the
         database, unseen, so no card or move is deleted. Only the board's holder, and always with a
         reason and the url: nothing here is a default."""
-        u = reviews.url(params.get("url"))
         reason = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
         head = reviews.head(params.get("head"))
-        rv = self.store.review_for_url(room.id, u)
+        rv = self._find(room, params.get("url"))
         if rv is None:
+            u = reviews.scrub(reviews.lookup_url(params.get("url")))
             raise ReviewError(f'{room.name} has no board for {u}: open one with action="open"')
+        u = rv["url"]  # the board's own, never what was given: a reset writes nothing from the call's url
         holder = reviews.holder(rv)
         if actor != holder:
             raise ReviewError(f"{self._ref(rv)} was opened by {holder}: only {holder} can reset it")
@@ -562,11 +581,13 @@ class Boards:
             boards.append(
                 {
                     **rv,
+                    "url": reviews.scrub(rv["url"]),
                     "counts": reviews.counts(items, set(ctx["agents"]), ctx["now"], ctx["offline"]),
                 }
             )
         last = self._last.get((room.id, actor))
         open_urls = [b["url"] for b in boards if b["closed_at"] is None]
+        last = reviews.scrub(last) if last else last
         default = last if last in open_urls else open_urls[0] if len(open_urls) == 1 else None
         return {"ok": True, "boards": reviews.list_text(boards, default)}
 
@@ -599,7 +620,7 @@ class Boards:
             self._notice(room, f"{ref}: {notice}" if several else notice)
         out = self._shown(room, rv, touched=item.label)
         if handoff is not None:
-            out["handoff"] = {"mentions": list(handoff[0]), "text": handoff[1]}
+            out["handoff"] = {"mentions": list(handoff[0]), "text": reviews.scrub(handoff[1])}
             for agent in handoff[0]:
                 self._last[(room.id, agent)] = rv["url"]
         return out
@@ -959,7 +980,19 @@ class Boards:
         return out
 
     def _notice(self, room: Room, text: str) -> None:
-        self.state.service.post_notice(room, text[:300], level="info")
+        self.state.service.post_notice(room, reviews.scrub(text)[:300], level="info")
+
+
+def _scrubbed(value: Any) -> Any:
+    """``value``, an event's data, with every string in it cut by ``reviews.scrub``: a move copies words
+    already on a card (a title, a proof) into its event, and a card may be older than the check (#890)."""
+    if isinstance(value, str):
+        return reviews.scrub(value)
+    if isinstance(value, dict):
+        return {k: _scrubbed(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrubbed(v) for v in value]
+    return value
 
 
 def action_past(action: str) -> str:

@@ -193,11 +193,46 @@ def _link(what: str, kinds: list[str]) -> None:
         )
 
 
+# user:password@ in front of a host: a password has no token's shape, so the patterns can't see it
+_USERINFO_RE = re.compile(r"(?i)\b(https?://)[^\s/@<>\"'?#]*@")
+
+
+def scrub(value: str) -> str:
+    """``value`` with every obvious secret cut out, and the credentials of any http(s) link in it (#890).
+    Never refuses and never fails: it is for text that is only being shown or posted, whatever an older
+    row holds, and applying it twice changes nothing. What a board takes in goes through ``text`` (which
+    refuses what it can't repair); what it says out loud, a notice, a line in the room, an event and a
+    board's own URL as shown, goes through here as well, so a row stored before this check, or a value
+    copied from one into a new message, is cut too."""
+    return _USERINFO_RE.sub(r"\1[redacted: url credentials]@", redact(value)[0])
+
+
+def lookup_url(value: Any) -> str:
+    """A URL given to find a board that exists (a lookup, never a write): a string of the right length,
+    not checked for shape or secrets. A board of an older row may hold a URL ``url`` would now refuse, and
+    its owner must still be able to open and close it, by the URL as ``scrub`` shows it or as stored."""
+    return _string(value, "url", MAX_URL, required=True)
+
+
+def _no_credentials(what: str, link: str) -> None:
+    """A link with ``user:password@`` in it is refused: it would store a password, show it as a link
+    and post it (§37.14, #890)."""
+    try:
+        netloc = urlsplit(link).netloc
+    except ValueError:
+        raise ReviewError(f"{what} is not a valid http(s) link") from None
+    if "@" in netloc:
+        raise ReviewError(
+            f"{what} must not carry a user name or password (user:password@host): leave them out"
+        )
+
+
 def url(value: Any) -> str:
     u, kinds = _redacted(_string(value, "url", MAX_URL, required=True), "url", MAX_URL)
     _link("url", kinds)
     if not URL_RE.match(u):
         raise ReviewError("url must be an http(s) link to the pull request or merge request")
+    _no_credentials("url", u)
     return u
 
 
@@ -211,6 +246,7 @@ def proof(value: Any) -> str:
         _link("proof link", kinds)
         if not URL_RE.fullmatch(p):
             raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+        _no_credentials("proof link", p)
     return p
 
 
@@ -291,11 +327,19 @@ def lines(value: Any) -> str:
 
 def where(value: Any) -> tuple[str, str]:
     """Split a compact finding location, then apply the existing file and line checks. It is split before
-    either part is redacted: a marker has a colon in it, and the last colon is the one before the lines."""
+    either part is redacted: a marker has a colon in it, and the last colon is the one before the lines.
+    The whole value is searched too (#890): a secret whose pattern reaches across that colon (``"token":``
+    and its value) is in neither part, so the parts alone would keep it. A match across the colon is
+    refused, so a marker never moves the split."""
     location = _string(value, "where", MAX_FILE + MAX_LINES + 1)
     if not location:
         return "", ""
     path, sep, span = location.rpartition(":")
+    whole, kinds = redact(location)
+    if sep and whole != redact(path)[0] + sep + redact(span)[0]:
+        raise ReviewError(
+            f"where holds what looks like a secret ({', '.join(kinds)}) across its colon: leave it out"
+        )
     if not sep:
         return text(location, "file", MAX_FILE), ""
     return text(path, "file", MAX_FILE), lines(span)
