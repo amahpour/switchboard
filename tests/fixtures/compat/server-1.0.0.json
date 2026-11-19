@@ -1,0 +1,210 @@
+{
+ "_source": "switchboard v1.0.0 (git tag v1.0.0): the tool list read from build_server, the review and board ACTIONS, HOOK_FIELDS and LISTEN_PATH; and the listener read from broker/agent_http.py (class Listener).",
+ "release": "1.0.0",
+ "tools": {
+  "join": {
+   "properties": [
+    "resume",
+    "room",
+    "screen_name"
+   ],
+   "required": [
+    "room",
+    "screen_name"
+   ]
+  },
+  "leave": {
+   "properties": [
+    "room"
+   ],
+   "required": [
+    "room"
+   ]
+  },
+  "who": {
+   "properties": [
+    "room"
+   ],
+   "required": [
+    "room"
+   ]
+  },
+  "claim": {
+   "properties": [
+    "key",
+    "note",
+    "room",
+    "ttl"
+   ],
+   "required": [
+    "key",
+    "room",
+    "ttl"
+   ]
+  },
+  "say": {
+   "properties": [
+    "reply_to",
+    "room",
+    "since",
+    "text"
+   ],
+   "required": [
+    "room",
+    "text"
+   ]
+  },
+  "review": {
+   "properties": [
+    "action",
+    "ci",
+    "commit",
+    "detail",
+    "head",
+    "item",
+    "options",
+    "owner",
+    "proof",
+    "reason",
+    "recommend",
+    "room",
+    "state",
+    "threads",
+    "title",
+    "url",
+    "where"
+   ],
+   "required": [
+    "action",
+    "room"
+   ]
+  },
+  "board": {
+   "properties": [
+    "action",
+    "h",
+    "id",
+    "room",
+    "shape",
+    "style",
+    "text",
+    "to",
+    "w",
+    "x",
+    "y"
+   ],
+   "required": [
+    "action",
+    "room"
+   ]
+  },
+  "read": {
+   "properties": [
+    "before",
+    "limit",
+    "room"
+   ],
+   "required": [
+    "room"
+   ]
+  },
+  "wait": {
+   "properties": [
+    "room",
+    "timeout_s"
+   ],
+   "required": [
+    "room"
+   ]
+  },
+  "pass": {
+   "properties": [
+    "note",
+    "room"
+   ],
+   "required": []
+  },
+  "away": {
+   "properties": [
+    "message"
+   ],
+   "required": []
+  },
+  "status": {
+   "properties": [
+    "text"
+   ],
+   "required": [
+    "text"
+   ]
+  }
+ },
+ "review_actions": [
+  "open",
+  "list",
+  "show",
+  "raise",
+  "ask",
+  "concur",
+  "concede",
+  "contest",
+  "insist",
+  "fix",
+  "confirm",
+  "drop",
+  "defer",
+  "report",
+  "close",
+  "reset"
+ ],
+ "board_actions": [
+  "note",
+  "box",
+  "connect",
+  "frame",
+  "move",
+  "edit",
+  "delete",
+  "read",
+  "draw_mermaid",
+  "arrange",
+  "resize",
+  "text"
+ ],
+ "hook_fields": [
+  "agent_id",
+  "event",
+  "model",
+  "notification_type",
+  "permission_mode",
+  "prompt_id",
+  "reason",
+  "session_id",
+  "source",
+  "stop_hook_active",
+  "tool_name",
+  "tool_response",
+  "tool_use_id",
+  "turn_id",
+  "wait_s"
+ ],
+ "listen_path": "/mcp/listen",
+ "listen": {
+  "method": "POST",
+  "headers_read": [
+   "x-switchboard-session",
+   "x-switchboard-wait",
+   "x-switchboard-again",
+   "x-switchboard-harness",
+   "x-switchboard-token",
+   "authorization",
+   "origin"
+  ],
+  "answers": {
+   "200": "text/plain: the message that wakes the session",
+   "408": "JSON: a round ran out, listen again",
+   "409": "JSON: refused, the listener ends and wakes nothing",
+   "410": "text/plain: another listener ended the session, printed once"
+  }
+ }
+}

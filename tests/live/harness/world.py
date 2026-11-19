@@ -77,7 +77,8 @@ def free_port() -> int:
 
 
 class Broker:
-    def __init__(self, label: str, room: str = ROOM, hosted: bool = False) -> None:
+    def __init__(self, label: str, room: str = ROOM, hosted: bool = False, src: Path | None = None) -> None:
+        self.src = src  # another release's ``src`` folder to run the broker from (tests/compat)
         self.room = room  # the room the person plays in; the evals (tests/evals) name their own
         self.hosted = hosted
         self.admin_password = ""
@@ -104,6 +105,7 @@ class Broker:
             "TMPDIR": str(self.base),
             "SWITCHBOARD_TEST": "1",
             "LOGNAME": HUMAN,
+            **({"PYTHONPATH": str(self.src)} if self.src else {}),
         }
         log = open(self.base / "broker.log", "ab")
         if self.hosted:

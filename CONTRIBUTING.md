@@ -44,6 +44,7 @@ A failing test leaves a Playwright trace and a screenshot of each open page in `
 ```bash
 docker build -t switchboard:dev -f deploy/image/Dockerfile .
 SWITCHBOARD_IMAGE=switchboard:dev uv run pytest -m image tests/image   # about 20 seconds; unset, it builds switchboard:test itself
+uv run pytest -m compat tests/live/test_compat_oldest_release.py   # the newest plugin against a real v1.0.0 broker; needs the tag (git fetch --tags), no network
 ```
 
 The same image job also checks Litestream recovery against MinIO (#689): an old schema is replicated,
