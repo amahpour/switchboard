@@ -4466,3 +4466,54 @@ def test_a_posted_secret_is_removed_and_the_page_says_what_kind_under_the_messag
     expect(note).to_have_count(1)
     expect(note.locator(".cmd-out")).to_contain_text("github token")
     assert token not in page.locator("#log").inner_text()
+
+
+@pytest.mark.parametrize("mode", ["light", "dark", "phone"])
+def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str) -> None:
+    """The room lists past reviews after its last open board closes, with evidence and no moves."""
+    room = f"#past-reviews-{mode}"
+    unknown = "https://github.com/example/shop/pull/7"
+    merged = "https://github.com/example/shop/pull/8"
+    ui.world.create_room(room)
+    ui.world.add_agents(room, ("codex-1",))
+
+    def move(**args: Any) -> None:
+        result = ui.world.agent_call(room, "codex-1", "review", **args)
+        assert result["ok"], result
+
+    move(action="open", url=unknown)
+    move(action="ask", title="When should discounts apply?", options=["Before tax", "After tax"], recommend=0)
+    move(action="close", reason="Review paused")
+    move(action="open", url=merged)
+    move(action="raise", title="Check rounding")
+    move(action="drop", item="F1", reason="Already covered")
+    move(action="report", state="merged")
+
+    page = ui.open(
+        room=room[1:],
+        color_scheme="dark" if mode == "dark" else "light",
+        **(PHONE if mode == "phone" else {}),
+    )
+    page.get_by_role("button", name="Past boards", exact=True).click()
+    history = page.get_by_role("list", name="Past boards")
+    expect(history.get_by_role("button", name="example/shop #7")).to_be_visible()
+    unknown_row = history.get_by_role("listitem").filter(has_text="example/shop #7")
+    merged_row = history.get_by_role("listitem").filter(has_text="example/shop #8")
+    expect(unknown_row).to_contain_text("Unknown")
+    expect(merged_row).to_contain_text("Merged")
+    for label in ("Opened", "Settled", "Closed"):
+        expect(merged_row).to_contain_text(label)
+    expect(unknown_row.locator("time")).to_have_count(2)
+    expect(merged_row.locator("time")).to_have_count(3)
+    no_horizontal_scroll(page)
+
+    history.get_by_role("button", name="example/shop #7").press("Enter")
+    expect(page.get_by_text("Read-only", exact=True)).to_be_visible()
+    page.locator('#board .board-card[data-item="Q1"]').click()
+    expect(page.locator(".board-detail")).to_contain_text("When should discounts apply?")
+    expect(page.locator(".board-detail")).to_contain_text("Before tax")
+    expect(page.locator("#board-close, #board-handoff, .board-actions")).to_have_count(0)
+    page.get_by_role("button", name="Back to past boards").click()
+    expect(history.get_by_role("button", name="example/shop #7")).to_be_focused()
+    move(action="report", url=unknown, state="merged")
+    expect(unknown_row).to_contain_text("Merged")

@@ -19,6 +19,8 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 
 ## Actions
 
+The tool's description lists the actions the server you are on accepts; a refusal of an unknown action may list them too. This list describes the newest server: if an action here is not in that list, the server is older, so use the ones it has.
+
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.
 - `show`: read one board, including a closed one. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.
@@ -36,11 +38,15 @@ A finding's `detail` is Markdown. A Mermaid diagram is fine when a picture expla
 - `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
-- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three.
+- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` to record the outcome.
 - `close` (`reason` when work is still open): only the board's holder. A settled board needs no reason.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 
 A move that is another agent's to answer is posted as your message and wakes them. Any other move is a notice. `show` reads the board.
+
+## Check back after handoff
+
+If you were chosen to post the review, check the pull request or merge request again with your own `gh` or `glab` when you next have a chance. When the forge shows it merged, call `review(action="report", url=..., state="merged")` with the original board link. This works after the board closes and keeps it closed.
 
 ## Ask for a review when you are the author
 

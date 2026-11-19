@@ -2762,6 +2762,9 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
         added = c.post("/api/people", json={"name": "bob", "email": "bob@example.com"})
         assert added.status_code == 200, added.text
         bob_id = int(added.json()["person"]["id"])
+        # bob is in #build, as his agent there would make him (§63): People lists him
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob"})
+        assert joined.status_code == 200, joined.text
         admin_cookie = c.cookies.get("switchboard_session")
     assert admin_cookie
 
@@ -3075,6 +3078,9 @@ def shoot_real_names(browser: Any, out: Path, world: Any) -> None:
         signed = c.post("/api/signin/password", json={"name": "bob.lee@example.com", "password": bob_otp})
         assert signed.status_code == 200, signed.text
         assert c.post("/api/me/password", json={"password": "bob's own secret 1"}).status_code == 200
+        # he is in #build, so its People list has him (§63)
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob-lee"})
+        assert joined.status_code == 200, joined.text
         assert c.post("/api/rooms/build/say", json={"text": "The port check is in."}).status_code == 200
 
     base = {"timezone_id": "UTC", "locale": "en-US"}
@@ -4226,6 +4232,64 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
             room.id, sender_name="alice", sender_kind="human", via="web", text="how far did the build get?"
         )
         store.create_batch(target.id, path="wait", kind="wake", counted=True, items=[(msg.id, 1)])
+        plant_reviews(store, room)
+
+    def plant_reviews(store: Any, room: Any) -> None:
+        """#863: two review boards a few hours old, one settled and merged, one still open. The clock is
+        swapped while they are written, so the figures read in minutes and hours."""
+        from conftest import FakeClock
+
+        real = store.clock
+        now = float(real.now())
+        clock = FakeClock(now)
+        store.clock = clock
+        try:
+
+            def at(ago_min: float) -> None:
+                clock.t = now - ago_min * 60
+
+            def event(rv: dict[str, Any], ago_min: float, **data: Any) -> None:
+                at(ago_min)
+                store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
+
+            def board(n: int, holder: str, ago_min: float) -> dict[str, Any]:
+                at(ago_min)
+                rv = store.open_review(
+                    room.id, f"https://github.com/example/shop/pull/{n}", "a1b2c3d", holder
+                )
+                event(rv, ago_min, open=rv["url"], head="a1b2c3d", by=holder, how="opened")
+                return rv
+
+            def finding(rv: dict[str, Any], ago_min: float, by: str) -> Any:
+                at(ago_min)
+                return store.add_review_item(rv["id"], "finding", "raised", title="finding", raised_by=by)
+
+            def move(
+                rv: dict[str, Any], ago_min: float, item: Any, to: str, state: str, **fields: Any
+            ) -> None:
+                at(ago_min)
+                store.move_review_item(item.id, state, **fields)
+                event(rv, ago_min, item=item.label, to=to, by="x")
+
+            a = board(7, "codex-1", 190)
+            one, two, three = (finding(a, 180 - 5 * i, "claude-1") for i in range(3))
+            for item in (one, three):
+                move(a, 150, item, "conceded", "conceded", owner="codex-1")
+                move(a, 120, item, "fixed", "fixed", commit_sha="abc1234", proof="t")
+            move(a, 110, three, "reopened", "conceded")
+            event(a, 100, open=a["url"], head="e4f5a6b", by="codex-1", how="moved")
+            move(a, 95, three, "fixed", "fixed", commit_sha="abc1235", proof="t")
+            move(a, 90, one, "confirmed", "fixed", confirmed_by="claude-1")
+            move(a, 85, two, "dropped", "dropped", reason="covered")
+            move(a, 80, three, "confirmed", "fixed", confirmed_by="claude-1")
+            event(a, 35, report={"pr_state": "merged"}, by="codex-1")
+            at(35)
+            store.set_review(a["id"], pr_state="merged", reported_by="codex-1", reported_at=clock.t)
+            b = board(8, "claude-1", 25)
+            four = finding(b, 20, "codex-1")
+            move(b, 15, four, "contested", "contested", reason="intended")
+        finally:
+            store.clock = real
 
     world.broker.on_loop(plant)
 
@@ -4258,6 +4322,19 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
         page = open_usage(PHONE, scheme)
         try:
             shot(page, out, f"usage-phone-{scheme}.png")
+        finally:
+            page.context.close()
+    # #863: the Reviews section, scrolled into view
+    for name, options, scheme in (
+        ("usage-reviews-light.png", {"viewport": {"width": 1200, "height": 900}}, "light"),
+        ("usage-reviews-dark.png", {"viewport": {"width": 1200, "height": 900}}, "dark"),
+        ("usage-reviews-phone.png", PHONE, "light"),
+    ):
+        page = open_usage(options, scheme)
+        try:
+            page.locator("#usage-review-rooms").scroll_into_view_if_needed()
+            page.locator("#usage .usage-h", has_text="Reviews").scroll_into_view_if_needed()
+            shot(page, out, name)
         finally:
             page.context.close()
 
@@ -4367,6 +4444,178 @@ def shoot_agents(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
+    """#843, on a hosted broker with alice, bob and carol (DESIGN.md §63): ``room-members-sidebar-*`` is
+    #build with the rooms alice is in (#design with a red count, #infra "joined with claude-2") and Other
+    rooms folded, its dot saying a call is live in one; ``room-members-preview-*`` is #ops, a room she is
+    not in, read with the Join bar and Other rooms open; ``room-members-leave-*`` is the confirm from the
+    room's menu; ``room-members-people-*`` is Members with the room's people, Leave and Add a person. Light,
+    dark and the phone, which must not scroll sideways; ``guide-rooms-light`` is the guide's picture.
+    ``world`` is a HostedWorld. Run on a branch without
+    #843, the same setup makes the "before" pictures: every public room in the sidebar, and People listing
+    everyone on the broker."""
+    import httpx
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    cookies: dict[str, str] = {}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert c.post("/api/setup/password", json={"password": "correct horse battery"}).status_code == 200
+        cookies["alice"] = c.cookies.get("switchboard_session") or ""
+        added = {
+            n: c.post("/api/people", json={"name": n, "email": f"{n}@example.com"}) for n in ("bob", "carol")
+        }
+    for name, r in added.items():
+        assert r.status_code == 200, r.text
+        with httpx.Client(base_url=origin, headers=headers) as c:
+            signed = c.post(
+                "/api/signin/password", json={"name": f"{name}@example.com", "password": r.json()["password"]}
+            )
+            assert signed.status_code == 200, signed.text
+            assert c.post("/api/me/password", json={"password": "correct horse " + name}).status_code == 200
+            cookies[name] = c.cookies.get("switchboard_session") or ""
+
+    def as_(who: str, path: str, body: dict[str, Any]) -> None:
+        with httpx.Client(
+            base_url=origin, headers=headers, cookies={"switchboard_session": cookies[who]}
+        ) as c:
+            c.post(path, json=body)  # a "before" run refuses joining a public room: that is the point
+
+    as_("alice", "/api/rooms", {"name": "#design"})
+    for room in ("#infra", "#ops", "#hiring", "#random"):
+        as_("bob", "/api/rooms", {"name": room})
+    as_("carol", "/api/rooms/hiring/people", {"action": "add", "name": "carol"})
+    as_("bob", "/api/rooms/build/people", {"action": "add", "name": "bob"})
+    as_(
+        "alice",
+        "/api/rooms/build/say",
+        {"text": "Can someone review the login rewrite? @claude-1 you wrote the first pass."},
+    )
+    as_("bob", "/api/rooms/design/say", {"text": "@alice is the new header ready to look at?"})
+    as_(
+        "bob",
+        "/api/rooms/ops/say",
+        {"text": "Deploy window moves to Thursday. Anything blocking? @humans please shout now."},
+    )
+    as_(
+        "bob",
+        "/api/rooms/ops/say",
+        {"text": "Rollback plan is in the runbook; the canary stays at 5% until Wednesday."},
+    )
+    b = world.broker
+
+    def seed() -> None:
+        store, svc = b.state.store, b.state.service
+        room = store.get_room("#build")
+        for name, harness in (("claude-1", "claude"), ("codex-1", "codex")):
+            p = store.upsert_participant(harness, f"{harness}:{name}", host="")
+            m = store.create_membership(room.id, p.id, name)
+            svc._post(
+                room,
+                sender_name=name,
+                sender_kind="agent",
+                sender_harness=harness,
+                sender_membership_id=m.id,
+                via="mcp",
+                kind="join",
+                text="joined (mcp-only)",
+            )
+        infra = store.get_room("#infra")
+        if hasattr(svc, "agent_joined"):  # what an agent's join does since #843 (§63)
+            svc.agent_joined(infra, 0, "claude-2")
+        ops = store.get_room("#ops")
+        call = store.insert_meeting(ops.id, started_by="bob", platform="zoom")
+        store.set_meeting_live(call.id)
+        svc.publish_settings(ops.id)
+        svc.rooms_changed()
+
+    b.on_loop(seed)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    themes = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+
+    def page_for(ctx_args: dict[str, Any]) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": cookies["alice"], "url": origin}])
+        page = ctx.new_page()
+        page.goto(origin + "/#build")
+        connected(page)
+        expect(page.locator("#room-title")).to_have_text("build")
+        return page
+
+    def drawer(page: Any, open_: bool) -> None:
+        if not page.locator("#rooms-toggle").is_visible():
+            return
+        if open_ != bool(page.locator("#app.nav-open").count()):
+            page.click("#rooms-toggle")
+
+    def wide_ok(page: Any) -> None:
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth"
+        )
+
+    def still(page: Any) -> None:
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+
+    for theme, ctx_args in themes:
+        phone = theme.startswith("phone")
+        page = page_for(ctx_args)
+        try:
+            drawer(page, True)
+            still(page)
+            shot(page, out, f"room-members-sidebar-{theme}.png")
+            other = page.locator("#other-rooms")
+            if other.count():
+                other.click()
+                page.locator('#tabs .room[data-room="#ops"]').click()
+            else:
+                page.locator('#tabs .room[data-room="#ops"]').click()
+            drawer(page, False)
+            if phone:
+                wide_ok(page)
+            still(page)
+            shot(page, out, f"room-members-preview-{theme}.png")
+            drawer(page, True)
+            page.locator('#tabs .room[data-room="#build"]').click()
+            drawer(page, False)
+            if page.locator("#room-menu-btn").is_visible():
+                page.click("#room-menu-btn")
+                page.click("#room-menu-leave")
+                expect(page.locator("#app-dialog")).to_be_visible()
+                still(page)
+                shot(page, out, f"room-members-leave-{theme}.png")
+                page.click("#app-dialog-cancel")
+            if phone:
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                wide_ok(page)
+            expect(page.locator("#room-people .person-row").first).to_be_visible()
+            still(page)
+            shot(page, out, f"room-members-people-{theme}.png")
+        finally:
+            page.context.close()
+    # the guide's picture (docs/guide/rooms.md): a room alice is not in, read, with Other rooms open
+    page = page_for(
+        {"viewport": {"width": 1200, "height": 760}, "device_scale_factor": 1.5, "color_scheme": "light"}
+    )
+    try:
+        if page.locator("#other-rooms").count():
+            page.click("#other-rooms")
+        page.locator('#tabs .room[data-room="#ops"]').click()
+        still(page)
+        shot(page, out, "guide-rooms-light.png")
+    finally:
+        page.context.close()
+
+
 ONLY: dict[str, Any] = {
     "agents": shoot_agents,
     "redact": shoot_redact,
@@ -4396,18 +4645,20 @@ ONLY: dict[str, Any] = {
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
+    "room_members": shoot_room_members,
 }
 
 
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names``,
-    ``admin_names``, ``admins`` and ``backups`` start a hosted broker; the others start the seeded desktop world."""
+    ``admin_names``, ``admins``, ``backups`` and ``room_members`` start a hosted broker; the others start the
+    seeded desktop world."""
     from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    hosted = name in ("real_names", "admin_names", "admins", "backups")
+    hosted = name in ("real_names", "admin_names", "admins", "backups", "room_members")
     world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()

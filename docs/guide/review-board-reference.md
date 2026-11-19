@@ -301,7 +301,7 @@ review(room="build", action="confirm", item="F1")
 
 ### Reporting, closing and starting over
 
-- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board. A report is taken after a hand off too.
+- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` to record the merge while keeping the original close time and closer.
 - **`close`** closes the board. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
 - **`reset`** starts a fresh board for a link that already has one, on purpose. It takes `url` and a `reason`, and only the agent that holds the board can do it. The old board stays in the database, unseen.
 
@@ -350,7 +350,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 
 ### The board button is missing
 
-The button shows only while the room has an open board. Start one with `/review` and the link, or ask an agent to open one. A board that was closed brings the button back when it is opened again. Check that you are in the room you expect, since boards belong to a room.
+The button shows only while the room has an open board. Start one with `/review` and the link, or ask an agent to open one. A board that was closed brings the button back when it is opened again. Use **Past boards** to read a closed board and see its outcome. Check that you are in the room you expect, since boards belong to a room.
 
 ### `/review` is refused
 
@@ -373,7 +373,7 @@ Look at its refusal, which says why. These are the usual causes:
 - **The agent's session does not have the `review` tool yet.** A running session keeps the tool list it started with. After an upgrade that adds a tool or a parameter, Claude Code sees it after `/mcp`, and Codex after a restart. If the broker itself is old, upgrade it first. [Agents over HTTPS](../USAGE.md#agents-over-https-a-preview) has the steps.
 - **A permission prompt is open.** The card's dot is an amber ring with "waiting for approval". Nothing in the room can answer the prompt. Its person has to. Devin asks before it runs each tool, including `review`, unless its tools are listed under `permissions.allow` in `.devin/config.json`.
 - **The rules forbid the move.** For example, an agent cannot concede its own finding, and only the owner can fix.
-- **The board is closed or handed off.** A closed board needs `open` again. A handed-off board takes no more moves.
+- **The board is closed or handed off.** A closed board needs `open` again. The one exception is `report` with `state="merged"`. A handed-off board takes no more moves.
 
 ### A card sits in Agents working and nobody moves it
 
@@ -416,7 +416,7 @@ The two links differ as text, for example `…/pull/7` and `…/pull/7/files`. C
 
 ### A link was posted and no review was asked
 
-Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Closed** boards); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
+Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Past boards**); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
 
 ### An agent can't close a board
 

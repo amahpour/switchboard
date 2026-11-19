@@ -55,8 +55,19 @@ from switchboard.search import SNIPPET_TOKENS, markers
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
-# of ``delete_room``'s result. Participants are never deleted.
-ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
+# of ``delete_room``'s result, which its plan, its output and its ``room_delete`` record show; the
+# people's rows (``room_people``, §44, §63) beside the agents' memberships. Every other row naming the
+# room goes too (``_ROOM_ROWS``), uncounted. Participants are never deleted.
+ROOM_DELETE_TABLES = (
+    "rooms",
+    "messages",
+    "memberships",
+    "deliveries",
+    "batches",
+    "events",
+    "files",
+    "room_people",
+)
 STATUS_LINE_STALE_S = 30 * 60
 # Enough time for a broker rollout and a client retry, with short-lived receipts.
 SAY_KEY_TTL_S = 5 * 60
@@ -100,11 +111,14 @@ class Store:
         rules_text: str = "",
         *,
         private_for: int | None = None,
+        member: int | None = None,
     ) -> Room:
         """``private_for``: a private room (§44), whose first person is this one (0: the owner),
-        in the same transaction, so it's never private with nobody in it."""
+        in the same transaction, so it's never private with nobody in it. ``member``: a public
+        room's first member, its creator (§63)."""
         now = self.clock.now()
         private = int(private_for is not None)
+        first = private_for if private_for is not None else member
         with db.tx(self.con):
             if self.get_room(name) is not None or self.room_by_alias(name) is not None:
                 raise Conflict(f"{name} already exists")
@@ -125,10 +139,10 @@ class Store:
                 ),
             )
             rid = cur.lastrowid
-            if private_for is not None and rid is not None:
+            if first is not None and rid is not None:
                 self.con.execute(
                     "INSERT INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
-                    (rid, private_for, private_for, now),
+                    (rid, first, first, now),
                 )
         if rid is None:
             raise StoreError("room insert returned no id")
@@ -136,22 +150,110 @@ class Store:
         assert room is not None
         return room
 
-    # ------------------------------------------------------------ a private room's people (§44)
+    # ----------------------------------------- a room's people: private (§44) and public (§63)
     def room_people(self, room_id: int) -> list[int]:
-        """A private room's people, by id (0: the owner), in the order they were added."""
+        """A room's people, by id (0: the owner), in the order they were added: a private room's are
+        who sees it (§44), a public room's its members, who are pinged there (§63)."""
         rows = self.con.execute(
             "SELECT person_id FROM room_people WHERE room_id=? ORDER BY added_at, rowid", (room_id,)
         ).fetchall()
         return [r[0] for r in rows]
 
-    def room_person_add(self, room_id: int, person_id: int, added_by: int) -> bool:
-        """False if they were in it already."""
+    def room_person_add(
+        self, room_id: int, person_id: int, added_by: int, joined_with: str | None = None
+    ) -> bool:
+        """False if they were in it already. ``joined_with``: the agent whose join made them a member
+        (§63), shown to them once."""
         with db.tx(self.con):
             cur = self.con.execute(
-                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
-                (room_id, person_id, added_by, self.clock.now()),
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at, joined_with)"
+                " VALUES(?,?,?,?,?)",
+                (room_id, person_id, added_by, self.clock.now(), joined_with),
             )
             return cur.rowcount == 1
+
+    def person_rooms(self, person_id: int) -> dict[int, str | None]:
+        """Every room ``person_id`` is in, private or public, by id, with the agent that made them a
+        member there while they have not opened it since (§63), else None."""
+        rows = self.con.execute(
+            "SELECT room_id, joined_with FROM room_people WHERE person_id=?", (person_id,)
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def room_person_used(self, room_id: int, person_id: int) -> bool:
+        """The one person on the broker opened ``room_id`` or posted in it: a member of it from now, quietly
+        (§63), the way day one counts use, so that the day a second person is added the rooms they used
+        are rows (while they are alone every public room is theirs, row or not). Never a room they left
+        once (its ``room_people`` leave event): that Leave stands until they join it again by hand. True
+        when a row was added."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT ?, ?, ?, ?"
+                " WHERE NOT EXISTS (SELECT 1 FROM room_people WHERE room_id=? AND person_id=?)"
+                " AND NOT EXISTS (SELECT 1 FROM events WHERE kind='room_people' AND room_id=?"
+                "  AND json_valid(data) AND json_extract(data, '$.what')='leave'"
+                "  AND json_extract(data, '$.person')=?)",
+                (room_id, person_id, person_id, self.clock.now(), room_id, person_id, room_id, person_id),
+            )
+            return cur.rowcount == 1
+
+    def room_opened(self, person_key: int, room_id: int, seen_id: int, *, used: bool = False) -> int:
+        """The person read ``room_id`` up to the message ``seen_id`` (the page's seen request, §55.8): their
+        mark moves forward as ``home_mark_seen`` moves it, and the "joined with" note (§63) goes once the
+        mark moves past where it stood. An agent's join made the note and set the mark to the room's newest
+        message in one transaction, before the agent's join line, so a request for what a page showed
+        before that join (sent late, or from another browser) leaves the note, and one that reaches the
+        join line clears it. ``used``: the person is the broker's one, and opening the room is recorded
+        as membership (``room_person_used``). One transaction. Returns the mark now."""
+        with db.tx(self.con):
+            if used:
+                self.room_person_used(room_id, person_key)
+            r = self.con.execute(
+                "SELECT seen_id FROM home_seen WHERE person_key=? AND room_id=?", (person_key, room_id)
+            ).fetchone()
+            if r is None or max(0, min(int(seen_id), self.last_message_id(room_id))) > int(r[0]):
+                self.con.execute(
+                    "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
+                    " AND joined_with IS NOT NULL",
+                    (room_id, person_key),
+                )
+            return self.home_mark_seen(person_key, room_id, seen_id)
+
+    # The meta key that says the day-one members were filled in (§63): once, so a person who left a
+    # room they had posted in is not put back at the next start.
+    DAY_ONE_KEY = "room_people_day_one"
+
+    def join_day_one(self) -> int:
+        """Join each person to every public room they opened (a seen mark, §55.8), posted in, or have an
+        agent in, on any day, once (§63, #843): what was already recorded, so nobody's sidebar empties
+        when membership starts to count. An agent on this machine (no host) is the owner's (0); one on a
+        device is the person's whose token that device had when the agent joined: a device name is unique
+        only among live tokens, so today's token may be someone else's. An agent no token placed then
+        joins nobody to anything, the owner included. A removed person joins nothing. Runs at the
+        broker's start; a database that has done it says so in ``meta`` and is never filled again. The
+        rows added, 0 when it had run already."""
+        with db.tx(self.con):
+            if self.con.execute("SELECT 1 FROM meta WHERE key=?", (self.DAY_ONE_KEY,)).fetchone():
+                return 0
+            now = self.clock.now()
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT DISTINCT e.room_id, e.person, e.person, ? FROM ("
+                "  SELECT room_id, person_key AS person FROM home_seen"
+                "  UNION SELECT room_id, COALESCE(sender_person_id, 0) FROM messages"
+                "   WHERE sender_kind='human'"
+                "  UNION SELECT m.room_id, CASE WHEN p.host='' THEN 0 ELSE ("
+                "    SELECT COALESCE(t.person_id, 0) FROM agent_tokens t WHERE t.device=p.host"
+                "     AND t.created_at<=m.joined_at AND (t.revoked_at IS NULL OR t.revoked_at>m.joined_at)"
+                "     ORDER BY t.created_at DESC, t.id DESC LIMIT 1) END"
+                "   FROM memberships m JOIN participants p ON p.id=m.participant_id"
+                " ) e JOIN rooms r ON r.id=e.room_id AND r.private=0"
+                " WHERE e.person=0 OR e.person IN (SELECT id FROM people WHERE removed_at IS NULL)",
+                (now,),
+            )
+            self.con.execute("INSERT INTO meta(key, value) VALUES(?,?)", (self.DAY_ONE_KEY, repr(now)))
+            return cur.rowcount
 
     def room_person_remove(self, room_id: int, person_id: int) -> bool:
         with db.tx(self.con):
@@ -161,7 +263,7 @@ class Store:
             return cur.rowcount == 1
 
     def rooms_of_person(self, person_id: int) -> list[int]:
-        """The private rooms ``person_id`` is in, by id."""
+        """The rooms ``person_id`` is in, private and public (§63), by id."""
         rows = self.con.execute("SELECT room_id FROM room_people WHERE person_id=?", (person_id,)).fetchall()
         return [r[0] for r in rows]
 
@@ -319,6 +421,7 @@ class Store:
         ("pins", "pins WHERE room_id=?", 1),
         ("home_seen", "home_seen WHERE room_id=?", 1),
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
+        ("room_people", "room_people WHERE room_id=?", 1),
         ("say_keys", f"say_keys WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
@@ -3423,6 +3526,79 @@ class Store:
             (since, until, *ids),
         )
         return {int(r["room_id"]): int(r["n"]) for r in rows}
+
+    def usage_reviews(
+        self, room_ids: Sequence[int], *, since: float, until: float
+    ) -> tuple[list[dict[str, Any]], list[tuple[int, reviews.Item]], list[tuple[int, float, dict[str, Any]]]]:
+        """The review boards that did anything in ``[since, until]``, with their items and events (§61.5).
+
+        A board is in when it was opened in the window, when one of its ``review`` events falls in
+        it (``events_kind_ts`` serves ``kind`` and the ``ts`` bounds), or when it gained an item in
+        it (searched per board through ``reviews_room`` and the items' own key, so a room's boards
+        are read and no message or batch is). Then every item of those boards and every ``review``
+        event of them, however old: a board that settled today was opened last week. Read only.
+        Returns ``(boards, [(board id, item)], [(board id, ts, data)])``.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return [], [], []
+        marks = ",".join("?" * len(ids))
+        board_of = "CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.board') END"
+        boards = [
+            dict(r)
+            for r in self.con.execute(
+                f"SELECT * FROM reviews r WHERE r.room_id IN ({marks}) AND ("
+                " r.opened_at BETWEEN ? AND ?"
+                f" OR r.id IN (SELECT {board_of} FROM events e"
+                "   WHERE e.kind = 'review' AND e.ts BETWEEN ? AND ?)"
+                " OR EXISTS (SELECT 1 FROM review_items i WHERE i.review_id = r.id"
+                "   AND i.created_at BETWEEN ? AND ?))",
+                (*ids, since, until, since, until, since, until),
+            )
+        ]
+        if not boards:
+            return [], [], []
+        board_ids = [int(b["id"]) for b in boards]
+        bmarks = ",".join("?" * len(board_ids))
+        items = [
+            (int(r["review_id"]), _review_item(r))
+            for r in self.con.execute(
+                f"SELECT * FROM review_items WHERE review_id IN ({bmarks}) ORDER BY review_id, kind, n",
+                board_ids,
+            )
+        ]
+        low = min(float(b["opened_at"]) for b in boards)
+        events: list[tuple[int, float, dict[str, Any]]] = []
+        for r in self.con.execute(
+            f"SELECT e.ts AS ts, e.data AS data, {board_of} AS board FROM events e"
+            f" WHERE e.kind = 'review' AND e.ts >= ? AND e.ts <= ? AND e.room_id IN ({marks})"
+            f" AND {board_of} IN ({bmarks}) ORDER BY e.id",
+            (low, until, *ids, *board_ids),
+        ):
+            try:
+                data = json.loads(r["data"] or "{}")
+            except ValueError:
+                continue
+            if isinstance(data, dict) and isinstance(r["board"], int):
+                events.append((r["board"], r["ts"], data))
+        return boards, items, events
+
+    def usage_agents(self, room_ids: Sequence[int]) -> dict[tuple[int, str], tuple[str, str]]:
+        """The harness and host of each agent name in those rooms, the newest membership winning,
+        keyed ``(room id, lower-cased name)``: who an agent on the review figures is."""
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        out: dict[tuple[int, str], tuple[str, str]] = {}
+        for r in self.con.execute(
+            "SELECT m.room_id AS room_id, m.screen_name AS name, p.harness AS harness, p.host AS host"
+            " FROM memberships m JOIN participants p ON p.id = m.participant_id"
+            f" WHERE m.room_id IN ({marks}) ORDER BY m.id",
+            ids,
+        ):
+            out[(int(r["room_id"]), str(r["name"]).casefold())] = (r["harness"] or "", r["host"] or "")
+        return out
 
     # ------------------------------------------------------------------ report (§12.5, §12.6; #167)
     # Read-only queries behind `switchboard report` (report.py), on its own query-only

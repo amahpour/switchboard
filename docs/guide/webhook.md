@@ -19,6 +19,8 @@ After the wait, switchboard posts once for each of these that still needs you:
 - a review board waiting for your call;
 - an agent of yours waiting on an approval prompt.
 
+On a switchboard with more than one person, the first two come only from rooms you are a member of. An agent of yours waiting on approval counts in any room, since your agents stay in a room you leave.
+
 **Opening it stops it.** Answering, deciding, or opening the room before the wait is over means nothing is sent. A tap on the link in the message opens the room, which does the same. If you do not look, it posts once, not again and again.
 
 A message looks like this in Slack: `scout has a message for you in #build: https://switchboard.example.com/#build`. The link only works where your switchboard can be reached from where you are.

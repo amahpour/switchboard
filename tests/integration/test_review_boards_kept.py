@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from conftest import InProcBroker, cookie_of, ws_connect
 from fakes.fake_agent import FakeAgent
@@ -444,3 +445,60 @@ async def test_every_move_gives_the_page_all_the_open_boards_and_the_last_close_
     finally:
         ws.close()
         web.close()
+
+
+async def test_closed_board_accepts_a_merge_without_changing_its_close_or_cards(broker: InProcBroker) -> None:
+    """A later merge records the outcome on the closed row and keeps its original closure."""
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        assert (await tool(agent, action="open", url=PR_A))["ok"]
+        assert (await tool(agent, action="raise", title="Check tax order"))["ok"]
+        web = broker.web_client()
+        try:
+            assert (
+                web.post(
+                    PATH, json={"action": "close", "url": PR_A}, headers=broker.write_headers()
+                ).status_code
+                == 200
+            )
+            before = q(broker, "SELECT * FROM reviews")[0]
+            assert not (await tool(agent, action="report", url=PR_A, state="open"))["ok"]
+            merged = await tool(agent, action="report", url=PR_A, state="merged")
+            assert merged["ok"] and merged["closed"], merged
+            after = q(broker, "SELECT * FROM reviews")[0]
+            assert after["pr_state"] == "merged" and after["reported_by"] == "claude-1"
+            for field in ("id", "closed_at", "closed_by", "reopened_at", "reopened_by"):
+                assert after[field] == before[field]
+            assert boards(web) == []
+            assert q(broker, "SELECT title FROM review_items")[0]["title"] == "Check tax order"
+            assert not (await tool(agent, action="drop", url=PR_A, item="F1", reason="done"))["ok"]
+        finally:
+            web.close()
+
+
+async def test_past_review_route_lists_closed_boards_and_reads_one_but_not_an_open_one(
+    broker: InProcBroker,
+) -> None:
+    """The page's past-boards read: only closed boards, newest close first, with their outcome, one
+    readable by url with its cards; an open board is not a past board; no session, no read."""
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        assert (await tool(agent, action="open", url=PR_A))["ok"]
+        assert (await tool(agent, action="raise", title="Check tax order"))["ok"]
+        assert (await tool(agent, action="close", reason="paused"))["ok"]
+        assert (await tool(agent, action="open", url=PR_B))["ok"]
+        web = broker.web_client()
+        try:
+            past = web.get(PATH + "/past")
+            assert past.status_code == 200
+            listed = past.json()["boards"]
+            assert [b["url"] for b in listed] == [PR_A]
+            assert listed[0]["outcome"] == "unknown" and listed[0]["settled_at"] is None
+            assert web.get(PATH + "/past", params={"url": PR_B}).status_code == 404
+            one = web.get(PATH + "/past", params={"url": PR_A}).json()["board"]
+            assert [i["title"] for i in one["items"]] == ["Check tax order"]
+            assert (await tool(agent, action="report", url=PR_A, state="merged"))["ok"]
+            assert web.get(PATH + "/past").json()["boards"][0]["outcome"] == "merged"
+        finally:
+            web.close()
+        assert httpx.get(broker.base + PATH + "/past").status_code == 401
