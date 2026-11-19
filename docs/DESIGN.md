@@ -2577,7 +2577,7 @@ A new room's `budget_per_hour` and `hop_limit` used to come only from `[delivery
 On a hosted broker with people (§32) every room was open to everyone signed in. A **private** room is seen only by its people, like a Slack private channel: a side project, a customer's work, two people and their agents. A room is private from its creation, by the **Private** box in New room (`POST /api/rooms` with `private: true`), and stays so: there's no switching either way, so no history ever changes audience. A desktop broker has one person, so it refuses `private` ("private rooms are for a hosted broker, with people").
 
 ### 44.2 Who sees what
-- **Storage (schema 15):** `rooms.private` (0 or 1; every room that existed stays 0) and `room_people(room_id, person_id, added_by, added_at)`, a person keyed as `preferences` keys them (0: the owner). The creator is the first person, in the same transaction, so a private room is never made with nobody in it. The v14→v15 migration only adds the column and the table, after the usual checked backup (§27.6).
+- **Storage (schema 15):** `rooms.private` (0 or 1; every room that existed stays 0) and `room_people(room_id, person_id, added_by, added_at)`, a person keyed as `preferences` keys them (0: the owner). The creator is the first person, in the same transaction, so a private room is never made with nobody in it. The v14→v15 migration only adds the column and the table, after the usual checked backup (§27.6). Since §62 (#843) the same table holds a public room's members too: there it says who is pinged, not who may see the room.
 - **The gate:** `RoomService.visible(room, viewer)`: a public room for everyone signed in, a private one for its people. `room_for(name, viewer)` raises "no such room: #x", the words for a room that doesn't exist, so a private room's name isn't confirmed either; a closed private room's "reopen it" hint is held back the same way. Every route that takes a room calls it first (`web.py`'s `viewer()`, -1 when there's no live person, so it fails closed to the public rooms): the messages, the members and a member's detail, the review board and its moves, say, command, rules, wake settings, the room's people and reopening a closed room. `GET /api/rooms` and the closed-rooms list show only what the viewer sees.
 - **The WebSocket:** a page's subscriber carries its person; `_ws_hello` never subscribes it to a private room it isn't in, and replays nothing of one. The `rooms` frame every page gets names only public rooms (each page reads its own list back). When a person leaves, `Hub.unsubscribe_person` drops the room from their pages at once.
 - **People:** any of a private room's people adds another or removes one (`POST /api/rooms/{slug}/people`, `{action, name}`), and anyone may leave; the last person can't (close the room instead). Each is a notice in the room and a `room_people` event.
@@ -3743,6 +3743,7 @@ The web UI opens on one page that answers three questions across every room the 
 One answer for the signed-in person, from the stored rows, never for anyone else and never about a private room they are not in (§44; the rooms come from `RoomService.visible`).
 
 - **Waiting on you.** Two kinds of card, newest first, capped at 50 (`waiting_total` says how many there were).
+  Both kinds come only from the rooms the person is a member of (§62): a public room they never joined, or left, is one they can read, not one that pings them.
   - *A question:* the newest chat message in a room that is addressed to this person and that they have not answered. "Addressed" is the page's own unread test (§29): an @mention of them, `@humans`, or an agent's reply to something they said. Another person's message counts only when it names them or everyone, and a person's own message never counts. "Answered" means they said anything in that room later (`Store.home_lines`), and a message they have read no longer counts: only messages after the person's seen mark for the room are questions (§55.8). One card a room, with the count of the others under it. Only the last seven days are looked at (`WAIT_DAYS`).
   - *A review-board call:* each open board that has items a person must decide, by the board's own `needs_person` (§37.2: an open question, a contested finding the raiser can no longer answer, an unconfirmed fix). A board the person set aside with **Not now** has no card until the board changes (§55.8). Each item carries the moves a person may make on it, which are the board page's: answer (with an option), concede (to an agent in the room) or drop (with a reason) a contested finding, confirm a fix.
 - **Done since you last looked.** Newest first, capped at 30: a board handed off (who posted the review), a board settled and waiting for its handoff, a call that ended (its line count and the members its lines addressed, from `messages.meeting_id`), and, for each agent in each room, its latest message since, when it is not addressed to the person (those wait above instead). "Since" is the person's stored time, at most seven days back, and the last day for someone who never looked. Not done work: a join, a leave, a notice, a pass.
@@ -4178,3 +4179,70 @@ The three reads (`Store.usage_wakes`, `usage_posts`, `usage_exhausted`) are limi
 **The page.** **Usage** is the sidebar row under Home. Its address is `#/usage`, so a room named `#usage` still opens from `#usage`. The rows are buttons: Enter or a click opens that room. On a phone the four figures stack in one column and the buttons are at least 44 px tall. Search can cover the page and closes back to it. The page says it does not measure tokens or dollars, and it never sends a model or a model override (§11).
 
 **Tests.** `tests/unit/test_usage.py` (the windows, the counts against stored rows on a `FakeClock`, a quiet hour shown as refilled without a write, the query plan using the window indexes, a room the caller did not pass dropped, two casings summed). `tests/unit/test_db_migrate_v52.py` (a database already at schema 51 gains the indexes). `tests/integration/test_usage_page.py` (a private room's counts for a member and not for anyone else, a session required, a bad offset read as UTC). `tests/e2e/test_usage_ui.py` (the figures, light and dark, the phone, no sideways scroll, Enter opens the room).
+
+## 62. A public room's members (#843)
+
+On a hosted broker (§32), a public room's people were everyone on the server. So `@humans` in any public room, an @mention of someone, and an agent's reply to them landed in that person's Home as "waiting on you", gave them a red badge and (§55.9) could fire their browser notification, even when they had never opened the room. Private rooms were already fine: there it reached only the room's own people (§44). This section does it the way Slack does: people **join** and **leave** public rooms, and what pings a person follows membership, not "everyone on the server". Authority does not move.
+
+### 62.1 What the maintainer decided (2026-11-18, all seven of #843's recommendations)
+
+1. **Members on day one:** each person is joined to every public room they opened, posted in, or own an agent in (all already recorded), so no sidebar empties. Rooms nobody touched go to Other rooms.
+2. **An agent joining makes its person a member.** The room appears in their sidebar with "joined with claude-1" the first time.
+3. **Leave** clears that room's unread, and anything waiting on the person there leaves Home. `@humans`, badges and notifications stop. They can still read the room from Other rooms. Their agents stay in it.
+4. **Who agents answer to is unchanged.** In a public room agents still answer to everyone on the broker (§32.1). Only who is pinged moves.
+5. **Private rooms are unchanged.** They keep their own people; Leave works as before (the last person can't leave).
+6. **A broker with one person** (a desktop, or a hosted one with only its admin) shows no change: no Other rooms row, no Leave, no Join bar.
+7. **One table:** `room_people` holds a public room's members too, with the private flag deciding who may see a room. Home reads it for "who is pinged"; the visibility rule of §44 stays a separate check.
+
+### 62.2 The data (schema 54)
+
+- **`room_people`** (§44.2) now lists a public room's members as well as a private room's people, keyed the same way (0 is the owner). `rooms.private` still decides who may see a room (`RoomService.visible`, the one rule of §44, unchanged); `room_people` decides who is pinged there.
+- **Schema 54** adds one column, `room_people.joined_with`: the screen name of the agent whose join made the person a member (1 to 64 characters), until they open the room, and NULL otherwise. The step only adds the column, after the usual checked backup (§27.6), so every row is kept and the existing people of private rooms have NULL.
+- **Day one is not in the migration.** A migration keeps the rows of every table as they were: `_migrate` checks the counts after the steps and rolls back on any difference, and that guard stays. So `Store.join_day_one` fills the members once, at the broker's start (`app.py`'s lifespan, right after the store opens), in one transaction that also writes `meta.room_people_day_one`. A database with that key is never filled again, so someone who left a room they had posted in is not put back at the next restart. A new home's first start finds nothing to fill and writes the key.
+- **What day one counts,** for each public room, open or closed: a seen mark (`home_seen`, §55.8: the page posts one when the person opens the room), a message from the person (`messages.sender_kind='human'`; `sender_person_id`, NULL being the owner), and any membership of an agent of theirs, current or ended. An agent is its person's as `RoomService.host_person` says, written in SQL: the live agent token naming its device, else the owner. A removed person joins nothing. A private room's people are untouched.
+- **A new room's creator is its first member** (`Store.create_room(member=…)`), in the same transaction, as a private room's creator always was.
+- **Deleting a room** (§28.6) removes its `room_people` rows (`Store._ROOM_ROWS`): ids are reused, and a row left behind would fail the delete's foreign key check (as it did for a private room's people) or make someone a member of the next room with that id.
+
+### 62.3 Who is a member, and what follows it
+
+`service.is_member(room, joined, one_person)` is the one rule, pure: the room is one the person is in, or it is public and the broker has one person (`RoomService.one_person`: no rows in `people`). With one person, every public room is theirs and nothing on screen changes; rows are still written, quietly, so that the day a second person is added the owner's rooms are the ones they used.
+
+What follows membership:
+
+- **Home's "waiting on you"** (§55.2): question cards and review-board calls come only from rooms the person is a member of (`home.build`). The rest of Home (done since you looked, live now, every agent) is still everything the person can see.
+- **Browser notifications** (§55.9) are made from that list, so they follow it with no change of their own.
+- **The page's red badges and quiet dots** follow it in the page (§62.6).
+- **`@humans`** is the literal mention it always was (`HUMANS_MENTION`); it reaches a person only through the three above, so it reaches members only. So does an @mention of a person, or a reply to one: a person who is not in a room is not pinged there.
+
+What does not:
+
+- **Who agents answer to.** `RoomService.room_humans` is unchanged: everyone on the broker in a public room (§32.1), a private room's own people. The join text, `who()`, the batch header, @mention matching and delivery all read it. A person's message is a person's message wherever they post it.
+- **Who sees what** (§44): a public room is still everyone's to read, search (§58), use in `/catchup` (whose subjects are agents, §26) and list for an agent (`rooms()`, §59).
+- **Becoming a member starts from now.** When a person joins, is added, or their agent makes them a member, their seen mark (§55.8) moves to the room's newest message, so what was said before is the room's history, read when they open it, not waiting on them or counted unread.
+
+### 62.4 Joining, adding and leaving
+
+The route is the one private rooms use, `POST /api/rooms/{slug}/people` with `{action, name}` (§44.2), and every case goes through `room_for`, so a private room a person isn't in stays "no such room".
+
+- **Join:** `add` with your own name, for anyone who can see the room. **Add someone:** `add` with their name, only for a member of the room ("join #ops first to add someone to it" otherwise). **Leave:** `remove` with your own name. Nobody takes someone else out of a public room ("people leave #build themselves: you can't take alice out of it"): it would only stop their pings, and they decide that. With one person on the broker, all of these are refused ("#solo is everyone's: there is only one person on this switchboard").
+- Each is a notice in the room ("bob joined #build", "alice added bob to #build", "bob left #build"), a `room_people` event, and a `rooms` frame, so every page reads its list again (§44.2). Notices are never delivered to agents.
+- **Leaving** keeps the person's agents in the room (in a private room they still leave with their person, §44.3) and moves their seen mark to the newest message, so nothing is left unread and nothing of the room waits on them.
+- **An agent's join** makes its person a member (`RoomService.agent_joined`, called by `AgentService.join` when it makes a new membership, not when the same session joins again). It posts no notice, since the agent's own join line is in the room. While the broker has more than one person, `joined_with` records the agent; the seen route (`POST /api/rooms/{slug}/seen`, §55.8) clears it when the person opens the room. A private room's agents are its people's already.
+- **People come and go on the broker.** Adding someone sends a `rooms` frame too, since a second person is what turns membership on. Removing someone from switchboard (`person_gone`) takes them out of every public room quietly; their agents there end because their tokens were revoked (§49.3), and private rooms do as §44.3 says.
+
+`GET /api/rooms` gives, for each room the person can see, `member` (by `is_member`) and `joined_with` (only for a member), beside `seen`. A room's `people` is now its members for a public room too, as it was its people for a private one.
+
+### 62.5 Threat model delta
+
+- **No authority moves.** Membership decides attention, never what an agent may be told or by whom. Every person is still a human to every agent in a public room (§32.6), joined or not.
+- **New to know:** who is a member of a public room is visible to everyone signed in, and joining says so in the room. People's names were already every signed-in page's to have (§44.8); which rooms someone joined is new, as in Slack. A private room's people are still shown only to its people.
+- **What one person can do to another:** a member can add someone to a public room, which only makes them pinged there and says who did it; nobody can take someone else out. Joining needs only that the person can see the room.
+- A request with no live person (`viewer` -1) has no rows, so it is a member of nothing on a broker with people.
+
+### 62.6 The page
+
+The sidebar, the room you are not in, Leave and the Members pane's people are built in the second pull request for #843; this section is filled in there.
+
+### 62.7 Tests
+
+`tests/unit/test_room_member_rule.py` (`is_member`). `tests/unit/test_db_migrate_v54.py` (the step from 53 keeps every row and matches a fresh `room_people`; day one on the 0.37.2 dump, with a seen mark, a person's device agent and a removed person added at 53; it runs once, and a person who left is not put back; a fresh database fills nothing). `tests/integration/test_room_members.py` (a creator is the first member and anyone else joins; only a member adds someone and a person only leaves themself; `@humans` and a question wait only on members, and joining does not bring old ones back; leaving clears unread and Home and keeps the agents; an agent of bob's makes him a member, with `joined_with` until he opens the room, and still names alice and bob as its users; a private room keeps its people; a removed person's rows go quietly; one person on a desktop broker is in every public room and has nothing to leave; a room with members can be deleted). `tests/integration/test_home_page.py` and `test_private_rooms.py` follow the new rule.

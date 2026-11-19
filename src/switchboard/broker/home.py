@@ -4,8 +4,8 @@ what got done since they last looked, and what is live now.
 It is a query and a view over what the broker already stores (messages, the review boards, calls,
 members and claims), never a new kind of record. What it keeps is per person: a "looked at" time in
 ``meta``, how far they have read each room, and which boards they set aside (§55.8, #663). Everything is
-for one viewer: nobody sees a private room they are not in,
-and each person's "waiting on you" is their own. It never decides anything for an agent: a card
+for one viewer: nobody sees a private room they are not in, and each person's "waiting on you" is their
+own, from the rooms they are a member of (§62). It never decides anything for an agent: a card
 only points at an answer the person gives through the routes the room already has (``say``, the
 board's person moves).
 
@@ -20,7 +20,7 @@ from typing import Any
 
 from switchboard import reviews
 from switchboard.broker import agents_view
-from switchboard.broker.service import ServiceError
+from switchboard.broker.service import ServiceError, is_member
 from switchboard.envelope import clean
 from switchboard.models import Message, Room
 
@@ -359,14 +359,19 @@ def build(state: Any, name: str, person_id: int | None, admin: bool) -> dict[str
     snoozed = state.store.home_snoozes(key)
     since = max(seen if seen is not None else now - FIRST_LOOK_S, now - WAIT_DAYS * DAY_S)
 
+    # what waits on them comes only from the rooms they are a member of (§62): a public room they never
+    # joined, or left, is one they can read, not one that pings them
+    joined, one = state.store.person_rooms(key), state.service.one_person()
+
     waiting: list[dict[str, Any]] = []
     done: list[dict[str, Any]] = []
     for room in rooms:
         questions, turns = state.store.home_lines(
             room.id, name, now - WAIT_DAYS * DAY_S, since, CANDIDATES, BOARD_LINE, read.get(room.id, 0)
         )
-        waiting += _question_cards(name, room, questions)
-        waiting += _board_cards(state, room, snoozed)
+        if is_member(room, joined, one):
+            waiting += _question_cards(name, room, questions)
+            waiting += _board_cards(state, room, snoozed)
         done += _done_boards(state, room, since)
         done += _done_turns(room, turns)
     live = _live(state, visible, person_id, admin, now)

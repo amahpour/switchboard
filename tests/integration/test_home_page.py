@@ -24,13 +24,16 @@ PR = "https://example.com/shop/pull/7"
 
 @pytest.fixture
 def team() -> Iterator[tuple[InProcBroker, Browser, Browser]]:
-    """A hosted broker: alice (the owner) and bob, with #build and #uploads, and claude-1 in #build."""
+    """A hosted broker: alice (the owner) and bob, with #build and #uploads, both of them members of both
+    (§62), and claude-1 in #build."""
     b = hosted_broker()
     admin = set_up(b)
     bob = join_as_bob(b, admin)
     try:
         for name in ("#build", "#uploads"):
             assert admin.post("/api/rooms", {"name": name}).status_code == 200
+            slug = name.lstrip("#")
+            assert bob.post(f"/api/rooms/{slug}/people", {"action": "add", "name": "bob"}).status_code == 200
 
         def seed() -> None:
             store = b.state.store

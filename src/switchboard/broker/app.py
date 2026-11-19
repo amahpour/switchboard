@@ -255,6 +255,10 @@ def create_app(
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
         state.store.meta_set("passkey_rp_id", web_origin.hostname)
+        # public rooms have members since schema 54: once, each person joins the rooms they had used (§62)
+        joined = state.store.join_day_one()
+        if joined:
+            log.info("room members: %d joined from what they had opened, said or had an agent in", joined)
         state.listener_keys = listener_keys.ListenerKeys(state.store, clock)
         state.recovery = state.store.recover_on_start()
         if any(state.recovery.values()):

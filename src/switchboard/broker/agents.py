@@ -594,6 +594,8 @@ class AgentService:
                 text=f"joined ({where}, {shown})" + (", back after a restart" if resumed is not None else ""),
                 sender_host=host or None,
             )
+            # its person is a member of the room now: pinged there, and the room is in their sidebar (§62)
+            self.svc.agent_joined(room, person, name)
         others = [(x.name, x.harness, x.host) for x in self.store.members(room.id) if x.membership_id != m.id]
         hist = [x for x in self.store.history(room.id, None, 400) if x.kind == "chat"]
         catchup = hist[-self.cfg.delivery.catchup_n :] if self.cfg.delivery.catchup_n else []

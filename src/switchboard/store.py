@@ -100,11 +100,14 @@ class Store:
         rules_text: str = "",
         *,
         private_for: int | None = None,
+        member: int | None = None,
     ) -> Room:
         """``private_for``: a private room (§44), whose first person is this one (0: the owner),
-        in the same transaction, so it's never private with nobody in it."""
+        in the same transaction, so it's never private with nobody in it. ``member``: a public
+        room's first member, its creator (§62)."""
         now = self.clock.now()
         private = int(private_for is not None)
+        first = private_for if private_for is not None else member
         with db.tx(self.con):
             if self.get_room(name) is not None or self.room_by_alias(name) is not None:
                 raise Conflict(f"{name} already exists")
@@ -125,10 +128,10 @@ class Store:
                 ),
             )
             rid = cur.lastrowid
-            if private_for is not None and rid is not None:
+            if first is not None and rid is not None:
                 self.con.execute(
                     "INSERT INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
-                    (rid, private_for, private_for, now),
+                    (rid, first, first, now),
                 )
         if rid is None:
             raise StoreError("room insert returned no id")
@@ -136,22 +139,75 @@ class Store:
         assert room is not None
         return room
 
-    # ------------------------------------------------------------ a private room's people (§44)
+    # ----------------------------------------- a room's people: private (§44) and public (§62)
     def room_people(self, room_id: int) -> list[int]:
-        """A private room's people, by id (0: the owner), in the order they were added."""
+        """A room's people, by id (0: the owner), in the order they were added: a private room's are
+        who sees it (§44), a public room's its members, who are pinged there (§62)."""
         rows = self.con.execute(
             "SELECT person_id FROM room_people WHERE room_id=? ORDER BY added_at, rowid", (room_id,)
         ).fetchall()
         return [r[0] for r in rows]
 
-    def room_person_add(self, room_id: int, person_id: int, added_by: int) -> bool:
-        """False if they were in it already."""
+    def room_person_add(
+        self, room_id: int, person_id: int, added_by: int, joined_with: str | None = None
+    ) -> bool:
+        """False if they were in it already. ``joined_with``: the agent whose join made them a member
+        (§62), shown to them once."""
         with db.tx(self.con):
             cur = self.con.execute(
-                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
-                (room_id, person_id, added_by, self.clock.now()),
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at, joined_with)"
+                " VALUES(?,?,?,?,?)",
+                (room_id, person_id, added_by, self.clock.now(), joined_with),
             )
             return cur.rowcount == 1
+
+    def person_rooms(self, person_id: int) -> dict[int, str | None]:
+        """Every room ``person_id`` is in, private or public, by id, with the agent that made them a
+        member there while they have not opened it since (§62), else None."""
+        rows = self.con.execute(
+            "SELECT room_id, joined_with FROM room_people WHERE person_id=?", (person_id,)
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def room_person_noted(self, room_id: int, person_id: int) -> None:
+        """They opened the room: its "joined with" note has been seen (§62)."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
+                " AND joined_with IS NOT NULL",
+                (room_id, person_id),
+            )
+
+    # The meta key that says the day-one members were filled in (§62): once, so a person who left a
+    # room they had posted in is not put back at the next start.
+    DAY_ONE_KEY = "room_people_day_one"
+
+    def join_day_one(self) -> int:
+        """Join each person to every public room they opened (a seen mark, §55.8), posted in, or have an
+        agent in, on any day, once (§62, #843): what was already recorded, so nobody's sidebar empties
+        when membership starts to count. An agent is its person's as ``RoomService.host_person`` says:
+        the live agent token for its device, else the owner's (0). A removed person joins nothing. Runs
+        at the broker's start; a database that has done it says so in ``meta`` and is never filled
+        again. The rows added, 0 when it had run already."""
+        with db.tx(self.con):
+            if self.con.execute("SELECT 1 FROM meta WHERE key=?", (self.DAY_ONE_KEY,)).fetchone():
+                return 0
+            now = self.clock.now()
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT DISTINCT e.room_id, e.person, e.person, ? FROM ("
+                "  SELECT room_id, person_key AS person FROM home_seen"
+                "  UNION SELECT room_id, COALESCE(sender_person_id, 0) FROM messages"
+                "   WHERE sender_kind='human'"
+                "  UNION SELECT m.room_id, COALESCE((SELECT COALESCE(t.person_id, 0) FROM agent_tokens t"
+                "    WHERE t.device=p.host AND p.host!='' AND t.revoked_at IS NULL), 0)"
+                "   FROM memberships m JOIN participants p ON p.id=m.participant_id"
+                " ) e JOIN rooms r ON r.id=e.room_id AND r.private=0"
+                " WHERE e.person=0 OR e.person IN (SELECT id FROM people WHERE removed_at IS NULL)",
+                (now,),
+            )
+            self.con.execute("INSERT INTO meta(key, value) VALUES(?,?)", (self.DAY_ONE_KEY, repr(now)))
+            return cur.rowcount
 
     def room_person_remove(self, room_id: int, person_id: int) -> bool:
         with db.tx(self.con):
@@ -161,7 +217,7 @@ class Store:
             return cur.rowcount == 1
 
     def rooms_of_person(self, person_id: int) -> list[int]:
-        """The private rooms ``person_id`` is in, by id."""
+        """The rooms ``person_id`` is in, private and public (§62), by id."""
         rows = self.con.execute("SELECT room_id FROM room_people WHERE person_id=?", (person_id,)).fetchall()
         return [r[0] for r in rows]
 
@@ -319,6 +375,7 @@ class Store:
         ("pins", "pins WHERE room_id=?", 1),
         ("home_seen", "home_seen WHERE room_id=?", 1),
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
+        ("room_people", "room_people WHERE room_id=?", 1),
         ("say_keys", f"say_keys WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),

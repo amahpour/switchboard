@@ -29,7 +29,8 @@ each person has seen of each room and which board cards they set aside, for the 
 on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room's opt-in so an agent's
 new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
 agent chat and wake batches (§61);
-53 (#823) adds say retry receipts (§8.4).
+53 (#823) adds say retry receipts (§8.4); 54 (#843) says which agent made a person a member of a public room,
+whose members are in ``room_people`` too (§62).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -50,7 +51,7 @@ from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 53
+SCHEMA_VERSION = 54
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -192,6 +193,7 @@ CREATE TABLE preferences(
 CREATE TABLE room_people(
   room_id INTEGER NOT NULL REFERENCES rooms(id), person_id INTEGER NOT NULL CHECK(person_id >= 0),
   added_by INTEGER NOT NULL CHECK(added_by >= 0), added_at REAL NOT NULL,
+  joined_with TEXT CHECK(joined_with IS NULL OR length(joined_with) BETWEEN 1 AND 64),
   PRIMARY KEY(room_id, person_id));
 
 CREATE TABLE reviews(
@@ -1112,6 +1114,15 @@ SAY_KEYS_DDL = (
 )
 # v52 -> v53 (#823, DESIGN.md §8.4): the retry receipts.
 V52_TO_V53 = (*SAY_KEYS_DDL, "UPDATE meta SET value='53' WHERE key='schema_version'")
+# v53 -> v54 (#843, DESIGN.md §62): a public room has members too, in ``room_people`` as a private
+# room's people are. The step only adds the column that says which of a person's agents made them a
+# member, NULL for everyone already there; who is in which room on day one is filled once at the
+# broker's first start (``Store.join_day_one``), since a migration keeps every table's rows as they were.
+V53_TO_V54 = (
+    "ALTER TABLE room_people ADD COLUMN joined_with TEXT"
+    " CHECK(joined_with IS NULL OR length(joined_with) BETWEEN 1 AND 64)",
+    "UPDATE meta SET value='54' WHERE key='schema_version'",
+)
 
 
 class MigrationStep(NamedTuple):
@@ -1185,6 +1196,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         50: MigrationStep(51, V50_TO_V51, ()),
         51: MigrationStep(52, V51_TO_V52, ()),
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
+        53: MigrationStep(54, V53_TO_V54, ()),
     }
     out = []
     v = frm
