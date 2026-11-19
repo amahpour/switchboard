@@ -4,6 +4,8 @@ The project was built in milestones: Milestone 0 tested what each harness can do
 
 **Changes come as pull requests,** from a branch here or from a fork, and the maintainer reviews and merges each one. If a coding agent writes yours, point it at [CLAUDE.md](CLAUDE.md): how a change lands, where the code and the tests live, and what has to be right. The same file is for people.
 
+**Reviews follow the repository's own rules.** `REVIEW.md` files at the root and in `plugins/`, `deploy/joinly/`, `src/switchboard/web/` and `tests/` say what a review flags and what it skips, with the bug each line comes from. Reviewers, agents on a [review board](docs/guide/review-board.md) included, read the ones nearest the changed files, from the default branch, so a pull request cannot change the rules it is reviewed under. If a review keeps catching or missing something, add a line to the nearest one.
+
 ## Development
 
 Development needs uv 0.7.13 or newer: `pyproject.toml` sets `[tool.uv] required-version = ">=0.7.13"`. CI and the Linux test container stay on 0.7.13 with `--frozen`, so a newer uv that would change `uv.lock` fails CI instead of slipping through (uv 0.12 re-locks the current lock unchanged).
