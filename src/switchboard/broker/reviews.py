@@ -89,6 +89,42 @@ class Boards:
         ctx = self._context(room)
         return [self._board(room, rv, ctx) for rv in rows]
 
+    def past_boards(self, room: Room) -> list[dict[str, Any]]:
+        """List closed boards without building their cards and handoff plans (§37.14)."""
+        rows = (rv for rv in self.store.room_reviews(room.id) if rv["closed_at"] is not None)
+        return [
+            {
+                "id": rv["id"],
+                "url": rv["url"],
+                "forge": reviews.forge(rv["url"]),
+                "opened_at": rv["opened_at"],
+                "settled_at": self._settled_at(room, rv),
+                "closed_at": rv["closed_at"],
+                "outcome": "merged" if rv["pr_state"] == "merged" else "unknown",
+            }
+            for rv in sorted(rows, key=lambda rv: (rv["closed_at"], rv["id"]), reverse=True)
+        ]
+
+    def past_board(self, room: Room, url: str) -> dict[str, Any] | None:
+        rv = self.store.review_for_url(room.id, reviews.url(url))
+        if rv is None or rv["closed_at"] is None:
+            return None
+        return self.board(room, rv)
+
+    def _settled_at(self, room: Room, rv: dict[str, Any]) -> float | None:
+        items = self.store.review_items(rv["id"])
+        if not items or not reviews.settled(items):
+            return None
+        times = {}
+        for event in self.store.review_events(room.id, rv["id"], rv["opened_at"]):
+            if event.data.get("to") in ("answered", "confirmed", "dropped", "deferred") or (
+                event.data.get("to") == "fixed" and event.data.get("person")
+            ):
+                times[event.data.get("item")] = event.ts
+        if all(item.label in times for item in items):
+            return max(times[item.label] for item in items)
+        return None
+
     def board(self, room: Room, rv: dict[str, Any]) -> dict[str, Any]:
         """One board of the room as data, open or closed: the review, its items and whether it's
         settled."""
@@ -231,11 +267,12 @@ class Boards:
             return self._shown(room, rv, selected=params.get("item"))
         if action == "close":  # settled boards can close even after handoff
             return self._close(room, rv, actor, params)
+        if action == "report":  # a merge may be reported after handoff or close
+            self._remember(room, actor, rv)
+            return self._report(room, rv, actor, params)
         if rv["closed_at"] is not None:
             raise ReviewError(f'the board for {rv["url"]} is closed: open it again with action="open" first')
         self._remember(room, actor, rv)
-        if action == "report":  # also after the handoff: the merge that closes the board comes then
-            return self._report(room, rv, actor, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
@@ -439,21 +476,26 @@ class Boards:
         result is said in the room, each in one line naming who reported it, so agents cite the
         board instead of passing CI on from memory. switchboard fetches nothing itself."""
         fields = reviews.report(params)
-        now = self.state.clock.now()
-        self.store.set_review(rv["id"], **fields, reported_by=actor, reported_at=now)
-        self._event(room, rv, report=dict(fields), by=actor)
         url = rv["url"]
+        was_closed = rv["closed_at"] is not None
+        state = fields.get("pr_state")
+        if was_closed and state != "merged":
+            raise ReviewError('a closed board only accepts a report with state="merged"')
+        ended = state in ("merged", "closed")
+        result = {"ok": True, "closed": True, "board": f"{url} is {state}: the board is closed."}
+        if was_closed and all(rv[key] == value for key, value in fields.items()):
+            return result
+        now = self.state.clock.now()
+        closure = {"closed_at": now, "closed_by": actor} if ended and not was_closed else {}
+        self.store.set_review(rv["id"], **fields, **closure, reported_by=actor, reported_at=now)
+        self._event(room, rv, report=fields, by=actor)
         if fields.get("pr_ci") and fields["pr_ci"] != rv["pr_ci"]:
             self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
-        if fields.get("pr_state") in ("merged", "closed"):
-            self.store.set_review(rv["id"], closed_at=now, closed_by=actor)
-            self._notice(room, f"{actor} reports {url} {fields['pr_state']}: the review board is closed")
+        if ended:
+            status = "remains closed" if was_closed else "is closed"
+            self._notice(room, f"{actor} reports {url} {state}: the review board {status}")
             self._publish(room)
-            return {
-                "ok": True,
-                "closed": True,
-                "board": f"{url} is {fields['pr_state']}: the board is closed.",
-            }
+            return result
         return self._shown(room, rv)
 
     def _close(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
