@@ -102,6 +102,7 @@
     wsEverOpen: false,  // a socket was up once: a close now is a drop, not the first connect (#129)
     backoff: 500,
     pingTimer: null,
+    offlineTimer: null,
     sendQueue: null,   // sends (typed or from the Inspector) go out one at a time, in order
     // Inspector: which agent, the latest member-detail GET, and its UI toggles
     inspect: null,     // { room, name, host } for an agent, { room, call: true } for the room's call, or null (Members)
@@ -3781,6 +3782,9 @@
   }
 
   // ---------------------------------------------------------- websocket
+  const LONG_OUTAGE_MS = 120000;
+  const RECONNECTING_TEXT = 'Disconnected: reconnecting… What you see may be out of date.';
+
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     const ws = new WebSocket(proto + location.host + '/ws');
@@ -3789,6 +3793,9 @@
       const reopened = state.wsEverOpen;
       state.wsOpen = true;
       state.wsEverOpen = true;
+      clearTimeout(state.offlineTimer);
+      state.offlineTimer = null;
+      $('banner-offline-text').textContent = RECONNECTING_TEXT;
       if (reopened) refreshAgentIcons();  // an avatar may have changed while the socket was down
       state.backoff = 500;
       // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
@@ -3810,6 +3817,12 @@
     ws.addEventListener('close', function () {
       state.wsOpen = false;
       clearInterval(state.pingTimer);
+      if (state.wsEverOpen && state.offlineTimer === null) {
+        state.offlineTimer = setTimeout(function () {
+          $('banner-offline-text').textContent =
+            'Switchboard has been unreachable for at least 2 minutes. Still trying to reconnect.';
+        }, LONG_OUTAGE_MS);
+      }
       renderStatus();
       renderBuddies();
       const wait = state.backoff;

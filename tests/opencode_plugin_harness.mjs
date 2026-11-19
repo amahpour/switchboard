@@ -53,6 +53,37 @@ test('listener rounds: 200, 408, 409, 401, unreachable; no credentials in output
   }
 });
 
+test('an OpenCode listener reports a two-minute outage and stops retrying', async () => {
+  let clock = 0;
+  const logs = [];
+  await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+    canWake: async () => true, ctx: {session: {prompt: async () => assert.fail('unexpected wake')}},
+    request: async () => {
+      if (clock >= 121000) return new Response('', {status: 409});
+      throw new Error('connection refused');
+    },
+    sleep: async ms => { clock += ms; }, now: () => clock, warn: text => logs.push(text)});
+  assert.equal(clock, 120000);
+  assert.deepEqual(logs, ['[switchboard] Switchboard has been unreachable for at least 2 minutes. The listener stopped.']);
+});
+
+for (const status of [0, 504]) {
+  test(`OpenCode keeps listening after four 60-second proxy cuts (status ${status})`, async () => {
+    let clock = 0, requests = 0;
+    const logs = [];
+    await listen({url: 'https://example.com', token, sessionID, signal: new AbortController().signal,
+      canWake: async () => true, ctx: {session: {prompt: async () => assert.fail('unexpected wake')}},
+      request: async () => {
+        if (++requests === 5) return new Response('', {status: 409});
+        clock += 60000;
+        if (!status) throw new Error('connection reset');
+        return new Response('', {status});
+      }, sleep: async ms => { clock += ms; }, now: () => clock, warn: text => logs.push(text)});
+    assert.equal(requests, 5);
+    assert.deepEqual(logs, []);
+  });
+}
+
 // Even a response already received cannot wake an approval-blocked, moved or deleted session.
 test('listener rechecks eligibility after 200 and rejects oversized or credential-bearing text', async () => {
   for (const [text, allowed] of [[wake, false], [token, true], ['x'.repeat(65537), true], ['', true]]) {
@@ -64,7 +95,7 @@ test('listener rechecks eligibility after 200 and rejects oversized or credentia
   }
 });
 
-// A gateway may send 200 headers and then drop the body; no turn was admitted, so this is still a retryable outage.
+// A gateway may send 200 headers and then drop the body; no turn was admitted, so the listener retries.
 test('a broken 200 body retries without losing the listener or logging credentials', async () => {
   const prompts = [], logs = [], delays = [];
   let requests = 0;

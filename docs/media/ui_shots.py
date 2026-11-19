@@ -534,7 +534,7 @@ def shoot_opencode_upload(browser: Any, out: Path, world: Any) -> None:
         web.delete("/api/agent-icons/opencode", headers=b.write_headers())
 
 
-def shoot_offline(browser: Any, out: Path, world: Any) -> None:
+def shoot_offline(browser: Any, out: Path, world: Any, *, long_outage: bool = False) -> None:
     """The page after its connection dropped (#129), in #build: the band, the You row, the
     header chip and the dimmed members (light, dark), and the phone (dark). The socket is
     closed through Playwright's WebSocket routing, and the ``/api/me`` check the page makes
@@ -559,12 +559,16 @@ def shoot_offline(browser: Any, out: Path, world: Any) -> None:
         ctx.route("**/api/me", me)
         try:
             page = ctx.new_page()
+            if long_outage:
+                page.clock.install()
             sign_in(page, b)
             open_build(page, n_chat)
             down["on"] = True
             with page.expect_request("**/api/me"):
                 live[-1].close()
             expect(page.locator("#st-conn")).to_have_text("Reconnecting…")
+            if long_outage:
+                page.clock.fast_forward(120_000)
             page.evaluate("document.activeElement && document.activeElement.blur()")
             shot(page, out, name)
         finally:
@@ -4618,6 +4622,7 @@ ONLY: dict[str, Any] = {
     "backups": shoot_backups,
     "home": shoot_home,
     "usage": shoot_usage,
+    "long_outage": lambda browser, out, world: shoot_offline(browser, out, world, long_outage=True),
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
     "review_edit": shoot_review_edit,

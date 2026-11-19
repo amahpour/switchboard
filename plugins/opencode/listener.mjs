@@ -3,6 +3,7 @@
 // either can contain credentials. No subprocess, file write, permission reply or permission rule is used.
 import { realpath } from 'node:fs/promises';
 const ROUND_S = 900;
+const OUTAGE_MS = 120000;
 const TEXT_MAX = 65536;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 const OWN_TOOLS = new Set(['join', 'leave', 'who', 'say', 'read', 'wait', 'pass', 'away', 'status',
@@ -48,9 +49,31 @@ async function readWake(response, signal) {
 
 export async function listen({url, token, sessionID, ctx, signal, canWake,
   received = () => {}, settle = async () => {},
-  request = globalThis.fetch, sleep: pause = sleep, warn = console.warn}) {
-  let again = '0', backoff = 1000;
+  request = globalThis.fetch, sleep: pause = sleep, now = () => performance.now(), warn = console.warn}) {
+  let again = '0', backoff = 1000, unreachableSince = null;
+  async function retry(began, answered) {
+    const failedAt = now();
+    if (answered || failedAt - began >= 10000) unreachableSince = null;
+    if (failedAt - began >= 10000) {
+      backoff = 1000;
+      return !signal.aborted;
+    }
+    let delay = backoff;
+    if (!answered) {
+      unreachableSince ??= failedAt;
+      const remaining = OUTAGE_MS - (failedAt - unreachableSince);
+      if (remaining <= 0) {
+        warn('[switchboard] Switchboard has been unreachable for at least 2 minutes. The listener stopped.');
+        return false;
+      }
+      delay = Math.min(delay, remaining);
+    }
+    await pause(delay, signal);
+    backoff = Math.min(backoff * 2, 60000);
+    return !signal.aborted;
+  }
   while (!signal.aborted) {
+    const began = now();
     let response;
     try {
       response = await request(`${url}/mcp/listen`, {method: 'POST', redirect: 'error',
@@ -74,9 +97,7 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
         text = await readWake(response, signal);
       } catch {
         await settle('wake.dropped', receipt);
-        if (signal.aborted) return;
-        await pause(backoff, signal);
-        backoff = Math.min(backoff * 2, 60000);
+        if (signal.aborted || !await retry(began, true)) return;
         continue; // headers arrived, but no wake body: a proxy cut the round, so wait again
       }
       let queued = false;
@@ -94,11 +115,11 @@ export async function listen({url, token, sessionID, ctx, signal, canWake,
     if (response?.status === 408) {
       await response.body?.cancel();
       backoff = 1000;
+      unreachableSince = null;
       await pause(1000, signal);
     } else if (!response || [429, 500, 502, 503, 504].includes(response.status)) {
       await response?.body?.cancel();
-      await pause(backoff, signal);
-      backoff = Math.min(backoff * 2, 60000);
+      if (!await retry(began, Boolean(response))) return;
     } else {
       await response.body?.cancel();
       if (response.status !== 409) warn(`[switchboard] listener stopped (HTTP ${response.status})`);

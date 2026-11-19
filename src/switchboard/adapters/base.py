@@ -233,7 +233,7 @@ class Adapter:
         return None
 
     def listener_retry(self, p: Participant, has_continue: bool) -> bool:
-        """Whether a reconnect may recover an offered wake before a turn has confirmed it (§49.12)."""
+        """Whether a later listener round may resume after a restart or an interrupted wake (§49)."""
         return False
 
     def stop_continues(self, p: Participant) -> bool:
