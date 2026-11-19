@@ -1915,9 +1915,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "give id, a message id")
             room = state.service.room_for(slug, viewer(request))
             key = state.service.person_key(w.person_id)
-            seen = home.mark_room_seen(state, key, room, body["id"])
-            state.store.room_person_noted(room.id, key)  # they opened it: "joined with" has been seen (§62)
-            return _ok({"seen": seen})
+            return _ok({"seen": home.mark_room_seen(state, key, room, body["id"])})
         except ServiceError as e:
             return _svc_err(e)
 

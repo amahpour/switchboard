@@ -169,14 +169,24 @@ class Store:
         ).fetchall()
         return {r[0]: r[1] for r in rows}
 
-    def room_person_noted(self, room_id: int, person_id: int) -> None:
-        """They opened the room: its "joined with" note has been seen (§62)."""
+    def room_opened(self, person_key: int, room_id: int, seen_id: int) -> int:
+        """The person read ``room_id`` up to the message ``seen_id`` (the page's seen request, §55.8): their
+        mark moves forward as ``home_mark_seen`` moves it, and the "joined with" note (§62) goes once the
+        mark moves past where it stood. An agent's join made the note and set the mark to the room's newest
+        message in one transaction, before the agent's join line, so a request for what a page showed
+        before that join (sent late, or from another browser) leaves the note, and one that reaches the
+        join line clears it. One transaction. Returns the mark now."""
         with db.tx(self.con):
-            self.con.execute(
-                "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
-                " AND joined_with IS NOT NULL",
-                (room_id, person_id),
-            )
+            r = self.con.execute(
+                "SELECT seen_id FROM home_seen WHERE person_key=? AND room_id=?", (person_key, room_id)
+            ).fetchone()
+            if r is None or max(0, min(int(seen_id), self.last_message_id(room_id))) > int(r[0]):
+                self.con.execute(
+                    "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
+                    " AND joined_with IS NOT NULL",
+                    (room_id, person_key),
+                )
+            return self.home_mark_seen(person_key, room_id, seen_id)
 
     # The meta key that says the day-one members were filled in (§62): once, so a person who left a
     # room they had posted in is not put back at the next start.

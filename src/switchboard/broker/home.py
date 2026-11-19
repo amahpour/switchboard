@@ -318,10 +318,11 @@ def seen_at(state: Any, person_key: int) -> float | None:
 def mark_room_seen(state: Any, person_key: int, room: Room, upto: Any) -> int:
     """Move a person's mark in a room forward to the message id ``upto`` (the caller has checked they may see
     the room). A value that is not a whole number from 0 up is refused; one past the room's newest message
-    is cut to it, so the mark can never hide a message that has not been written yet."""
+    is cut to it, so the mark can never hide a message that has not been written yet. Reading past where an
+    agent's join started them also clears its "joined with" note (§62, ``Store.room_opened``)."""
     if isinstance(upto, bool) or not isinstance(upto, int) or not 0 <= upto < 2**53:
         raise ServiceError("bad_request", "give id, a message id")
-    return state.store.home_mark_seen(person_key, room.id, upto)
+    return state.store.room_opened(person_key, room.id, upto)
 
 
 def snooze_board(state: Any, person_key: int, room: Room, url: Any) -> float:

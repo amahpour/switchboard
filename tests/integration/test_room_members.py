@@ -197,6 +197,27 @@ def test_an_agent_joining_makes_its_person_a_member(team: tuple[InProcBroker, Br
         bobs.c.close()
 
 
+def test_a_late_seen_request_keeps_the_joined_with_note(team: tuple[InProcBroker, Browser, Browser]) -> None:
+    """The note "joined with codex-1" goes when bob reads past where his agent's join started him, not on
+    any seen request: one his page sent for what it showed before the join, arriving late, leaves it, and
+    one that reaches the agent's join line clears it. Fails if a stale seen POST erases the note before
+    bob has seen it."""
+    b, _alice, bob = team
+    bobs = Codex(b, make_token(b, "bobs-laptop", b.state.store.person_named("bob").id))
+    bobs.c = httpx.Client(base_url=f"http://127.0.0.1:{b.port}", timeout=30.0, headers={"host": HOST})
+    try:
+        assert bobs.start().status_code == 200
+        assert bobs.call("join", THREAD_B, room="#build", screen_name="codex-1")["ok"]
+        got = rooms(bob)["#build"]
+        assert got["seen"] < got["last_id"]  # the join line is after where he starts
+        assert bob.post("/api/rooms/build/seen", {"id": got["seen"]}).status_code == 200
+        assert rooms(bob)["#build"]["joined_with"] == "codex-1"
+        assert bob.post("/api/rooms/build/seen", {"id": got["last_id"]}).status_code == 200
+        assert rooms(bob)["#build"]["joined_with"] is None
+    finally:
+        bobs.c.close()
+
+
 def boom(*_args: Any, **_kw: Any) -> Any:
     """A write that fails the way a full disk or a crash between two commits would."""
     raise sqlite3.OperationalError("disk I/O error")
