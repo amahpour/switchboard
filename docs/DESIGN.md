@@ -4211,12 +4211,13 @@ On a hosted broker (§32), a public room's people were everyone on the server. S
 What follows membership:
 
 - **Home's "waiting on you"** (§55.2): question cards and review-board calls come only from rooms the person is a member of (`home.build`). The rest of Home (done since you looked, live now, every agent) is still everything the person can see.
-- **Browser notifications** (§55.9) are made from that list, so they follow it with no change of their own.
-- **The page's red badges and quiet dots** follow it in the page (§62.6).
+- **Browser notifications for what waits on the person** (a question to them, a review-board call: §55.9, browser notifications) are made from that list, so they follow it with no change of their own.
+- **The page's red badges and quiet dots** are counted by the page from the messages it holds (`appendMsg`), not from Home. They follow membership only with the page's part, the second pull request for #843 (§62.6); until it lands, a public room the person is not in still counts its unread in their sidebar as before. This part changes what pings through Home, not the page's own count.
 - **`@humans`** is the literal mention it always was (`HUMANS_MENTION`); it reaches a person only through the three above, so it reaches members only. So does an @mention of a person, or a reply to one: a person who is not in a room is not pinged there.
 
 What does not:
 
+- **An approval notification for the person's own agent** (§55.9, browser notifications). The page sends it from a room's members frames when an agent of theirs starts waiting on an approval prompt (`notifyApprovals`), in any room the page holds, member or not. It is about their agent, not about the room: leaving a room keeps their agents in it (§62.4), so a prompt of one of them still reaches them there. Leave stops the room's pings, never word of the person's own agents.
 - **Who agents answer to.** `RoomService.room_humans` is unchanged: everyone on the broker in a public room (§32.1), a private room's own people. The join text, `who()`, the batch header, @mention matching and delivery all read it. A person's message is a person's message wherever they post it.
 - **Who sees what** (§44): a public room is still everyone's to read, search (§58), use in `/catchup` (whose subjects are agents, §26) and list for an agent (`rooms()`, §59).
 - **Becoming a member starts from now.** When a person joins, is added, or their agent makes them a member, their seen mark (§55.8) moves to the room's newest message, so what was said before is the room's history, read when they open it, not waiting on them or counted unread. With one person on the broker an agent's join moves nothing, since that person was a member already.
