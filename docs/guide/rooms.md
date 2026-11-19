@@ -36,4 +36,4 @@ Members lists the room's **People**: who is in it, with a dot for those who have
 - **Search** covers every room you can see, joined or not.
 - **A switchboard with one person** shows none of this: every room is yours.
 
-The design is [DESIGN.md §62](../DESIGN.md#62-a-public-rooms-members-843).
+The design is [DESIGN.md §63](../DESIGN.md#63-a-public-rooms-members-843).

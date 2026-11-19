@@ -127,8 +127,8 @@ function makeWorld(rooms) {
     const d = { id: r.id, name: r.name, slug: r.name.slice(1), created_at: r.created_at, members: 0, last_id: 0,
                 settings: {} };
     if (r.private) { d.private = true; d.people = r.people; }  // a private room lists its people (§44)
-    else if (r.people) d.people = r.people;  // a public room's members (§62)
-    if (r.member === false) d.member = false;  // a room this person is not a member of (§62)
+    else if (r.people) d.people = r.people;  // a public room's members (§63)
+    if (r.member === false) d.member = false;  // a room this person is not a member of (§63)
     if (r.joined_with) d.joined_with = r.joined_with;
     return d;
   }
@@ -176,7 +176,7 @@ function makeWorld(rooms) {
       server.moves.push(Object.assign({ room: decodeURIComponent(mv[1]) }, body));
       return function () { return [server.moveFails ? 400 : 200, server.moveFails ? { message: server.moveFails } : { ok: true, boards: [] }]; };
     }
-    // join, add someone or leave a public room (§62): the listing follows, as the broker's does
+    // join, add someone or leave a public room (§63): the listing follows, as the broker's does
     const mp = /^\/api\/rooms\/([^/]+)\/people$/.exec(url);
     if (method === 'POST' && mp) {
       server.peopleCalls = (server.peopleCalls || []).concat([Object.assign({ room: decodeURIComponent(mp[1]) }, body)]);
@@ -825,7 +825,7 @@ const SCENARIOS = {
     return seen;
   },
 
-  // A public room's members (§62): the sidebar lists the rooms alice is in, with "joined with" the first time,
+  // A public room's members (§63): the sidebar lists the rooms alice is in, with "joined with" the first time,
   // and folds the rest under Other rooms, with a dot when a call is live in one; a message there counts
   // nothing. Opening one is a preview with a Join bar in place of the composer; Join makes it hers, and Leave
   // (the room's menu, then a confirm) makes it a preview again.
@@ -1770,7 +1770,7 @@ const SCENARIOS = {
   // option id, what choosing inserts). Agents and a system line stay the name they posted under.
   // A later people frame with full_names redraws an open page. Typing the real name matches.
   async real_names_show() {
-    // its members (§62): a public room's People list is who is in it
+    // its members (§63): a public room's People list is who is in it
     const w = makeWorld([{ id: 1, name: '#build', created_at: 100, people: ['alice', 'bob-lee', 'carol'] }]);
     w.server.me = {
       human: 'alice', admin: false, test_mode: false,

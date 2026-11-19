@@ -1,7 +1,7 @@
 """Private rooms in the page (#74, DESIGN.md §44), on a hosted broker: the New room dialog's
 Private box, the lock in the sidebar, the room's people with Add and Leave, and the admin's
 list of private rooms in People. A public room lists its members, with who is here now (#354,
-§62)."""
+§63)."""
 
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ def test_a_private_room_shows_its_lock_and_its_people(ui: UI, hosted: tuple[InPr
     page.click("#app-dialog-action")
     expect(people.locator(".group-label")).to_have_text("People (2) · private")
     expect(people.locator('.person-row[data-name="bob"]')).to_contain_text("Remove")
-    # a public room lists its members (#354, §62), without a private room's Remove
+    # a public room lists its members (#354, §63), without a private room's Remove
     page.locator('#tabs .room[data-room="#build"]').click()
     expect(people.locator(".group-label")).not_to_contain_text("private")
     expect(people.locator('.person-row[data-name="alice"]')).to_contain_text("Leave")
@@ -130,7 +130,7 @@ def test_a_public_room_lists_people_and_who_is_here(
     ui: UI, hosted: tuple[InProcBroker, str], phone: bool
 ) -> None:
     """#354: a public room showed You and the agents, and nobody else: the other people on the
-    broker were only names on messages. It lists its members (§62), each with a dot for a page open
+    broker were only names on messages. It lists its members (§63), each with a dot for a page open
     now, those people first, and no Remove: only your own row has Leave. The list follows people as
     they open and close the page. Fails if a public room shows no people, or if the dot doesn't
     follow a second person's page."""
@@ -140,7 +140,7 @@ def test_a_public_room_lists_people_and_who_is_here(
     origin = b.state.web_origin.origin
     h = {"Origin": origin, "X-Switchboard": "1"}
     with httpx.Client(base_url=origin, headers=h, cookies={"switchboard_session": cookie}) as c:
-        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": name})  # a member (§62)
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": name})  # a member (§63)
         assert joined.status_code == 200, joined.text
     page = admin_page(ui, hosted, **(PHONE if phone else {}))
     if phone:

@@ -78,7 +78,7 @@
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
     ncOpen: false,     // the Members group "Not connected (n)" is unfolded (#814)
-    otherOpen: null,   // the sidebar's Other rooms is unfolded (§62); null: open only when they are in no room
+    otherOpen: null,   // the sidebar's Other rooms is unfolded (§63); null: open only when they are in no room
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
     usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
     usageData: null,   // the last GET /api/usage
@@ -672,12 +672,12 @@
 
   function activeRoom() { return state.active ? state.rooms.get(state.active) || null : null; }
 
-  // A public room's members are who is pinged there (§62, #843): the rooms someone is in fill the sidebar,
+  // A public room's members are who is pinged there (§63, #843): the rooms someone is in fill the sidebar,
   // and the others wait under Other rooms, to read and join. A broker that says nothing (an older one) makes
   // every room theirs, and so does one with a single person, whose list says member for every room.
   function isMember(r) { return !!r && r.member !== false; }
 
-  // Leave is for a member of a public room on a switchboard with people (§62): with one person every room
+  // Leave is for a member of a public room on a switchboard with people (§63): with one person every room
   // is theirs, and a private room's own Leave is in Members, as before (§44).
   function canLeave(r) { return isMember(r) && !r.private && state.everyone.length > 1; }
 
@@ -1549,7 +1549,7 @@
       // a person's message counts only when it's another person's @mention of you (#418) or
       // @humans (#138); otherwise a person's messages are left out, as they were before (#109).
       // What this person already read (the broker's mark, §55.8) never counts again.
-      // A room they are not a member of counts nothing at all: they read it, it doesn't ping them (§62).
+      // A room they are not a member of counts nothing at all: they read it, it doesn't ping them (§63).
       const unseen = m.id > (r.seenId || 0) && isMember(r);
       if (unseen && m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
@@ -1594,7 +1594,7 @@
 
   // ------------------------------------------------------- sidebar, title
   // One room's row in the sidebar. A room they are a member of has its red count, "joined with <agent>" the
-  // first time (§62), or a quiet dot. One under Other rooms pings them for nothing, so it has no count: what
+  // first time (§63), or a quiet dot. One under Other rooms pings them for nothing, so it has no count: what
   // is live there (a call), or how many people are in it.
   function roomButton(r, other) {
     const name = r.name;
@@ -1648,7 +1648,7 @@
       tabs.append(roomButton(r, false));
     }
     if (others.length) {
-      // Other rooms (§62): the public rooms they are not a member of, folded under one row. It is open by
+      // Other rooms (§63): the public rooms they are not a member of, folded under one row. It is open by
       // itself when they are in none, and opened when one of them is the room on screen (selectRoom).
       const mine = names.length - others.length;
       const open = state.otherOpen === null ? mine === 0 : state.otherOpen;
@@ -1886,7 +1886,7 @@
   }
 
   // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person. A public
-  // room's are its members (§62): who @humans, the unread badges and notifications reach there, with Leave
+  // room's are its members (§63): who @humans, the unread badges and notifications reach there, with Leave
   // on your own row and Add a person for a member. Before #843 a public room listed everyone signed up
   // (#354). Each row has a dot for a page open now, and those people come first. A broker with one person
   // shows no list.
@@ -1999,7 +1999,7 @@
     if (answer) roomPeople(r, 'add', answer);
   }
 
-  // ----------------------------------------------------- joining and leaving (§62)
+  // ----------------------------------------------------- joining and leaving (§63)
   // A public room they are not a member of is read-only: a Preview chip in the header and a Join bar in
   // place of the composer. A member's room has the "..." menu with Leave (and Leave on their own row in
   // Members). Called whenever the room on screen, the room list or the number of people changes.
@@ -2402,7 +2402,7 @@
     if (state.active !== name) closeWhiteboard();
     state.active = name;
     const activeR = state.rooms.get(name);
-    if (!isMember(activeR)) state.otherOpen = true;  // its row stays in view, under Other rooms (§62)
+    if (!isMember(activeR)) state.otherOpen = true;  // its row stays in view, under Other rooms (§63)
     if (!state.around) {  // a window around a search result has not shown the room's latest
       markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
       activeR.unread = 0;
@@ -2421,7 +2421,7 @@
     loadBoard(state.rooms.get(name));
     renderComposerMentions();  // the known-names set just changed with the room
     syncRoomActions();
-    // a room they only read has no composer: its Join button has the keyboard instead (§62)
+    // a room they only read has no composer: its Join button has the keyboard instead (§63)
     (isMember(activeR) ? $('input') : $('preview-join')).focus();
   }
 
@@ -3891,7 +3891,7 @@
       if (!r) return;
       r.settings = f.settings || {};
       if (f.room === state.active) renderStatus();
-      if (!isMember(r)) renderTabs();  // a call there shows under Other rooms (§62)
+      if (!isMember(r)) renderTabs();  // a call there shows under Other rooms (§63)
     } else if (f.t === 'pins') {
       if (!r) return;
       r.pins = Array.isArray(f.pins) ? f.pins : [];
@@ -3939,8 +3939,8 @@
       }
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
-      renderTabs();  // "joined with" shows only with people (§62)
-      syncRoomActions();  // a second person makes Leave possible, the last other one takes it away (§62)
+      renderTabs();  // "joined with" shows only with people (§63)
+      syncRoomActions();  // a second person makes Leave possible, the last other one takes it away (§63)
       noteOwnAdmin(f);
     }
   }
@@ -7769,7 +7769,7 @@
   // has, so a stale or repeated post does nothing. A question card counts only messages after it. `refresh`: ask
   // for Home again once it is stored, so the sidebar's count drops (Home itself waits for it in loadHome).
   function markRoomSeen(r, refresh) {
-    // "joined with <agent>" (§62) is seen once the room is opened, even with nothing new in it to mark
+    // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
     const note = !!(r && r.joinedWith);
     if (!r || (!note && (!r.lastId || (r.seenSent || 0) >= r.lastId))) return;
     const upto = r.lastId || 0;
@@ -8437,7 +8437,7 @@
   function renderHome(error, again, focusKey) {
     const root = $('home');
     const d = state.homeData;
-    // the rooms the sidebar lists as theirs (§62): Other rooms are not on Home
+    // the rooms the sidebar lists as theirs (§63): Other rooms are not on Home
     const rooms = Array.from(state.rooms.values()).filter(isMember).map(function (r) {
       const last = roomSummary(r);
       return { r: r, last: last, ts: last ? last.ts : 0 };
@@ -8601,7 +8601,7 @@
       searchFocusBack();
       return;
     }
-    if (roomMenuOpen()) {  // the room's menu (§62): closed, and the keyboard back on its button
+    if (roomMenuOpen()) {  // the room's menu (§63): closed, and the keyboard back on its button
       setRoomMenu(false);
       $('room-menu-btn').focus();
       return;
@@ -8873,7 +8873,7 @@
         focusSearch();
       }
     });
-    // a click outside the room's menu closes it (§62)
+    // a click outside the room's menu closes it (§63)
     document.addEventListener('click', function (ev) {
       const t = ev.target;
       if (!roomMenuOpen() || (t && typeof t.closest === 'function' && t.closest('#room-menu-wrap'))) return;
@@ -9474,7 +9474,7 @@
       r.pins = Array.isArray(l.pins) ? l.pins : [];  // the room's pinned messages (#292)
       r.private = !!l.private;  // seen only by its people (§44)
       r.people = Array.isArray(l.people) ? l.people : null;
-      // whether this person is a member, pinged here, and the agent that made them one until they open it (§62)
+      // whether this person is a member, pinged here, and the agent that made them one until they open it (§63)
       r.member = l.member !== false;
       r.joinedWith = r.member && typeof l.joined_with === 'string' ? l.joined_with : '';
       if (!r.member) { r.unread = 0; r.quiet = false; }  // a room they left, or never joined, counts nothing
@@ -9511,7 +9511,7 @@
       if (activeRoom()) markPinned(activeRoom());
     }
     if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
-    syncRoomActions();  // joined or left (§62): the composer or the Join bar, and the menu
+    syncRoomActions();  // joined or left (§63): the composer or the Join bar, and the menu
     return fresh;
   }
 

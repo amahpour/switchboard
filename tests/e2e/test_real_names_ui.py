@@ -41,7 +41,7 @@ def _sign_in_and_say(origin: str, email: str, one_time: str, password: str, text
         chosen = c.post("/api/me/password", json={"password": password})
         assert chosen.status_code == 200, chosen.text
         me = c.get("/api/me").json()["human"]
-        # they are in #build, so its People list has them: a public room's people are its members (§62)
+        # they are in #build, so its People list has them: a public room's people are its members (§63)
         joined = c.post("/api/rooms/build/people", json={"action": "add", "name": me})
         assert joined.status_code == 200, joined.text
         said = c.post("/api/rooms/build/say", json={"text": text})

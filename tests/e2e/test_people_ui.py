@@ -187,7 +187,7 @@ def test_the_admin_sets_up_adds_bob_and_bob_joins(ui: UI, hosted: InProcBroker) 
     # opens the room first
     bob.locator('#tabs .room[data-room="#build"]').click()
     page.locator('#tabs .room[data-room="#build"]').click()
-    # bob is in no room yet: #build is under Other rooms, read with a Join bar (§62); he joins it
+    # bob is in no room yet: #build is under Other rooms, read with a Join bar (§63); he joins it
     expect(bob.locator("#preview-join")).to_be_focused()
     bob.keyboard.press("Enter")
     expect(bob.locator("#input")).to_be_focused()

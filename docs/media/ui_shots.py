@@ -2758,7 +2758,7 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
         added = c.post("/api/people", json={"name": "bob", "email": "bob@example.com"})
         assert added.status_code == 200, added.text
         bob_id = int(added.json()["person"]["id"])
-        # bob is in #build, as his agent there would make him (§62): People lists him
+        # bob is in #build, as his agent there would make him (§63): People lists him
         joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob"})
         assert joined.status_code == 200, joined.text
         admin_cookie = c.cookies.get("switchboard_session")
@@ -3074,7 +3074,7 @@ def shoot_real_names(browser: Any, out: Path, world: Any) -> None:
         signed = c.post("/api/signin/password", json={"name": "bob.lee@example.com", "password": bob_otp})
         assert signed.status_code == 200, signed.text
         assert c.post("/api/me/password", json={"password": "bob's own secret 1"}).status_code == 200
-        # he is in #build, so its People list has him (§62)
+        # he is in #build, so its People list has him (§63)
         joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob-lee"})
         assert joined.status_code == 200, joined.text
         assert c.post("/api/rooms/build/say", json={"text": "The port check is in."}).status_code == 200
@@ -4370,7 +4370,7 @@ def shoot_agents(browser: Any, out: Path, world: Any) -> None:
 
 
 def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
-    """#843, on a hosted broker with alice, bob and carol (DESIGN.md §62): ``room-members-sidebar-*`` is
+    """#843, on a hosted broker with alice, bob and carol (DESIGN.md §63): ``room-members-sidebar-*`` is
     #build with the rooms alice is in (#design with a red count, #infra "joined with claude-2") and Other
     rooms folded, its dot saying a call is live in one; ``room-members-preview-*`` is #ops, a room she is
     not in, read with the Join bar and Other rooms open; ``room-members-leave-*`` is the confirm from the
@@ -4449,7 +4449,7 @@ def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
                 text="joined (mcp-only)",
             )
         infra = store.get_room("#infra")
-        if hasattr(svc, "agent_joined"):  # what an agent's join does since #843 (§62)
+        if hasattr(svc, "agent_joined"):  # what an agent's join does since #843 (§63)
             svc.agent_joined(infra, 0, "claude-2")
         ops = store.get_room("#ops")
         call = store.insert_meeting(ops.id, started_by="bob", platform="zoom")

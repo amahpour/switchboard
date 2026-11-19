@@ -3839,7 +3839,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   .usage button { min-height: 44px; min-width: 44px; }
 }
 
-/* ==== 20. A public room's members (#843, DESIGN.md §62) ============================== */
+/* ==== 20. A public room's members (#843, DESIGN.md §63) ============================== */
 /* The sidebar's Other rooms: the public rooms you are not a member of, folded under one row, each with what
    is live there or how many people are in it, never a count (they don't ping you). */
 .room .room-aside {

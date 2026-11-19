@@ -701,7 +701,7 @@ def test_a_person_is_shown_by_their_real_name() -> None:
     assert "nick-system" in out["before"]["system"]["cls"]
     assert out["before"]["you"] == {"name": "Alice Ng", "handle": "@alice"}
     assert out["before"]["people"] == [
-        {"name": "alice", "text": "Alice Ng@aliceyouLeave", "handle": "@alice"},  # a member leaves (§62)
+        {"name": "alice", "text": "Alice Ng@aliceyouLeave", "handle": "@alice"},  # a member leaves (§63)
         {"name": "bob-lee", "text": "Bob Lee@bob-lee", "handle": "@bob-lee"},
         {"name": "carol", "text": "carol", "handle": ""},
     ]
@@ -856,7 +856,7 @@ def test_a_room_on_screen_refreshes_the_home_count_only_for_what_can_change_it()
 
 
 def test_the_sidebar_lists_your_rooms_and_folds_the_others_and_join_and_leave_move_a_room() -> None:
-    """§62 (#843): the rooms alice is a member of are listed, #infra with "joined with claude-2" the first
+    """§63 (#843): the rooms alice is a member of are listed, #infra with "joined with claude-2" the first
     time, and the public rooms she is not in fold under Other rooms, with a dot while a call is live in one.
     @humans in a room she is not in counts nothing (no badge, no title count); in her own it does. Opening
     one is a preview: no composer, a Join bar and a Preview chip, no room menu. Join posts her own name and

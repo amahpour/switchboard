@@ -1,4 +1,4 @@
-"""A public room's members in the page (#843, DESIGN.md §62), on a hosted broker with alice (the admin), bob
+"""A public room's members in the page (#843, DESIGN.md §63), on a hosted broker with alice (the admin), bob
 and carol: the sidebar lists the rooms alice is in and folds the rest under Other rooms; a room she is not
 in is a read-only preview with a Join bar; Leave is in the room's menu and on her own row in Members, after
 a confirm; @humans in a room she is not in gives her no badge. A desktop broker, one person, shows none of
@@ -158,7 +158,7 @@ def test_your_rooms_are_listed_and_the_others_fold_under_other_rooms(
     def agent_joins() -> None:
         room = team.b.state.store.get_room(agents)
         assert room is not None
-        team.b.state.service.agent_joined(room, 0, "claude-2")  # what an agent's join() does (§62)
+        team.b.state.service.agent_joined(room, 0, "claude-2")  # what an agent's join() does (§63)
 
     team.b.on_loop(agent_joins)
     page = alices_page(ui, team, **options)
