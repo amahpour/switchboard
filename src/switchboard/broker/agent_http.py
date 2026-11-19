@@ -748,6 +748,13 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _plugin_raw(scope: Scope) -> str | None:
+    """The plugin-version header of a hook or listener request, cut, or None when it carried none: a
+    request without it says nothing about the plugin (§49.13)."""
+    raw = _header(scope, plugin_versions.HEADER)
+    return raw[:PLUGIN_RAW_MAX] if raw is not None else None
+
+
 @dataclass(frozen=True)
 class Door:
     """Who is at ``/mcp/listen`` or ``/mcp/session``: the token (a key's own token, when it came in with a
@@ -1049,7 +1056,7 @@ class CommandHook:
                 return
             self.tools.input_uses.report(row.id, harness, sid, use, tool)
             if harness == "devin":
-                conn = self.tools.conn_for(row, harness)
+                conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
                 await self.tools.state.agents.http_hook(
                     conn,
                     harness,
@@ -1084,7 +1091,7 @@ class CommandHook:
             # session id and nothing else of the body (not the tool, its input or the rest of the hook's
             # payload, which the plugin's script doesn't send either), and the reply is always empty: the
             # hook's command discards it, and the server never writes a decision (§11).
-            conn = self.tools.conn_for(row, harness)
+            conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
             await self.tools.state.agents.http_hook(
                 conn, harness, ev, hook_params(ev, {"session_id": sid}, self.tools.state.clock.now())
             )
@@ -1098,7 +1105,7 @@ class CommandHook:
             await _reply(send, 200, {})
             return
         agents: Any = self.tools.state.agents
-        conn = self.tools.conn_for(row, harness)
+        conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
         res = await agents.http_hook(
             conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
         )
@@ -1169,7 +1176,7 @@ class OpenCodeStatus:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
             self.auth.touch(row)
-            conn = self.tools.conn_for(row, "opencode")
+            conn = self.tools.conn_for(row, "opencode", plugin=_plugin_raw(scope))
             self.tools.state.agents.http_continue(
                 conn, sid, body["batch_id"], body["ack"], queued=event == "wake.queued"
             )
@@ -1197,7 +1204,7 @@ class OpenCodeStatus:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
         self.auth.touch(row)
-        conn = self.tools.conn_for(row, "opencode")
+        conn = self.tools.conn_for(row, "opencode", plugin=_plugin_raw(scope))
         agents = self.tools.state.agents
         p = agents.http_session(conn, sid)
         ev = OPENCODE_STATUS_EVENTS[event]
@@ -1280,7 +1287,7 @@ class Listener:
             wait = 900.0
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
-        conn = self.tools.conn_for(row, harness)
+        conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
         # OpenCode has already reported idle. Even a first round must not turn a busy or
         # approval-blocked session idle when its state changed between that report and this POST.
         if harness == "opencode" or _header(scope, AGAIN_HEADER) == "1":

@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 # a delivery's batch token, as switchboard writes it into a tool's answer
 TOKEN = re.compile(r"yk:b\d{1,12}\.[0-9a-f]{8}")
 MAX_TOKENS = 20
@@ -31,6 +32,18 @@ ID_MAX = 128  # an id or a tool's name longer than this is not relayed (the brok
 OTHER_TIMEOUT = 1.5  # under the group's own timeout (2 s): the script ends itself, Cursor never kills it
 
 
+def plugin_version():
+    """This plugin's own version, from its manifest, for X-Switchboard-Plugin-Version (docs/DESIGN.md §49.13).
+    Only ``X.Y.Z`` of digits is sent: a missing or odd manifest sends no header, and never breaks a hook."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".cursor-plugin", "plugin.json")
+        with open(path, encoding="utf-8") as f:
+            version = json.load(f).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and VERSION.fullmatch(version) else None
+
+
 def send(path, body, timeout):
     base = os.environ.get("SWITCHBOARD_URL", "").rstrip("/")
     token = os.environ.get("SWITCHBOARD_AGENT_TOKEN", "")
@@ -40,12 +53,11 @@ def send(path, body, timeout):
         and not (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1", "switchboard.localhost"))
     ):
         return None
-    req = urllib.request.Request(
-        base + path,
-        data=json.dumps(body).encode(),
-        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
-        method="POST",
-    )
+    headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    version = plugin_version()
+    if version:
+        headers["X-Switchboard-Plugin-Version"] = version
+    req = urllib.request.Request(base + path, data=json.dumps(body).encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.load(response)
