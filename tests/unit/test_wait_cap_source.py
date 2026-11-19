@@ -47,8 +47,8 @@ def tool_cap(harness: str | None, cfg: Config) -> int:
 @pytest.mark.parametrize(
     "harness,cap",
     [
-        ("claude", 600),
-        ("codex", 280),
+        ("claude", 60),
+        ("codex", 60),
         ("cursor", 55),
         ("devin", 100),  # 600 in the config, held to 100 over HTTPS (§49.7)
         ("opencode", 50),
@@ -58,7 +58,8 @@ def tool_cap(harness: str | None, cfg: Config) -> int:
     ],
 )
 def test_the_defaults_are_the_measured_harness_caps(harness: str | None, cap: int) -> None:
-    """No config at all: each harness uses its measured default, with Claude raised by #558. (The tool
+    """No config at all: each harness uses its default: Claude Code and Codex 60 s (#878), the rest as
+    measured. (The tool
     used to say 600 for Devin, and the broker cut that to 100, so the wait it got was 100 either way.)"""
     assert tool_cap(harness, Config()) == cap
 

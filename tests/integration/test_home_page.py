@@ -25,7 +25,7 @@ PR = "https://example.com/shop/pull/7"
 @pytest.fixture
 def team() -> Iterator[tuple[InProcBroker, Browser, Browser]]:
     """A hosted broker: alice (the owner) and bob, with #build and #uploads, both of them members of both
-    (§62), and claude-1 in #build."""
+    (§63), and claude-1 in #build."""
     b = hosted_broker()
     admin = set_up(b)
     bob = join_as_bob(b, admin)
@@ -304,7 +304,7 @@ def test_the_room_list_carries_each_persons_own_seen_mark(
         rooms = {r["name"]: r for r in who.get("/api/rooms").json()["rooms"]}
         return int(rooms["#build"]["seen"])
 
-    joined = seen(bob)  # bob joined #build when it was made: a member starts from then (§62)
+    joined = seen(bob)  # bob joined #build when it was made: a member starts from then (§63)
     assert seen(alice) == 0 and 0 < joined < q
     assert alice.post("/api/rooms/build/seen", {"id": q}).status_code == 200
     assert seen(alice) == q

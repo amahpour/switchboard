@@ -77,7 +77,8 @@ def free_port() -> int:
 
 
 class Broker:
-    def __init__(self, label: str, room: str = ROOM, hosted: bool = False) -> None:
+    def __init__(self, label: str, room: str = ROOM, hosted: bool = False, src: Path | None = None) -> None:
+        self.src = src  # another release's ``src`` folder to run the broker from (tests/compat)
         self.room = room  # the room the person plays in; the evals (tests/evals) name their own
         self.hosted = hosted
         self.admin_password = ""
@@ -85,6 +86,7 @@ class Broker:
         self.home = self.base / "home"
         self.port = 0
         self.proc: subprocess.Popen[bytes] | None = None
+        self.version = ""  # what the broker's own ``sys.ping`` reports
         self.web: httpx.Client | None = None
         self.hdr: dict[str, str] = {}
         self.url = ""
@@ -104,6 +106,7 @@ class Broker:
             "TMPDIR": str(self.base),
             "SWITCHBOARD_TEST": "1",
             "LOGNAME": HUMAN,
+            **({"PYTHONPATH": str(self.src)} if self.src else {}),
         }
         log = open(self.base / "broker.log", "ab")
         if self.hosted:
@@ -135,6 +138,7 @@ class Broker:
             info = ping(self.paths.sock, timeout=1.0)
             if info:
                 self.port = info["port"]
+                self.version = str(info.get("version", ""))
                 break
             if self.proc.poll() is not None:
                 break

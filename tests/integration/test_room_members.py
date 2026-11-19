@@ -1,4 +1,4 @@
-"""A public room's members on a hosted broker (#843, DESIGN.md §62): people join and leave public rooms,
+"""A public room's members on a hosted broker (#843, DESIGN.md §63): people join and leave public rooms,
 and ``@humans``, Home's "waiting on you" and so the notifications built on it reach only a room's
 members. An agent joining makes its person a member. Who agents answer to does not change, private rooms
 keep their own people, and a broker with one person sees nothing new."""

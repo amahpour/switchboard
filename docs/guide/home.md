@@ -34,7 +34,7 @@ A notification for a message says who and where in its title ("scout in #build")
 
 **Show message text in notifications** is on by default. Turn it off, for a lock screen or a screen share, and a notification says only "scout needs you in #build" and "A message for you". The choice is yours, kept by switchboard like the notifications setting itself. Clicking a notification brings the window forward at that room, at the message.
 
-It is all local to your browser. The page draws the notification through your browser; nothing is sent to anyone, and nothing runs when every tab is closed (that, and email or a webhook, would come with later parts of [#723](https://github.com/amahpour/switchboard/issues/723)). The setting is yours, kept by switchboard, so it follows you to another browser, which asks for its own permission again; another person on the same broker has their own. If you blocked notifications for the site, allow them in the browser's site settings first. Notifications need a secure page, which `127.0.0.1` and an HTTPS address both are.
+It is all local to your browser. The page draws the notification through your browser; nothing is sent to anyone, and nothing runs when every tab is closed (that, and email, would come with later parts of [#723](https://github.com/amahpour/switchboard/issues/723); a [webhook](webhook.md) already reaches you when nothing is open). The setting is yours, kept by switchboard, so it follows you to another browser, which asks for its own permission again; another person on the same broker has their own. If you blocked notifications for the site, allow them in the browser's site settings first. Notifications need a secure page, which `127.0.0.1` and an HTTPS address both are.
 
 ## On a phone
 

@@ -21,7 +21,7 @@ from fastapi import FastAPI
 from switchboard import db
 from switchboard.adapters import build_adapters
 from switchboard.adapters.base import waits_over_client_limit
-from switchboard.broker import agent_http, call_http, listener_keys, oauth, oidc, web
+from switchboard.broker import agent_http, call_http, listener_keys, oauth, oidc, web, webhook
 from switchboard.broker.agents import AgentService
 from switchboard.broker.auth import HostOriginGuard, LoginTokens, SecurityHeaders, Sessions, WebOrigin
 from switchboard.broker.backups import Backups
@@ -76,6 +76,7 @@ class BrokerState:
     rpc: RpcServer = None  # type: ignore[assignment]
     engine: Engine = None  # type: ignore[assignment]
     runner: Runner = None  # type: ignore[assignment]
+    notifier: Any = None  # people's webhooks (broker/webhook.py, §62); None until the lifespan wires it
     agents: AgentService = None  # type: ignore[assignment]
     boards: Boards = None  # type: ignore[assignment]
     room_board: Any = None  # the whiteboard (broker/room_board.py, §56)
@@ -255,7 +256,7 @@ def create_app(
         con = db.open_db(paths.db)  # a version-1 database is migrated here, after a backup (§27.6)
         state.store = Store(con, clock)
         state.store.meta_set("passkey_rp_id", web_origin.hostname)
-        # public rooms have members since schema 54: once, each person joins the rooms they had used (§62)
+        # public rooms have members since schema 54: once, each person joins the rooms they had used (§63)
         joined = state.store.join_day_one()
         if joined:
             log.info("room members: %d joined from what they had opened, said or had an agent in", joined)
@@ -322,6 +323,8 @@ def create_app(
         state.tasks.append(asyncio.create_task(_maintenance(state)))
         state.tasks.append(asyncio.create_task(state.runner.run()))
         state.tasks.append(asyncio.create_task(state.hosted_calls.run()))
+        state.notifier = webhook.Notifier(state)
+        state.tasks.append(asyncio.create_task(state.notifier.run()))
         # agents over HTTPS (§49.2): the MCP session manager, once everything it calls is up
         mcp_http = contextlib.AsyncExitStack()
         if state.agent_http is not None:

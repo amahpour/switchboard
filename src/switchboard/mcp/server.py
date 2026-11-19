@@ -78,6 +78,10 @@ class ToolBackend(Protocol):
 
     def wait_cap(self) -> int: ...
 
+    def wait_cap_note(self) -> str:
+        """What a capped ``wait()`` result tells the caller's harness to do instead (#878), or ""."""
+        ...
+
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]: ...
 
     async def find_cred(self, room: str, tid: str | None) -> tuple[str, str] | str: ...
@@ -104,12 +108,14 @@ def request_meta(ctx: Context | None) -> dict[str, Any]:
 PASSED = "[switchboard] logged, not posted."
 
 
-def note_wait_cap(asked: int, res: dict[str, Any]) -> dict[str, Any]:
+def note_wait_cap(asked: int, res: dict[str, Any], advice: str = "") -> dict[str, Any]:
     """When a harness cap shortened ``asked``, name both on the wait result (#547).
 
     ``capped_from`` is what the agent asked for and ``cap_s`` is the limit that was applied: this
     tool's cap, or a tighter one the broker applied. The timeout sentence says so. A message, a
     pause, or an unread note after that sentence is left as it is. The wait itself is unchanged.
+    ``advice`` is the harness's own line on what to do for a longer wait (#878), added after the
+    timeout sentence: for a harness whose Stop hook wakes an idle session, it is to end the turn.
     """
     applied = res.get("timeout_s")
     if isinstance(applied, bool) or not isinstance(applied, int) or asked <= applied:
@@ -121,7 +127,8 @@ def note_wait_cap(asked: int, res: dict[str, Any]) -> dict[str, Any]:
     if out.get("status") == "timeout" and isinstance(text, str):
         needle = f"within {applied} s."
         if needle in text:
-            out["text"] = text.replace(needle, f"within {applied} s (capped from {asked} s).", 1)
+            said = f"within {applied} s (capped from {asked} s)." + (f" {advice}" if advice else "")
+            out["text"] = text.replace(needle, said, 1)
     return out
 
 
@@ -447,7 +454,7 @@ def build_server(st: ToolBackend) -> FastMCP:
             # The harness cancelled the call (e.g. Esc): take the answer back if any.
             st.unwait({**st.base(cred, tid), "wait_id": wait_id})
             raise
-        return dumps(note_wait_cap(asked, res))
+        return dumps(note_wait_cap(asked, res, st.wait_cap_note()))
 
     @mcp.tool(
         name="pass",

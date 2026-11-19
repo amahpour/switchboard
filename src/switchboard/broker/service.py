@@ -1,4 +1,4 @@
-"""RoomService: the broker's room operations (DESIGN.md §3, §10; a room's members, §62).
+"""RoomService: the broker's room operations (DESIGN.md §3, §10; a room's members, §63).
 
 The human side: rooms, history, the member list (and one member's detail, for
 the web UI's Inspector), human messages and commands. Agent operations live in
@@ -63,7 +63,7 @@ MAX_MESSAGE_ID = 2**63 - 1  # SQLite INTEGER; larger Python ints raise OverflowE
 
 def is_member(room: Room, joined: Iterable[int] | dict[int, Any], one_person: bool) -> bool:
     """Is a person a member of ``room``, someone ``@humans``, Home's "waiting on you", the unread badges
-    and notifications reach there (§62, #843)? ``joined``: the ids of the rooms they are in
+    and notifications reach there (§63, #843)? ``joined``: the ids of the rooms they are in
     (``room_people``). A private room's people are its members (§44). A public room's members are the
     people who joined it, except on a broker with one person, where that person is in every room as
     before, and nothing on their screen changes. Who an agent answers to is not this: see
@@ -367,7 +367,7 @@ class RoomService:
             "rules": room.rules_text,
             "pins": self.pins_payload(room),
             # a private room's people, who alone see it (§44); a public room's members, who are pinged
-            # there (§62)
+            # there (§63)
             "private": room.private,
             "people": self.room_people_names(room),
         }
@@ -455,24 +455,24 @@ class RoomService:
 
     def room_humans(self, room: Room) -> list[str]:
         """The people an agent in ``room`` answers to: everyone in a public room (§32), the
-        room's own people in a private one (§44). Not a public room's members (§62): joining or
+        room's own people in a private one (§44). Not a public room's members (§63): joining or
         leaving one changes who is pinged there, never who agents answer to."""
         return self.room_people_names(room) if room.private else self.people_names()
 
-    # ------------------------------------------------------------ a public room's members (§62)
+    # ------------------------------------------------------------ a public room's members (§63)
     def one_person(self) -> bool:
         """One person on this broker (a desktop, or a hosted one with only its admin): every public
-        room is theirs, and nothing about joining or leaving shows (§62)."""
+        room is theirs, and nothing about joining or leaving shows (§63)."""
         return not self.store.people()
 
     def solo_room(self, room: Room) -> bool:
         """A public room on a broker with one person: theirs with or without a row (``is_member``), so what
         they open or post there is recorded as a row (``Store.room_person_used``), and the day a second
-        person is added their rooms are the ones they used, as day one counts them (§62)."""
+        person is added their rooms are the ones they used, as day one counts them (§63)."""
         return not room.private and self.one_person()
 
     def agent_joined(self, room: Room, key: int, agent: str) -> bool:
-        """An agent of the person ``key`` joined ``room``: they are a member of it now (§62, the
+        """An agent of the person ``key`` joined ``room``: they are a member of it now (§63, the
         maintainer's call on #843), and their sidebar says "joined with <agent>" until they open it.
         Nothing is posted: the agent's own join line is in the room. A private room's agents are its
         people's already (§44.3). With one person, the row is kept quietly for the day a second
@@ -500,7 +500,7 @@ class RoomService:
         self.store.home_mark_seen(key, room.id, self.store.last_message_id(room.id))
 
     def _public_people(self, room: Room, key: int | None, name: str, by: int, add: bool) -> str:
-        """Join, add someone to, or leave a public room (§62). Anyone who sees the room may join it; a
+        """Join, add someone to, or leave a public room (§63). Anyone who sees the room may join it; a
         member may add another person; a person leaves only themself. Either way their seen mark moves
         to the newest message (``_member_from_now``): leaving clears their unread there, so nothing of it
         waits on them. Their agents stay. With one person every public room is theirs, so there is
@@ -581,7 +581,7 @@ class RoomService:
 
     def add_room_person(self, room: Room, name: str, by: int) -> str:
         """Add a person to a private room (any of its people may, §44.2), or join or add someone to a
-        public one (§62)."""
+        public one (§63)."""
         if not room.private:
             return self._public_people(room, self.person_by_name(name), name, by, add=True)
         key = self.person_by_name(name)
@@ -597,7 +597,7 @@ class RoomService:
 
     def remove_room_person(self, room: Room, name: str, by: int) -> str:
         """Take a person out of a private room, with their agents (§44.3). A person may leave. In a
-        public room a person only leaves, and their agents stay (§62)."""
+        public room a person only leaves, and their agents stay (§63)."""
         if not room.private:
             return self._public_people(room, self.person_by_name(name), name, by, add=False)
         key = self.person_by_name(name)
@@ -643,7 +643,7 @@ class RoomService:
 
     def person_gone(self, person_id: int) -> None:
         """Someone removed from switchboard leaves every private room, with their agents (§44.3), and
-        every public room they were a member of, quietly (§62): their agents there leave because their
+        every public room they were a member of, quietly (§63): their agents there leave because their
         tokens were revoked, not because of this."""
         for rid in self.store.rooms_of_person(person_id):
             room = self.store.room_by_id(rid)
@@ -928,7 +928,7 @@ class RoomService:
                 defaults["hop_limit"]["value"],
                 self.store.preferences(person_id)["room_rules"],
                 private_for=self.person_key(person_id) if private else None,
-                member=self.person_key(person_id),  # its creator is its first member (§62)
+                member=self.person_key(person_id),  # its creator is its first member (§63)
             )
         except Conflict:
             raise ServiceError("conflict", f"{n} already exists") from None
@@ -1384,7 +1384,7 @@ class RoomService:
             skip_memberships=skip,
             sender_person_id=person[1] if person is not None else None,
         )
-        if self.solo_room(room):  # the broker's one person posted here: a room they used (§62)
+        if self.solo_room(room):  # the broker's one person posted here: a room they used (§63)
             self.store.room_person_used(room.id, self.person_key(person[1] if person is not None else None))
         for note in self.not_connected_notes(room, mentions):
             self.post_notice(room, note, level="warn")

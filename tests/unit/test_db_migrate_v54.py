@@ -1,4 +1,4 @@
-"""Schema 54 (#843, DESIGN.md §62): public rooms have members, in ``room_people`` like a private room's
+"""Schema 54 (#843, DESIGN.md §63): public rooms have members, in ``room_people`` like a private room's
 people. The step from 53 only adds ``joined_with``; the day-one members are filled once, at the broker's
 first start, from what a real old database recorded (``Store.join_day_one``)."""
 
