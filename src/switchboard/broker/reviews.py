@@ -680,9 +680,8 @@ class Boards:
         A burst that is due already, would no longer fit one message, or names its board differently
         goes first, and this line starts the next."""
         quiet, most = self._window()
-        if quiet <= 0 or most <= 0:
+        if quiet <= 0 or most <= 0:  # no quiet period: each line at once (the caller settles the board)
             self._say(room, rv, poster, [line])
-            self._settle(room, rv)
             return
         key = (room.id, rv["id"], actor)
         now = self.state.clock.now()

@@ -71,10 +71,24 @@ def test_an_opener_that_only_raised_is_a_reviewer_and_a_person_or_switchboard_is
     # the link's poster is recorded when switchboard opens the board for it (§37.16)
     opened = [{"data": {"open": PR, "by": "switchboard", "author": "dispatch", "board": 1}}]
     assert reviews.author_side("switchboard", [finding()], opened, room) == ("dispatch",)
-    # an agent that opened it again with open() is its side too
-    assert reviews.author_side("alice", [], [{"open": PR, "by": "dispatch", "how": "kept"}], room) == (
+    # an agent that moved it to the commit it pushed is its side too; one that found it open as it was is not
+    assert reviews.author_side("alice", [], [{"open": PR, "by": "dispatch", "how": "moved"}], room) == (
         "dispatch",
     )
+    assert reviews.author_side("alice", [], [{"open": PR, "by": "grok-reviewer", "how": "kept"}], room) == ()
+
+
+def test_an_agent_that_raised_here_is_a_reviewer_unless_it_owns_a_finding() -> None:
+    """In a review the agents do together, a reviewer may answer another's finding. It is still a
+    reviewer once it has raised one, so the next raise does not go to it instead of the author, which
+    the board then doesn't know: everyone hears it. A finding conceded to an agent makes it the side
+    whatever else it did."""
+    room = ("codex-review", "grok-reviewer", "claude-author")
+    items = [finding(), finding(raised_by="grok-reviewer", n=2)]
+    answered = [{"item": "F1", "to": "contested", "by": "grok-reviewer"}]
+    assert reviews.author_side("alice", items, answered, room) == ()
+    owned = [*items, finding("conceded", raised_by="codex-review", owner="grok-reviewer", n=3)]
+    assert reviews.author_side("alice", owned, answered, room) == ("grok-reviewer",)
 
 
 def test_an_offline_or_departed_author_side_is_not_counted() -> None:

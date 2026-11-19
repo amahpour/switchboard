@@ -3183,27 +3183,34 @@ class Store:
         reached whose delivery is pending, offered or in context, with their screen names. ``since``:
         when the board was opened. A line is recorded by a ``review_line`` event (``{board, msg, items,
         states}``) when it is posted."""
-        rows = self.con.execute(
-            "SELECT e.data AS data, d.membership_id AS membership_id, mb.screen_name AS name"
-            " FROM events e JOIN deliveries d ON d.message_id=json_extract(e.data, '$.msg')"
-            " JOIN memberships mb ON mb.id=d.membership_id"
-            " WHERE e.kind='review_line' AND e.ts>=? AND e.room_id=? AND json_valid(e.data)"
-            " AND json_extract(e.data, '$.board')=? AND mb.left_at IS NULL"
-            " AND d.state IN ('pending','offered','in_context') ORDER BY e.id, mb.screen_name",
+        lines: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]]]] = {}
+        for r in self.con.execute(
+            "SELECT data FROM events WHERE kind='review_line' AND ts>=? AND room_id=? AND json_valid(data)"
+            " AND json_extract(data, '$.board')=? ORDER BY id",
             (since, room_id, review_id),
-        ).fetchall()
-        out: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]]]] = {}
-        for r in rows:
+        ):
             data = json.loads(r["data"])
             msg, labels, states = data.get("msg"), data.get("items"), data.get("states")
             if type(msg) is not int or not isinstance(labels, list):
                 continue
             if not isinstance(states, list) or len(states) != len(labels):
                 states = [""] * len(labels)
-            cards = [(str(label), str(state)) for label, state in zip(labels, states, strict=True)]
-            line = out.setdefault(msg, (msg, cards, []))
-            line[2].append((int(r["membership_id"]), str(r["name"])))
-        return list(out.values())
+            lines[msg] = (msg, [(str(a), str(b)) for a, b in zip(labels, states, strict=True)], [])
+        ids = list(lines)
+        # the room's current members, then their delivery of each line by its key (membership, message):
+        # never a scan of every delivery for a message id
+        for at in range(0, len(ids), 500):
+            chunk = ids[at : at + 500]
+            marks = ",".join("?" * len(chunk))
+            for r in self.con.execute(
+                "SELECT d.membership_id AS membership_id, d.message_id AS message_id, mb.screen_name AS name"
+                " FROM memberships mb JOIN deliveries d ON d.membership_id=mb.id"
+                f" WHERE mb.room_id=? AND mb.left_at IS NULL AND d.message_id IN ({marks})"
+                " AND d.state IN ('pending','offered','in_context') ORDER BY d.message_id, mb.screen_name",
+                (room_id, *chunk),
+            ):
+                lines[int(r["message_id"])][2].append((int(r["membership_id"]), str(r["name"])))
+        return [line for line in lines.values() if line[2]]
 
     def answer_deliveries(self, pairs: Iterable[tuple[int, int]]) -> int:
         """Those ``(membership_id, message_id)`` deliveries become handled, wherever they are short of

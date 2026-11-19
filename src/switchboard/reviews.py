@@ -774,6 +774,9 @@ def agent_move(
 # ------------------------------------------------------- who acts next (#884)
 # the moves of a board's ``review`` events that answer a finding: whoever made one is on the author's side
 SIDE_MOVES = frozenset({"conceded", "reassigned", "contested"})
+# an ``open`` that changed the board: it opened it, brought it back, or moved it to a commit just pushed.
+# A call that found it open as it was ("kept") says nothing about who wrote the pull request.
+SIDE_OPENS = frozenset({"opened", "reopened", "moved"})
 
 
 def author_side(
@@ -784,19 +787,19 @@ def author_side(
     offline: Collection[str] = (),
 ) -> tuple[str, ...]:
     """The agents of the room (``agents``, its active ones) that the board records on the author's
-    side, the side that concedes or contests a finding (#884), in the room's order: every owner of
-    one of its findings, every agent that conceded, reassigned or contested one (an agent's
-    ``review`` event, not a person's), the agent that posted the link a board was opened for
-    (§37.16, its ``open`` event's ``author``), and whoever opened it: its ``holder``, or an agent an
-    ``open`` event names as its ``by``. An opener that has only raised findings here is a reviewer
-    that opened the board, so it is not counted. An agent that is ``offline`` is not counted
-    either: it would not answer. Empty when the board does not know: then a raise asks every other
-    agent, as it always did (``acts_next``). ``events`` are the board's, as ``{"data": {...}}`` or
-    the data alone."""
+    side, the side that concedes or contests a finding (#884), in the room's order. Always: every
+    owner of one of its findings, and the agent that posted the link switchboard opened the board for
+    (§37.16, its ``open`` event's ``author``). And, unless it has raised a finding here, which makes
+    it a reviewer: whoever opened the board (its ``holder``, or an agent an ``open`` event that opened,
+    reopened or moved the board names as its ``by``), and every agent that conceded, reassigned or
+    contested a finding (an agent's ``review`` event, not a person's). An agent that is ``offline``
+    is not counted either: it would not answer. Empty when the board does not know: then a raise asks
+    every other agent, as it always did (``acts_next``). ``events`` are the board's, as
+    ``{"data": {...}}`` or the data alone."""
     owners = {i.owner for i in items if i.kind == "finding" and i.owner}
     raisers = {i.raised_by for i in items if i.kind == "finding" and i.raised_by}
-    known = set(owners)
-    opened = {holder} if holder else set()
+    sure = set(owners)
+    maybe = {holder} if holder else set()
     for event in events:
         data = event.get("data", event) if isinstance(event, dict) else {}
         if not isinstance(data, dict) or data.get("person"):
@@ -805,13 +808,14 @@ def author_side(
         if not isinstance(by, str) or not by:
             continue
         if data.get("to") in SIDE_MOVES:
-            known.add(by)
+            maybe.add(by)
         if "open" in data:
-            opened.add(by)
+            if data.get("how") in SIDE_OPENS:
+                maybe.add(by)
             author = data.get("author")
             if isinstance(author, str) and author:
-                known.add(author)
-    side = known | {a for a in opened if a not in raisers}
+                sure.add(author)
+    side = sure | (maybe - raisers)
     gone = set(offline)
     return tuple(a for a in dict.fromkeys(agents) if a in side and a not in gone)
 
