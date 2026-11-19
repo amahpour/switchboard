@@ -4,16 +4,21 @@
 A room holds several boards, one per pull request URL, open or closed (§37.14); a closed board is
 kept with every item and move it had, and ``open`` brings it back. The rules are in
 ``switchboard.reviews`` (pure); the SQL in ``store.py``. A move that hands the next step to another
-agent (``reviews.handoff``: a raise, a concession to another owner, a fix) comes back with the line
-that wakes them, which ``AgentService.review`` posts as the mover's own message; any other move is a
-notice, which wakes no one. A board is read on demand (``review(action="show")``) or, for a person,
-in the web UI.
+agent (``reviews.told``: a raise, a concession to another owner, a fix) is posted here as the mover's
+own message, delivered only to whoever acts next (a raise: the author's side, #884); any other move
+is a notice, which wakes no one. One agent's raises and asks wait a few seconds for its next ones and
+go as one message (§37.17), and a line stops counting as unanswered for an agent once the board has
+moved on without it. A board is read on demand (``review(action="show")``) or, for a person, in the
+web UI.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from switchboard import reviews
@@ -50,6 +55,33 @@ ACTIONS = (
 
 MAX_UNREVIEWED = 500  # links noted as "nothing asked", across all rooms, until a restart (§37.16)
 
+# who posts a board's line: the mover's own message fields, as ``AgentService.review`` has them
+Poster = dict[str, Any]
+# (room id, board id, agent): one agent's lines on one board, held for its next ones (§37.17)
+BurstKey = tuple[int, int, str]
+
+
+@dataclass
+class Burst:
+    """Lines one agent's raises and asks on one board made, not posted yet (#884)."""
+
+    room: Room
+    rv: dict[str, Any]
+    poster: Poster
+    first_at: float
+    last_at: float
+    told: list[reviews.Told] = field(default_factory=list)
+
+
+def loop_call_later(delay: float, callback: Callable[[], None]) -> Any:
+    """``callback`` in ``delay`` seconds on the running loop; None when nothing runs one, and the caller
+    posts at once rather than hold a line nothing would send."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    return loop.call_later(delay, callback)
+
 
 def vendor_of(member: Any) -> str:
     """Whose model an agent is, as far as the broker knows: its harness (Claude Code, Codex, ...). A review
@@ -58,8 +90,13 @@ def vendor_of(member: Any) -> str:
 
 
 class Boards:
-    def __init__(self, state: Any):
+    def __init__(self, state: Any, call_later: Callable[[float, Callable[[], None]], Any] = loop_call_later):
         self.state = state
+        # one agent's raises and asks on a board, held a few seconds for its next ones (§37.17), and the
+        # timer that sends each; ``call_later`` schedules it (a test passes its own, run by its clock)
+        self._bursts: dict[BurstKey, Burst] = {}
+        self._timers: dict[BurstKey, Any] = {}
+        self._call_later = call_later
         # The board each agent last acted on, or was told about, in each room (§37.14): what a call
         # without a ``url`` means when the room has several open boards. It is kept in memory, and a
         # restart forgets it; a room with several open boards then asks for the url, never guesses.
@@ -211,14 +248,18 @@ class Boards:
         self.store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
 
     # ------------------------------------------------------------ agent moves
-    def agent(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
+    def agent(self, room: Room, actor: str, params: dict[str, Any], *, poster: Poster) -> dict[str, Any]:
         """One ``review`` tool call from the member ``actor`` of ``room``. Returns the board as
-        text (what the agent reads), with ``handoff`` (who must act next, and the line that tells
-        them) when the move is someone else's to answer; or raises ReviewError with what to fix.
-        A call is about one board (§37.14): its ``url``, else the one the agent last used."""
+        text (what the agent reads); or raises ReviewError with what to fix. A move that is someone
+        else's to answer is posted as ``actor``'s message (``poster``: its fields), to them alone; a
+        raise or an ask waits a few seconds for the same agent's next ones (§37.17). A call is about
+        one board (§37.14): its ``url``, else the one the agent last used."""
         action = params.get("action")
         if action not in ACTIONS:
             raise ReviewError(f"action must be one of: {', '.join(ACTIONS)}")
+        if action not in ("raise", "ask", "show", "list"):
+            # any other move goes after the lines already made, so the room reads in order
+            self.flush_room(room.id)
         if action == "open":
             return self._open(room, actor, params)
         if action == "list":
@@ -241,7 +282,9 @@ class Boards:
         if action in ("raise", "ask"):
             item = self._add(rv, actor, action, params)
             verb = "raised" if item.kind == "finding" else "asked"
-            return self._told(room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}")
+            return self._told(
+                room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}", poster=poster, hold=True
+            )
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
@@ -336,6 +379,7 @@ class Boards:
                 moved,
                 actor,
                 f"{actor} moved {item.label} from {item.owner}{gone} to {fields['owner']}",
+                poster=poster,
             )
         tail = {
             "reopened": f", owner {item.owner}: {fields.get('reason')}",
@@ -349,7 +393,13 @@ class Boards:
             "confirmed": f" by {actor}",
         }.get(shown, "")
         return self._told(
-            room, rv, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}", action=action
+            room,
+            rv,
+            moved,
+            actor,
+            f"{actor} {action_past(action)} {item.label}{tail}",
+            action=action,
+            poster=poster,
         )
 
     def _concur(
@@ -448,6 +498,7 @@ class Boards:
         if fields.get("pr_state") in ("merged", "closed"):
             self.store.set_review(rv["id"], closed_at=now, closed_by=actor)
             self._notice(room, f"{actor} reports {url} {fields['pr_state']}: the review board is closed")
+            self._settle(room, rv, closed=True)
             self._publish(room)
             return {
                 "ok": True,
@@ -490,6 +541,7 @@ class Boards:
         self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
         self._event(room, rv, close=rv["url"], by=actor, reason=reason, open=labels)
         self.state.service.post_notice(room, line, level="info")
+        self._settle(room, rv, closed=True)
         self._publish(room)
         return {"ok": True, "closed": True, "board": None, "note": KEPT}
 
@@ -509,6 +561,7 @@ class Boards:
         self._check_room(room, closing=rv["closed_at"] is None)
         if rv["closed_at"] is None:
             self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
+        self._settle(room, rv, closed=True)
         self._event(room, rv, reset=u, by=actor, reason=reason)
         fresh = self.store.open_review(room.id, u, head, actor)
         self._event(room, fresh, open=u, head=head, by=actor)
@@ -547,30 +600,191 @@ class Boards:
         notice: str,
         wake: bool = True,
         action: str = "",
+        poster: Poster | None = None,
+        hold: bool = False,
     ) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
-        for whoever acts next (posted by the caller as the mover's message, so it wakes them),
-        or the notice when that's nobody (§37.4). A move that asks nothing of anyone, such as a
+        for whoever acts next, posted as the mover's message (``poster``) to them alone, so it wakes
+        them, or the notice when that's nobody (§37.4). A raised finding's next move is the author's
+        side's (``reviews.author_side``, #884). ``hold``: a raise or an ask, whose line waits a few
+        seconds for the same agent's next ones (§37.17). A move that asks nothing of anyone, such as a
         pick among options (``wake`` False), is a notice whatever state the item is in. With several
         boards open, the line and the notice say which one, and whoever is told of a move on a board
-        has it as the board their next call is about (§37.14)."""
+        has it as the board their next call is about (§37.14). Every move then settles the board's
+        earlier lines: one an agent has no move left on is answered for it (``_settle``)."""
         several = self._several(room)
-        handoff = (
-            reviews.handoff(
-                item, actor, self.store.active_names(room.id), rv["url"] if several else "", action=action
-            )
-            if wake
-            else None
-        )
-        if handoff is None:
+        line = None
+        if wake and poster is not None:
+            agents, offline = self._here(room)
+            side = self._side(room, rv, self.store.review_items(rv["id"]), agents, offline)
+            url = rv["url"] if several else ""
+            line = reviews.told(item, actor, agents, url, action=action, side=side)
+        if line is None:
             ref = self._ref(rv)
             self._notice(room, f"{ref}: {notice}" if several else notice)
         out = self._shown(room, rv, touched=item.label)
-        if handoff is not None:
-            out["handoff"] = {"mentions": list(handoff[0]), "text": handoff[1]}
-            for agent in handoff[0]:
+        if line is not None and poster is not None:
+            for agent in line.who:
                 self._last[(room.id, agent)] = rv["url"]
+            if hold:
+                self._hold(room, rv, actor, poster, line)
+            else:
+                self._say(room, rv, poster, [line])
+        self._settle(room, rv)
         return out
+
+    # ---------------------------------------------------- lines for whoever acts next (#884)
+    def _here(self, room: Room) -> tuple[list[str], list[str]]:
+        """The room's agents, in the order they joined, and the ones of them that are offline."""
+        members = self.store.members(room.id)
+        names = self.store.active_names(room.id)
+        return names, [m.name for m in members if m.status == "offline"]
+
+    def _side(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        items: Sequence[reviews.Item],
+        agents: Sequence[str],
+        offline: Sequence[str],
+    ) -> tuple[str, ...]:
+        """The board's author side as it records it (``reviews.author_side``)."""
+        events = [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+        return reviews.author_side(reviews.holder(rv), items, events, agents, offline)
+
+    def _say(self, room: Room, rv: dict[str, Any], poster: Poster, lines: Sequence[reviews.Told]) -> None:
+        """Post ``lines`` as one message from their mover, delivered only to the agents they name
+        (§37.4), and record which cards it named, so a later move can settle it (``_settle``)."""
+        who = list(dict.fromkeys(a for t in lines for a in t.who))
+        text = reviews.burst_text(lines)[: self.state.cfg.delivery.max_msg_chars]
+        msg = self.state.service._post(room, **poster, text=text, mentions=who, addressed_only=True)
+        self.store.add_event(
+            "review_line",
+            room_id=room.id,
+            data={
+                "board": rv["id"],
+                "msg": msg.id,
+                "items": [t.label for t in lines],
+                "states": [t.state for t in lines],
+            },
+        )
+
+    def _window(self) -> tuple[float, float]:
+        """How long a burst of lines waits (§37.17): the room's quiet period after its last line, and at
+        most ``reviews.BURST_MAX_S`` (or the max hold, if shorter) after its first. Either at 0: none."""
+        d = self.state.cfg.delivery
+        return d.quiet_s, min(reviews.BURST_MAX_S, d.max_hold_s)
+
+    def _hold(self, room: Room, rv: dict[str, Any], actor: str, poster: Poster, line: reviews.Told) -> None:
+        """Add a raise's or an ask's ``line`` to ``actor``'s burst on this board, and time the burst.
+        A burst that is due already, would no longer fit one message, or names its board differently
+        goes first, and this line starts the next."""
+        quiet, most = self._window()
+        if quiet <= 0 or most <= 0:
+            self._say(room, rv, poster, [line])
+            self._settle(room, rv)
+            return
+        key = (room.id, rv["id"], actor)
+        now = self.state.clock.now()
+        burst = self._bursts.get(key)
+        if burst is not None and (
+            reviews.burst_due(burst.first_at, burst.last_at, now, quiet, most)
+            or burst.told[0].on != line.on
+            or len(reviews.burst_text([*burst.told, line])) > self.state.cfg.delivery.max_msg_chars
+        ):
+            self._flush(key)
+            burst = None
+        if burst is None:
+            burst = self._bursts[key] = Burst(
+                room=room, rv=rv, poster=dict(poster), first_at=now, last_at=now
+            )
+        burst.told.append(line)
+        burst.last_at = now
+        self._arm(key, reviews.burst_wait(burst.first_at, burst.last_at, now, quiet, most))
+
+    def _arm(self, key: BurstKey, delay: float) -> None:
+        timer = self._timers.pop(key, None)
+        if timer is not None:
+            timer.cancel()
+        handle = self._call_later(max(delay, 0.05), lambda: self._wake(key))
+        if handle is None:  # nothing would run the timer: send it now rather than hold it
+            self._flush(key)
+        else:
+            self._timers[key] = handle
+
+    def _wake(self, key: BurstKey) -> None:
+        self._timers.pop(key, None)
+        try:
+            self.flush_due()
+        except Exception:  # pragma: no cover - a failed post must not kill the loop's callback
+            log.exception("posting a review board's lines failed")
+        burst = self._bursts.get(key)
+        if burst is not None:  # not due yet by the broker's clock: wait out what is left
+            quiet, most = self._window()
+            now = self.state.clock.now()
+            self._arm(key, reviews.burst_wait(burst.first_at, burst.last_at, now, quiet, most))
+
+    def flush_due(self) -> None:
+        """Post every burst whose time has come."""
+        quiet, most = self._window()
+        now = self.state.clock.now()
+        for key, burst in list(self._bursts.items()):
+            if reviews.burst_due(burst.first_at, burst.last_at, now, quiet, most):
+                self._flush(key)
+
+    def flush_room(self, room_id: int) -> None:
+        """Post every burst in a room now: a move other than a raise or an ask comes after them."""
+        for key in [k for k in self._bursts if k[0] == room_id]:
+            self._flush(key)
+
+    def flush_actor(self, room_id: int, actor: str) -> None:
+        """Post ``actor``'s bursts in a room now: its say comes after the lines its moves made."""
+        for key in [k for k in self._bursts if k[0] == room_id and k[2] == actor]:
+            self._flush(key)
+
+    def _flush(self, key: BurstKey) -> None:
+        burst = self._bursts.pop(key, None)
+        timer = self._timers.pop(key, None)
+        if timer is not None:
+            timer.cancel()
+        if burst is None or not burst.told:
+            return
+        room = self.store.room_by_id(burst.room.id)
+        if room is None or room.closed:  # deleted or closed meanwhile: nobody is there to act
+            log.info("review board lines for a closed room %s not posted", burst.room.id)
+            return
+        self._say(room, burst.rv, burst.poster, burst.told)
+        self._settle(room, burst.rv)
+
+    def close(self) -> None:
+        """At shutdown: stop the timers and post every burst still held, so no line is lost."""
+        for timer in self._timers.values():
+            timer.cancel()
+        self._timers.clear()
+        for key in list(self._bursts):
+            with contextlib.suppress(Exception):
+                self._flush(key)
+
+    def _settle(self, room: Room, rv: dict[str, Any], *, closed: bool = False) -> None:
+        """Answer the board's earlier lines that the agents they reached no longer owe (#884): an agent
+        with no move left on any card a line named (``reviews.answered``) has its delivery of that line
+        handled, as a say or a pass would handle it, so the line neither comes back to it as
+        ``again=yes`` nor sets off the watchdog. ``closed``: the board takes no more moves, so every
+        line is answered. An agent that still has a move keeps its line."""
+        lines = self.store.review_lines_open(room.id, rv["id"], rv["opened_at"])
+        if not lines:
+            return
+        items = self.store.review_items(rv["id"])
+        by_label = {i.label: i for i in items}
+        agents, offline = self._here(room)
+        side = self._side(room, rv, items, agents, offline)
+        done: list[tuple[int, int]] = []
+        for msg, cards, reached in lines:
+            names = [name for _, name in reached]
+            free = set(names if closed else reviews.answered(cards, by_label, names, agents, side))
+            done.extend((membership_id, msg) for membership_id, name in reached if name in free)
+        if done:
+            self.store.answer_deliveries(done)
 
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         url = reviews.url(params.get("url"))
@@ -591,11 +805,14 @@ class Boards:
                 f"{room.name} has {open_} open boards, the most it holds: close one before opening another"
             )
 
-    def _open_board(self, room: Room, by: str, url: str, head: str) -> tuple[dict[str, Any], str]:
+    def _open_board(
+        self, room: Room, by: str, url: str, head: str, *, author: str = ""
+    ) -> tuple[dict[str, Any], str]:
         """The room's board for ``url``, opened by ``by`` (an agent or a person) with ``head``, and
         what happened to it: ``opened`` (a new board), ``reopened`` (a closed one is back, with its
         items and history), ``moved`` (an open one now at a newer head) or ``kept`` (open already).
-        Other boards of the room are left as they are (§37.14)."""
+        Other boards of the room are left as they are (§37.14). ``author``: the agent that posted the
+        link a board is opened for (§37.16), recorded with the move: the board's author side (#884)."""
         rv = self.store.review_for_url(room.id, url)
         new_head = bool(head) and (rv is None or head != rv["head"])
         if rv is not None and rv["posted_at"] is not None and new_head:
@@ -624,7 +841,7 @@ class Boards:
                 self._notice(room, f"{by} moved the review board to {head[:12]}")
                 how = how if how == "reopened" else "moved"
             rv = self.store.review_for_url(room.id, url) or rv
-        self._event(room, rv, open=url, head=head, by=by, how=how)
+        self._event(room, rv, open=url, head=head, by=by, how=how, **({"author": author} if author else {}))
         return rv, how
 
     def on_agent_say(self, room: Room, author: str, text: str) -> None:
@@ -662,7 +879,7 @@ class Boards:
                 )
                 continue
             try:
-                self._open_board(room, "switchboard", url, "")
+                self._open_board(room, "switchboard", url, "", author=author)
             except ReviewError as e:
                 self._notice(room, f"not asking for a review of {url}: {e}")
                 continue
@@ -701,6 +918,7 @@ class Boards:
     def person_open(self, room: Room, name: str, url: str) -> str:
         """A person's ``/review`` (§37.8): the board opens, or comes back, or stays, for ``url``,
         and every page showing the room gets it at once. Returns what happened (``_open_board``)."""
+        self.flush_room(room.id)
         rv, how = self._open_board(room, name, reviews.url(url), "")
         self._publish(room)
         return how
@@ -761,6 +979,7 @@ class Boards:
         agents the way anything a person says does; closing is a notice. The move is about one
         board: the ``url`` the page sends, or the room's only open one (§37.14). A person may
         close any board, whoever opened it."""
+        self.flush_room(room.id)  # the person's move reads after the agents' lines already made
         rv = self._person_board(room, params)
         action = params.get("action")
         if action == "close":
@@ -770,6 +989,7 @@ class Boards:
             self._notice(
                 room, f"{name} closed the review board for {rv['url']}" + (f": {reason}" if reason else "")
             )
+            self._settle(room, rv, closed=True)
             return {"ok": True, "boards": self._publish(room)}
         if action == "handoff":
             return self._handoff(room, rv, name, person_id, params)
@@ -859,6 +1079,7 @@ class Boards:
             via="web",
             person=(name, person_id),
         )
+        self._settle(room, rv)  # a ruling or an answer is the next move on that card: its lines are answered
         return {"ok": True, "boards": self._publish(room)}
 
     def _handoff(

@@ -771,51 +771,192 @@ def agent_move(
     return to
 
 
-def handoff(
-    item: Item, actor: str, agents: Sequence[str], board_url: str = "", *, action: str = ""
-) -> tuple[tuple[str, ...], str] | None:
-    """After an agent's move on ``item`` (its state now), who has to act next and the line
-    that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
-    is the other agents' to concede or contest; a finding conceded to another agent is that
-    owner's to fix; a fix is its raiser's to check. A question just asked is the other agents' to
-    agree with or answer with another pick (#423: "recommended" means they all agree), before it
-    is a person's. A contested finding goes back to its raiser (#424), to drop or insist on; once
-    insisted on it waits for a person, who sees it on the page, and a move that leaves the next
-    step with the mover wakes nobody. ``agents``: the room's active agents. ``board_url``: given
+# ------------------------------------------------------- who acts next (#884)
+# the moves of a board's ``review`` events that answer a finding: whoever made one is on the author's side
+SIDE_MOVES = frozenset({"conceded", "reassigned", "contested"})
+
+
+def author_side(
+    holder: str,
+    items: Sequence[Item],
+    events: Sequence[dict[str, Any]],
+    agents: Sequence[str],
+    offline: Collection[str] = (),
+) -> tuple[str, ...]:
+    """The agents of the room (``agents``, its active ones) that the board records on the author's
+    side, the side that concedes or contests a finding (#884), in the room's order: every owner of
+    one of its findings, every agent that conceded, reassigned or contested one (an agent's
+    ``review`` event, not a person's), the agent that posted the link a board was opened for
+    (§37.16, its ``open`` event's ``author``), and whoever opened it: its ``holder``, or an agent an
+    ``open`` event names as its ``by``. An opener that has only raised findings here is a reviewer
+    that opened the board, so it is not counted. An agent that is ``offline`` is not counted
+    either: it would not answer. Empty when the board does not know: then a raise asks every other
+    agent, as it always did (``acts_next``). ``events`` are the board's, as ``{"data": {...}}`` or
+    the data alone."""
+    owners = {i.owner for i in items if i.kind == "finding" and i.owner}
+    raisers = {i.raised_by for i in items if i.kind == "finding" and i.raised_by}
+    known = set(owners)
+    opened = {holder} if holder else set()
+    for event in events:
+        data = event.get("data", event) if isinstance(event, dict) else {}
+        if not isinstance(data, dict) or data.get("person"):
+            continue
+        by = data.get("by")
+        if not isinstance(by, str) or not by:
+            continue
+        if data.get("to") in SIDE_MOVES:
+            known.add(by)
+        if "open" in data:
+            opened.add(by)
+            author = data.get("author")
+            if isinstance(author, str) and author:
+                known.add(author)
+    side = known | {a for a in opened if a not in raisers}
+    gone = set(offline)
+    return tuple(a for a in dict.fromkeys(agents) if a in side and a not in gone)
+
+
+def _first(item: Item, here: Sequence[str], side: Sequence[str]) -> list[str]:
+    """Whose move a finding's state makes next (§37.4): a raised one is the author's side's to
+    concede or contest (every other agent's when the board doesn't know that side, #884), a contested
+    one its raiser's (#424), a conceded one its owner's, an unconfirmed fix its raiser's."""
+    if item.kind != "finding":
+        return []
+    if item.state == "raised":
+        mine = [a for a in side if a in here and a != item.raised_by]
+        return mine or [a for a in here if a != item.raised_by]
+    if item.state == "contested" and not item.insisted:
+        return [item.raised_by] if item.raised_by in here else []
+    if item.state == "conceded":
+        return [item.owner] if item.owner and item.owner in here else []
+    if item.state == "fixed" and not item.confirmed_by:
+        return [item.raised_by] if item.raised_by in here else []
+    return []
+
+
+def _pickers(item: Item, here: Sequence[str]) -> list[str]:
+    """The agents asked to agree with ``item``'s options who have neither picked nor abstained, while
+    it is still being decided (§37.12: every agent in the room counts)."""
+    if not item.options:
+        return []
+    deciding = item.state == "open" if item.kind == "question" else item.state in OPEN_FINDING
+    if not deciding:
+        return []
+    spoken = set(effective_picks(item)) | set(item.abstentions)
+    return [a for a in here if a != item.raised_by and a not in spoken]
+
+
+def acts_next(item: Item, agents: Sequence[str], side: Sequence[str] = ()) -> tuple[str, ...]:
+    """Who of ``agents`` (the room's) has a move on ``item`` now (#884): its state's next move
+    (``_first``), and every agent still to pick among its options. A board's line about an item stays
+    owed by an agent it reached only while that agent is here: once the item has moved on (an agent
+    conceded it, the raiser dropped it, a person ruled), its line is answered for the others."""
+    here = list(dict.fromkeys(agents))
+    who = set(_first(item, here, side)) | set(_pickers(item, here))
+    return tuple(a for a in here if a in who)
+
+
+def answered(
+    cards: Sequence[tuple[str, str]],
+    items: dict[str, Item],
+    recipients: Sequence[str],
+    agents: Sequence[str],
+    side: Sequence[str],
+) -> list[str]:
+    """Of the agents a board's line reached (``recipients``), those for whom it is answered (#884),
+    though they said nothing, since a move on the board is the answer. A line names ``cards``, each as
+    its label and the state it was in when the line was posted (read now in ``items`` by label). An
+    agent still owes the line while one of its cards is in that state and the agent has a move on it
+    (``acts_next``). Once a card has moved on, what the line asked of it was done by someone, and
+    whatever is next has a line of its own (or was the mover's own doing, as a concession to itself
+    is); a card the board no longer has is nobody's. A state the line did not record (``""``) asks only
+    whether the agent has a move."""
+    owed: set[str] = set()
+    for label, state in cards:
+        item = items.get(label)
+        if item is not None and (not state or item.state == state):
+            owed.update(acts_next(item, agents, side))
+    return [r for r in recipients if r not in owed]
+
+
+@dataclass(frozen=True)
+class Told:
+    """One move's line for whoever acts next (§37.4): ``who`` they are, and its parts. ``body`` is the
+    line between its board and its ``show``: "F1 raised: off by one. @claude-1: concede or contest it."
+    ``plain``: a raise with no fix options, which asks the same of the same agents as every other one."""
+
+    who: tuple[str, ...]
+    label: str
+    kind: str
+    title: str
+    body: str
+    on: str
+    show: str
+    plain: bool = False
+    state: str = ""  # the item's state the line is about: it is answered once the item moves on
+
+    @property
+    def line(self) -> str:
+        return f"{self.on} {self.body} {self.show}"
+
+
+def told(
+    item: Item,
+    actor: str,
+    agents: Sequence[str],
+    board_url: str = "",
+    *,
+    action: str = "",
+    side: Sequence[str] = (),
+) -> Told | None:
+    """After an agent's move on ``item`` (its state now), who has to act next and the parts of the
+    line that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding is
+    the author's side's to concede or contest (``author_side``, #884), every other agent's while the
+    board doesn't know that side; a finding conceded to another agent is that owner's to fix; a fix
+    is its raiser's to check. A question just asked, and a finding's fix options, are every other
+    agent's to agree with or answer with another pick (#423: "recommended" means they all agree),
+    before it is a person's. A contested finding goes back to its raiser (#424), to drop or insist
+    on; once insisted on it waits for a person, who sees it on the page, and a move that leaves the
+    next step with the mover wakes nobody. ``agents``: the room's active agents. ``board_url``: given
     when the room has several open boards (§37.14), so the line names the board and every call it
-    suggests carries its ``url``; the line is the mover's own message, so the board's URL, which
-    the mover wrote, may be in it."""
+    suggests carries its ``url``; the line is the mover's own message, so the board's URL, which the
+    mover wrote, may be in it."""
     on = f"Review board {board_url}:" if board_url else "Review board:"
     pass_url = f', url="{board_url}"' if board_url else ""
     show = f'review(action="show"{pass_url}) shows the board.'
+    here = list(dict.fromkeys(agents))
     if item.kind == "question":
-        who = tuple(a for a in agents if a != actor) if item.state == "open" and item.options else ()
-        if not who:
+        who = tuple(a for a in _pickers(item, here) if a != actor)
+        if item.state != "open" or not who:
             return None
         concur_s = f'review(action="concur", item="{item.label}", recommend=<index>{pass_url})'
         abstain_s = f'review(action="abstain", item="{item.label}"{pass_url})'
         stop = "" if item.title.endswith((".", "?", "!")) else "."  # a question usually ends in one
         mention = " ".join("@" + a for a in who)
-        return who, (
-            f"{on} {item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
-            f" or pick another option, {concur_s}, or abstain if you have no view, {abstain_s}. {show}"
+        body = (
+            f"{item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
+            f" or pick another option, {concur_s}, or abstain if you have no view, {abstain_s}."
         )
+        return Told(who, item.label, item.kind, item.title, body, on, show, state=item.state)
+    first = [a for a in _first(item, here, side) if a != actor]
     if item.state == "raised":
-        who = tuple(a for a in agents if a != actor)
+        # its fix options are every other agent's to agree with too (#423)
+        pick = set(_pickers(item, here))
+        who = tuple(a for a in here if (a in first or a in pick) and a != actor)
         verb, then = f"raised: {item.title}", "concede or contest it"
-        if item.options:  # its fix options are theirs to agree with too (#423)
+        if item.options:
             then += ", and agree with its fix option, pick another, or abstain (concur or abstain)"
     elif item.state == "contested" and not item.insisted:
         # a contest is the raiser's to answer (#424): drop it, or insist with a reason, and only an
         # insisted finding is a person's. The reason itself is read on the board, not repeated here
-        who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
+        who = tuple(first)
         verb = f"contested: {item.title}"
         then = (
             f'drop it if the contest convinces you, or insist with your reason (review(action="insist", '
             f'item="{item.label}", reason=...{pass_url})): only an insisted finding goes to a person'
         )
     elif item.state == "conceded":
-        who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
+        who = tuple(first)
         verb = (
             f"reopened, owner {item.owner}: {item.reason}"
             if action == "reopen"
@@ -823,13 +964,93 @@ def handoff(
         )
         then = "it's yours to fix"
     elif item.state == "fixed" and not item.confirmed_by:
-        who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
+        who = tuple(first)
         verb, then = f"fixed in {item.commit[:12]}", "check the fix"
     else:
         return None
     if not who:
         return None
-    return who, f"{on} {item.label} {verb}. {' '.join('@' + a for a in who)}: {then}. {show}"
+    body = f"{item.label} {verb}. {' '.join('@' + a for a in who)}: {then}."
+    plain = item.state == "raised" and not item.options
+    return Told(who, item.label, item.kind, item.title, body, on, show, plain, item.state)
+
+
+def handoff(
+    item: Item,
+    actor: str,
+    agents: Sequence[str],
+    board_url: str = "",
+    *,
+    action: str = "",
+    side: Sequence[str] = (),
+) -> tuple[tuple[str, ...], str] | None:
+    """Who has to act next after an agent's move on ``item``, and the one line that tells them, or
+    None (``told``)."""
+    t = told(item, actor, agents, board_url, action=action, side=side)
+    return None if t is None else (t.who, t.line)
+
+
+def label_list(labels: Sequence[str]) -> str:
+    """Labels of one kind as a line names them: "F1 to F11", "F1 and F3 to F5", "Q2". A run of three
+    or more numbers in a row reads "from to"."""
+    parts: list[str] = []
+    run: list[str] = []
+
+    def num(label: str) -> int:
+        return int(label[1:])
+
+    def close() -> None:
+        if len(run) >= 3:
+            parts.append(f"{run[0]} to {run[-1]}")
+        else:
+            parts.extend(run)
+
+    for label in labels:
+        if run and num(label) != num(run[-1]) + 1:
+            close()
+            run = []
+        run.append(label)
+    if run:
+        close()
+    return names(parts)
+
+
+def burst_text(entries: Sequence[Told]) -> str:
+    """One message for several lines one agent's moves on one board made within a few seconds
+    (#884), so whoever acts next hears them once: "Review board: F1 to F11 raised. @claude-1: concede
+    or contest each." and the titles under it, when every one is a plain raise for the same agents;
+    else each line under one that names them all. A single line is that line, as it always was."""
+    if len(entries) == 1:
+        return entries[0].line
+    on, show = entries[0].on, entries[0].show
+    findings = [t.label for t in entries if t.kind == "finding"]
+    questions = [t.label for t in entries if t.kind == "question"]
+    if all(t.plain for t in entries) and len({t.who for t in entries}) == 1:
+        mention = " ".join("@" + a for a in entries[0].who)
+        rows = "\n".join(f"- {t.label}: {t.title}" for t in entries)
+        return f"{on} {label_list(findings)} raised. {mention}: concede or contest each.\n{rows}\n{show}"
+    said = [f"{label_list(findings)} raised"] if findings else []
+    if questions:
+        said.append(f"{label_list(questions)} asked")
+    rows = "\n".join(f"- {t.body}" for t in entries)
+    return f"{on} {' and '.join(said)}.\n{rows}\n{show}"
+
+
+# A board's lines from one agent's raises and asks wait for the room's quiet period (``[delivery]
+# quiet_s``, 3 s) after its last one, and at most this long after its first, then go as one (#884):
+# a few seconds is all a first wake waits.
+BURST_MAX_S = 5.0
+
+
+def burst_due(first_at: float, last_at: float, now: float, quiet_s: float, max_s: float) -> bool:
+    """True once a burst of lines may go: quiet for ``quiet_s`` since its last, or ``max_s`` since its
+    first, whichever comes first."""
+    return now - last_at >= quiet_s or now - first_at >= max_s
+
+
+def burst_wait(first_at: float, last_at: float, now: float, quiet_s: float, max_s: float) -> float:
+    """Seconds until ``burst_due`` is true, 0 when it is already."""
+    return max(0.0, min(last_at + quiet_s, first_at + max_s) - now)
 
 
 def person_move(item: Item, move: str) -> str:

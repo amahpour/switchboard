@@ -482,6 +482,7 @@ class Store:
         deliver_notice: bool = False,
         meeting_id: int | None = None,
         say_key_hash: str | None = None,
+        addressed_only: bool = False,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -499,6 +500,8 @@ class Store:
         ``meeting_id`` identifies the call whose source supplied a line (§52, §54): the line is stored
         with it, and the call's count of lines goes up in the same transaction.
         ``say_key_hash`` records an authenticated member's retry receipt in that same transaction (§8.4).
+        ``addressed_only``: a member the message does not address (no @mention, no live claim it names)
+        gets no delivery row: a review board's line for whoever acts next (§37.4, #884) reaches nobody else.
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
@@ -580,6 +583,8 @@ class Store:
                     ] in skip:
                         continue
                     mentioned = r["screen_name"].lower() in mentions_l or r["id"] in watching
+                    if addressed_only and not mentioned:
+                        continue
                     prio = 2 if sender_kind == "human" else (1 if mentioned else 0)
                     self.con.execute(
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
@@ -3169,6 +3174,58 @@ class Store:
             (since, room_id, review_id),
         ).fetchall()
         return [Event.from_row(r) for r in rows]
+
+    def review_lines_open(
+        self, room_id: int, review_id: int, since: float
+    ) -> list[tuple[int, list[tuple[str, str]], list[tuple[int, str]]]]:
+        """One board's lines for whoever acts next that some current member still has open (#884): each
+        as its message id, the cards it named (label, and the card's state then), and the members it
+        reached whose delivery is pending, offered or in context, with their screen names. ``since``:
+        when the board was opened. A line is recorded by a ``review_line`` event (``{board, msg, items,
+        states}``) when it is posted."""
+        rows = self.con.execute(
+            "SELECT e.data AS data, d.membership_id AS membership_id, mb.screen_name AS name"
+            " FROM events e JOIN deliveries d ON d.message_id=json_extract(e.data, '$.msg')"
+            " JOIN memberships mb ON mb.id=d.membership_id"
+            " WHERE e.kind='review_line' AND e.ts>=? AND e.room_id=? AND json_valid(e.data)"
+            " AND json_extract(e.data, '$.board')=? AND mb.left_at IS NULL"
+            " AND d.state IN ('pending','offered','in_context') ORDER BY e.id, mb.screen_name",
+            (since, room_id, review_id),
+        ).fetchall()
+        out: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]]]] = {}
+        for r in rows:
+            data = json.loads(r["data"])
+            msg, labels, states = data.get("msg"), data.get("items"), data.get("states")
+            if type(msg) is not int or not isinstance(labels, list):
+                continue
+            if not isinstance(states, list) or len(states) != len(labels):
+                states = [""] * len(labels)
+            cards = [(str(label), str(state)) for label, state in zip(labels, states, strict=True)]
+            line = out.setdefault(msg, (msg, cards, []))
+            line[2].append((int(r["membership_id"]), str(r["name"])))
+        return list(out.values())
+
+    def answer_deliveries(self, pairs: Iterable[tuple[int, int]]) -> int:
+        """Those ``(membership_id, message_id)`` deliveries become handled, wherever they are short of
+        that: a board's line answered on the board (#884), as a say or a pass answers what reached a
+        member (``mark_handled``). One still offered is handled too: the batch's confirmation and expiry
+        move only offered rows, so it stays handled, and its member is not woken again for it."""
+        now = self.clock.now()
+        n = 0
+        members: set[int] = set()
+        with db.tx(self.con):
+            for membership_id, message_id in sorted(set(pairs)):
+                done = self.con.execute(
+                    "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
+                    " AND message_id=? AND state IN ('pending','offered','in_context')",
+                    (now, membership_id, message_id),
+                ).rowcount
+                if done:
+                    n += done
+                    members.add(membership_id)
+            for membership_id in sorted(members):
+                self._advance_cursor(membership_id)
+        return n
 
     def review_items(self, review_id: int) -> list[reviews.Item]:
         rows = self.con.execute(

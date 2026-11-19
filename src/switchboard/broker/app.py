@@ -175,6 +175,8 @@ class BrokerState:
         self.restart_event.set()
         self.runner.execute(self.engine.close_for_restart())
         self.agents.flush_queued_says()
+        if self.boards is not None:  # a review board's held lines go out before the restart (§37.17)
+            self.boards.close()
 
 
 def default_peer_policy(cfg: Config, test_trust_uds: bool = False) -> PeerPolicy:
@@ -348,6 +350,9 @@ def create_app(
             if state.room_board is not None:  # posts an open burst's notice, stops its timers
                 with contextlib.suppress(Exception):
                     state.room_board.close()
+            if state.boards is not None:  # posts a review board's held lines, stops their timers
+                with contextlib.suppress(Exception):
+                    state.boards.close()
             for t in state.tasks:
                 t.cancel()
             for t in state.tasks:
