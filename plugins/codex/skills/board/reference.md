@@ -41,7 +41,7 @@ One frame per layer or service group, at most 8 shapes in each.
 
 One frame per step, titled with the step ("1. A person posts"), left to right. Inside a frame,
 two or three boxes and one or two arrows, then `arrange` the frame. Add a `text` heading with the one thing to notice.
-People play the frames left to right, one row at a time. `read` lists each frame by its title and its id, in the order the frames were made, which is not that play order.
+People play the frames left to right, one row at a time. `read` lists each frame by its title and its id; how that list is ordered depends on the server, so name the frame you mean by its title or id, and never rely on its place in the list.
 
 ## A comparison
 

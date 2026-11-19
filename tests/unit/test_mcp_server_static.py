@@ -232,7 +232,7 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     for field in ("text", "id", "to", "shape", "x", "y", "style", "w", "h"):
         assert field in text, field
     # #751: the how-to says edit changes an arrow's label, which of a note's two ids to use,
-    # and that read lists frames by title and id in the order they were made
+    # and that read lists frames by title and id, in an order that depends on the server (#867)
     assert "arrow's label" in text
     assert "returns two ids" in text
     assert "how the list is ordered depends on the server" in text  # 1.0.0 sorted frames by position (#867)
@@ -240,6 +240,7 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     refs = [p.with_name("reference.md").read_bytes() for p in paths]
     assert refs[0] == refs[1] == refs[2] and b"draw_mermaid" in refs[0]
     assert b"An arrow's label" in refs[0] and b"returns two ids" in refs[0]
+    assert b"depends on the server" in refs[0] and b"in the order the frames were made" not in refs[0]
     assert "reference.md" in text
 
 
