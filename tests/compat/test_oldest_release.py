@@ -1,6 +1,6 @@
 """The newest plugin against a real broker of the oldest release of its major (#850, DESIGN.md §49.13).
 
-Opt-in: ``uv run pytest -m compat tests/live/test_compat_oldest_release.py``. It needs the release's git
+Opt-in: ``uv run pytest -m compat tests/compat/test_oldest_release.py``. It needs the release's git
 tag in this checkout (``git fetch --tags``) and ``curl``; it needs no network and no Docker. The tag's
 ``src`` is
 extracted to a temp folder and run on this interpreter (``PYTHONPATH``), as a hosted broker in a temp home
@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import types
@@ -20,11 +21,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from harness.world import Broker, poll
+
+ROOT = Path(__file__).resolve().parents[2]
+for _dir in (ROOT / "tests" / "live", ROOT / "tests" / "integration"):
+    sys.path.insert(0, str(_dir))  # the live tests' Broker, and the plugin tests' helpers
+
+from harness.world import Broker, poll  # noqa: E402
 
 pytestmark = pytest.mark.compat
 
-ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests" / "fixtures" / "compat" / "server-1.0.0.json"
 RELEASE = json.loads(FIXTURE.read_text())["release"]
 TAG = f"v{RELEASE}"
@@ -39,9 +44,6 @@ def test_the_newest_plugin_is_woken_by_a_real_oldest_release() -> None:
     """A real ``v1.0.0`` broker, this checkout's Claude Code plugin scripts. The listener parks, a person's
     message reaches it, and it exits 2 with the message. Fails when a change to the listen protocol (or the
     session script's requests) leaves a plugin ahead of its server unable to wake a session."""
-    import sys
-
-    sys.path.insert(0, str(ROOT / "tests" / "integration"))
     from test_agent_plugins import run_listen
     from test_agents_http_claude import SESSION_1, Claude
 

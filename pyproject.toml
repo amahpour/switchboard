@@ -104,7 +104,7 @@ markers = [
     "eval: real agents graded from the database, tests/evals (opt-in via SWITCHBOARD_EVAL)",
     "perf: strict timing targets (run once per milestone commit)",
     "e2e: the web UI in a real browser through Playwright, tests/e2e (opt-in: -m e2e; needs `playwright install chromium`)",
-    "compat: the newest plugin against a real broker of the oldest release of its major, tests/live/test_compat_oldest_release.py (opt-in: -m compat; needs the release tag, run offline)",
+    "compat: the newest plugin against a real broker of the oldest release of its major, tests/compat/test_oldest_release.py (opt-in: -m compat; needs the release tag, run offline)",
     "image: the container image behind a TLS proxy, tests/image (opt-in: -m image; needs Docker and Playwright's Chromium)",
 ]
 # pytest-split's per-test durations, which balance CI's shards (CONTRIBUTING.md, "Shards in CI")
