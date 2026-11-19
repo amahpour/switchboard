@@ -37,6 +37,9 @@ esac
 BIN="$HOME/.local/bin"
 NODE_HOME="$HOME/.local/node"
 mkdir -p "$BIN"
+# This run finds the pinned tools first too: npm's launcher runs `/usr/bin/env node`, which would
+# otherwise find the base image's Node, or none.
+export PATH="$BIN:$PATH"
 # CI's setting: only a uv-managed CPython, never a system one.
 export UV_PYTHON_PREFERENCE=only-managed
 
@@ -74,12 +77,18 @@ fi
 for tool in node npm npx; do
   ln -sf "$NODE_HOME/bin/$tool" "$BIN/$tool"
 done
-echo "node $("$BIN/node" --version), npm $("$BIN/npm" --version)"
+# Each check is its own command, so a Node or npm that doesn't run stops the Build (a failure
+# inside an echo's argument would not).
+node_version="$("$BIN/node" --version)"
+npm_version="$("$BIN/npm" --version)"
+echo "node $node_version, npm $npm_version"
 
 # CPython, managed by uv, and the project's .venv on it. A .venv an earlier Build made from another
 # interpreter (a system Python) is rebuilt, since uv would otherwise keep it.
 "$BIN/uv" python install "$PYTHON_VERSION"
-python="$("$BIN/uv" python find "$PYTHON_VERSION")"
+# --system: without it, `uv python find` returns a discovered virtual environment (this .venv) before
+# a managed install, so a system-backed .venv would be compared with itself and kept.
+python="$("$BIN/uv" python find --system "$PYTHON_VERSION")"
 base() { "$1" -c 'import sys; print(sys.base_prefix)'; }
 if [ -x .venv/bin/python ] && [ "$(base .venv/bin/python)" != "$(base "$python")" ]; then
   rm -rf .venv
