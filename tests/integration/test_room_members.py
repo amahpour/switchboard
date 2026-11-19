@@ -281,17 +281,22 @@ def test_joining_a_public_room_and_its_starting_mark_commit_together(
     team: tuple[InProcBroker, Browser, Browser], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """bob joining #build, its notice and his seen mark moving to the newest message are one write: when
-    the mark fails, he is not a member and nothing was said, and joining again works and starts him from
-    now, so the @humans from before he joined does not wait on him. Fails if the membership commits
-    without its mark: bob is then a member who sees old questions, and the retry is "you're in already"."""
+    the mark fails, he is not a member and nothing was stored or published, and joining again works and
+    starts him from now, so the @humans from before he joined does not wait on him. Fails if the
+    membership commits without its mark (bob is then a member who sees old questions, and the retry is
+    "you're in already"), or if the notice goes out before the commit."""
     b, alice, bob = team
     agent_says(b, "@humans deploy at noon?", ["humans"])
     svc = b.state.service
     bob_id = b.state.store.person_named("bob").id
+    sent: list[str] = []
     with monkeypatch.context() as mp:
         mp.setattr(b.state.store, "home_mark_seen", boom)
+        real = b.state.hub.message
+        mp.setattr(b.state.hub, "message", lambda room, frame: (sent.append(room), real(room, frame)))
         with pytest.raises(sqlite3.OperationalError):
             b.on_loop(lambda: svc.add_room_person(svc.room("#build"), "bob", bob_id))
+    assert sent == []  # the notice was never published either
     assert rooms(bob)["#build"]["member"] is False
     assert "bob joined #build" not in notices(alice, "build")
     r = people(bob, "build", "add", "bob")
@@ -449,10 +454,14 @@ def test_the_one_persons_post_and_its_quiet_row_commit_together(monkeypatch: pyt
             store.create_room("#said", "alice", 60, 6)
 
         b.on_loop(old_room)
+        sent: list[str] = []
         with monkeypatch.context() as mp:
             mp.setattr(store, "room_person_used", boom)
+            real = b.state.hub.message
+            mp.setattr(b.state.hub, "message", lambda room, frame: (sent.append(room), real(room, frame)))
             with pytest.raises(sqlite3.OperationalError):
                 b.on_loop(lambda: svc.human_say("#said", "hello", via="web"))
+        assert sent == []  # no frame went out for a post that was never stored
         msgs = alice.get("/api/rooms/said/messages").json()["messages"]
         assert [m["text"] for m in msgs if m["kind"] == "chat"] == []
         assert alice.post("/api/rooms/said/say", {"text": "hello"}).status_code == 200
