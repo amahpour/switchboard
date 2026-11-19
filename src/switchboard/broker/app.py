@@ -311,6 +311,12 @@ def create_app(
         state.files_swept = clock.now()
         state.attachments.sweep()
         state.service.delivery = state.agents
+        try:  # a review board's raises a crash left without their line are posted now (§37.17)
+            held = state.boards.recover()
+            if held:
+                log.warning("restart recovery: %d review board raise(s) posted", held)
+        except Exception:  # pragma: no cover - a board's lines must never stop the broker from starting
+            log.exception("posting review board lines left by a restart failed")
         state.rpc = RpcServer(paths.sock, state)
         try:
             await state.rpc.start()

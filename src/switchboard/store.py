@@ -586,6 +586,7 @@ class Store:
         meeting_id: int | None = None,
         say_key_hash: str | None = None,
         addressed_only: bool = False,
+        review_line: dict[str, Any] | None = None,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -605,6 +606,8 @@ class Store:
         ``say_key_hash`` records an authenticated member's retry receipt in that same transaction (§8.4).
         ``addressed_only``: a member the message does not address (no @mention, no live claim it names)
         gets no delivery row: a review board's line for whoever acts next (§37.4, #884) reaches nobody else.
+        ``review_line``: that line's record (§37.17), written in the same transaction as a ``review_line``
+        event with the message's id, so a line is never posted without it, nor recorded unposted.
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
@@ -693,6 +696,11 @@ class Store:
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
                         (r["id"], mid, prio, int(mentioned)),
                     )
+            if review_line is not None:
+                self.con.execute(
+                    "INSERT INTO events(ts, room_id, kind, data) VALUES(?,?,'review_line',?)",
+                    (now, room_id, json.dumps({**review_line, "msg": mid})),
+                )
         if mid is None:
             raise StoreError("message insert returned no id")
         msg = self.get_message(mid)
@@ -3280,13 +3288,14 @@ class Store:
 
     def review_lines_open(
         self, room_id: int, review_id: int, since: float
-    ) -> list[tuple[int, list[tuple[str, str]], list[tuple[int, str]]]]:
+    ) -> list[tuple[int, list[tuple[str, str]], list[tuple[int, str]], list[str] | None]]:
         """One board's lines for whoever acts next that some current member still has open (#884): each
-        as its message id, the cards it named (label, and the card's state then), and the members it
-        reached whose delivery is pending, offered or in context, with their screen names. ``since``:
-        when the board was opened. A line is recorded by a ``review_line`` event (``{board, msg, items,
-        states}``) when it is posted."""
-        lines: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]]]] = {}
+        as its message id, the cards it named (label, and the card's state then), the members it
+        reached whose delivery is pending, offered or in context, with their screen names, and the
+        agents it was addressed to (None when the record does not say). ``since``: when the board was
+        opened. A line is recorded by a ``review_line`` event (``{board, msg, items, states, to}``),
+        written with its message (``insert_message``)."""
+        lines: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]], list[str] | None]] = {}
         for r in self.con.execute(
             "SELECT data FROM events WHERE kind='review_line' AND ts>=? AND room_id=? AND json_valid(data)"
             " AND json_extract(data, '$.board')=? ORDER BY id",
@@ -3298,7 +3307,9 @@ class Store:
                 continue
             if not isinstance(states, list) or len(states) != len(labels):
                 states = [""] * len(labels)
-            lines[msg] = (msg, [(str(a), str(b)) for a, b in zip(labels, states, strict=True)], [])
+            to = data.get("to")
+            names = [str(x) for x in to] if isinstance(to, list) else None
+            lines[msg] = (msg, [(str(a), str(b)) for a, b in zip(labels, states, strict=True)], [], names)
         ids = list(lines)
         # the room's current members, then their delivery of each line by its key (membership, message):
         # never a scan of every delivery for a message id
@@ -3314,6 +3325,26 @@ class Store:
             ):
                 lines[int(r["message_id"])][2].append((int(r["membership_id"]), str(r["name"])))
         return [line for line in lines.values() if line[2]]
+
+    def review_held_unposted(self, since: float) -> list[Event]:
+        """Raises and asks held for a burst (#884, a ``review_held`` event each, written with the card)
+        that no posted line covers yet (a ``review_line`` event's ``held``), oldest first: what a crash
+        or a failed post left, for the broker to post at start. ``since``: how far back to look."""
+        done: set[int] = set()
+        for r in self.con.execute(
+            "SELECT data FROM events WHERE kind='review_line' AND ts>=? AND json_valid(data)", (since,)
+        ):
+            held = json.loads(r["data"]).get("held")
+            if isinstance(held, list):
+                done.update(x for x in held if type(x) is int)
+        rows = self.con.execute(
+            "SELECT * FROM events WHERE kind='review_held' AND ts>=? ORDER BY id", (since,)
+        ).fetchall()
+        return [e for e in (Event.from_row(r) for r in rows) if e.id not in done]
+
+    def review_by_id(self, review_id: int) -> dict[str, Any] | None:
+        r = self.con.execute("SELECT * FROM reviews WHERE id=?", (review_id,)).fetchone()
+        return dict(r) if r else None
 
     def answer_deliveries(self, pairs: Iterable[tuple[int, int]]) -> int:
         """Those ``(membership_id, message_id)`` deliveries become handled, wherever they are short of

@@ -4,6 +4,7 @@ when each was posted, and answering one sticks, whatever state its delivery was 
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -39,11 +40,7 @@ def line(store: Store, room_id: int, sender: int, to: list[str], board: int, car
         sender_membership_id=sender,
         mentions=to,
         addressed_only=True,
-    )
-    store.add_event(
-        "review_line",
-        room_id=room_id,
-        data={"board": board, "msg": msg.id, "items": list(cards), "states": list(cards.values())},
+        review_line={"board": board, "items": list(cards), "states": list(cards.values()), "to": to},
     )
     return msg.id
 
@@ -95,7 +92,12 @@ def test_open_lines_are_this_boards_with_a_current_member_still_holding_them(sto
     )
     line(store, room.id, m["codex-1"], ["claude-1"], other, {"F1": "raised"})
     assert store.review_lines_open(room.id, board, 0.0) == [
-        (first, [("F1", "raised"), ("F2", "raised")], [(m["claude-1"], "claude-1"), (m["grok-1"], "grok-1")])
+        (
+            first,
+            [("F1", "raised"), ("F2", "raised")],
+            [(m["claude-1"], "claude-1"), (m["grok-1"], "grok-1")],
+            ["claude-1", "grok-1"],
+        )
     ]
     store.answer_deliveries([(m["grok-1"], first)])
     store.end_membership(m["claude-1"], "leave")
@@ -120,3 +122,56 @@ def test_an_answered_line_stays_answered_through_its_batch_confirming_or_expirin
             store.expire_batch(b.id, "test")
         assert states(store, m["claude-1"])[msg] == "handled", end
     assert store.answer_deliveries([(m["claude-1"], msg)]) == 0  # handled already: nothing to do
+
+
+def test_a_line_and_its_record_are_one_write(store: Store) -> None:
+    """The record a later move settles a line by is written with the message, in its transaction, and
+    names the message. Fails if the two were separate writes a crash could split (F1 on #889): a line
+    posted with no record is never answered, and a record with no line would be posted again."""
+    room = store.create_room("#build", "alice", 60, 0)
+    m = members(store, room.id, "codex-1", "claude-1")
+    board = store.open_review(room.id, PR, "", "claude-1")["id"]
+    msg = line(store, room.id, m["codex-1"], ["claude-1"], board, {"F1": "raised"})
+    [ev] = store.recent_events(kinds=("review_line",), limit=5)
+    assert ev.data["msg"] == msg and ev.data["to"] == ["claude-1"] and ev.room_id == room.id
+    with pytest.raises(sqlite3.IntegrityError):  # a message that fails takes its record with it
+        store.insert_message(
+            room.id + 99,
+            sender_name="codex-1",
+            sender_kind="agent",
+            via="mcp",
+            text="x",
+            review_line={"board": board, "items": ["F2"], "states": ["raised"], "to": []},
+        )
+    assert len(store.recent_events(kinds=("review_line",), limit=5)) == 1
+
+
+def test_held_raises_with_no_posted_line_are_found_for_the_next_start(store: Store) -> None:
+    """A raise held for its burst is a ``review_held`` record; the line that posts it names it in
+    ``held``. What no line names is what a crash left, for the broker to post at start."""
+    room = store.create_room("#build", "alice", 60, 0)
+    m = members(store, room.id, "codex-1", "claude-1")
+    board = store.open_review(room.id, PR, "", "claude-1")["id"]
+    first = store.add_event("review_held", room_id=room.id, membership_id=m["codex-1"], data={"board": board})
+    second = store.add_event(
+        "review_held", room_id=room.id, membership_id=m["codex-1"], data={"board": board}
+    )
+    assert [e.id for e in store.review_held_unposted(0.0)] == [first, second]
+    store.insert_message(
+        room.id,
+        sender_name="codex-1",
+        sender_kind="agent",
+        via="mcp",
+        text="Review board: F1 raised: one.",
+        sender_membership_id=m["codex-1"],
+        mentions=["claude-1"],
+        addressed_only=True,
+        review_line={
+            "board": board,
+            "items": ["F1"],
+            "states": ["raised"],
+            "to": ["claude-1"],
+            "held": [first],
+        },
+    )
+    assert [e.id for e in store.review_held_unposted(0.0)] == [second]

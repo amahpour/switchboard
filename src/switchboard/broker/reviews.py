@@ -21,7 +21,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from switchboard import review_stats, reviews
+from switchboard import db, review_stats, reviews
 from switchboard.models import Room
 from switchboard.reviews import ReviewError
 
@@ -61,15 +61,27 @@ Poster = dict[str, Any]
 BurstKey = tuple[int, int, str]
 
 
+# how far back the broker looks at start for raises a crash left unposted (§37.17)
+RECOVER_S = 24 * 60 * 60.0
+# a burst whose post failed is tried again this much later; it is kept until it goes
+RETRY_S = 5.0
+
+
 @dataclass
 class Burst:
-    """Lines one agent's raises and asks on one board made, not posted yet (#884)."""
+    """One agent's raises and asks on one board whose line is not posted yet (#884). Each is also a
+    ``review_held`` event, written with its card, so a crash cannot lose it (``Boards.recover``):
+    ``held`` is ``(event id, label, state when raised)``. ``told`` is each one's line as it read when
+    raised, used only to keep the burst within one message; the line is worked out again when it goes,
+    from the board and the room as they are then."""
 
-    room: Room
-    rv: dict[str, Any]
-    poster: Poster
+    room_id: int
+    board_id: int
+    actor: str
+    membership_id: int
     first_at: float
     last_at: float
+    held: list[tuple[int, str, str]] = field(default_factory=list)
     told: list[reviews.Told] = field(default_factory=list)
 
 
@@ -307,10 +319,17 @@ class Boards:
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
-            item = self._add(rv, actor, action, params)
+            with db.tx(self.store.con):  # the card and the record of its line to come, or neither
+                item = self._add(rv, actor, action, params)
+                held = self.store.add_event(
+                    "review_held",
+                    room_id=room.id,
+                    membership_id=poster["sender_membership_id"],
+                    data={"board": rv["id"], "item": item.label, "state": item.state, "actor": actor},
+                )
             verb = "raised" if item.kind == "finding" else "asked"
             return self._told(
-                room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}", poster=poster, hold=True
+                room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}", poster=poster, held=held
             )
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
@@ -633,17 +652,17 @@ class Boards:
         wake: bool = True,
         action: str = "",
         poster: Poster | None = None,
-        hold: bool = False,
+        held: int | None = None,
     ) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
         for whoever acts next, posted as the mover's message (``poster``) to them alone, so it wakes
         them, or the notice when that's nobody (§37.4). A raised finding's next move is the author's
-        side's (``reviews.author_side``, #884). ``hold``: a raise or an ask, whose line waits a few
-        seconds for the same agent's next ones (§37.17). A move that asks nothing of anyone, such as a
-        pick among options (``wake`` False), is a notice whatever state the item is in. With several
-        boards open, the line and the notice say which one, and whoever is told of a move on a board
-        has it as the board their next call is about (§37.14). Every move then settles the board's
-        earlier lines: one an agent has no move left on is answered for it (``_settle``)."""
+        side's (``reviews.author_side``, #884). ``held``: a raise or an ask, its ``review_held``
+        event: its line waits a few seconds for the same agent's next ones (§37.17). A move that asks
+        nothing of anyone, such as a pick among options (``wake`` False), is a notice whatever state
+        the item is in. With several boards open, the line and the notice say which one, and whoever
+        is told of a move on a board has it as the board their next call is about (§37.14). Every move
+        then settles the board's earlier lines: one an agent no longer owes is answered (``_settle``)."""
         several = self._several(room)
         line = None
         if wake and poster is not None:
@@ -656,12 +675,12 @@ class Boards:
             self._notice(room, f"{ref}: {notice}" if several else notice)
         out = self._shown(room, rv, touched=item.label)
         if line is not None and poster is not None:
-            for agent in line.who:
-                self._last[(room.id, agent)] = rv["url"]
-            if hold:
-                self._hold(room, rv, actor, poster, line)
+            if held is not None:
+                self._hold(room, rv, actor, poster["sender_membership_id"], held, item, line)
             else:
                 self._say(room, rv, poster, [line])
+        elif held is not None:  # nobody to tell: the notice said it, and nothing is left to post
+            self._line_done(room.id, rv["id"], [held])
         self._settle(room, rv)
         return out
 
@@ -684,22 +703,56 @@ class Boards:
         events = [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
         return reviews.author_side(reviews.holder(rv), items, events, agents, offline)
 
-    def _say(self, room: Room, rv: dict[str, Any], poster: Poster, lines: Sequence[reviews.Told]) -> None:
+    def _say(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        poster: Poster,
+        lines: Sequence[reviews.Told],
+        held: Sequence[int] = (),
+    ) -> None:
         """Post ``lines`` as one message from their mover, delivered only to the agents they name
-        (§37.4), and record which cards it named, so a later move can settle it (``_settle``)."""
+        (§37.4), with its record in the same transaction: which cards it named, in which state, to whom,
+        and which held raises it posts (``held``), so a later move can settle it (``_settle``) and a
+        restart does not post it again (``recover``). Whoever is told has this board as the one their
+        next call is about (§37.14)."""
         who = list(dict.fromkeys(a for t in lines for a in t.who))
         text = reviews.burst_text(lines)[: self.state.cfg.delivery.max_msg_chars]
-        msg = self.state.service._post(room, **poster, text=text, mentions=who, addressed_only=True)
+        record = {
+            "board": rv["id"],
+            "items": [t.label for t in lines],
+            "states": [t.state for t in lines],
+            "to": who,
+            "held": list(held),
+        }
+        self.state.service._post(
+            room, **poster, text=text, mentions=who, addressed_only=True, review_line=record
+        )
+        for agent in who:
+            self._last[(room.id, agent)] = rv["url"]
+
+    def _line_done(self, room_id: int, board_id: int, held: Sequence[int]) -> None:
+        """Held raises that need no line any more (nobody to tell, or the card moved on first)."""
         self.store.add_event(
             "review_line",
-            room_id=room.id,
-            data={
-                "board": rv["id"],
-                "msg": msg.id,
-                "items": [t.label for t in lines],
-                "states": [t.state for t in lines],
-            },
+            room_id=room_id,
+            data={"board": board_id, "msg": None, "items": [], "states": [], "to": [], "held": list(held)},
         )
+
+    def _poster(self, membership_id: int) -> Poster | None:
+        """The message fields of the agent with this membership, as ``AgentService.review`` sets them."""
+        m = self.store.get_membership(membership_id)
+        p = self.store.get_participant(m.participant_id) if m is not None else None
+        if m is None or p is None:
+            return None
+        return {
+            "sender_name": m.screen_name,
+            "sender_kind": "agent",
+            "sender_harness": p.harness,
+            "sender_membership_id": m.id,
+            "via": "mcp",
+            "sender_host": p.host or None,
+        }
 
     def _window(self) -> tuple[float, float]:
         """How long a burst of lines waits (§37.17): the room's quiet period after its last line, and at
@@ -707,30 +760,37 @@ class Boards:
         d = self.state.cfg.delivery
         return d.quiet_s, min(reviews.BURST_MAX_S, d.max_hold_s)
 
-    def _hold(self, room: Room, rv: dict[str, Any], actor: str, poster: Poster, line: reviews.Told) -> None:
-        """Add a raise's or an ask's ``line`` to ``actor``'s burst on this board, and time the burst.
-        A burst that is due already, would no longer fit one message, or names its board differently
-        goes first, and this line starts the next."""
+    def _hold(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        actor: str,
+        membership_id: int,
+        held: int,
+        item: reviews.Item,
+        line: reviews.Told,
+    ) -> None:
+        """Add a raise's or an ask's ``held`` record to ``actor``'s burst on this board, and time the
+        burst. A burst that is due already, or would no longer fit one message, goes first, and this
+        one starts the next. Without a quiet period it goes at once."""
         quiet, most = self._window()
-        if quiet <= 0 or most <= 0:  # no quiet period: each line at once (the caller settles the board)
-            self._say(room, rv, poster, [line])
-            return
         key = (room.id, rv["id"], actor)
         now = self.state.clock.now()
         burst = self._bursts.get(key)
         if burst is not None and (
             reviews.burst_due(burst.first_at, burst.last_at, now, quiet, most)
-            or burst.told[0].on != line.on
             or len(reviews.burst_text([*burst.told, line])) > self.state.cfg.delivery.max_msg_chars
         ):
             self._flush(key)
-            burst = None
+            burst = self._bursts.get(key)  # kept only if its post failed
         if burst is None:
-            burst = self._bursts[key] = Burst(
-                room=room, rv=rv, poster=dict(poster), first_at=now, last_at=now
-            )
+            burst = self._bursts[key] = Burst(room.id, rv["id"], actor, membership_id, now, now)
+        burst.held.append((held, item.label, item.state))
         burst.told.append(line)
         burst.last_at = now
+        if quiet <= 0 or most <= 0:  # no quiet period: each line at once
+            self._flush(key)
+            return
         self._arm(key, reviews.burst_wait(burst.first_at, burst.last_at, now, quiet, most))
 
     def _arm(self, key: BurstKey, delay: float) -> None:
@@ -774,27 +834,105 @@ class Boards:
             self._flush(key)
 
     def _flush(self, key: BurstKey) -> None:
-        burst = self._bursts.pop(key, None)
+        """Post ``key``'s burst now. If the post fails, the burst is kept and tried again in
+        ``RETRY_S``; its records stay unposted, so a restart posts it too (``recover``)."""
+        burst = self._bursts.get(key)
         timer = self._timers.pop(key, None)
         if timer is not None:
             timer.cancel()
-        if burst is None or not burst.told:
+        if burst is None:
             return
-        room = self.store.room_by_id(burst.room.id)
-        if room is None or room.closed:  # deleted or closed meanwhile: nobody is there to act
-            log.info("review board lines for a closed room %s not posted", burst.room.id)
+        try:
+            self._post_burst(burst)
+        except Exception:
+            log.exception("posting a review board's lines failed in room %s; trying again", burst.room_id)
+            handle = self._call_later(RETRY_S, lambda: self._wake(key))
+            if handle is not None:
+                self._timers[key] = handle
             return
-        self._say(room, burst.rv, burst.poster, burst.told)
-        self._settle(room, burst.rv)
+        self._bursts.pop(key, None)
+
+    def _post_burst(self, burst: Burst) -> None:
+        """A burst's lines, worked out from the board and the room as they are now (§37.17): each card
+        still in the state it was raised in, told to whoever has its next move now, so an author that
+        left meanwhile is not the only one named, and the line names its board if another board opened
+        since. A card that moved on, or that nobody is left to answer, gets no line. One message for
+        what fits, then another."""
+        held_ids = [h[0] for h in burst.held]
+        room = self.store.room_by_id(burst.room_id)
+        rv = self.store.review_by_id(burst.board_id)
+        poster = self._poster(burst.membership_id)
+        if room is None or room.closed or rv is None or rv["closed_at"] is not None or poster is None:
+            # deleted, closed, or no longer anyone's board: nobody is there to act on it
+            log.info("review board lines for room %s not posted: nobody to act on them", burst.room_id)
+            self._line_done(burst.room_id, burst.board_id, held_ids)
+            return
+        agents, offline = self._here(room)
+        items = self.store.review_items(rv["id"])
+        by_label = {i.label: i for i in items}
+        side = self._side(room, rv, items, agents, offline)
+        url = rv["url"] if self._several(room) else ""
+        lines: list[tuple[int, reviews.Told]] = []
+        skipped: list[int] = []
+        for event_id, label, state in burst.held:
+            item = by_label.get(label)
+            t = (
+                reviews.told(item, burst.actor, agents, url, side=side)
+                if item is not None and item.state == state
+                else None
+            )
+            if t is None:
+                skipped.append(event_id)
+            else:
+                lines.append((event_id, t))
+        if skipped and not lines:
+            self._line_done(room.id, rv["id"], skipped)
+        limit = self.state.cfg.delivery.max_msg_chars
+        chunk: list[tuple[int, reviews.Told]] = []
+        for entry in lines:
+            if chunk and len(reviews.burst_text([t for _, t in chunk] + [entry[1]])) > limit:
+                self._say(room, rv, poster, [t for _, t in chunk], [i for i, _ in chunk] + skipped)
+                skipped, chunk = [], []
+            chunk.append(entry)
+        if chunk:
+            self._say(room, rv, poster, [t for _, t in chunk], [i for i, _ in chunk] + skipped)
+        self._settle(room, rv)
+
+    def recover(self) -> int:
+        """At start: post the raises and asks a crash or a failed post left without their line (#884),
+        from their ``review_held`` records of the last ``RECOVER_S``, each agent's on each board as one
+        burst. Returns how many were waiting."""
+        waiting = self.store.review_held_unposted(self.state.clock.now() - RECOVER_S)
+        for e in waiting:
+            board, label, state, actor = (e.data.get(k) for k in ("board", "item", "state", "actor"))
+            if not (
+                type(board) is int
+                and isinstance(label, str)
+                and isinstance(state, str)
+                and isinstance(actor, str)
+                and e.room_id is not None
+                and e.membership_id is not None
+            ):
+                continue
+            key = (e.room_id, board, actor)
+            burst = self._bursts.setdefault(key, Burst(e.room_id, board, actor, e.membership_id, e.ts, e.ts))
+            burst.held.append((e.id, label, state))
+        for key in list(self._bursts):
+            self._flush(key)
+        return len(waiting)
 
     def close(self) -> None:
-        """At shutdown: stop the timers and post every burst still held, so no line is lost."""
+        """At shutdown: stop the timers and post every burst still held. One whose post fails stays
+        recorded, and the next start posts it (``recover``)."""
         for timer in self._timers.values():
             timer.cancel()
         self._timers.clear()
         for key in list(self._bursts):
             with contextlib.suppress(Exception):
                 self._flush(key)
+        for timer in self._timers.values():  # retries a failed post armed: the next start has them
+            timer.cancel()
+        self._timers.clear()
 
     def _settle(self, room: Room, rv: dict[str, Any], *, closed: bool = False) -> None:
         """Answer the board's earlier lines that the agents they reached no longer owe (#884): once a
@@ -810,8 +948,10 @@ class Boards:
         agents, offline = self._here(room)
         side = self._side(room, rv, items, agents, offline)
         done: list[tuple[int, int]] = []
-        for msg, cards, reached in lines:
-            names = [name for _, name in reached]
+        for msg, cards, reached, to in lines:
+            # only the agents the line was addressed to: one that has it because the line names its
+            # claim (§8.1) answers it as it answers any message that does, with a say or a pass
+            names = [name for _, name in reached if to is None or name in to]
             free = set(names if closed else reviews.answered(cards, by_label, names, agents, side))
             done.extend((membership_id, msg) for membership_id, name in reached if name in free)
         if done:
@@ -910,6 +1050,7 @@ class Boards:
                 )
                 continue
             try:
+                self.flush_room(room.id)  # lines held for the room's only board say so before another opens
                 self._open_board(room, "switchboard", url, "", author=author)
             except ReviewError as e:
                 self._notice(room, f"not asking for a review of {url}: {e}")

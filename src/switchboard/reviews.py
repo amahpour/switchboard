@@ -874,12 +874,19 @@ def answered(
     (``acts_next``). Once a card has moved on, what the line asked of it was done by someone, and
     whatever is next has a line of its own (or was the mover's own doing, as a concession to itself
     is); a card the board no longer has is nobody's. A state the line did not record (``""``) asks only
-    whether the agent has a move."""
+    whether the agent has a move. A raise or an ask with options asked every agent to pick (§37.12),
+    and a pick is due until the card is decided, whatever state it has moved to: an agent still to
+    pick owes that line until it picks or abstains."""
+    here = list(dict.fromkeys(agents))
     owed: set[str] = set()
     for label, state in cards:
         item = items.get(label)
-        if item is not None and (not state or item.state == state):
-            owed.update(acts_next(item, agents, side))
+        if item is None:
+            continue
+        if not state or item.state == state:
+            owed.update(acts_next(item, here, side))
+        if state in ("raised", "open"):  # the line that asked for the picks
+            owed.update(_pickers(item, here))
     return [r for r in recipients if r not in owed]
 
 

@@ -8,6 +8,7 @@ with no broker and no I/O: a bystander reviewer is never woken and never gets ``
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,7 +20,7 @@ from engine_agents import listener, result, session, stop, woke
 from engine_world import World
 
 from switchboard import reviews
-from switchboard.broker.reviews import Boards, loop_call_later
+from switchboard.broker.reviews import RETRY_S, Boards, loop_call_later
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Membership, Participant, closed_room_name
@@ -530,3 +531,146 @@ def test_a_line_held_for_a_room_closed_meanwhile_is_not_posted(w: World, clock: 
     w.store.rename_room(room.id, closed_room_name(room.name, room.id), expect=room.name)
     r.later(3.0)
     assert r.lines() == [] and not woke(w, dispatch_park)
+
+
+# --------------------------------------------- what the first review of #889 found (F1 to F5)
+PR_B = "https://github.com/example/shop/pull/867"
+
+
+def leave(w: World, m: Membership) -> None:
+    w.store.end_membership(m.id, "leave")
+    w.actions += w.engine.on_membership_ended(m.id, "leave")
+
+
+def test_a_raise_held_when_the_broker_crashed_is_posted_at_the_next_start(w: World, clock: FakeClock) -> None:
+    """The raise is stored at once; its line waits a few seconds. A crash in those seconds used to
+    lose the line, and with it the author's only wake (F1). The held raise is a record written with
+    the card, so the next start posts it, once."""
+    r, dispatch_park, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    for t in r.timers.armed:  # the crash: the broker's memory and its timers are gone
+        t.cancel()
+    r.boards = Boards(r.boards.state, call_later=r.timers)
+    assert r.lines() == []
+    assert r.boards.recover() == 1
+    [line] = r.lines()
+    assert "F1 raised: off by one. @dispatch:" in line.text and woke(w, dispatch_park)
+    assert Boards(r.boards.state, call_later=r.timers).recover() == 0 and len(r.lines()) == 1  # not twice
+
+
+def test_a_post_that_fails_is_kept_and_tried_again(w: World, clock: FakeClock) -> None:
+    """A burst used to leave memory before its post: a failed post lost it (F1). It stays until it is
+    posted, and is tried again a few seconds later."""
+    r, dispatch_park, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    service = r.boards.state.service
+    posting = service._post
+
+    def broken(room: Any, **kw: Any) -> Any:
+        raise sqlite3.OperationalError("disk I/O error")
+
+    service._post = broken
+    r.later(3.0)
+    assert r.lines() == [] and not woke(w, dispatch_park)
+    service._post = posting
+    r.later(RETRY_S)
+    [line] = r.lines()
+    assert "F1 raised" in line.text and woke(w, dispatch_park)
+
+
+def test_an_author_that_left_while_the_line_was_held_is_not_the_only_one_named(
+    w: World, clock: FakeClock
+) -> None:
+    """Who a held line names is worked out when it goes (F2). The dispatcher that opened the board
+    leaves before then: the board knows no author in the room, so grok-reviewer, the agent left to
+    answer it, is named and woken. Fails if the line still named only the agent that left, which
+    nobody then receives."""
+    r, _dispatch_park, grok_park = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    leave(w, r.agents["dispatch"][1])
+    r.later(3.0)
+    [line] = r.lines()
+    assert set(line.mentions) == {"grok-reviewer"} and woke(w, grok_park)
+
+
+def test_a_pick_still_due_keeps_the_raise_line_after_the_author_concedes(w: World, clock: FakeClock) -> None:
+    """A finding with fix options asks every agent to pick, and a pick counts until it is fixed or
+    dropped (§37.12). The dispatcher conceding it does not answer the line for grok-reviewer, which
+    has yet to pick, nor for the dispatcher itself: each answers it by picking (F3)."""
+    r, _d, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="rounding", options=["half up", "half even"], recommend=0)
+    r.later(3.0)
+    [line] = r.lines()
+    assert set(line.mentions) == {"dispatch", "grok-reviewer"}
+    r.move("dispatch", action="concede", item="F1")
+    assert r.delivered("grok-reviewer", line)["state"] != "handled"  # type: ignore[index]
+    assert r.delivered("dispatch", line)["state"] != "handled"  # type: ignore[index]
+    r.move("grok-reviewer", action="concur", item="F1", recommend=1)
+    assert r.delivered("grok-reviewer", line)["state"] == "handled"  # type: ignore[index]
+    r.move("dispatch", action="abstain", item="F1")
+    assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
+
+
+def test_a_board_opened_for_a_posted_link_comes_after_the_lines_held_for_the_first(
+    w: World, clock: FakeClock
+) -> None:
+    """A line held while the room had one board says "review(action=\\"show\\")" with no url. A link
+    posted meanwhile opens a second board: the held line goes first, while it is still the only one
+    (F4). Fails if the line went out after the second board opened, naming no board."""
+    r, _d, _g = review_room(w, clock)
+    w.store.set_room_review_on_link(w.room.id, True)
+    r.move("codex-review", action="raise", title="off by one")
+    room = w.store.room_by_id(w.room.id)
+    assert room is not None
+    r.boards.on_agent_say(room, "codex-review", f"Opened {PR_B} for the follow-up.")
+    chat = r.lines()
+    assert [x.sender_name for x in chat] == ["codex-review", "switchboard"]  # the line, then the request
+    assert chat[0].text.startswith("Review board: F1 raised: off by one.")
+    assert len(w.store.open_reviews(w.room.id)) == 2
+
+
+def test_a_held_line_names_its_board_when_another_opened_before_it_went(w: World, clock: FakeClock) -> None:
+    """However a second board opened, a line that goes out after it names its own board and passes its
+    url, so the move it asks for lands on the right board (F4)."""
+    r, _d, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    w.store.open_review(w.room.id, PR_B, "", "dispatch")
+    r.later(3.0)
+    [line] = r.lines()
+    assert line.text.startswith(f"Review board {PR}: F1 raised: off by one.")
+    assert f'url="{PR}"' in line.text
+
+
+def test_a_claim_holder_that_hears_a_line_keeps_it_until_it_answers(w: World, clock: FakeClock) -> None:
+    """A message that names a member's live claim reaches it as an @mention would, and is answered
+    with a say or a pass (§8.1). A board's line is such a message too: a move on the board answers it
+    only for the agents the line was addressed to (F5). Fails if the claim holder's copy was handled
+    before it could read it."""
+    r, _d, _g = review_room(w, clock)
+    w.store.open_review(w.room.id, PR_B, "", "dispatch")  # two boards: a line names its board's url
+    w.store.move_claim(w.room.id, r.agents["grok-reviewer"][1].id, PR, 600)
+    r.move("codex-review", action="raise", title="off by one")
+    r.later(3.0)
+    [line] = r.lines()
+    assert set(line.mentions) == {"dispatch"}
+    assert r.delivered("grok-reviewer", line) is not None  # it names grok-reviewer's claim
+    r.move("dispatch", action="concede", item="F1")
+    assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
+    assert r.delivered("grok-reviewer", line)["state"] != "handled"  # type: ignore[index]
+
+
+def test_a_raise_that_moved_on_before_its_line_went_gets_none(w: World, clock: FakeClock) -> None:
+    """A card already answered when its held line goes (after a restart) asks nothing of anyone: no
+    line is posted for it, and its record is closed so no later start posts it either."""
+    r, dispatch_park, _g = review_room(w, clock)
+    r.move("codex-review", action="raise", title="off by one")
+    for t in r.timers.armed:
+        t.cancel()
+    board = w.store.review_for_url(w.room.id, PR)
+    assert board is not None
+    item = w.store.review_item(board["id"], "finding", 1)
+    assert item is not None
+    w.store.move_review_item(item.id, "conceded", owner="dispatch")
+    fresh = Boards(r.boards.state, call_later=r.timers)
+    assert fresh.recover() == 1 and r.lines() == [] and not woke(w, dispatch_park)
+    assert Boards(r.boards.state, call_later=r.timers).recover() == 0
