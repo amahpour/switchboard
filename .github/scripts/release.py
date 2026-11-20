@@ -7,7 +7,9 @@
     python3 .github/scripts/release.py --notes-for 1.2.3             # release.yml: its notes
 
 `main` takes only pull requests, so a release is a PR too. `--open-pr` works on a fresh branch
-from origin/main, in a temporary worktree (the checkout it runs from is never touched). It:
+from origin/main, in a temporary worktree (the checkout it runs from is never touched). It runs
+only as origin/main's own copy of this script, and stops otherwise: what a release stamps is written
+here, so an older copy would stamp an older set. It:
 - reads the commits since the last `vX.Y.Z` tag, skipping earlier `release:` commits. Every
   squash merge is one Conventional Commits message (the PR's title);
 - picks the bump: a minor for `feat:` or a breaking change (`!` or `BREAKING CHANGE`), a patch
@@ -28,9 +30,9 @@ from origin/main, in a temporary worktree (the checkout it runs from is never to
   installed it with a release, never with a merge to main (#462). The tag is made by release.yml
   a minute after the merge; until then an update finds no such tag and keeps the old plugin
   (DESIGN.md §49.5 says when each harness tries again);
-- sets the `version` of every plugin manifest (`plugins/claude/.claude-plugin/plugin.json`,
-  `plugins/codex/.codex-plugin/plugin.json`, `plugins/cursor/.cursor-plugin/plugin.json`) to the
-  release's own, changed or not, so the plugin of switchboard X.Y.Z is always X.Y.Z (#841). Claude Code
+- sets the `version` of every plugin manifest (`PLUGIN_MANIFESTS`: Claude Code's, Codex's, Cursor's,
+  Devin's and OpenCode's) to the release's own, changed or not, so the plugin of switchboard X.Y.Z
+  is always X.Y.Z (#841). Claude Code
   and Codex keep an installed plugin by that `version` (§49.5), and a pull request no longer touches
   it. The broker compares a session's plugin with its own version (`plugin_versions.PINNED`), so
   nothing else is rewritten;
@@ -332,6 +334,23 @@ def behind_main(root: Path = ROOT) -> bool:
     return bool(remote) and remote != git("rev-parse", "HEAD", root=root).strip()
 
 
+SCRIPT_PATH = ".github/scripts/release.py"
+
+
+def own_copy_is_mains(root: Path = ROOT, script: Path = Path(__file__)) -> bool:
+    """True when the script running is origin/main's own copy. Which files a release stamps is written
+    in this script, so an older copy stamps an older set: v1.11.0 ran from a checkout of v1.10.0 and
+    left the Devin and OpenCode plugins at 1.10.0, which #891 had added. A main with no copy is not a
+    match, so the release stops rather than guess."""
+    try:
+        mains = subprocess.run(
+            ["git", "show", f"origin/main:{SCRIPT_PATH}"], cwd=root, check=True, capture_output=True
+        ).stdout
+    except subprocess.CalledProcessError:
+        return False
+    return mains == script.read_bytes()
+
+
 def output(**kv: str) -> None:
     path = os.environ.get("GITHUB_OUTPUT")
     lines = "".join(f"{k}={v}\n" for k, v in kv.items())
@@ -395,6 +414,11 @@ def open_pr(root: Path, today: str, *, major: bool = False) -> str | None:
     if stale := [f"#{p['number']}" for p in listed if p["headRefName"].startswith("release/")]:
         raise SystemExit(f"release PR {', '.join(stale)} is still open: merge it or close it first")
     git("fetch", "-q", "--tags", "origin", "main", root=root)
+    if not own_copy_is_mains(root):
+        raise SystemExit(
+            f"this {SCRIPT_PATH} is not origin/main's: run main's own copy, from a checkout of a fresh "
+            "origin/main (git fetch, then git worktree add <dir> origin/main)"
+        )
     with tempfile.TemporaryDirectory(prefix="switchboard-release-") as tmp:
         tree, notes = Path(tmp) / "tree", Path(tmp) / "notes.md"
         git("worktree", "add", "-q", "--detach", str(tree), "origin/main", root=root)
