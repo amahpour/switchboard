@@ -145,11 +145,16 @@ class Boards:
         events = [
             {"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])
         ]
+        # the newest commit an open, a fix or a report named (#906). ``head`` stays the one the
+        # board was opened or moved to: history, list, the outdated mark and line links keep it.
+        head_sha, head_note = reviews.header_commit(rv, items, events)
         return {
             "id": rv["id"],
             "url": rv["url"],
             "forge": f,
             "head": rv["head"],
+            "head_sha": head_sha,
+            "head_note": head_note,
             "opened_by": rv["opened_by"],
             "opened_at": rv["opened_at"],
             # kept when closed, and brought back by ``open`` (§37.14)
@@ -482,6 +487,9 @@ class Boards:
         result is said in the room, each in one line naming who reported it, so agents cite the
         board instead of passing CI on from memory. switchboard fetches nothing itself."""
         fields = reviews.report(params)
+        # a head named with the report is a commit the board was told (#906). It is not a move
+        # of the board: findings are not outdated, and ``reviews.head`` stays what open set.
+        named = reviews.head(params.get("head"))
         url = rv["url"]
         was_closed = rv["closed_at"] is not None
         state = fields.get("pr_state")
@@ -491,14 +499,19 @@ class Boards:
             raise ReviewError(f"{url} is recorded as merged already: a closed report would overwrite it")
         ended = state in ("merged", "closed")
         result = {"ok": True, "closed": True, "board": f"{url} is {state}: the board is closed."}
-        if was_closed and all(rv[key] == value for key, value in fields.items()):
+        same = was_closed and all(rv[key] == value for key, value in fields.items())
+        if same and (not named or named == self._reported_head(room, rv)):
             return result
         now = self.state.clock.now()
         closure = {"closed_at": now, "closed_by": actor} if ended and not was_closed else {}
         self.store.set_review(rv["id"], **fields, **closure, reported_by=actor, reported_at=now)
-        self._event(room, rv, report=fields, by=actor)
+        self._event(room, rv, report=fields, by=actor, **({"head": named} if named else {}))
         if fields.get("pr_ci") and fields["pr_ci"] != rv["pr_ci"]:
             self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
+        if ended and same:
+            # only the head is new: the close was already said. The page still hears the commit.
+            self._publish(room)
+            return result
         if ended:
             status = "remains closed" if was_closed else "is closed"
             self._notice(room, f"{actor} reports {url} {state}: the review board {status}")
@@ -506,6 +519,14 @@ class Boards:
             self._publish(room)
             return result
         return self._shown(room, rv)
+
+    def _reported_head(self, room: Room, rv: dict[str, Any]) -> str:
+        """The head on the latest report event, or "" when none named one (#906)."""
+        for event in reversed(self.store.review_events(room.id, rv["id"], rv["opened_at"])):
+            if "report" in event.data:
+                head = event.data.get("head")
+                return head if isinstance(head, str) else ""
+        return ""
 
     def _close(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """Close a settled board at any time; open work needs the mover's reason in the room. The

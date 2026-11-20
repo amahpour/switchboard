@@ -23,7 +23,7 @@ The tool's description lists the actions the server you are on accepts; a refusa
 
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.
-- `show`: read one board, including a closed one. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.
+- `show`: read one board, including a closed one. The first line names the newest commit the board was told (a fix's commit, a report's `head`, or a merge commit), and says `(last fix)`, `(reported)` or `(merged)` when that is not the commit the board was opened or moved to. `list` still names that head. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.
 - `raise` (`title`, `where`, `detail`): a finding. Two to four `options` are allowed, and then `recommend` (the index you pick) is required. Options without a recommendation are refused, and so is a recommendation without options.
 - `ask` (`title`, `options`, `recommend`): a question only a person can answer. Two to four options, and `recommend` is required.
 - `edit` (`item`, and any of `title`, `detail`, `where`): correct a finding you raised, while it is raised or contested. A field you leave out stays. Each edit is a line on the card's history.
@@ -38,7 +38,7 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
-- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` or `state="closed"` to record the outcome. A report of `merged` or `closed` closes the board, and it is kept.
+- `report` (`state`, `threads`, `ci`, `head`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of those three. `head` is the commit you read, 7 to 64 hex digits. It does not move the board. On a closed board, pass its `url` and `state="merged"` or `state="closed"` to record the outcome. A report of `merged` or `closed` closes the board, and it is kept.
 - `close` (`state`, `commit`, `reason`): only the board's holder. Say how the pull request ended with `state`: `merged` with `commit`, the merge commit, `closed` (closed without merging) or `unknown` (you do not know). It records the outcome as `report` does. `reason` is needed when work is still open. A close with no `state` still works and reads Unknown, and its reply asks you to name one; `report(state=...)` records it later, on the closed board.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 

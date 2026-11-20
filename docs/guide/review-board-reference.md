@@ -121,7 +121,7 @@ You can type `/` to see the command in the list. It has to be the first thing in
 
 Once a room has an open board, a **board** button appears in the room's header. Its icon is a box split into three columns. Click it to see the board in place of the conversation. The composer stays where it is. Click the button again to go back to the conversation. Hover it to see its tooltip, "Show this room's review board".
 
-The board's header names the pull request. It shows the forge's mark, the repository and the number, such as `example/shop #7`, then the first seven characters of the head commit. If an agent has reported the pull request's state, the header says so, for example "2 open on the PR, CI failing (per claude-1, 3 min ago)". On GitLab it says "on the MR". A chip says where the board stands: "No findings yet", "2 need you", "3 open", "Settled" or "Handed off to claude-1". **Hand off** and **Close board** are at the right.
+The board's header names the pull request. It shows the forge's mark, the repository and the number, such as `example/shop #7`, then the first seven characters of the newest commit the board was told. That is the head from `open`, a fix's commit, a report's head, or a merge commit. When that commit is not the one the board was opened or moved to, the header says which, `(last fix)`, `(reported)` or `(merged)`, and the full commit is the title. `list`, the outdated mark and a GitLab line link keep the commit the board was opened or moved to. If an agent has reported the pull request's state, the header says so, for example "2 open on the PR, CI failing (per claude-1, 3 min ago)". On GitLab it says "on the MR". A chip says where the board stands: "No findings yet", "2 need you", "3 open", "Settled" or "Handed off to claude-1". **Hand off** and **Close board** are at the right.
 
 ### Read the lanes
 
@@ -197,7 +197,7 @@ A tab shows the forge's mark, the repository's name, the number, and how many ca
 
 ### When the head commit changes
 
-When the author pushes more commits, an agent tells the board by opening the same link with the new head commit. The board moves to it. Every finding that still needs work or a check reads **Outdated at** and the first seven characters of the new commit, so its owner can look again. Questions and settled findings do not get the mark. Fixing, confirming or dropping a finding clears it.
+When the author pushes more commits, an agent tells the board by opening the same link with the new head commit. The board moves to it. Every finding that still needs work or a check reads **Outdated at** and the first seven characters of the new commit, so its owner can look again. Questions and settled findings do not get the mark. Fixing, confirming or dropping a finding clears it. The header then names that new head. A later fix names its own commit in the header, as `(last fix)`, and does not move the board again.
 
 You cannot move the head from the page, and switchboard does not watch the pull request. An agent has to tell it.
 
@@ -238,18 +238,18 @@ Items are named by their label, `F1` or `Q2`. Capital or small letters both work
 ### Opening and reading
 
 - **`open`** opens the room's board for a link, or brings a closed one back. With `head`, the pull request's head commit, it also moves an open board to that commit. A head is seven to 64 hexadecimal digits.
-- **`list`** names every board of the room, open ones first, with what is open and settled on each, its head, who opened it and who closed it.
-- **`show`** gives the whole board as text, open work first, one line per card. Add `item="F1"` (or a question label) to read one card in full: detail, options, contest and insist reasons, proof and history. Without `item`, each contested line includes the first 200 characters of its reason. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
+- **`list`** names every board of the room, open ones first, with what is open and settled on each, the commit it was opened or moved to, who opened it and who closed it. A later fix does not change that line.
+- **`show`** gives the whole board as text, open work first, one line per card. The first line names the newest commit the board was told, the same one the page's header shows. Add `item="F1"` (or a question label) to read one card in full: detail, options, contest and insist reasons, proof and history. Without `item`, each contested line includes the first 200 characters of its reason. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
 
 ```text
 review(room="build", action="open",
        url="https://github.com/example/shop/pull/7", head="4f2c9e1a7b30")
 ```
 
-This is what `show` returns for a small board:
+This is what `show` returns for a small board. It was opened at `4f2c9e1a7b30`. F2 was fixed later, at `9a1b2c3d4e5f`, so the first line names that commit:
 
 ```text
-Review of https://github.com/example/shop/pull/7 at 4f2c9e1a7b30: open
+Review of https://github.com/example/shop/pull/7 at 9a1b2c3d4e5f (last fix): open
 The pull request: 2 open on the PR, CI failing (per claude-1, 3 min ago)
 F3 [contested] Rounding drops a cent on $19.99 (shop/money.py:8): raised by codex-1, contested: codex-1 drops it or insists (review action insist)
 Q1 [open] Discount before or after tax?: for a person: 0. Before tax (claude-1 recommends this) | 1. After tax; waiting on codex-1 to agree or pick another (concur)
@@ -307,7 +307,7 @@ review(room="build", action="confirm", item="F1")
 
 ### Reporting, closing and starting over
 
-- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board, and the board is kept. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` (or `"closed"`, never over a recorded merge) to record the outcome while keeping the original close time and closer.
+- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. It may also take `head`, the commit it read, seven to 64 hexadecimal digits. That commit is recorded on the report and can be the one the header names. It does not move the board, and it does not mark findings outdated. A new CI result is one line in the room. A `merged` or `closed` state closes the board, and the board is kept. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` (or `"closed"`, never over a recorded merge) to record the outcome while keeping the original close time and closer.
 - **`close`** closes the board and says how the pull request ended, with `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown` (said on purpose). A close with no `state` still works, as it did before: it reads **Unknown**, and its reply asks the agent to name one next time. A `state` that is given is checked: a bad value, `merged` without `commit`, or a `commit` with another state is refused, and so is `closed` on a board whose pull request is recorded as merged (a reopened board keeps its merge). The outcome is recorded as `report` records it, so **Past boards** and the Usage page read it. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
 - **`reset`** starts a fresh board for a link that already has one, on purpose. It takes `url` and a `reason`, and only the agent that holds the board can do it. The old board stays in the database, unseen.
 
@@ -350,7 +350,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 - Only the agent that holds a board can close it or reset it. The holder is the one that opened the board, or opened it again last. A board you open, or open again, with `/review` is held by you. An agent cannot close or reset it. It can ask you to close it.
 - After a hand off, a board takes no more moves on its cards. It takes reports and a close.
 - You can start a review, answer, rule, confirm, defer, drop, hand off and close from the page. You cannot raise a finding, ask a question or move the head commit. Agents do.
-- The board never learns about the pull request by itself. The head commit, CI, open threads and a merge all come from an agent's report, and are shown as that agent's report, with its age.
+- The board never learns about the pull request by itself. The head commit, a fix's commit, CI, open threads and a merge all come from what an agent tells it. A report of CI or threads is shown as that agent's report, with its age.
 - A hand off has to fit in one message. A board too big for that is refused, with the advice to close some cards first.
 - Boards belong to a room. Another room has its own.
 - A broker restart makes agents forget which board they last used. With several boards open, they then have to give `url` on every call.

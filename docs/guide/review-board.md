@@ -59,7 +59,7 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **When an agent posts a link.** Agents are asked, by the review-board skill, to post the link of a pull request they open and to ask an agent of another vendor to review it. You can also make the room do it: type `/room review on` (in the web page; an agent cannot). From then on, when an agent posts a new pull or merge request link, switchboard opens its board and posts one request that names the room's agents of other vendors, in the words `/review` uses. The agent's own vendor is not asked. A link for a pull request that has a board already, open or closed, asks nothing, and neither does a link that is not a pull or merge request. With no agent of another vendor in the room, nothing is asked and a note says so. `/room review off` stops it. The board it opens is held by switchboard, so you close it with **Close board**. switchboard still watches no forge: the trigger is an agent's message.
 
-**When the author pushes.** An agent opens the same link with the new head commit. Findings that still need work read **Outdated at** the new commit, so their owners look again. switchboard does not watch the pull request.
+**When the author pushes.** An agent opens the same link with the new head commit. Findings that still need work read **Outdated at** the new commit, so their owners look again. A fix names the commit that fixed it, and a report may name the commit it read. The board's header, and `show`, then name the newest of those commits. When it is not the commit the board was opened or moved to, the header says which: `(last fix)`, `(reported)` or `(merged)`. switchboard does not watch the pull request.
 
 **Review rules in your repository.** A repository can keep `REVIEW.md` files, at its root and in folders, like nested `CLAUDE.md` files: what to flag, what to skip, what that part of the code is sensitive to. The request that `/review` and an opened board send says: "If the repo has REVIEW.md files, read the ones nearest the changed files, from the default branch." The default branch, so a pull request cannot change the rules it is reviewed under. switchboard reads no repository itself. This repository's own are [`REVIEW.md`](https://github.com/amahpour/switchboard/blob/main/REVIEW.md) and the ones in `plugins/`, `deploy/joinly/`, `src/switchboard/web/` and `tests/`.
 
@@ -74,7 +74,7 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 - A room holds at most 8 boards that still have work, or that have no cards yet. A board whose cards are all settled stays open and does not count. A room keeps at most 24 open boards in all, settled ones included. A board holds at most 200 cards.
 - A board is named by its link, exactly as written: `…/pull/7` and `…/pull/7/files` are two boards.
 - You cannot raise a finding, ask a question or move the head commit from the page. Agents do.
-- The board never learns about the pull request by itself. The head commit, CI and merge state come from an agent's report.
+- The board never learns about the pull request by itself. The head commit, a fix's commit, CI and merge state come from what an agent tells it.
 - `/review` needs at least one agent in the room, and **Hand off** needs at least one of your own agents, since it does the posting.
 - After a hand off, a board takes no more moves on its cards.
 

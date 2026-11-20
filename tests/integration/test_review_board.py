@@ -747,9 +747,10 @@ async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: I
             mine = [line for line in text.splitlines() if " from=alice " in line]
             assert mine and not any(PR in line or "expired codes" in line for line in mine)
             r = await reviewer.call("review", room="#build", action="show")
+            # the board was opened with no head; the fix is the commit it was told (#906)
             assert (
                 r["board"].splitlines()[0]
-                == f"Review of {PR}: handed off to codex-1: post one review now, once"
+                == f"Review of {PR} at 9a1b2c3 (last fix): handed off to codex-1: post one review now, once"
             )
             assert "F2 Dropped: style nit" in r["board"]
     finally:
@@ -1643,5 +1644,102 @@ async def test_an_independent_reviewer_takes_a_departed_raisers_findings(broker:
             assert {p["agent"]: p["option"] for p in card["picks"]} == {"codex-1": 0}
             done = await reviewer.call("review", room="#build", action="drop", item="F2", reason="not a bug")
             assert done["ok"] and done["settled"]
+    finally:
+        web.close()
+
+
+async def test_show_and_the_page_name_the_newest_commit_the_board_was_told(broker: InProcBroker) -> None:
+    """#906: after a fix at a newer commit, ``show`` and the page named the commit the board was
+    opened at, so a reader could think the review was of that old commit. Both name the newest
+    commit an open, a fix or a report told the board. ``list``, the stored head and the outdated
+    mark keep the commit the board was opened or moved to. A report's head does not move the
+    board, and opening again at the same head does not hide the fix."""
+    opened, fix, reported, moved, newer = (
+        "4f2c9e1a7b30",
+        "9a1b2c3d4e5f",
+        "aeb613ed0011",
+        "7b9c2a4d6e8f",
+        "656cfb2d395b",
+    )
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            opened_board = await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+            assert opened_board["board"].splitlines()[0] == f"Review of {PR} at {opened}: settled"
+            await reviewer.call(
+                "review", room="#build", action="raise", title="Expired codes still apply",
+                where="shop/codes.py:12",
+            )  # fmt: skip
+            await author.call("review", room="#build", action="concede", item="F1")
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=fix, proof="test_expiry"
+            )
+            assert fixed["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+
+            page = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert page is not None
+            assert page["head"] == opened
+            assert page["head_sha"] == fix
+            assert page["head_note"] == "last fix"
+            assert page["items"][0]["outdated_head"] == ""
+
+            listed = await reviewer.call("review", room="#build", action="list")
+            assert f"at {opened}" in listed["boards"]
+            assert "(last fix)" not in listed["boards"]
+            assert fix not in listed["boards"]
+
+            kept = await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+            assert kept["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+
+            bad = await reviewer.call("review", room="#build", action="report", state="open", head="main")
+            assert bad["ok"] is False and "commit hash" in bad["error"]
+            still = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert still is not None and still["head"] == opened and still["head_sha"] == fix
+
+            told = await reviewer.call("review", room="#build", action="report", state="open", head=reported)
+            assert told["board"].splitlines()[0] == f"Review of {PR} at {reported} (reported): open"
+            after = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert after is not None
+            assert after["head"] == opened and after["head_sha"] == reported
+            assert after["head_note"] == "reported"
+            assert after["items"][0]["outdated_head"] == ""
+
+            moved_board = await reviewer.call("review", room="#build", action="open", url=PR, head=moved)
+            assert moved_board["board"].splitlines()[0] == f"Review of {PR} at {moved}: open"
+            shifted = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert shifted is not None
+            assert shifted["head"] == moved and shifted["head_sha"] == moved and shifted["head_note"] == ""
+            assert shifted["items"][0]["outdated_head"] == moved
+
+            again = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=newer, proof="test_expiry"
+            )
+            assert again["board"].splitlines()[0] == f"Review of {PR} at {newer} (last fix): open"
+            latest = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert latest is not None
+            assert latest["head"] == moved and latest["head_sha"] == newer
+            assert latest["head_note"] == "last fix"
+
+            merged = "c0ffee123456"
+            before = [row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")]
+            closed = await reviewer.call(
+                "review", room="#build", action="close", state="merged", commit=merged, reason="landed"
+            )
+            assert closed["ok"] and closed["closed"] is True
+            shown = await reviewer.call("review", room="#build", action="show", url=PR)
+            assert shown["board"].splitlines()[0].startswith(f"Review of {PR} at {merged} (merged)")
+            # the same merged report, naming only a newer head, does not say the close again
+            again_report = await reviewer.call(
+                "review", room="#build", action="report", state="merged", url=PR, head="b0b0b0b0b0b0"
+            )
+            assert again_report["ok"] and again_report["closed"] is True
+            after = [row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")]
+            added = after[len(before) :]
+            assert any(merged in line and "closed by" in line for line in added)
+            assert not any("remains closed" in line or "the review board is closed" in line for line in added)
+            reread = await reviewer.call("review", room="#build", action="show", url=PR)
+            assert reread["board"].splitlines()[0].startswith(f"Review of {PR} at b0b0b0b0b0b0 (reported)")
     finally:
         web.close()

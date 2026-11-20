@@ -7117,10 +7117,20 @@
       link.replaceChildren(mark(f.kind), el('span', 'board-pr-repo', f.repo), el('span', 'board-pr-num', ref));
     }
     title.append(name, link);
-    if (b.head) {
-      const sha = el('code', 'board-head-sha', b.head.slice(0, 7));
-      sha.title = b.head;
-      title.append(sha);
+    // the newest commit an open, a fix or a report named (#906). ``head`` stays the one the
+    // board was opened or moved to: the outdated mark and a GitLab line link keep using it.
+    // A note is one of two fixed strings; anything else is dropped.
+    const shown = typeof b.head_sha === 'string' && b.head_sha ? b.head_sha : (b.head || '');
+    const note = b.head_note === 'last fix' || b.head_note === 'reported' || b.head_note === 'merged'
+      ? b.head_note : '';
+    if (shown) {
+      // one phrase, so the note stays with the commit instead of wrapping under the title
+      const commit = el('span', 'board-head-commit');
+      const sha = el('code', 'board-head-sha', shown.slice(0, 7));
+      sha.title = note ? shown + ' (' + note + ')' : shown;
+      commit.append(sha);
+      if (note) commit.append(el('span', 'board-head-note', '(' + note + ')'));
+      title.append(commit);
     }
     // what an agent last read off the pull request (#291): its claim, named as its, never checked
     if (b.report) {
