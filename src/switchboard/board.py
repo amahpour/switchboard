@@ -1262,8 +1262,9 @@ def _normal_text(v: Any) -> str:
 
 
 def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
-    """``el`` without what points at a dropped id: its entry in a bound list or group list, a binding,
-    ``frameId`` or ``containerId`` set to ``None``. ``el`` itself when nothing in it names a dropped id;
+    """``el`` without what points at a dropped id: its entry in a bound list or group list, and a binding
+    set to ``None``; a ``frameId`` or ``containerId`` is **deleted** (``null`` is longer than a one-character
+    id, and a shape at its size limit must not grow). ``el`` itself when nothing in it names a dropped id;
     otherwise a copy, which has only lost entries, so it is never larger."""
     if not dropped:
         return el
@@ -1285,11 +1286,40 @@ def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
     return new if new != el else el
 
 
+def _is_wrap_of(text: str, original: str) -> bool:
+    """True when ``text`` is ``original`` wrapped by Excalidraw, read in order and both consumed
+    completely (no prefix, no cut): every character of ``text`` that is not a line break equals the next
+    one of ``original``, and each ``"\\n"`` in ``text`` stands for one of three things. A line break the
+    person typed (``original`` has ``"\\n"`` there, consumed). A wrap at spaces (``original`` has a run
+    of one or more spaces there, consumed whole): Excalidraw's ``wrapText`` pushes a wrapped line with
+    ``trimEnd()``, so the whole run of spaces where it broke is dropped. Or a break inside a word
+    (nothing in ``original``). A break where ``original`` has a space is therefore never mid-word, so a
+    text that drops a word boundary does not match. An empty ``original`` matches nothing (#893, schema
+    56)."""
+    if not original:
+        return False
+    i = 0
+    for ch in text:
+        if ch == "\n":
+            if i < len(original) and original[i] == "\n":
+                i += 1
+            else:
+                while i < len(original) and original[i] == " ":
+                    i += 1
+        elif i < len(original) and original[i] == ch:
+            i += 1
+        else:
+            return False
+    return i == len(original)
+
+
 def _needs_cleaning(el: dict[str, Any]) -> bool:
-    """True when a stored shape is one the cleaning of a write would change in any way (#893, schema 56):
-    an id or an id-like string that holds a secret; a tombstone with text; a text, ``originalText`` or
-    ``name`` that redaction or the cut would change; a ``text`` with line breaks and no ``originalText``,
-    or one that is not a wrapped copy of its ``originalText``."""
+    """True when a stored shape is one the cleaning of a write would change in any way (#893, schema 56): an
+    id or an id-like string that holds a secret; a tombstone with text; a text, ``originalText`` or ``name``
+    that redaction or the cut would change; or a multi-line ``text`` that is neither equal to its clean
+    ``originalText`` nor a full wrap of it (``_is_wrap_of``): the old broker stored the two fields
+    independently, so only a full wrap shows nothing the clean original does not. A legacy text that was cut
+    (shorter than its original's wrap) is removed: the accepted, conservative cost."""
     if not isinstance(el.get("id"), str) or any(redact(v)[1] for v in _id_strings(el)):
         return True
     fields = [el.get(k) for k in ("text", "originalText", "name") if isinstance(el.get(k), str)]
@@ -1301,20 +1331,18 @@ def _needs_cleaning(el: dict[str, Any]) -> bool:
     if isinstance(text, str) and "\n" in text:
         if not isinstance(original, str):
             return True  # only ever stored wrapped: nothing verifies what the wrap did to a token
-        # a wrapped copy of the original words (the same characters, spaces and breaks aside, or a cut
-        # of them) shows nothing the original, which is clean, does not: kept, whatever its line count
-        a, b = "".join(text.split()), "".join(original.split())
-        return not (a.startswith(b) or b.startswith(a))  # a cut copy is a prefix of the other
+        return text != original and not _is_wrap_of(text, original)
     return False
 
 
 def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
-    """A stored whiteboard cleaned once, for the upgrade that cleans old data (#893, schema 56). A shape that
-    needs any change (``_needs_cleaning``) is **removed**, not rewritten, and a shape that needs none is kept
-    as it is. The references the kept shapes held to a removed one go with it (its entry in a bound list or
-    group list, a binding, a ``frameId`` or ``containerId`` set to ``None``). So a board can only shrink: no
-    size limit can be crossed. Returns the kept shapes and the ids removed, which the caller also removes from
-    the change records. Anything that is not a shape (not a dict, no string id) is removed. Idempotent."""
+    """A stored whiteboard cleaned once, for the upgrade that cleans old data (#893, schema 56). A shape
+    that needs any change (``_needs_cleaning``) is **removed**, not rewritten, and a shape that needs
+    none is kept as it is. The references the kept shapes held to a removed one go with it (its entry in
+    a bound list or group list, a binding set to ``None``, a ``frameId`` or ``containerId`` deleted). So
+    a board can only shrink: no size limit can be crossed. Returns the kept shapes and the ids removed,
+    which the caller also removes from the change records. Anything that is not a shape (not a dict, no
+    string id) is removed. Idempotent."""
     shapes = [e for e in elements if isinstance(e, dict)]
     dropped = {e["id"] for e in shapes if isinstance(e.get("id"), str) and _needs_cleaning(e)}
     kept = [e for e in shapes if isinstance(e.get("id"), str) and e["id"] not in dropped]

@@ -378,3 +378,50 @@ def test_removing_a_reference_never_grows_a_shape_that_is_at_its_limit(key: str)
     kept, dropped = board.clean_stored([el("x", text=f"uses {TOKEN}"), survivor])
     assert dropped == {"x"} and len(kept) == 1
     assert key not in kept[0] and size(kept[0]) <= board.MAX_SHAPE_BYTES
+
+
+def kept_by_the_upgrade(text: str, original: str) -> bool:
+    shape = el("t", type="text", text=text, originalText=original)
+    kept, _ = board.clean_stored([shape])
+    assert kept in ([], [shape])  # a shape is kept as it is, or removed: never rewritten
+    return bool(kept)
+
+
+@pytest.mark.parametrize(
+    ("text", "original"),
+    [
+        ("one\ntwo", ""),  # an empty original approves nothing
+        ("one\ntwo", "one"),  # a short original that is a prefix of the text
+        ("one\ntwo", "one two three"),  # a text cut short of its original's wrap
+        ("abc\nd", "ab cd"),  # the break loses a word boundary: the original has a space after "ab"
+        ("ab\ncd", "abXcd"),  # other words
+        ("one\ntwo", "one two\n"),  # the original is not consumed completely
+    ],
+)
+def test_a_multi_line_text_that_is_not_a_full_wrap_of_its_original_is_removed(
+    text: str, original: str
+) -> None:
+    """The old broker stored ``text`` and ``originalText`` independently, so a prefix, a cut or a lost
+    word boundary says nothing about what the display text holds. Only equal strings, or a full wrap read
+    in order with both consumed completely, are kept. Fails on a check that lets a prefix, a cut or an
+    empty original through."""
+    assert not kept_by_the_upgrade(text, original)
+
+
+@pytest.mark.parametrize(
+    ("text", "original"),
+    [
+        ("one\ntwo", "one\ntwo"),  # equal
+        (TEN, TEN),  # ten lines, equal: more than eight breaks is no reason to remove it
+        (TEN, TEN.replace("\n", " ")),  # ten lines, a wrap at single spaces
+        ("ab\ncd", "abcd"),  # a break inside a word
+        ("ab\ncd", "ab   cd"),  # a wrap at a run of spaces: wrapText trims the whole run
+        ("ab \ncd", "ab \ncd"),  # a typed newline after a space
+        ("ab\ncd\nef", "ab cd\nef"),  # a wrap and a typed newline
+    ],
+)
+def test_a_multi_line_text_that_is_equal_to_or_a_full_wrap_of_its_original_is_kept_as_it_is(
+    text: str, original: str
+) -> None:
+    """The cases above that must not be lost: nothing to change, whatever the line count."""
+    assert kept_by_the_upgrade(text, original)
