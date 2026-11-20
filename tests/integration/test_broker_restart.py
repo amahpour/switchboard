@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import signal
 import threading
 import time
@@ -23,6 +24,7 @@ from test_agents_http_wake import claude_hook, joined_claude, listen, parked, pa
 
 from switchboard import db
 from switchboard.broker import agent_tokens
+from switchboard.broker.agent_http import REOPEN_IDLE_S
 from switchboard.clock import SystemClock
 from switchboard.config import Config
 from switchboard.store import Store
@@ -363,11 +365,11 @@ def test_a_client_that_keeps_its_session_id_is_served_after_a_restart(broker: In
     assert tool_json(joined)["ok"]
     row = broker.state.store.agent_token_by_hash(agent_tokens.token_hash(token))
     key = hashlib.sha256(sid.encode()).hexdigest()
-    before = broker.state.store.mcp_session(row.id, key)
+    before = broker.state.store.mcp_session(row.id, key, REOPEN_IDLE_S)
     assert before is not None and before.client_name == "Cursor"
     broker.restart()
     assert c.tools() == listed  # the same client after the restart, not the plain names
-    after = broker.state.store.mcp_session(row.id, key)
+    after = broker.state.store.mcp_session(row.id, key, REOPEN_IDLE_S)
     assert after is not None and after.opened_at > before.opened_at  # its month starts again
     first = cursor_call(
         broker, c, token, "use-2", "switchboard_say", room="#build", text="back after the restart"
@@ -414,3 +416,250 @@ def test_a_reopened_session_still_ends_its_threads_when_deleted(broker: InProcBr
     assert status(broker, "codex-1") == "offline"
     broker.restart()
     assert codex.raw("who", THREAD_A, room="#build").status_code == 404
+
+
+# ---------------------------------------------------------------- review findings on #903 (§49.2)
+
+
+def token_row(b: InProcBroker, token: str) -> Any:
+    return b.on_loop(b.state.store.agent_token_by_hash, agent_tokens.token_hash(token))
+
+
+def library_sessions(b: InProcBroker) -> set[str]:
+    """The session IDs the MCP library itself holds (its manager's own map), read on the broker's loop."""
+    return b.on_loop(lambda: set(b.state.agent_auth.app.session_manager._server_instances))
+
+
+def opener(
+    b: InProcBroker, token: str, name: Any, protocol: str = "2025-06-18"
+) -> tuple[httpx.Response, str]:
+    """A fresh initialize with this clientInfo name and protocol, then its notifications/initialized."""
+    c = Codex(b, token)
+    body = {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": protocol,
+            "capabilities": {},
+            "clientInfo": {"name": name, "version": "1"},
+        },
+    }
+    headers = c.headers({"accept": "application/json, text/event-stream", "content-type": "application/json"})
+    r = c.c.post("/mcp", json=body, headers=headers)
+    assert r.status_code == 200, (r.status_code, r.text)
+    sid = r.headers["mcp-session-id"]
+    negotiated = sse_result(r)["result"]["protocolVersion"]
+    done = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+    headers = {**headers, "mcp-session-id": sid, "mcp-protocol-version": negotiated}
+    assert c.c.post("/mcp", json=done, headers=headers).status_code == 202
+    return r, sid
+
+
+def test_another_tokens_live_session_is_refused_before_a_restart(broker: InProcBroker) -> None:
+    """A session ID is no credential even while its library session is alive: another token sending it gets
+    the 404 an unknown session gets, and the owner is still served."""
+    broker.call("room.create", {"name": "#build"})
+    mine = Codex(broker, make_token(broker, "laptop"))
+    assert mine.start().status_code == 200
+    assert mine.sid in library_sessions(broker)
+    theirs = Codex(broker, make_token(broker, "desk"))
+    theirs.sid = mine.sid
+    assert theirs.raw("who", THREAD_A, room="#build").status_code == 404
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+
+
+def test_a_reopened_sessions_library_id_is_unknown_to_every_token(broker: InProcBroker) -> None:
+    """After a reopen the library knows the session by a new ID of its own, which is no key of the broker's
+    map of who owns what. Sent directly, by its own token or another's, it must be refused before it reaches
+    the library; only the public ID the client owns reaches it. Fails if an ID the broker can't attribute to
+    the token is forwarded (#903, F1)."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    broker.restart()
+    assert mine.call("who", THREAD_A, room="#build")["ok"]  # reopened
+    inner = broker.on_loop(lambda: broker.state.agent_auth.sessions[mine.sid].inner)
+    assert inner is not None and inner != mine.sid and inner in library_sessions(broker)
+    for other in (token, make_token(broker, "desk")):
+        direct = Codex(broker, other)
+        direct.sid = inner
+        assert direct.raw("who", THREAD_A, room="#build").status_code == 404
+        assert (
+            direct.c.get("/mcp", headers=direct.headers({"accept": "text/event-stream"})).status_code == 404
+        )
+    assert mine.call("who", THREAD_A, room="#build")["ok"]
+
+
+def test_an_evicted_session_with_no_record_is_refused(broker: InProcBroker, monkeypatch: Any) -> None:
+    """Past ``SESSIONS_MAX`` the broker forgets its oldest session while the library may keep it. With no
+    record to open it again by, its ID is one the broker can't attribute, so it gets a 404 and never reaches
+    the still-living library session. Fails if it is forwarded (#903, F1)."""
+    from switchboard.broker import agent_http
+
+    monkeypatch.setattr(agent_http, "SESSIONS_MAX", 1)
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    old = Codex(broker, token)
+    assert old.start().status_code == 200
+    row = token_row(broker, token)
+    broker.on_loop(
+        broker.state.store.mcp_session_forget, row.id, hashlib.sha256(old.sid.encode()).hexdigest()
+    )
+    new = Codex(broker, token)
+    assert new.start().status_code == 200  # evicts the old one from the broker's map
+    assert old.sid in library_sessions(broker)
+    assert old.raw("who", THREAD_A, room="#build").status_code == 404
+    assert new.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+
+
+def pause_inner(b: InProcBroker, when: str, hold: threading.Event, at: threading.Event) -> None:
+    """Make the broker's handshake stop after it sent ``when`` (a JSON-RPC method) until ``hold`` is set,
+    telling the test through ``at``: the test controls the moment, no sleep."""
+    auth = b.state.agent_auth
+    real = auth._inner
+
+    async def paused(scope: Any, message: Any, session_id: Any, protocol: Any) -> Any:
+        answer = await real(scope, message, session_id, protocol)
+        if isinstance(message, dict) and message.get("method") == when:
+            at.set()
+            assert await asyncio.to_thread(hold.wait, 30)
+        return answer
+
+    auth._inner = paused
+
+
+def test_a_delete_during_a_reopen_wins_and_leaves_no_library_session(broker: InProcBroker) -> None:
+    """A reopen reads the record, then awaits two library calls. A DELETE of the same ID in between removes
+    the record: the reopen must not bind the session after it, and must end the library session it started.
+    The race is made with an event the test controls. Fails if the session comes back after its client
+    deleted it, or an orphan library session is left (#903, F2)."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    broker.restart()
+    assert library_sessions(broker) == set()
+    hold, at = threading.Event(), threading.Event()
+    pause_inner(broker, "initialize", hold, at)
+    with ThreadPoolExecutor(1) as pool:
+        call = pool.submit(mine.raw, "who", THREAD_A, room="#build")
+        assert at.wait(30)
+        deleter = Codex(broker, token)
+        deleter.sid = mine.sid
+        assert deleter.delete(recorded).status_code == 404  # unknown to the broker: its record goes
+        hold.set()
+        assert call.result(30).status_code == 404
+    until(lambda: library_sessions(broker) == set())
+    assert mine.sid not in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+    row = token_row(broker, token)
+    key = hashlib.sha256(mine.sid.encode()).hexdigest()
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S) is None
+
+
+def test_a_failed_reopen_leaves_no_library_session(broker: InProcBroker) -> None:
+    """The library session the broker's own initialize opened is ended when the rest of the handshake fails,
+    so none stays alive that nothing can reach; the record stays, so the next request can try again. Fails if
+    the failed reopen leaves its library session (#903, F2)."""
+    broker.call("room.create", {"name": "#build"})
+    mine = Codex(broker, make_token(broker, "laptop"))
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    broker.restart()
+    auth = broker.state.agent_auth
+    real = auth._inner
+
+    async def refused(scope: Any, message: Any, session_id: Any, protocol: Any) -> Any:
+        if isinstance(message, dict) and message.get("method") == "notifications/initialized":
+            return 500, None, b""
+        return await real(scope, message, session_id, protocol)
+
+    auth._inner = refused
+    assert mine.raw("who", THREAD_A, room="#build").status_code == 404
+    until(lambda: library_sessions(broker) == set())
+    auth._inner = real
+    assert mine.call("who", THREAD_A, room="#build")["ok"]  # the record stayed: it opens now
+
+
+def test_a_reopen_uses_the_protocol_the_library_negotiated(broker: InProcBroker) -> None:
+    """The record keeps the protocol the client asked for, which the library may have answered with
+    another. The broker's handshake must use the one the library answers it with, not the stored one, and
+    keep it. Fails if notifications/initialized carries a protocol the library refuses (#903, F4)."""
+    token = make_token(broker, "laptop")
+    first, sid = opener(broker, token, "Cursor", protocol="2024-01-01")
+    negotiated = sse_result(first)["result"]["protocolVersion"]
+    assert negotiated != "2024-01-01"
+    row = token_row(broker, token)
+    key = hashlib.sha256(sid.encode()).hexdigest()
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S).protocol == "2024-01-01"
+    broker.restart()
+    c = Codex(broker, token)
+    c.sid = sid
+    body = {"jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {}}
+    r = c.c.post("/mcp", json=body, headers=c.headers({"accept": "application/json, text/event-stream"}))
+    assert r.status_code == 200, (r.status_code, r.text)
+    assert r.headers["mcp-session-id"] == sid
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S).protocol == negotiated
+
+
+@pytest.mark.parametrize(
+    ("name", "kept"),
+    [
+        ("\x00Cursor", "Cursor"),  # SQLite's length() stops at the NUL: the CHECK failed in the response
+        ("\x01\x02\x1b​", None),  # nothing printable: no record
+        ("A\x00" + "b" * 200, "A" + "b" * 79),  # cut after the controls go, not before
+    ],
+)
+def test_a_client_name_is_kept_printable_and_never_fails_the_initialize(
+    broker: InProcBroker, name: str, kept: str | None
+) -> None:
+    """clientInfo.name is the client's claim: it is kept the way the broker keeps untrusted text (control
+    and format characters dropped, cut to 80), or not at all, and the client's initialize succeeds whatever
+    it says. Fails if a NUL-led name turns the initialize into a database error, or a control character is
+    stored (#903, F5)."""
+    token = make_token(broker, "laptop")
+    _, sid = opener(broker, token, name)
+    row = token_row(broker, token)
+    got = broker.on_loop(
+        broker.state.store.mcp_session, row.id, hashlib.sha256(sid.encode()).hexdigest(), REOPEN_IDLE_S
+    )
+    assert (got.client_name if got is not None else None) == kept
+
+
+def test_a_record_that_cannot_be_stored_never_fails_the_initialize(
+    broker: InProcBroker, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The record only helps a later restart: a database error writing it is logged, without the client's
+    claim, and the client's own initialize still succeeds. Fails if the error reaches the response (#903,
+    F5)."""
+    import sqlite3
+
+    def broken(*_: Any) -> None:
+        raise sqlite3.IntegrityError("CHECK constraint failed")
+
+    broker.state.store.mcp_session_opened = broken
+    caplog.set_level(logging.WARNING, logger="switchboard")
+    opener(broker, make_token(broker, "laptop"), "Cursor-unstored")
+    assert any("could not keep what opened" in r.getMessage() for r in caplog.records)
+    assert not any("Cursor-unstored" in r.getMessage() for r in caplog.records)
+
+
+def test_the_reopen_log_line_holds_no_client_name(
+    broker: InProcBroker, caplog: pytest.LogCaptureFixture
+) -> None:
+    """What a client calls itself is its claim, and may carry anything: the line that says a session was
+    opened again names no client. Fails if the log prints the client-supplied name (#903, F6)."""
+    token = make_token(broker, "laptop")
+    _, sid = opener(broker, token, "Cursor-name-from-the-client")
+    broker.restart()
+    caplog.set_level(logging.INFO, logger="switchboard")
+    c = Codex(broker, token)
+    c.sid = sid
+    assert c.tools()
+    lines = [r.getMessage() for r in caplog.records if r.name.startswith("switchboard")]
+    assert any("opened an MCP session again" in line for line in lines), lines
+    assert not any("Cursor-name-from-the-client" in line for line in lines)

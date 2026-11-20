@@ -503,7 +503,7 @@ applies. A crash or SIGKILL can still lose says that were only queued in memory.
   client that keeps its session id (Cursor) carries on, and one that opens a new session
   (Claude Code, Codex, Devin) does too. The participant's room memberships and pending
   messages survive. The broker keeps a month of these sessions, at most 100 per token; a
-  revoked token's go at once.
+  revoked token's, and a removed person's, go at once.
 - **Codex and Devin:** an idle Codex's Stop wait and an idle Devin's `wait()` end with the
   outage, and neither starts listening again by itself: switchboard never starts a turn from
   outside. Once the broker is back, type anything in the CLI (for example `read #build`). A

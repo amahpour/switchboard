@@ -2025,6 +2025,11 @@ class Store:
                 "UPDATE agent_tokens SET revoked_at=? WHERE person_id=? AND revoked_at IS NULL",
                 (now, person_id),
             )
+            # their revoked tokens open nothing again, as one revoked alone doesn't (#823)
+            self.con.execute(
+                "DELETE FROM mcp_sessions WHERE token_id IN (SELECT id FROM agent_tokens WHERE person_id=?)",
+                (person_id,),
+            )
             return self.web_session_delete_person(person_id)
 
     def person_set_admin(self, person_id: int, admin: bool) -> bool:
@@ -2161,20 +2166,32 @@ class Store:
                 (token_id, sid_hash, name, version, protocol, now),
             )
 
-    def mcp_session(self, token_id: int, sid_hash: str) -> McpSessionRow | None:
-        """The client that opened this token's session whose ID has this sha256, or None."""
-        r = self.con.execute(
-            "SELECT * FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash)
-        ).fetchone()
-        return McpSessionRow.from_row(r) if r is not None else None
-
-    def mcp_session_reopened(self, token_id: int, sid_hash: str) -> None:
-        """The broker opened this session again after a restart: its month starts again from now, so a
-        session in use through several restarts is not swept while its client still holds the ID."""
+    def mcp_session(self, token_id: int, sid_hash: str, idle_s: float) -> McpSessionRow | None:
+        """The client that opened this token's session whose ID has this sha256, or None. One opened (or
+        opened again) more than ``idle_s`` ago is past its time whether or not a sweep ran: it is deleted,
+        and None."""
         with db.tx(self.con):
             self.con.execute(
-                "UPDATE mcp_sessions SET opened_at=? WHERE token_id=? AND sid_hash=?",
-                (self.clock.now(), token_id, sid_hash),
+                "DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash=? AND opened_at < ?",
+                (token_id, sid_hash, self.clock.now() - idle_s),
+            )
+            r = self.con.execute(
+                "SELECT * FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash)
+            ).fetchone()
+        return McpSessionRow.from_row(r) if r is not None else None
+
+    def mcp_session_reopened(self, token_id: int, sid_hash: str, protocol: str) -> bool:
+        """The broker opened this session again after a restart, with the protocol the MCP library
+        answered: its month starts again from now, so a session in use through several restarts is not
+        swept while its client still holds the ID. False when the record is gone (the client deleted the
+        session, or its token was revoked, while it was being opened): it must not be opened then."""
+        with db.tx(self.con):
+            return (
+                self.con.execute(
+                    "UPDATE mcp_sessions SET opened_at=?, protocol=? WHERE token_id=? AND sid_hash=?",
+                    (self.clock.now(), protocol, token_id, sid_hash),
+                ).rowcount
+                == 1
             )
 
     def mcp_session_forget(self, token_id: int, sid_hash: str) -> None:

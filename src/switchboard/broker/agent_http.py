@@ -47,6 +47,7 @@ import itertools
 import json
 import logging
 import re
+import sqlite3
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
@@ -76,6 +77,7 @@ from switchboard.broker.hook_replies import (
 from switchboard.broker.oauth import challenge
 from switchboard.broker.restarts import RESTART_MESSAGE, RETRY_AFTER_S
 from switchboard.broker.service import ServiceError
+from switchboard.envelope import clean
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
     TOOL_NAMES,
@@ -194,6 +196,8 @@ REOPEN_IDLE_S = 30 * 86400.0
 REOPEN_ID = "switchboard-reopen"  # the JSON-RPC id of the initialize the broker sends for the client
 SESSION_ID_RE = re.compile(r"[\x21-\x7e]{1,128}")  # an MCP session ID: visible ASCII, cut here
 PROTOCOL_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+REOPEN_REPLY_MAX = 65536  # the library's answer to that initialize is read only this far
+CLIENT_TEXT_MAX = 80  # a client's name or version, as kept (``mcp_sessions``' CHECK)
 TOUCH_S = 60.0  # a token's last use is written at most this often
 # the AgentService method behind each of the tools' calls (the socket's method table, §5.2)
 METHODS = {
@@ -291,7 +295,7 @@ def _listener_harness(raw: bytes) -> str:
 def _opening(raw: bytes) -> tuple[str, str, str] | None:
     """The client's name and version, and the protocol it asks for, from an ``initialize`` (2025-era MCP) of a
     bounded size: what the broker needs to open the same session again after a restart (#823). Each is the
-    client's own claim, cut as ``client_info`` cuts it; anything else is None."""
+    client's own claim, made printable and cut (``_client_text``); anything else is None."""
     if len(raw) > LISTENER_META_MAX:
         return None
     try:
@@ -302,13 +306,48 @@ def _opening(raw: bytes) -> tuple[str, str, str] | None:
         return None
     params = message.get("params")
     info = params.get("clientInfo") if isinstance(params, dict) else None
-    if not isinstance(info, dict) or not isinstance(info.get("name"), str) or not info["name"]:
+    if not isinstance(info, dict) or not isinstance(info.get("name"), str):
+        return None
+    name = _client_text(info["name"])
+    if not name:  # nothing printable: nothing to open again as
         return None
     protocol = params.get("protocolVersion") if isinstance(params, dict) else None
     if not isinstance(protocol, str) or not PROTOCOL_RE.fullmatch(protocol):
         return None
     version = info.get("version")
-    return info["name"][:80], (version if isinstance(version, str) else "")[:80], protocol
+    return name, _client_text(version) if isinstance(version, str) else "", protocol
+
+
+def _client_text(text: str) -> str:
+    """A client's name or version as it is kept: control and format characters dropped (``envelope.clean``,
+    so a NUL can't cut what SQLite measures), whitespace runs made one space, cut to ``CLIENT_TEXT_MAX``."""
+    return " ".join(clean(text[: CLIENT_TEXT_MAX * 4]).split())[:CLIENT_TEXT_MAX]
+
+
+def _negotiated(body: bytes | None) -> str | None:
+    """The protocol version the MCP library answered the broker's own ``initialize`` with (§49.2): from a JSON
+    body or the first SSE event that has data, read only within ``REOPEN_REPLY_MAX``. None if it can't be
+    read, or isn't a version."""
+    if body is None or len(body) > REOPEN_REPLY_MAX:
+        return None
+    text = body.decode("utf-8", "replace")
+    if not text.lstrip().startswith("{"):
+        data: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                data.append(line[5:].removeprefix(" "))
+            elif not line.strip() and any(d.strip() for d in data):
+                break  # the end of the first event with data
+            elif not line.strip():
+                data = []
+        text = "\n".join(data)
+    try:
+        message = json.loads(text)
+    except ValueError:
+        return None
+    result = message.get("result") if isinstance(message, dict) and message.get("id") == REOPEN_ID else None
+    protocol = result.get("protocolVersion") if isinstance(result, dict) else None
+    return protocol if isinstance(protocol, str) and PROTOCOL_RE.fullmatch(protocol) else None
 
 
 def _sid_hash(session_id: str) -> str:
@@ -924,14 +963,17 @@ class AgentAuth:
         until it restarts. So the broker keeps which client opened each session (``mcp_sessions``, by the
         ID's sha256) and, when one of the same token's IDs comes back unknown, initializes a session itself
         as that client did, with nothing else. The client keeps its ID: the broker maps it to the new one.
-        Another token's ID, one the client deleted, or one the broker never opened stays unknown (404)."""
+        Another token's ID, one the client deleted, one past its month, or one the broker never opened stays
+        unknown (404). The library may answer with another protocol than the one asked for: the session uses
+        the one it answered. A reopen that fails, or whose record went while it ran (the client's DELETE, a
+        revoked token), ends the library session it started, so none is left that nothing can reach."""
         if not SESSION_ID_RE.fullmatch(sid):
             return None
         async with self._reopening:
             session = self.sessions.get(sid)
             if session is not None:  # opened again by a request that came at the same moment
                 return session if session.token_id == row.id else None
-            opened = self.state.store.mcp_session(row.id, _sid_hash(sid))
+            opened = self.state.store.mcp_session(row.id, _sid_hash(sid), REOPEN_IDLE_S)
             if opened is None:
                 return None
             asked = _header(scope, b"mcp-protocol-version")
@@ -942,38 +984,54 @@ class AgentAuth:
                 "clientInfo": {"name": opened.client_name, "version": opened.client_version},
             }
             initialize = {"jsonrpc": "2.0", "id": REOPEN_ID, "method": "initialize", "params": params}
-            status, inner = await self._inner(scope, initialize, None, None)
-            if status != 200 or inner is None:
+            status, inner, body = await self._inner(scope, initialize, None, None)
+            negotiated = _negotiated(body) if status == 200 else None
+            if inner is None or negotiated is None:
                 log.warning("could not open an MCP session again after a restart (status %s)", status)
+                if inner is not None:
+                    await self._end(scope, inner, None)
                 return None
             done = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-            status, _ = await self._inner(scope, done, inner, protocol)
+            status, _, _ = await self._inner(scope, done, inner, negotiated)
             if status != 202:
                 log.warning("could not open an MCP session again after a restart (status %s)", status)
+                await self._end(scope, inner, negotiated)
                 return None
-            log.info("opened an MCP session again after a restart (%s)", opened.client_name)
-            self.state.store.mcp_session_reopened(row.id, opened.sid_hash)
+            # read again, with no await before the bind: a DELETE or a revoke while the handshake ran wins
+            if not self.state.store.mcp_session_reopened(row.id, opened.sid_hash, negotiated):
+                log.info("an MCP session was ended while it was being opened again")
+                await self._end(scope, inner, negotiated)
+                return None
+            log.info("opened an MCP session again after a restart")
             return self.bind(sid, row.id, inner)
 
+    async def _end(self, scope: Scope, inner: str, protocol: str | None) -> None:
+        """End a library session the broker opened and won't use (an MCP DELETE): nothing could reach it."""
+        status, _, _ = await self._inner(scope, None, inner, protocol)
+        if status not in (200, 202, 204, 404):
+            log.warning("could not end an MCP session the broker opened (status %s)", status)
+
     async def _inner(
-        self, scope: Scope, message: dict[str, Any], session_id: str | None, protocol: str | None
-    ) -> tuple[int | None, str | None]:
+        self, scope: Scope, message: dict[str, Any] | None, session_id: str | None, protocol: str | None
+    ) -> tuple[int | None, str | None, bytes | None]:
         """Send one JSON-RPC message to the MCP endpoint as the request in ``scope`` would (its host, its
-        token in the request state), and return the answer's status and the session ID it names."""
-        body = json.dumps(message).encode()
+        token in the request state), or a DELETE of ``session_id`` for None, and return the answer's status,
+        the session ID it names and its body (None past ``REOPEN_REPLY_MAX``)."""
+        body = json.dumps(message).encode() if message is not None else b""
         own = {b"mcp-session-id", b"mcp-protocol-version", b"mcp-method", b"last-event-id"}
         own |= {b"content-length", b"content-type", b"accept"}
         headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() not in own]
         headers += [
-            (b"content-type", b"application/json"),
             (b"accept", b"application/json, text/event-stream"),
             (b"content-length", str(len(body)).encode()),
         ]
+        if message is not None:
+            headers.append((b"content-type", b"application/json"))
         if protocol is not None:
             headers.append((b"mcp-protocol-version", protocol.encode()))
         inner_scope = {
             **scope,
-            "method": "POST",
+            "method": "POST" if message is not None else "DELETE",
             "query_string": b"",
             "headers": _with_session(headers, session_id),
         }
@@ -981,6 +1039,7 @@ class AgentAuth:
         delivered = False
         status: int | None = None
         named: str | None = None
+        answer: bytes | None = b""
 
         async def receive() -> dict[str, Any]:
             nonlocal delivered
@@ -991,7 +1050,7 @@ class AgentAuth:
             return {"type": "http.disconnect"}
 
         async def send(message: dict[str, Any]) -> None:
-            nonlocal status, named
+            nonlocal status, named, answer
             if message["type"] == "http.response.start":
                 status = message["status"]
                 named = next(
@@ -1002,14 +1061,19 @@ class AgentAuth:
                     ),
                     None,
                 )
-            elif message["type"] == "http.response.body" and not message.get("more_body", False):
-                finished.set()
+            elif message["type"] == "http.response.body":
+                if answer is not None:
+                    answer += message.get("body", b"")
+                    if len(answer) > REOPEN_REPLY_MAX:
+                        answer = None  # read no further: the answer is too long to be one
+                if not message.get("more_body", False):
+                    finished.set()
 
         try:
             await self.app(inner_scope, receive, send)
         finally:
             finished.set()
-        return status, named
+        return status, named, answer
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -1035,9 +1099,9 @@ class AgentAuth:
             return
         sid = _header(scope, b"mcp-session-id")
         session = self.sessions.get(sid) if sid is not None else None
+        method = scope.get("method")
         if sid is not None and (
-            (session is not None and session.token_id != row.id)
-            or (scope.get("method") == "DELETE" and session is None)
+            (session is not None and session.token_id != row.id) or (method == "DELETE" and session is None)
         ):
             # another token's session: as if it didn't exist (the client starts a new one)
             if session is None and SESSION_ID_RE.fullmatch(sid):
@@ -1046,9 +1110,14 @@ class AgentAuth:
             return
         self.touch(row)
         scope.setdefault("state", {})["agent_token"] = row
-        method = scope.get("method")
         if sid is not None and session is None and method in ("POST", "GET"):
             session = await self.reopen(scope, row, sid)
+        if sid is not None and session is None:
+            # Fail closed (§49.2): an ID this token didn't open and the broker can't open again for it never
+            # reaches the library, which knows sessions by its own IDs and not by token. A reopened session's
+            # library ID is no key here, so it is unknown too: a client reaches one only through its own ID.
+            await _reply(send, 404, {"error": "not_found", "message": "no such MCP session"})
+            return
         if sid is not None:
             scope["state"]["mcp_session_id"] = sid  # the ID the client knows, whatever the library's is
         inner = session.inner if session is not None else None
@@ -1102,9 +1171,15 @@ class AgentAuth:
                     else:
                         self.bind(named, row.id)
                         if opening is not None and response_status == 200 and SESSION_ID_RE.fullmatch(named):
-                            self.state.store.mcp_session_opened(
-                                row.id, _sid_hash(named), *opening, REOPEN_KEEP, REOPEN_IDLE_S
-                            )
+                            try:
+                                self.state.store.mcp_session_opened(
+                                    row.id, _sid_hash(named), *opening, REOPEN_KEEP, REOPEN_IDLE_S
+                                )
+                            except sqlite3.Error as e:
+                                # the record only helps a restart: it never fails the client's own initialize
+                                log.warning(
+                                    "could not keep what opened an MCP session (%s)", type(e).__name__
+                                )
             await send(message)
 
         await self.app(scope, receive_claim if inspect_client else receive, send_binding)
