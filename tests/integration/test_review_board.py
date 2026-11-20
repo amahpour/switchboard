@@ -586,6 +586,40 @@ async def test_a_report_of_ci_blocked_by_a_conflict_shows_on_the_board_and_in_sh
         web.close()
 
 
+async def test_a_report_with_a_head_and_ci_blocked_shows_both_in_show_and_on_the_page(
+    broker: InProcBroker,
+) -> None:
+    """#906 with #907: one report can name a newer commit and say CI is blocked by a conflict. `show`
+    names the commit with "(reported)" on its first line and the conflict on the next, and the page gets
+    the commit, the note and pr_ci="blocked" together. Fails if either part drops the other, or the
+    blocked notice is lost when the report carries a head."""
+    reported = "c0ffee0c0ffee0"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "kc-r") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR, head="a1b2c3d4e5f6")
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked", head=reported)
+            assert r["ok"], r
+            shown = (await reviewer.call("review", room="#build", action="show"))["board"].splitlines()
+            assert shown[0].startswith(f"Review of {PR} at {reported[:12]} (reported): "), shown
+            blocked = "The pull request: CI blocked: conflicts with its base (per codex-1"
+            assert shown[1].startswith(blocked), shown
+            page = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert page is not None
+            assert page["head"] == "a1b2c3d4e5f6" and page["head_sha"] == reported
+            assert page["head_note"] == "reported" and page["pr_ci"] == "blocked"
+            assert page["report"].startswith("CI blocked: conflicts with its base (per codex-1"), page
+        texts = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        assert f"codex-1 reports CI blocked on {PR}: it conflicts with its base" in texts, texts
+    finally:
+        web.close()
+
+
 async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
     broker: InProcBroker,
 ) -> None:

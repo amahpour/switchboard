@@ -3687,6 +3687,22 @@ def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -
     expect(report).to_have_css("color", muted)
 
 
+def test_the_board_header_shows_a_reported_commit_beside_ci_blocked_on_a_phone(ui: UI) -> None:
+    """#906 with #907: a report that names a newer commit and says CI is blocked puts both in the header,
+    the commit with "(reported)" and the conflict in red, and on a phone nothing scrolls sideways. Fails
+    if one replaces the other or the longer header pushes the page wider than the screen."""
+    page = review_room(ui, "e2e-board-conflict-head", **PHONE)
+    room = "#e2e-board-conflict-head"
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked", head="c0ffee0c0ffee0")
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-head-sha")).to_have_text("c0ffee0")
+    expect(page.locator("#board .board-head-note")).to_have_text("(reported)")
+    report = page.locator("#board-report")
+    expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
+    expect(report).to_have_class(re.compile(r"\bconflict\b"))
+    no_horizontal_scroll(page)
+
+
 def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> None:
     """#786: Edit opens the card's text, Save writes the fields that changed, and the history
     names them. Fails while a card has no edit, so a wrong title stays on the card."""
