@@ -5,6 +5,10 @@ board is settled, what the agents' picks among an item's options add up to (§37
 a board (§37.14), and how a board reads as text. The store keeps the rows (``store.py``), the
 broker applies the moves (``broker/reviews.py``). switchboard never fetches the pull request,
 judges a finding, holds a token or posts anything: the agents and the people do (§37.1).
+
+Every string a board takes from outside is read through ``text`` (``url``, ``proof``, ``head``, ``where``
+and ``options`` call it too), which cuts obvious secrets out with ``say``'s patterns (``redact``, §11,
+#890), so a card, a move's event, a notice and a line posted in the room never hold one.
 """
 
 from __future__ import annotations
@@ -18,6 +22,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from switchboard import envelope
+from switchboard.redact import redact
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
@@ -143,8 +148,8 @@ class Item:
         )
 
 
-def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
-    """A string from outside: stripped, and refused (not cut) when it's too long."""
+def _string(value: Any, what: str, limit: int, *, required: bool = False) -> str:
+    """A string from outside: stripped, and refused (not cut) when it's too long. Not yet redacted."""
     if value is None:
         value = ""
     if not isinstance(value, str):
@@ -157,20 +162,113 @@ def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
     return value
 
 
+def _redacted(value: str, what: str, limit: int) -> tuple[str, list[str]]:
+    """``value`` with each obvious secret replaced by its marker, and the kinds removed (#890). After the
+    length check, so text over the limit is refused before anything searches it, as for ``say``; and the
+    limit again after, since a card's column has it as a CHECK (§37.3) and a marker can be a little
+    longer than the secret it replaced. That refusal names the kind, never the value."""
+    out, kinds = redact(value)
+    if len(out) > limit:
+        raise ReviewError(
+            f"{what} is too long once what looks like a secret ({', '.join(kinds)}) is cut out"
+            f" ({len(out)} > {limit} characters): leave the secret out"
+        )
+    return out, kinds
+
+
+def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
+    """A string from outside: stripped, refused (not cut) when it's too long, and with every obvious
+    secret cut out (``redact``, DESIGN.md §11, #890). Every field of a board, an agent's or a person's,
+    is read here, so what is stored, shown on the page and posted in the room holds ``[redacted: <kind>]``
+    and never the value."""
+    return _redacted(_string(value, what, limit, required=required), what, limit)[0]
+
+
+def _link(what: str, kinds: list[str]) -> None:
+    """A link is refused when it held a secret: a marker can't stand in a link, and a board's URL is the
+    board's name (§37.14), so a redacted one would name nothing that opens."""
+    if kinds:
+        raise ReviewError(
+            f"{what} holds what looks like a secret ({', '.join(kinds)}): give the link without it"
+        )
+
+
+# the authority of an http(s) link: everything up to the first /, ? or #. Credentials are all of it up to the
+# LAST @, as a URL parser reads it, so ``user:p@ss@host`` loses all of ``user:p@ss@``.
+_AUTHORITY_RE = re.compile(r"(?i)\b(https?://)([^\s/?#<>\"']*)")
+# a marker as redact writes it, whose space can't be in a link
+_MARKER_RE = re.compile(r"\[redacted: [^\]]*\]")
+
+
+def _credentials_out(value: str, replacement: str) -> str:
+    """``value`` with the user name and password of each http(s) link in it replaced (``replacement``, which
+    is put in front of the host's ``@``, or nothing)."""
+
+    def host_only(m: re.Match[str]) -> str:
+        authority = m.group(2)
+        if "@" not in authority:
+            return m.group(0)
+        return m.group(1) + replacement + authority.rsplit("@", 1)[1]
+
+    return _AUTHORITY_RE.sub(host_only, value)
+
+
+def scrub(value: str) -> str:
+    """``value`` with every obvious secret cut out, and the credentials of any http(s) link in it (#890).
+    Never refuses and never fails, and applying it twice changes nothing. What a board takes in goes through
+    ``text`` (which refuses what it can't repair); this is for text composed from stored words, which is
+    posted as a message (``Boards._say``), and for the one-time cleaning of rows stored before the check
+    (``clean_url``, ``clean_text``, ``db.clean_review_rows``)."""
+    # the credentials first: a marker has a space in it, and a space would end the authority's match
+    return redact(_credentials_out(value, "[redacted: url credentials]@"))[0]
+
+
+def clean_url(value: str) -> str:
+    """A stored board's or proof's URL as the upgrade keeps it: no credentials, no secret, and still a link
+    that ``url`` takes (a marker has no space in it: ``[redacted]``), so a cleaned board still opens by it."""
+    return _MARKER_RE.sub("[redacted]", redact(_credentials_out(value, ""))[0])
+
+
+def clean_text(value: str, limit: int) -> str:
+    """Stored text as the upgrade keeps it: ``scrub``, and cut to the column's ``limit`` since a marker can
+    be longer than what it replaced (a cleaned value is cut, never refused: nothing can be asked of whoever
+    wrote it)."""
+    return scrub(value)[:limit]
+
+
+def _no_credentials(what: str, link: str) -> None:
+    """A link with ``user:password@`` in it is refused: it would store a password, show it as a link
+    and post it (§37.14, #890)."""
+    try:
+        netloc = urlsplit(link).netloc
+    except ValueError:
+        raise ReviewError(f"{what} is not a valid http(s) link") from None
+    if "@" in netloc:
+        raise ReviewError(
+            f"{what} must not carry a user name or password (user:password@host): leave them out"
+        )
+
+
 def url(value: Any) -> str:
-    u = text(value, "url", MAX_URL, required=True)
+    u, kinds = _redacted(_string(value, "url", MAX_URL, required=True), "url", MAX_URL)
+    _link("url", kinds)
     if not URL_RE.match(u):
         raise ReviewError("url must be an http(s) link to the pull request or merge request")
+    _no_credentials("url", u)
     return u
 
 
 def proof(value: Any) -> str:
-    """A test's name or an http(s) proof link; the broker checks shape, not its contents."""
-    p = text(value, "proof", MAX_PROOF)
+    """A test's name or an http(s) proof link; the broker checks shape, not its contents. A name is
+    redacted like any text, and a link that held a secret is refused (``_link``)."""
+    p, kinds = _redacted(_string(value, "proof", MAX_PROOF), "proof", MAX_PROOF)
     if not p:
         raise ProofRequired("proof is required")
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p) and not URL_RE.fullmatch(p):
-        raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p):
+        _link("proof link", kinds)
+        if not URL_RE.fullmatch(p):
+            raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+        _no_credentials("proof link", p)
     return p
 
 
@@ -250,11 +348,20 @@ def lines(value: Any) -> str:
 
 
 def where(value: Any) -> tuple[str, str]:
-    """Split a compact finding location, then apply the existing file and line checks."""
-    location = text(value, "where", MAX_FILE + MAX_LINES + 1)
+    """Split a compact finding location, then apply the existing file and line checks. It is split before
+    either part is redacted: a marker has a colon in it, and the last colon is the one before the lines.
+    The whole value is searched too (#890): a secret whose pattern reaches across that colon (``"token":``
+    and its value) is in neither part, so the parts alone would keep it. A match across the colon is
+    refused, so a marker never moves the split."""
+    location = _string(value, "where", MAX_FILE + MAX_LINES + 1)
     if not location:
         return "", ""
     path, sep, span = location.rpartition(":")
+    whole, kinds = redact(location)
+    if sep and whole != redact(path)[0] + sep + redact(span)[0]:
+        raise ReviewError(
+            f"where holds what looks like a secret ({', '.join(kinds)}) across its colon: leave it out"
+        )
     if not sep:
         return text(location, "file", MAX_FILE), ""
     return text(path, "file", MAX_FILE), lines(span)
