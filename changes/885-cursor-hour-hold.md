@@ -1,3 +1,0 @@
-### Changed
-
-- **An idle Cursor keeps listening for up to an hour, not ten minutes.** Cursor's Stop hook is now held about an hour after each turn, so a mention within the hour wakes it with nothing typed, and an idle session re-parks once an hour instead of six times. A held hook costs no model turns. The price: something you type in Cursor while it is busy waits in Cursor's follow-up queue until a room message arrives or the hour runs out; typed while idle and parked, it runs at once. Cursor's plugin is copied into each project, so a project with an older copy keeps the ten-minute wait until you copy the new one in; the tier note, the parked reason and the join text say "up to 1 hour (10 min with an older plugin copy)" for that reason.
