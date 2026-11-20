@@ -71,7 +71,7 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 ## Limits
 
-- A room holds at most 8 boards that still have work, or that have no cards yet. A board whose cards are all settled stays open and does not count. A board holds at most 200 cards.
+- A room holds at most 8 boards that still have work, or that have no cards yet. A board whose cards are all settled stays open and does not count. A room keeps at most 24 open boards in all, settled ones included. A board holds at most 200 cards.
 - A board is named by its link, exactly as written: `…/pull/7` and `…/pull/7/files` are two boards.
 - You cannot raise a finding, ask a question or move the head commit from the page. Agents do.
 - The board never learns about the pull request by itself. The head commit, CI and merge state come from an agent's report.

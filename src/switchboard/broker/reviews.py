@@ -487,7 +487,7 @@ class Boards:
         state = fields.get("pr_state")
         if was_closed and state not in ("merged", "closed"):
             raise ReviewError('a closed board only accepts a report with state="merged" or state="closed"')
-        if was_closed and state == "closed" and rv["pr_state"] == "merged":
+        if state == "closed" and rv["pr_state"] == "merged":  # open (reopened) or closed alike
             raise ReviewError(f"{url} is recorded as merged already: a closed report would overwrite it")
         ended = state in ("merged", "closed")
         result = {"ok": True, "closed": True, "board": f"{url} is {state}: the board is closed."}
@@ -514,6 +514,11 @@ class Boards:
         if rv["closed_at"] is not None:
             raise ReviewError(f"the board for {rv['url']} is closed already")
         outcome, merge_commit, given = reviews.close_outcome(params)
+        if outcome == "closed" and rv["pr_state"] == "merged":
+            raise ReviewError(
+                f"the pull request for {rv['url']} is recorded as merged: a close with state=closed would"
+                ' overwrite it. Close with state="merged", or with no state.'
+            )
         items = self.store.review_items(rv["id"])
         open_items = reviews.open_items(items)
         holder = reviews.holder(rv)

@@ -218,7 +218,7 @@ async def test_reopening_a_confirmed_finding_on_a_settled_board_takes_a_slot_and
         assert (await tool(reviewer, action="confirm", url=first, item="F1"))["ok"]
         for n in range(2, reviews.MAX_OPEN_BOARDS + 2):  # the settled board takes no slot: eight more fit
             assert (await tool(author, action="open", url=f"https://github.com/example/shop/pull/{n}"))["ok"]
-        refused = await tool(reviewer, action="reopen", url=first, item="F1")
+        refused = await tool(reviewer, action="reopen", url=first, item="F1", reason="the fix broke it")
         assert refused["ok"] is False and "the most it holds" in refused["error"], refused
         web = broker.web_client()
         try:
@@ -567,3 +567,30 @@ async def test_past_review_route_lists_closed_boards_and_reads_one_but_not_an_op
         finally:
             web.close()
         assert httpx.get(broker.base + PATH + "/past").status_code == 401
+
+
+async def test_a_recorded_merge_is_never_overwritten_by_a_closed_outcome_after_a_reopen(
+    broker: InProcBroker,
+) -> None:
+    """Reopening a merged board keeps pr_state merged, so neither a close nor a report with
+    state=closed may replace it; a plain close still works and keeps Merged. Fails if either path
+    writes closed over the recorded merge (Past boards then read Closed, the stats still see the merge)."""
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        assert (await tool(agent, action="open", url=PR_A))["ok"]
+        done = await tool(agent, action="close", state="merged", commit="abc1234")
+        assert done["ok"], done
+        assert (await tool(agent, action="open", url=PR_A))["ok"]  # reopened: pr_state stays merged
+        refused = await tool(agent, action="close", state="closed", url=PR_A)
+        assert refused["ok"] is False and "recorded as merged" in refused["error"], refused
+        report = await tool(agent, action="report", url=PR_A, state="closed")
+        assert report["ok"] is False and "recorded as merged" in report["error"], report
+        assert q(broker, "SELECT pr_state, closed_at FROM reviews")[0]["pr_state"] == "merged"
+        assert q(broker, "SELECT closed_at FROM reviews")[0]["closed_at"] is None
+        assert (await tool(agent, action="close", url=PR_A))["ok"]  # no state: closes, keeps merged
+        assert q(broker, "SELECT pr_state FROM reviews")[0]["pr_state"] == "merged"
+        web = broker.web_client()
+        try:
+            assert web.get(PATH + "/past").json()["boards"][0]["outcome"] == "merged"
+        finally:
+            web.close()

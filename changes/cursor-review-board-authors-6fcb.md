@@ -1,6 +1,7 @@
 ### Added
 
 - **A close can say how the pull request ended.** `review(action="close")` takes `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown`. It is recorded as a report is, so **Past boards**, the Usage page and the review stats read it. A close with no `state` still works, as it did, and reads **Unknown**; its reply asks for the outcome next time. `report` with `state="merged"` or `state="closed"` also works on a board that was closed, a person's **Close board** included. **Past boards** now shows **Closed** for a pull request closed without merging.
+- **A recorded merge is never overwritten.** A `closed` report or close is refused on a board whose pull request is recorded as merged, even after the board was reopened.
 - **A pull request that ends closes its board.** The review-board skills ask the agent that handed off to report `state="merged"` or `state="closed"`. Either closes the board, which is kept. switchboard still holds no forge token: it knows only what an agent reports.
 
 ### Changed
