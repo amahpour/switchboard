@@ -498,7 +498,10 @@ class Boards:
         self.store.set_review(rv["id"], **fields, **closure, reported_by=actor, reported_at=now)
         self._event(room, rv, report=fields, by=actor)
         if fields.get("pr_ci") and fields["pr_ci"] != rv["pr_ci"]:
-            self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
+            if fields["pr_ci"] == "blocked":
+                self._notice(room, f"{actor} reports CI blocked on {url}: it conflicts with its base")
+            else:
+                self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
         if ended:
             status = "remains closed" if was_closed else "is closed"
             self._notice(room, f"{actor} reports {url} {state}: the review board {status}")

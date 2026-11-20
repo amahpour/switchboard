@@ -277,7 +277,9 @@ def proof(value: Any) -> str:
 # switchboard holds no token and polls no forge, so these are the reporting agent's claims, shown
 # as theirs. A value it doesn't know is refused, never taken for one it does.
 PR_STATES = ("open", "merged", "closed")
-CI_STATES = ("passing", "failing", "running", "none")
+# "blocked" (#907): the pull request conflicts with its base, so GitHub runs no CI on it. Reported as ci
+# beside the others, since "none" hid that the author has to resolve a conflict before any CI runs.
+CI_STATES = ("passing", "failing", "running", "none", "blocked")
 MAX_THREADS = 999
 
 
@@ -324,7 +326,9 @@ def report_line(review: dict[str, Any], now: float) -> str:
     if review.get("pr_threads") is not None:
         n = int(review["pr_threads"])
         bits.append(f"{n} open on the {pr}" if n else f"no threads open on the {pr}")
-    if review.get("pr_ci"):
+    if review.get("pr_ci") == "blocked":
+        bits.append("CI blocked: conflicts with its base")
+    elif review.get("pr_ci"):
         bits.append(f"CI {review['pr_ci']}")
     age = envelope.ago(float(review.get("reported_at") or now), now)
     return f"{', '.join(bits) or review.get('pr_state') or 'reported'} (per {review['reported_by']}, {age})"

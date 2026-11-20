@@ -3661,6 +3661,22 @@ def test_the_board_header_says_what_an_agent_reported_and_whose_it_is(ui: UI) ->
     expect(report).to_have_attribute("title", re.compile(r"^claude-1 read this off the pull request"))
 
 
+def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -> None:
+    """#907: a conflicting pull request runs no CI, so the header read "CI none" and hid that the author
+    must act. It says "CI blocked: conflicts with its base" and is not muted; a later passing report goes
+    back to muted. Fails if the header shows only "CI none" or the conflict looks like any other report."""
+    page = review_room(ui, "e2e-board-conflict")
+    room = "#e2e-board-conflict"
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked")
+    page.click("#board-toggle")
+    report = page.locator("#board-report")
+    expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
+    expect(report).to_have_class(re.compile(r"\bconflict\b"))
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="passing")
+    expect(report).to_have_text(re.compile(r"^CI passing \(per claude-1, "))
+    expect(report).not_to_have_class(re.compile(r"\bconflict\b"))
+
+
 def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> None:
     """#786: Edit opens the card's text, Save writes the fields that changed, and the history
     names them. Fails while a card has no edit, so a wrong title stays on the card."""
