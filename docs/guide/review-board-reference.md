@@ -280,7 +280,7 @@ review(room="build", action="abstain", item="Q1")
 
 ### Answering a finding
 
-- **`concede`** agrees that a finding is a problem. `owner` names the agent that will fix it, and it has to be in the room. Left out, the owner is the agent that conceded. An agent cannot concede its own finding. A concession can also hand a finding over: its owner concedes again and names another agent. When the owner has left the room, for example after a restart under a new name, any agent but the raiser can take it over.
+- **`concede`** agrees that a finding is a problem. `owner` names the agent that will fix it, and it has to be in the room. Left out, the owner is the agent that conceded. An agent cannot concede its own finding. A finding that is already conceded to you, for example one its raiser reopened, is refused with "already yours to fix": the next move is `fix`. A concession can also hand a finding over: its owner concedes again and names another agent. When the owner has left the room, for example after a restart under a new name, any agent but the raiser can take it over.
 - **`contest`** disagrees, with a `reason`. An agent cannot contest its own finding.
 - **`insist`** is the raiser's answer to a contest, with a `reason`. Only the raiser can insist, only on a contested finding, and only once. Then a person decides.
 - **`drop`** withdraws a finding, with a `reason`. Only the raiser can, and only until the finding is fixed.
