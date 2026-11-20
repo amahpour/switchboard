@@ -3664,7 +3664,8 @@ def test_the_board_header_says_what_an_agent_reported_and_whose_it_is(ui: UI) ->
 def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -> None:
     """#907: a conflicting pull request runs no CI, so the header read "CI none" and hid that the author
     must act. It says "CI blocked: conflicts with its base" and is not muted; a later passing report goes
-    back to muted. Fails if the header shows only "CI none" or the conflict looks like any other report."""
+    back to muted. Fails if the header shows only "CI none" or the conflict looks like any other report: the
+    computed color is the page's --danger, then --muted-2 again."""
     page = review_room(ui, "e2e-board-conflict")
     room = "#e2e-board-conflict"
     ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked")
@@ -3672,9 +3673,18 @@ def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -
     report = page.locator("#board-report")
     expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
     expect(report).to_have_class(re.compile(r"\bconflict\b"))
+    # the page's own colors, resolved to rgb() as computed style reports them, so the test reads the
+    # rule's effect and fails if the .board-report.conflict rule is gone (#910)
+    resolve = """name => { const probe = document.createElement('span');
+        probe.style.color = `var(${name})`; document.body.append(probe);
+        const c = getComputedStyle(probe).color; probe.remove(); return c; }"""
+    danger, muted = page.evaluate(resolve, "--danger"), page.evaluate(resolve, "--muted-2")
+    assert danger != muted
+    expect(report).to_have_css("color", danger)
     ui.world.agent_call(room, "claude-1", "review", action="report", ci="passing")
     expect(report).to_have_text(re.compile(r"^CI passing \(per claude-1, "))
     expect(report).not_to_have_class(re.compile(r"\bconflict\b"))
+    expect(report).to_have_css("color", muted)
 
 
 def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> None:
