@@ -822,3 +822,50 @@ def test_a_delete_the_library_answers_404_ends_only_the_threads_it_served_last(b
     assert old.delete(recorded).status_code == 404
     assert status(broker, "codex-1") == "idle"
     assert status(broker, "codex-2") == "offline"
+
+
+def test_a_revoke_during_an_initialize_leaves_no_record(broker: InProcBroker) -> None:
+    """A fresh initialize is let in with a live token, then awaits the library's answer. A revoke that commits
+    in between deletes the token's rows; the record written after the answer must not bring one back, so a
+    revoked token keeps nothing a restart could open. The moment is an event the test controls. Fails if the
+    insert checks only that the token row exists (#903, F11)."""
+    token = make_token(broker, "laptop")
+    row = token_row(broker, token)
+    auth = broker.state.agent_auth
+    real = auth.app
+    hold, at = threading.Event(), threading.Event()
+
+    async def paused(scope: Any, receive: Any, send: Any) -> None:
+        opening = scope.get("method") == "POST" and not any(
+            k.lower() == b"mcp-session-id" for k, _ in scope.get("headers", [])
+        )
+        if opening:
+            at.set()
+            assert await asyncio.to_thread(hold.wait, 30)
+        await real(scope, receive, send)
+
+    auth.app = paused
+    c = Codex(broker, token, client="Cursor")
+    body = {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "Cursor"}},
+    }
+    headers = c.headers({"accept": "application/json, text/event-stream", "content-type": "application/json"})
+    try:
+        with ThreadPoolExecutor(1) as pool:
+            call = pool.submit(c.c.post, "/mcp", json=body, headers=headers)
+            assert at.wait(30)
+            assert broker.on_loop(broker.state.store.agent_token_revoke_id, row.id) is not None
+            hold.set()
+            r = call.result(30)
+    finally:
+        auth.app = real
+    assert r.status_code == 200, r.text  # the library answered: only what is kept is refused
+    count = broker.on_loop(
+        lambda: broker.state.store.con.execute(
+            "SELECT COUNT(*) FROM mcp_sessions WHERE token_id=?", (row.id,)
+        ).fetchone()[0]
+    )
+    assert count == 0

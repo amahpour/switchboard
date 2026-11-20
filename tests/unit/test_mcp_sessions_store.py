@@ -140,3 +140,33 @@ def test_removing_a_person_removes_their_tokens_sessions(store: Store) -> None:
     for n, t in enumerate(hers):
         assert t is not None and store.mcp_session(t.id, sid_hash(n), REOPEN_IDLE_S) is None
     assert store.mcp_session(his.id, sid_hash(2), REOPEN_IDLE_S) is not None
+
+
+def test_a_revoked_tokens_session_is_never_written(store: Store) -> None:
+    """A fresh initialize authenticates, then awaits the library; a revoke can commit in between and delete
+    the token's rows. The insert that follows must check, in its own transaction, that the token is still
+    live, and write nothing for one that isn't; a live token's is written. Fails if only the foreign key is
+    checked (#903, F11)."""
+    live, revoked = token(store, 1), token(store, 2)
+    assert store.agent_token_revoke_id(revoked.id) is not None
+    opened(store, revoked, 1)
+    opened(store, live, 2)
+    assert store.mcp_session(revoked.id, sid_hash(1), REOPEN_IDLE_S) is None
+    count = store.con.execute("SELECT COUNT(*) FROM mcp_sessions WHERE token_id=?", (revoked.id,)).fetchone()
+    assert count[0] == 0
+    assert store.mcp_session(live.id, sid_hash(2), REOPEN_IDLE_S) is not None
+
+
+def test_a_revoked_tokens_session_is_never_refreshed(store: Store) -> None:
+    """The reopen's last step refreshes the row; should a row ever outlive its token's revoke, that step
+    must say no (so nothing is bound) and leave the row as it was. Fails if the refresh checks only the row
+    (#903, F11)."""
+    t = token(store, 1)
+    opened(store, t, 1)
+    # a revoke that left the row behind, as no revoke path does today: the refresh must not trust that
+    store.con.execute("UPDATE agent_tokens SET revoked_at=1 WHERE id=?", (t.id,))
+    before = store.mcp_session(t.id, sid_hash(1), REOPEN_IDLE_S)
+    assert before is not None
+    assert store.mcp_session_reopened(t.id, sid_hash(1), "2025-06-18") is False
+    after = store.mcp_session(t.id, sid_hash(1), REOPEN_IDLE_S)
+    assert after is not None and (after.opened_at, after.protocol) == (before.opened_at, before.protocol)

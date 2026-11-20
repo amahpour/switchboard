@@ -2151,9 +2151,16 @@ class Store:
     ) -> None:
         """Record which client opened one of ``token_id``'s MCP sessions. A new one first removes the rows
         older than ``idle_s`` and the token's oldest past ``keep``, so a client that opens a session at every
-        start can't grow the table without end."""
+        start can't grow the table without end. A token revoked since its request was let in (a revoke, a
+        person's removal, while the library answered the initialize) writes nothing: the check is in the same
+        transaction as the insert, so a revoked token keeps no row (#903, F11)."""
         now = self.clock.now()
         with db.tx(self.con):
+            live = self.con.execute(
+                "SELECT 1 FROM agent_tokens WHERE id=? AND revoked_at IS NULL", (token_id,)
+            ).fetchone()
+            if live is None:
+                return
             self.con.execute("DELETE FROM mcp_sessions WHERE opened_at < ?", (now - idle_s,))
             self.con.execute(
                 "DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash IN (SELECT sid_hash FROM mcp_sessions"
@@ -2184,12 +2191,14 @@ class Store:
         """The broker opened this session again after a restart, with the protocol the MCP library
         answered: its month starts again from now, so a session in use through several restarts is not
         swept while its client still holds the ID. False when the record is gone (the client deleted the
-        session, or its token was revoked, while it was being opened): it must not be opened then."""
+        session, or its token was revoked, while it was being opened), or when the token isn't live (checked in
+        the same transaction, should a row ever outlive its token): it must not be opened then."""
         with db.tx(self.con):
             return (
                 self.con.execute(
-                    "UPDATE mcp_sessions SET opened_at=?, protocol=? WHERE token_id=? AND sid_hash=?",
-                    (self.clock.now(), protocol, token_id, sid_hash),
+                    "UPDATE mcp_sessions SET opened_at=?, protocol=? WHERE token_id=? AND sid_hash=?"
+                    " AND EXISTS(SELECT 1 FROM agent_tokens WHERE id=? AND revoked_at IS NULL)",
+                    (self.clock.now(), protocol, token_id, sid_hash, token_id),
                 ).rowcount
                 == 1
             )
