@@ -321,7 +321,7 @@ async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
             assert (await author.call("review", room="#build", action="drop", item="F1", reason="checked"))[
                 "ok"
             ]
-            closed = await author.call("review", room="#build", action="close")
+            closed = await author.call("review", room="#build", action="close", state="unknown")
             assert closed["ok"] and closed["closed"] is True, closed
             assert page_board(web.get("/api/rooms/build/review")) is None
             opened = await author.call("review", room="#build", action="open", url=GITHUB_PR + "8")
@@ -359,10 +359,14 @@ async def test_agent_close_with_open_items_needs_a_reason_and_lists_them_for_the
                 recommend=0,
             )
             for reason in ("", "   ", "x" * 501):
-                refused = await author.call("review", room="#build", action="close", reason=reason)
+                refused = await author.call(
+                    "review", room="#build", action="close", state="unknown", reason=reason
+                )
                 assert refused["ok"] is False and "reason" in refused["error"], refused
                 assert page_board(web.get("/api/rooms/build/review")) is not None
-            closed = await author.call("review", room="#build", action="close", reason="moving to #8")
+            closed = await author.call(
+                "review", room="#build", action="close", state="unknown", reason="moving to #8"
+            )
             assert closed["ok"] and closed["closed"] is True, closed
             assert page_board(web.get("/api/rooms/build/review")) is None
             reopened = web_cmd(broker, web, f"/review {GITHUB_PR}")
@@ -399,7 +403,7 @@ async def test_agent_can_close_a_settled_board_after_handoff(broker: InProcBroke
                 "/api/rooms/build/review", json={"action": "handoff"}, headers=broker.write_headers()
             )
             assert handed.status_code == 200, handed.text
-            closed = await author.call("review", room="#build", action="close")
+            closed = await author.call("review", room="#build", action="close", state="unknown")
             assert closed["ok"] and closed["closed"] is True, closed
     finally:
         web.close()
@@ -422,7 +426,7 @@ async def test_agent_close_notice_keeps_every_open_label_at_the_board_limit(brok
                 store.add_review_item(rv["id"], "finding", "raised", title="open", raised_by="claude-1")
 
         broker.on_loop(fill)
-        closed = await author.call("review", room="#build", action="close", reason="r" * 500)
+        closed = await author.call("review", room="#build", action="close", state="unknown", reason="r" * 500)
         assert closed["ok"] and closed["closed"] is True, closed
     [line] = [
         row["text"]
@@ -1441,7 +1445,7 @@ async def test_show_one_card_exposes_the_contest_evidence_and_history(broker: In
             refused = await reviewer.call("review", room="#build", action="show", item=label)
             assert not refused["ok"]
         await reviewer.call("review", room="#build", action="insist", item="F1", reason="Readers do not.")
-        await reviewer.call("review", room="#build", action="close", reason="Paused review")
+        await reviewer.call("review", room="#build", action="close", state="unknown", reason="Paused review")
         closed = await reviewer.call("review", room="#build", action="show", item="F1", url=PR)
         assert closed["ok"] and "closed" in closed["board"]
         assert "Readers do not." in closed["board"] and "insisted on it" in closed["board"]

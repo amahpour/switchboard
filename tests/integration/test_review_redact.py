@@ -125,13 +125,13 @@ async def reopen_reason(w: World) -> None:
 
 async def close_reason(w: World) -> None:
     await w.raised()
-    await w.review(w.reviewer, action="close", reason=f"moving on, {SECRET}")
+    await w.review(w.reviewer, action="close", state="unknown", reason=f"moving on, {SECRET}")
 
 
 async def close_asked_by_another(w: World) -> None:
     """Not the holder's close: refused, and a person is asked in the room with the reason."""
     await w.raised()
-    r = await w.review(w.author, ok=False, action="close", reason=f"close it, {SECRET}")
+    r = await w.review(w.author, ok=False, action="close", state="unknown", reason=f"close it, {SECRET}")
     assert r.get("ok") is False and "A person has been asked" in r["error"], r
 
 

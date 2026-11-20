@@ -4474,6 +4474,7 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
     room = f"#past-reviews-{mode}"
     unknown = "https://github.com/example/shop/pull/7"
     merged = "https://github.com/example/shop/pull/8"
+    abandoned = "https://github.com/example/shop/pull/9"
     ui.world.create_room(room)
     ui.world.add_agents(room, ("codex-1",))
 
@@ -4483,11 +4484,13 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
 
     move(action="open", url=unknown)
     move(action="ask", title="When should discounts apply?", options=["Before tax", "After tax"], recommend=0)
-    move(action="close", reason="Review paused")
+    move(action="close", state="unknown", reason="Review paused")
     move(action="open", url=merged)
     move(action="raise", title="Check rounding")
     move(action="drop", item="F1", reason="Already covered")
     move(action="report", state="merged")
+    move(action="open", url=abandoned)
+    move(action="close", state="closed")
 
     page = ui.open(
         room=room[1:],
@@ -4501,6 +4504,10 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
     merged_row = history.get_by_role("listitem").filter(has_text="example/shop #8")
     expect(unknown_row).to_contain_text("Unknown")
     expect(merged_row).to_contain_text("Merged")
+    # a pull request closed without merging is not "Unknown" (#886)
+    expect(history.get_by_role("listitem").filter(has_text="example/shop #9").locator(".chip")).to_have_text(
+        "Closed"
+    )
     for label in ("Opened", "Settled", "Closed"):
         expect(merged_row).to_contain_text(label)
     expect(unknown_row.locator("time")).to_have_count(2)
@@ -4515,5 +4522,14 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
     expect(page.locator("#board-close, #board-handoff, .board-actions")).to_have_count(0)
     page.get_by_role("button", name="Back to past boards").click()
     expect(history.get_by_role("button", name="example/shop #7")).to_be_focused()
+    # the read-only head of a board closed without merging says Closed too, not Unknown (#886):
+    # the chip right after "Read-only", so the list rows' "Closed" date labels can't satisfy it
+    history.get_by_role("button", name="example/shop #9").press("Enter")
+    expect(page.get_by_text("Read-only", exact=True)).to_be_visible()
+    expect(
+        page.get_by_text("Read-only", exact=True).locator("xpath=following-sibling::span[1]")
+    ).to_have_text("Closed")
+    page.get_by_role("button", name="Back to past boards").click()
+    expect(history.get_by_role("button", name="example/shop #9")).to_be_focused()
     move(action="report", url=unknown, state="merged")
     expect(unknown_row).to_contain_text("Merged")

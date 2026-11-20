@@ -525,6 +525,19 @@ def test_a_raised_finding_is_the_other_agents_to_answer() -> None:
     )
 
 
+def test_a_settled_board_with_cards_does_not_fill_an_open_slot_and_an_empty_one_does() -> None:
+    """The room's cap is for boards that still have work, or that nobody has started. A finished
+    review stays open without taking a slot; an empty board still takes one, because ``settled``
+    is true of no cards. Fails if a finished board keeps blocking new ones, or if empty boards
+    can be opened without limit."""
+    assert reviews.fills_open_slot([])
+    assert reviews.fills_open_slot([finding("raised")])
+    assert reviews.fills_open_slot([replace(finding("fixed", owner="claude-1"), confirmed_by="")])
+    done = replace(finding("dropped"), deferred_to="")
+    assert not reviews.fills_open_slot([done])
+    assert not reviews.fills_open_slot([done, replace(finding("fixed", owner="claude-1"), n=2)])
+
+
 def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
     conceded = finding("conceded", owner="claude-1")
     assert reviews.handoff(conceded, "codex-1", AGENTS) is not None
@@ -1074,7 +1087,7 @@ def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_
     old = board_row(url="https://example.com/old/pull/1", closed_at=1_700_000_000.0, closed_by="")
     text = reviews.list_text([live, gone, old], default_url=live["url"])
     lines = text.splitlines()
-    assert lines[0] == "3 review boards in this room, open ones first:"
+    assert lines[0] == "3 review boards in this room, boards with work first:"
     assert lines[1] == (
         "https://github.com/example/shop/pull/7 at abc1234def56 [open]: 3 open, 5 settled,"
         " opened by claude-1 on 2027-01-15 08:00 UTC <- your calls without url go here"
@@ -1087,7 +1100,9 @@ def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_
     assert lines[3].endswith("closed on 2023-11-14 22:13 UTC") and "closed by" not in lines[3]
     assert lines[-1].startswith('review(action="show", url=...) reads any')
     many = reviews.list_text([board_row(url=f"https://example.com/p/{n}") for n in range(60)])
-    assert "... and 10 older closed boards" in many and many.count("[open]") == reviews.MAX_LISTED
+    assert (
+        "... and 10 more not listed: 10 open with work" in many and many.count("[open]") == reviews.MAX_LISTED
+    )
     assert reviews.list_text([]).startswith("This room has no review boards.")
     assert reviews.list_text([live]).startswith("1 review board in this room")
 
@@ -1338,3 +1353,45 @@ def test_stored_takeover_keeps_the_fix_age_and_each_agents_own_pick(tmp_path: Pa
     assert moved.raised_by == "devin-1" and moved.updated_at == item.updated_at
     assert moved.recommend is None and reviews.effective_picks(moved) == {"codex-1": 1, "devin-1": 0}
     assert reviews.consensus(moved, ["devin-1"]).by == ("devin-1",)
+
+
+def test_a_close_names_its_outcome_and_a_merged_one_its_commit() -> None:
+    """``close`` says what became of the pull request (#886); one that says nothing is a 1.x close and
+    reads unknown. Fails if a missing outcome is refused, an outcome of
+    another word, a merged one with no commit, or a commit with any other outcome is accepted."""
+    assert reviews.close_outcome({"state": "merged", "commit": "ABC1234"}) == ("merged", "abc1234", True)
+    assert reviews.close_outcome({"state": "closed"}) == ("closed", "", True)
+    assert reviews.close_outcome({"state": "unknown"}) == ("unknown", "", True)
+    assert reviews.close_outcome({}) == ("unknown", "", False)  # a 1.x close: unknown, and asked to say
+    assert reviews.close_outcome({"state": ""}) == ("unknown", "", False)
+    bad_closes = [
+        {"commit": "abc1234"},
+        {"state": "done"},
+        {"state": "merged"},
+        {"state": "merged", "commit": "xyz"},
+        {"state": "closed", "commit": "abc1234"},
+    ]
+    for bad in bad_closes:
+        with pytest.raises(reviews.ReviewError):
+            reviews.close_outcome(bad)
+
+
+def test_list_puts_the_default_board_and_boards_with_work_before_settled_and_closed_ones() -> None:
+    """``list`` shows the default board, then boards with work (or no cards), then settled open ones,
+    then closed ones, and counts what it leaves out by state (#886). Fails if 50 newer settled boards
+    push an older board with work, or the caller's default board, out of the listing."""
+    settled = {"needs_person": 0, "open": 0, "fixed": 2, "dropped": 0, "answered": 0}
+    rows = [board_row(url=f"https://example.com/p/{n}", counts=settled) for n in range(60)]
+    work = board_row(url="https://example.com/work/1")
+    empty = board_row(
+        url="https://example.com/work/2",
+        counts={"needs_person": 0, "open": 0, "fixed": 0, "dropped": 0, "answered": 0},
+    )
+    done = board_row(url="https://example.com/done/1", closed_at=1_800_000_000.0)
+    mine = board_row(url="https://example.com/mine/1", counts=settled)  # settled, but the default
+    text = reviews.list_text([*rows, work, empty, done, mine], default_url=mine["url"])
+    lines = text.splitlines()
+    assert lines[1].startswith(mine["url"]) and "<- your calls" in lines[1]
+    assert lines[2].startswith(work["url"]) and lines[3].startswith(empty["url"])
+    assert "https://example.com/done/1" not in text
+    assert "... and 14 more not listed: 13 open and settled, 1 closed" in text
