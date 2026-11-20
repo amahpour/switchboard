@@ -33,7 +33,8 @@ agent chat and wake batches (§61);
 whose members are in ``room_people`` too (§63); 55 (#890) and 56 (#893) clean what a review board and
 a room's whiteboard stored before their text was checked (§37.2, §56.5); 57 (#907) lets a review board's
 reported CI be ``blocked`` (§37.11); 58 (#903) remembers which client opened each MCP session, so a session
-survives a restart (§49.2).
+survives a restart (§49.2); 59 (#914) indexes the messages that name someone or reply to one, for a
+room's Mentions filter (§64).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -57,7 +58,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 58
+SCHEMA_VERSION = 59
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -1171,6 +1172,17 @@ MCP_SESSIONS_DDL = (
 # v57 -> v58 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens.
 V57_TO_V58 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='58' WHERE key='schema_version'")
 
+# v58 -> v59 (#914, DESIGN.md §64): a room's Mentions filter reads the chat lines addressed to one person,
+# newest first. Only a line that names someone or replies to one can be, so this partial index is that
+# filter's walk; without it the read walks every message of the room when few are for the person. The
+# predicate in Store.room_addressed repeats the index's condition, which is what lets SQLite use it.
+# Both fresh databases and the migration use it.
+ADDRESSED_DDL = (
+    "CREATE INDEX messages_addressed ON messages(room_id, id)"
+    " WHERE kind='chat' AND (mentions!='[]' OR reply_to IS NOT NULL)",
+)
+V58_TO_V59 = (*ADDRESSED_DDL, "UPDATE meta SET value='59' WHERE key='schema_version'")
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1444,6 +1456,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         55: MigrationStep(56, V55_TO_V56, ()),
         56: MigrationStep(57, V56_TO_V57, (), (("reviews", "'none', 'blocked'"),)),
         57: MigrationStep(58, V57_TO_V58, ("mcp_sessions",)),
+        58: MigrationStep(59, V58_TO_V59, ()),
     }
     out = []
     v = frm
@@ -1528,7 +1541,7 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL, *MCP_SESSIONS_DDL]
+SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL, *MCP_SESSIONS_DDL, *ADDRESSED_DDL]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:

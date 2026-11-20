@@ -66,7 +66,17 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, board, build_info, db, notify, ref_links
-from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people, usage, webhook
+from switchboard.broker import (
+    agent_icons,
+    agent_tokens,
+    home,
+    oauth,
+    oidc,
+    people,
+    room_filters,
+    usage,
+    webhook,
+)
 from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
@@ -2176,6 +2186,29 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # the room opened at a search result (§58.5): the same visibility check, then a window
                 return _ok({"messages": state.service.history_around(room, around), "around": around})
             return _ok({"messages": state.service.history(slug, after, min(limit, 1000))})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # A room filtered to its Mentions or its Files (§64, #914): a read, paged back like history, after the
+    # same room_for check as the room's other reads (§44, §58.4). An unknown filter is a 400, never All.
+    @app.get("/api/rooms/{slug}/filter")
+    async def room_filter(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        qp = request.query_params
+        try:
+            return _ok(
+                room_filters.run(
+                    state,
+                    viewer(request),
+                    w.name,
+                    slug,
+                    show=qp.get("show"),
+                    before=qp.get("before"),
+                    limit=qp.get("limit"),
+                )
+            )
         except ServiceError as e:
             return _svc_err(e)
 

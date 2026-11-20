@@ -219,6 +219,17 @@
       <ul class="claim-board-list hidden" id="claim-board-list"></ul>
     </section>
 
+    <!-- A room filtered to what was said to you or to its files (#914, DESIGN.md §64). All is the live log;
+         Mentions and Files are the broker's answer, older history included. Drawn by app.js. -->
+    <div class="room-filters hidden" id="room-filters" role="group" aria-label="Show in this room">
+      <button type="button" class="room-filter" id="filter-all" data-show="all" aria-pressed="true">All</button>
+      <button type="button" class="room-filter" id="filter-mentions" data-show="mentions" aria-pressed="false"
+              title="Messages addressed to you: an @mention of you, @humans, or an agent's reply to you">Mentions</button>
+      <button type="button" class="room-filter" id="filter-files" data-show="files" aria-pressed="false"
+              title="Messages with a file: an attachment or a call's snapshot">Files</button>
+      <span class="room-filter-note" id="room-filter-note" role="status" aria-live="polite"></span>
+    </div>
+
     <!-- Bands: shown by app.js. A band without an icon gets a glyph from CSS instead. -->
     <div class="band band-test band-amber hidden" id="banner-test" role="status">
       <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 7.2v4M8 4.9h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/></svg>

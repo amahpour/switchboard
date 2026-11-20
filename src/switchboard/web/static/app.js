@@ -42,7 +42,7 @@
       return true;
     } });
     $('whiteboard-toggle').addEventListener('click', function () {
-      if (whiteboardOpen) { closeWhiteboard(); return; }
+      if (whiteboardOpen) { closeWhiteboard(); noteShown(); return; }
       if (!state.active) return;
       state.pastBoards = null;
       state.boardOpen = false; renderBoard();
@@ -52,7 +52,11 @@
       $('whiteboard-toggle').setAttribute('aria-pressed', 'true');
       whiteboard.open(state.active);
     });
-    $('whiteboard-close').addEventListener('click', function () { closeWhiteboard(); $('whiteboard-toggle').focus(); });
+    $('whiteboard-close').addEventListener('click', function () {
+      closeWhiteboard();
+      noteShown();  // the log is back on screen
+      $('whiteboard-toggle').focus();
+    });
   }
   const MAX_LINES = 2000;
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
@@ -930,7 +934,11 @@
     const log = $('log');
     const stick = nearBottom(log);
     const top = log.scrollTop;
+    // a control in the text (a download link) that had the keyboard gets it back on its new node, found by
+    // what it is (a link by its file id), not by its place: a file stored above it adds a link before it
+    const spot = hasFocusIn(old) ? rowFocusSpot(log) : null;
     old.replaceWith(mdBody(m.text, m.mentions, m.files));
+    if (spot) rowFocusBack(log, spot);
     if (stick) log.scrollTop = log.scrollHeight;
     else log.scrollTop = top;
   }
@@ -1323,7 +1331,8 @@
     if (typeof log.querySelectorAll !== 'function') return;
     const cards = Array.from(log.querySelectorAll('.call-card'));
     if (!cards.length) return;
-    const windowed = !!(state.around && r && state.around.room === r.name);  // a window around a search hit
+    // a window around a search hit, or a filtered room (#914): not the room's latest, so no live call
+    const windowed = !!(state.around && r && state.around.room === r.name) || !!filterOf(r);
     const cur = r && !windowed ? callOf(r) : null;
     const known = !!(r && r.settings) && !windowed;
     const seen = r && r.callSeen;
@@ -1473,8 +1482,11 @@
     let prev = null;
     let open = null;  // the call card the last row went into, until a message of any other kind
     const frag = document.createDocumentFragment();
-    // a room opened at a search result shows the window around it, not its latest (#724, §58.5)
-    for (const m of (state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
+    // a room opened at a search result shows the window around it, not its latest (#724, §58.5);
+    // a room filtered to its Mentions or Files shows the broker's answer (#914, §64)
+    const f = filterOf(r);
+    if (f) frag.append(filterHead(f));
+    for (const m of (f ? f.msgs : state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
       const k = dayKey(m.ts);
       if (k !== lastDay) {
         frag.append(dayRow(m.ts));
@@ -1516,11 +1528,13 @@
     $('attach-btn').disabled = noRooms;
     composerPlaceholder();
     updateRoomEmpty();
+    renderFilters();
     renderRows(r);
     renderPins();
     renderClaimBoard();
     log.scrollTop = log.scrollHeight;
     syncAround();
+    noteShown();
   }
 
   // Focus mode (#99): collapse agent chat not addressed to you to one line, so what needs you
@@ -1562,6 +1576,7 @@
       return;
     }
     if (state.around && state.around.room === r.name) return;  // a window around a search result stays as it is
+    if (filterOf(r)) { filterTake(r, m); return; }  // a filtered room draws only what its filter takes
     const log = $('log');
     const stick = nearBottom(log);
     const newDay = !prev || dayKey(prev.ts) !== dayKey(m.ts);
@@ -1577,6 +1592,7 @@
     if (part) syncCallCards(r);
     if (m.kind === 'chat') updateRoomEmpty();
     if (stick) log.scrollTop = log.scrollHeight;
+    noteShown();
   }
 
   // mark the inspected agent's chat rows (.sel) without redrawing the log
@@ -2407,6 +2423,7 @@
     if (state.searchOn) closeSearch(false);
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
+    state.filter = null;  // a room opens on All (#914)
     if (state.home) leaveHome();
     if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
@@ -2421,7 +2438,6 @@
     const activeR = state.rooms.get(name);
     if (!isMember(activeR)) state.otherOpen = true;  // its row stays in view, under Other rooms (§63)
     if (!state.around) {  // a window around a search result has not shown the room's latest
-      markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
       activeR.unread = 0;
       activeR.quiet = false;
     }
@@ -2432,6 +2448,8 @@
     $('mentions').setAttribute('aria-label', 'Agents in ' + name);
     renderTabs();
     renderLog();
+    // opening a room is seeing what it holds (#663, §55.8): as far as the log just drawn is on screen (§64.4)
+    if (!state.around) markRoomSeen(activeR, true);
     renderBuddies();
     renderStatus();
     renderBoard();
@@ -2475,6 +2493,7 @@
     // the phone sheet is open, the page behind the scrim takes no focus (Esc and the scrim close it)
     $('main').inert = modal;
     $('sidebar').inert = modal;
+    noteShown();  // a phone sheet that closed uncovers the log
   }
 
   // Is keyboard focus somewhere inside `box`? (activeElement is null in the node harness.)
@@ -3882,10 +3901,15 @@
     } else if (f.t === 'file') {
       if (!r || !f.file || !f.file.id) return;
       const m = r.msgs.find(function (x) { return x.id === f.message_id; });
-      if (!m) return;
-      m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
-      m.files.push(f.file);
-      if (r.name === state.active) refreshMsgText(m);
+      if (m) {
+        m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
+        m.files.push(f.file);
+      }
+      // a filtered log holds its own copies of its rows (#914), which can have files the live copy lacks (one
+      // stored during a disconnect): the row on screen is drawn once, from the copy it shows, after the merge
+      const held = filterFile(r, f.message_id, f.file, m);
+      const drawn = held || (filterOf(r) ? null : m);
+      if (drawn && r.name === state.active) refreshMsgText(drawn);
     } else if (f.t === 'board') {
       if (r && whiteboard) {
         if (f.task) whiteboard.task(f.room, f.task);
@@ -6729,6 +6753,7 @@
       return false;
     }
     if (state.around) exitAround(false);  // what is posted belongs to the live log
+    if (state.filter) leaveFilter(false);  // so does the room under a filter (#914)
     // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
         !await confirmDialog('Close ' + r.name + '?',
@@ -7923,15 +7948,20 @@
     homeAgeTimer = setInterval(tickHomeAges, HOME_AGE_MS);
   }
 
-  // Tell the broker how far this person has read a room: the newest message this page holds (#663, §55.8). The
-  // broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
+  // Tell the broker how far this person has read a room: the newest message its live log has shown them
+  // (r.shownId, noteShown; #663, §55.8, §64.4), never one a filter, Search or the whiteboard kept off screen.
+  // The broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
   // has, so a stale or repeated post does nothing. A question card counts only messages after it. `refresh`: ask
   // for Home again once it is stored, so the sidebar's count drops (Home itself waits for it in loadHome).
   function markRoomSeen(r, refresh) {
     // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
     const note = !!(r && r.joinedWith);
-    if (!r || (!note && (!r.lastId || (r.seenSent || 0) >= r.lastId))) return;
-    const upto = r.lastId || 0;
+    if (!r) return;
+    const upto = Math.min(r.lastId || 0, r.shownId || 0);
+    // capped short of the newest: noteShown sends the rest once a painted frame shows the log on screen
+    if ((r.shownId || 0) < (r.lastId || 0)) r.seenWanted = !!(refresh || r.seenWanted);
+    else r.seenWanted = undefined;
+    if (!note && (!upto || (r.seenSent || 0) >= upto)) return;
     r.seenSent = Math.max(r.seenSent || 0, upto);
     r.joinedWith = '';
     const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
@@ -8756,6 +8786,7 @@
     if ($('app-dialog').open || $('confirm-dialog').open) return;
     if (state.searchOn) {  // Esc clears the box and goes back to the page under it
       closeSearch(false);
+      noteShown();  // the page under it is on screen again: the room's log, unless the whiteboard covers it
       updateTitle();
       searchFocusBack();
       return;
@@ -9121,7 +9152,9 @@
     if (state.searchOn) return;
     closePop();
     if (state.inspect) closeInspector(false);
+    // Search lies over the log first, so the All drawn under it is not on screen (§64.4)
     state.searchOn = true;
+    if (state.filter) leaveFilter(false);  // Search returns to All, not to a filtered log (#914, §64.4)
     $('app').classList.add('search-open');
     $('app').classList.remove('sheet-open');
     $('search').classList.remove('hidden');
@@ -9594,6 +9627,374 @@
     });
   }
 
+  // ----------------------------------------------- a room's filters (#914, DESIGN.md §64)
+  // All is the live log. Mentions (what is addressed to this person) and Files (messages with a stored file)
+  // are the broker's answer, GET /api/rooms/{slug}/filter, so a message older than the loaded history is
+  // found too; "Show older" asks for the page before. The room stays open under a filter: posting, opening
+  // another room or a search result, or All, goes back to the live log.
+  state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
+
+  // The one rule of the seen mark (§64.4, §55.8): it goes only as far as the person could have seen the room's
+  // live log. r.shownId is the newest line All held in a painted frame where the log was on screen; markRoomSeen
+  // goes no further. Which views cover the log is read from the page itself (logOnScreen), not from a list of app
+  // states: every list so far missed one (a review board, a phone sheet, Search over a click that drew the log).
+  // The check runs in the next animation frame, so a view a click opens after drawing the log (Back to results
+  // opens Search) has already covered it. What the log holds is still the app's to say: a filter or the window
+  // around a search result draws into the same #log, but neither is the live log.
+  function liveLogOf(r) {
+    return !!r && state.active === r.name && !state.around && !filterOf(r);
+  }
+
+  // Is #log rendered, visible, uncovered at its middle, in a visible document? Any check that can't run fails
+  // closed (false): the mark then waits for a frame that can show it was seen.
+  function logOnScreen() {
+    const log = $('log');
+    if (!log || document.visibilityState !== 'visible') return false;
+    if (typeof log.getBoundingClientRect !== 'function' || typeof document.elementFromPoint !== 'function' ||
+        typeof log.contains !== 'function') return false;
+    if (typeof log.checkVisibility === 'function') {
+      if (!log.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true,
+                                 visibilityProperty: true })) return false;
+    } else if (typeof window.getComputedStyle === 'function') {
+      for (let n = log; n && n.nodeType === 1; n = n.parentElement) {
+        const cs = window.getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse' ||
+            Number(cs.opacity) === 0) return false;
+      }
+    } else {
+      return false;
+    }
+    for (let n = log; n && n.nodeType === 1; n = n.parentElement) if (n.hidden || n.inert) return false;
+    const b = log.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (!(vw > 0) || !(vh > 0)) return false;
+    const left = Math.max(b.left, 0), right = Math.min(b.right, vw);
+    const top = Math.max(b.top, 0), bottom = Math.min(b.bottom, vh);
+    if (!(right > left) || !(bottom > top)) return false;
+    const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+    return !!hit && (hit === log || log.contains(hit));
+  }
+
+  // Called wherever the live log was drawn or uncovered. In the next painted frame, if the active room's live log
+  // is on screen, what it holds was seen; a mark asked for meanwhile (markRoomSeen, capped then) is sent on.
+  let shownFrame = false;
+  function noteShown() {
+    if (shownFrame) return;
+    if (typeof window.requestAnimationFrame !== 'function') return;  // no frames to check: fail closed
+    shownFrame = true;
+    window.requestAnimationFrame(function () {
+      shownFrame = false;
+      const room = activeRoom();
+      if (!liveLogOf(room) || !logOnScreen()) return;
+      room.shownId = Math.max(room.shownId || 0, room.lastId || 0);
+      if (room.seenWanted !== undefined) markRoomSeen(room, room.seenWanted);
+    });
+  }
+
+  // The general trigger of that check (§64.4): a view that covers or reveals the log without drawing it (Back to
+  // the conversation from a review board, a sheet or a dialog closing, the tab coming back) changes a class, the
+  // hidden or inert attribute of #log, one of its ancestors, #app or #main, or the document's visibility. Each
+  // such change asks for the same painted-frame check; noteShown coalesces them to one frame. Without a
+  // MutationObserver nothing is watched, and the mark waits for a draw: closed, never open.
+  // A cover can also go with none of those nodes changing: a modal <dialog> (Rename room) closing changes only
+  // the dialog's own open state. So the events that end something drawn over the page ask too, caught on the
+  // document in the capture phase since close and toggle do not bubble: close and cancel (dialogs), toggle
+  // (popovers, details), and, as a backstop for any cover not named here, focusin, pointerup and keyup. Each
+  // only schedules the one coalesced check, which still fails closed.
+  const COVER_ENDS = ['close', 'cancel', 'toggle', 'focusin', 'pointerup', 'keyup'];
+  function watchLogCover() {
+    document.addEventListener('visibilitychange', noteShown);
+    for (const t of COVER_ENDS) document.addEventListener(t, function () { noteShown(); }, true);
+    if (typeof window.MutationObserver !== 'function') return;
+    const watched = new Set();
+    for (let n = $('log'); n && n.nodeType === 1; n = n.parentElement) watched.add(n);
+    for (const id of ['app', 'main']) if ($(id)) watched.add($(id));
+    const obs = new window.MutationObserver(noteShown);
+    watched.forEach(function (n) {
+      obs.observe(n, { attributes: true, attributeFilter: ['class', 'hidden', 'inert'] });
+    });
+  }
+
+  const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
+  const FILTER_EMPTY = {
+    mentions: 'Nothing in this room is addressed to you yet.',
+    files: 'No files in this room yet.',
+  };
+
+  function filterOf(r) {
+    const f = state.filter;
+    return f && r && f.room === r.name ? f : null;
+  }
+
+  // The test of the unread count (#109, #418), which is the broker's home.addressed_to too: an @mention of this
+  // person, @humans, or an agent's reply to something they said, and never their own message.
+  function forMe(r, m) {
+    return m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m)) && addressedToMe(r, m);
+  }
+
+  function filterNote(f) {
+    if (f.busy && !f.msgs.length) return 'Loading…';
+    if (f.failed) return 'Could not load this filter. Choose it again to retry.';
+    const n = f.msgs.length;
+    if (!n) return FILTER_EMPTY[f.show];
+    const what = f.show === 'mentions'
+      ? (n === 1 ? ' message addressed to you' : ' messages addressed to you')
+      : (n === 1 ? ' message with a file' : ' messages with files');
+    if (!f.next) return n + what;
+    // a stored file can bring in a message older than the pages loaded (before the cursor): what is shown is then
+    // not the newest n, so it is only counted
+    const cut = Number(f.next);
+    if (f.msgs.some(function (m) { return m.id < cut; })) return n + what + ' shown';
+    return 'The newest ' + n + what;
+  }
+
+  // The row above the log: which button is pressed, and what the filter shows.
+  function renderFilters() {
+    const r = activeRoom();
+    const row = $('room-filters');
+    row.classList.toggle('hidden', !r || state.rooms.size === 0);
+    if (state.filter && (!r || state.filter.room !== r.name)) state.filter = null;
+    const f = filterOf(r);
+    const show = f ? f.show : 'all';
+    for (const s of FILTER_SHOWS) $('filter-' + s).setAttribute('aria-pressed', String(s === show));
+    const note = $('room-filter-note');
+    const text = f ? filterNote(f) : '';
+    if (note.textContent !== text) note.textContent = text;
+  }
+
+  // The log's first row under a filter: "Show older" while the broker has more, or what an empty one means.
+  function filterHead(f) {
+    if (f.next) {
+      const box = el('div', 'filter-more');
+      const b = el('button', 'btn filter-older', f.busy ? 'Loading…' : 'Show older');
+      b.type = 'button';
+      b.dataset.focus = 'filter-older';
+      b.disabled = f.busy;
+      b.addEventListener('click', function () { loadFilter(f, true); });
+      box.append(b);
+      return box;
+    }
+    if (!f.msgs.length && !f.busy && !f.failed) return el('div', 'filter-empty', FILTER_EMPTY[f.show]);
+    return document.createDocumentFragment();
+  }
+
+  async function loadFilter(f, older) {
+    const r = state.rooms.get(f.room);
+    if (!r || f.busy && older) return;
+    f.busy = true;
+    f.failed = false;
+    const log = $('log');
+    const fromBottom = log.scrollHeight - log.scrollTop;
+    if (older) renderRows(r);
+    let data;
+    try {
+      const q = '?show=' + f.show + (older && f.next ? '&before=' + String(Number(f.next)) : '');
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/filter' + q);
+    } catch (e) {
+      data = null;
+    }
+    if (state.filter !== f) return;  // the person moved on meanwhile
+    f.busy = false;
+    if (!data) f.failed = true;
+    else {
+      filterMerge(f, data.messages);
+      f.next = data.next;
+    }
+    // a row drawn while the page was on its way (a live line) may have the keyboard: it gets it back, as in
+    // filterAdd, on the same control
+    const key = older ? null : focusKey(log);
+    const spot = older || key ? null : rowFocusSpot(log);
+    renderFilters();
+    renderRows(r);
+    if (key) refocus(log, key);
+    else if (spot) rowFocusBack(log, spot);
+    // older lines go above: what the person was reading stays where it was; a first page opens at its newest
+    log.scrollTop = older ? log.scrollHeight - fromBottom : log.scrollHeight;
+    if (older && !refocus(log, 'filter-older')) {
+      const first = log.querySelector('[data-id]');
+      if (first) { first.tabIndex = -1; first.focus({ preventScroll: true }); }
+    }
+  }
+
+  function setFilter(show) {
+    const r = activeRoom();
+    if (!r) return;
+    if (show === 'all' || !FILTER_EMPTY[show]) { leaveFilter(true); return; }
+    const was = filterOf(r);
+    if (was && was.show === show && !was.failed) return;
+    if (state.around) { state.around = null; resetSearch(); }  // a filter replaces a window around a result
+    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false };
+    state.filter = f;
+    renderLog();
+    loadFilter(f, false);
+  }
+
+  // Back to the live log (All). `stay`: the person chose All, so the keyboard stays on the row.
+  function leaveFilter(stay) {
+    if (!state.filter) { renderFilters(); return; }
+    state.filter = null;
+    renderLog();
+    if (stay) $('filter-all').focus();
+  }
+
+  // What the broker answered and what the socket brought, as one list in id order: a message is kept once, as
+  // it first arrived, whichever source that was, so a live line that came before the page holding it is neither
+  // moved after newer ones nor lost. Its files are the exception: a file is stored after its message, so two
+  // copies of one message can each hold files the other lacks (an answer read before a second upload ended, and
+  // the one asked for after it), and the row keeps every file of both, the later copy's winning by file id.
+  // True when something was added or a held row gained a file.
+  function filterMerge(f, list) {
+    const byId = new Map(f.msgs.map(function (m) { return [m.id, m]; }));
+    let added = false;
+    let grew = false;
+    for (const m of list) {
+      const had = byId.get(m.id);
+      if (had) {
+        if (filterFilesInto(had, m.files)) grew = true;
+        continue;
+      }
+      byId.set(m.id, m);
+      added = true;
+    }
+    if (added) f.msgs = Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
+    return added || grew;
+  }
+
+  // Put `files` into the held row `had`, each replacing the one of its id. True when the row changed.
+  function filterFilesInto(had, files) {
+    if (!Array.isArray(files) || !files.length) return false;
+    const mine = Array.isArray(had.files) ? had.files : [];
+    const ids = new Set(files.map(function (x) { return x && x.id; }));
+    const next = mine.filter(function (x) { return !ids.has(x && x.id); }).concat(files);
+    const same = next.length === mine.length && next.every(function (x) {
+      const old = mine.find(function (y) { return y && x && y.id === x.id; });
+      return old && JSON.stringify(old) === JSON.stringify(x);
+    });
+    if (same) return false;
+    had.files = next;
+    return true;
+  }
+
+  // Draw what a filter gained while it is on screen. The log is drawn again, so whatever in it had the keyboard
+  // (Show older, a message row, or a control inside a row: a download link, a Message button) gets it back on
+  // its new node: a live line never drops the focus to the page.
+  function filterAdd(r, f, list) {
+    if (state.filter !== f || !filterMerge(f, list)) return;
+    const log = $('log');
+    const stick = nearBottom(log);
+    const key = focusKey(log);
+    const spot = key ? null : rowFocusSpot(log);
+    renderFilters();
+    renderRows(r);
+    if (key) refocus(log, key);
+    else if (spot) rowFocusBack(log, spot);
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+
+  // What can take the keyboard inside a log row, in document order: the same row drawn again gives the same list.
+  const ROW_FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]';
+
+  const FILE_HREF = /^\/api\/files\/([0-9a-f]{32})$/;  // md.js's fileLink: the only href a download link has
+
+  // What a control in a row is, the same however often the row is drawn: a download link by its file id, then
+  // its data-focus, its href, or its kind, class and label. Never its place: a file stored above a focused link
+  // adds a link before it, and the place would then name the wrong file.
+  function controlKey(c) {
+    const href = typeof c.getAttribute === 'function' ? c.getAttribute('href') : null;
+    const file = href ? FILE_HREF.exec(href) : null;
+    if (file) return 'file:' + file[1];
+    if (c.dataset && c.dataset.focus) return 'focus:' + c.dataset.focus;
+    if (href) return 'href:' + href;
+    const name = (typeof c.getAttribute === 'function' && c.getAttribute('aria-label')) || c.textContent || '';
+    return String(c.tagName) + '|' + String(c.className || '') + '|' + name;
+  }
+
+  // Where the keyboard is in the log, by row: { id, key, nth }, the message row holding the focused element, the
+  // element's identity (controlKey; null: the row itself) and which of the row's controls with that identity it
+  // is. Null when the focus is not in a row.
+  function rowFocusSpot(log) {
+    const had = document.activeElement;
+    if (!had || had === log || !log.contains(had) || typeof had.closest !== 'function') return null;
+    const row = had.closest('[data-id]');
+    if (!row || !log.contains(row)) return null;
+    const id = String(Number(row.dataset.id));
+    if (row === had) return { id: id, key: null, nth: 0 };
+    const key = controlKey(had);
+    const same = Array.from(row.querySelectorAll(ROW_FOCUSABLE))
+      .filter(function (c) { return controlKey(c) === key; });
+    return { id: id, key: key, nth: Math.max(0, same.indexOf(had)) };
+  }
+
+  // Focus the control `spot` names in its row as drawn now, else the row itself.
+  function rowFocusBack(log, spot) {
+    const n = log.querySelector('[data-id="' + spot.id + '"]');
+    if (!n) return;
+    const same = spot.key === null ? [] :
+      Array.from(n.querySelectorAll(ROW_FOCUSABLE)).filter(function (c) { return controlKey(c) === spot.key; });
+    const t = same[Math.min(spot.nth, same.length - 1)] || null;
+    if (t && tryFocusQuiet(t)) return;
+    n.tabIndex = -1;
+    n.focus({ preventScroll: true });
+  }
+
+  function tryFocusQuiet(n) {
+    n.focus({ preventScroll: true });
+    return document.activeElement === n;
+  }
+
+  // A message that arrives while the room is filtered: drawn when the filter would have answered with it. A reply
+  // whose parent this page does not hold (older than its history) cannot be judged here, so the broker is asked
+  // about that one message, with its own rule (home.addressed_to): no second copy of the rule.
+  function filterTake(r, m) {
+    const f = filterOf(r);
+    if (f.show !== 'mentions') {
+      if (Array.isArray(m.files) && m.files.length > 0) filterAdd(r, f, [m]);
+      return;
+    }
+    if (forMe(r, m)) filterAdd(r, f, [m]);
+    else if (m.kind === 'chat' && m.reply_to && !r.msgs.some(function (x) { return x.id === m.reply_to; })) {
+      filterAsk(r, f, m.id);
+    }
+  }
+
+  // A file of message `id` was stored (an agent's upload ends after its message arrived, §53). A filtered log
+  // holds the broker's copies of its rows, so the row there is brought up to date; under Files, a message that
+  // came while its upload was pending now has a stored file and is taken (or, when this page does not hold it,
+  // asked for). `m` is the page's own copy, if it has one. Returns the filter's copy of the row when it holds one,
+  // for the caller to draw (once, after both copies are merged); null otherwise.
+  function filterFile(r, id, file, m) {
+    const f = filterOf(r);
+    if (!f) return null;
+    const had = f.msgs.find(function (x) { return x.id === id; });
+    if (had) {
+      if (had !== m) filterFilesInto(had, [file]);
+      return had;
+    }
+    if (f.show === 'files') {
+      if (m) filterAdd(r, f, [m]);
+      else filterAsk(r, f, id);
+    }
+    return null;
+  }
+
+  // Ask the filter route whether the one message `id` is in this filter, and draw the broker's answer if it is.
+  async function filterAsk(r, f, id) {
+    let data;
+    try {
+      const q = '?show=' + f.show + '&before=' + String(Number(id) + 1) + '&limit=1';
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/filter' + q);
+    } catch (e) {
+      return;  // the line is still in the room's history, and All shows it
+    }
+    const list = data && Array.isArray(data.messages) ? data.messages : [];
+    const got = list.filter(function (x) { return x.id === id; });
+    if (got.length) filterAdd(r, f, got);
+  }
+
+  function bindRoomFilters() {
+    for (const s of FILTER_SHOWS) $('filter-' + s).addEventListener('click', function () { setFilter(s); });
+  }
+
   // --------------------------------------------------------------- boot
   // The open rooms, from the broker. A room whose room is gone, or was replaced under the same
   // name (another id, or the same id reused after a delete: another created_at), is dropped;
@@ -9612,6 +10013,7 @@
       for (const [old, r] of state.rooms) {
         if (r.id !== l.id || r.createdAt !== l.created_at) continue;
         state.rooms.delete(old);
+        if (state.filter && state.filter.room === old) state.filter.room = l.name;
         r.name = l.name;
         r.slug = l.slug;
         state.rooms.set(l.name, r);
@@ -9959,6 +10361,7 @@
   async function boot() {
     bindInput();
     bindSearch();
+    bindRoomFilters();
     $('pins-toggle').addEventListener('click', function () {
       state.pinsOpen = !state.pinsOpen;
       renderPins();
@@ -9978,6 +10381,7 @@
       $('usage').focus();
     });
     keepLogPinned();
+    watchLogCover();
     try {
       state.me = await api('GET', '/api/me');
     } catch (e) {
