@@ -2826,5 +2826,9 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
     if not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
         return False
     who = state.service.person_name(person) or "someone"
-    state.room_board.from_page(room, who, elements)
+    done = state.room_board.from_page(room, who, elements)
+    if done.get("dropped") or not done.get("changed"):
+        # Something the page drew was not kept as it drew it (refused, or an older copy): the page keeps its
+        # own copy until the broker's arrives, so it is given the committed board, which wins (#893).
+        sub.offer({"t": "board", "room": name, **state.room_board.snapshot(room)})
     return True

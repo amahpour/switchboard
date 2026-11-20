@@ -7,9 +7,15 @@
   const clamp = (v, lo, hi) => num(v) ? Math.max(lo, Math.min(hi, v)) : null;
   const integer = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi ? v : null;
   const choice = (v, values) => typeof v === 'string' && values.includes(v) ? v : null;
-  const text = v => Array.from(v.slice(0, 2000).normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u2028\u2029]/gu, c => c === '\n' || c === '\t' ? c : '')).slice(0, 200).join('');
+  // The broker redacts a text and then cuts it to 200 (DESIGN §56.5, #893), so the frame boundary keeps what it
+  // may send, up to 2000 characters, and does not cut at 200: a secret that crossed character 200 would reach
+  // the broker as a prefix it cannot recognize. The stored copy (a broker echo) is always the short one.
+  const text = v => Array.from(v.slice(0, 2000).normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u2028\u2029]/gu, c => c === '\n' || c === '\t' ? c : '')).slice(0, 2000).join('');
   const types = ['rectangle', 'ellipse', 'diamond', 'arrow', 'text', 'frame', 'line', 'freedraw'];
-  function clean(raw) {
+  // `load` is for what the broker sent or this tab holds, which an earlier broker may have stored in a form it
+  // would now refuse; only a write refuses it (a text with a line break and no originalText), so one old shape
+  // can never keep a whole board from opening.
+  function clean(raw, load) {
     if (!raw || typeof raw !== 'object' || !id(raw.id) || !types.includes(raw.type)) return null;
     const x = clamp(raw.x, -20000, 20000), y = clamp(raw.y, -20000, 20000);
     const width = clamp(raw.width, 0, 10000), height = clamp(raw.height, 0, 10000);
@@ -31,7 +37,15 @@
     for (const k of ['strokeColor', 'backgroundColor']) {
       if (typeof raw[k] === 'string' && (raw[k] === 'transparent' || /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(raw[k]))) e[k] = raw[k];
     }
-    for (const k of ['text', 'originalText', 'name']) if (typeof raw[k] === 'string') e[k] = text(raw[k]);
+    for (const k of ['originalText', 'name']) if (typeof raw[k] === 'string') e[k] = text(raw[k]);
+    // as the broker: the wrapped `text` is the page's copy of `originalText`, and the broker keeps only the words
+    if (typeof raw.text === 'string') {
+      // a write sends the words once; a load keeps both strings as stored (an earlier broker kept them apart)
+      if (load) e.text = text(raw.text);
+      else if (typeof raw.originalText === 'string') e.text = e.originalText;
+      else if (raw.text.includes('\n')) return null;
+      else e.text = text(raw.text);
+    }
     for (const k of ['locked', 'autoResize', 'simulatePressure', 'elbowed']) if (typeof raw[k] === 'boolean') e[k] = raw[k];
     for (const k of ['frameId', 'containerId']) if (k in raw && (raw[k] === null || id(raw[k]))) e[k] = raw[k];
     if (typeof raw.index === 'string' && /^[A-Za-z0-9]{1,120}$/.test(raw.index)) e.index = raw.index;
@@ -70,9 +84,9 @@
     }
     return new TextEncoder().encode(JSON.stringify(e)).length <= 32000 ? e : null;
   }
-  function batch(raw) {
+  function batch(raw, load) {
     if (!Array.isArray(raw) || raw.length > 1500) return null;
-    const out = raw.map(clean);
+    const out = raw.map(e => clean(e, load));
     if (out.includes(null) || new TextEncoder().encode(JSON.stringify(out)).length > 1000000) return null;
     return out;
   }
@@ -84,7 +98,18 @@
     }
     return Array.from(all.values());
   }
-  const rules = { clean, batch, merge };
+  // What the broker sends back is the committed copy. When the tab already has the element, the broker's copy
+  // wins if its version is the same or higher: a redacted echo of what the tab drew has the same version, and
+  // `merge` would keep the tab's own copy on that tie (DESIGN §56.5, #893). An older broker copy loses.
+  function adopt(current, incoming) {
+    const all = new Map(current.map(e => [e.id, e]));
+    for (const e of incoming) {
+      const old = all.get(e.id);
+      if (!old || e.version >= old.version) all.set(e.id, e);
+    }
+    return Array.from(all.values());
+  }
+  const rules = { clean, batch, merge, adopt };
   if (typeof module !== 'undefined') module.exports = rules;
   else root.SBBoardRules = rules;
 })(typeof window === 'undefined' ? globalThis : window);
