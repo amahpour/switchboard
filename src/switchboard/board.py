@@ -1294,10 +1294,10 @@ def _is_wrap_of(text: str, original: str) -> bool:
     there, consumed whole): ``wrapText`` pushes a wrapped line with ``trimEnd()``, so the whole run is
     dropped. A break inside a word (nothing in ``original``). Or a typed newline whose trailing spaces were
     trimmed (``original`` has a run of spaces and then ``"\\n"``): ``wrapText`` splits on typed newlines and
-    wraps each segment alone, and the last line of a wrapped segment can lose its trailing spaces (``Uu``,
-    wholly or in part). A break where ``original`` has a space is never mid-word, so a text that drops a
-    word boundary does not match. At the end, only trailing spaces of ``original`` may be left over (the
-    last segment's). An empty ``original`` matches nothing (#893, schema 56)."""
+    wraps each segment alone, and the last line of a wrapped segment can lose its trailing spaces, wholly or
+    in part (checked in the vendored build). A break where ``original`` has a space is never mid-word, so a
+    text that drops a word boundary does not match. At the end, only trailing spaces of ``original`` may be
+    left over (the last segment's). An empty ``original`` matches nothing (#893, schema 56)."""
     if not original:
         return False
     i, n = 0, len(original)

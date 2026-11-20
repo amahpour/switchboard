@@ -398,6 +398,8 @@ def kept_by_the_upgrade(text: str, original: str) -> bool:
         ("one\ntwo", "one two\n"),  # the original is not consumed completely
         ("one\ntwo", "one two three  "),  # a cut text, however many spaces end the original
         ("one\ntwo", "one  x\ntwo"),  # spaces then other characters before the newline: not a trim
+        ("abc\nd", "ab cd   "),  # a lost word boundary is not excused by trailing spaces after it
+        ("one\ntwo", "one   \ntwo\n"),  # a trimmed typed newline, and the original still not consumed
     ],
 )
 def test_a_multi_line_text_that_is_not_a_full_wrap_of_its_original_is_removed(
@@ -430,5 +432,8 @@ def test_a_multi_line_text_that_is_not_a_full_wrap_of_its_original_is_removed(
 def test_a_multi_line_text_that_is_equal_to_or_a_full_wrap_of_its_original_is_kept_as_it_is(
     text: str, original: str
 ) -> None:
-    """The cases above that must not be lost: nothing to change, whatever the line count."""
+    """The cases above that must not be lost: nothing to change, whatever the line count. The bundled
+    ``wrapText`` splits on typed newlines, wraps each segment alone and can trim the trailing spaces of a
+    segment's last line, wholly or in part, so those spaces may be absent before a typed newline or at the
+    end. Fails on a walk that consumes the spaces as a wrap and leaves the typed newline unmatched."""
     assert kept_by_the_upgrade(text, original)
