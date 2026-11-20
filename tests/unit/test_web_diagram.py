@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import random
 import subprocess
+import time
 from pathlib import Path
 
 from conftest import node_for_tests
@@ -165,3 +166,22 @@ def test_a_handler_in_an_ordinary_diagram_still_goes_and_nothing_else_does() -> 
     sources += [f"{sequence(rng)}\n  alice->>bob: {hostile} {label(rng)}" for _ in range(300)]
     want = [s.replace(hostile, "<img src=x >") for s in sources]
     assert clean(*sources) == want
+
+
+def test_a_very_long_line_is_read_once() -> None:
+    """One 200 KB line of quoted attributes in a tag that never closes is read in one pass: the
+    first clean-up looked for the line's end again after every quoted value, so a line of n
+    attributes cost n times its length (#918's review). The harness counts the characters
+    indexOf reads, which is where that rescan was; the clock bound is only a backstop."""
+    assert NODE is not None
+    line = 'flowchart TD\n  A["<img' + ' t="x"' * 33_000 + '"] --> B'
+    started = time.monotonic()
+    r = subprocess.run(
+        [NODE, str(HARNESS), "--count"], input=json.dumps([line]), capture_output=True, text=True, timeout=60
+    )
+    elapsed = time.monotonic() - started
+    assert r.returncode == 0, r.stderr
+    got = json.loads(r.stdout)
+    assert got["out"] == [line]
+    assert got["read"] <= 4 * len(line), got["read"]  # one pass, not one per attribute (~10**9)
+    assert elapsed < 30, elapsed

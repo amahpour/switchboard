@@ -108,12 +108,15 @@
   // attributes named on… go, each with its value.
   const TAG_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
   const ATTR_NAME = /^[A-Za-z_:][A-Za-z0-9_:.-]*$/;
-  const BAD_UNQUOTED = /["'`<\]}|]/;
+  const BAD_UNQUOTED = /["'`\]}|]/;
 
   function space(c) { return c === ' ' || c === '\t' || c === '\f' || c === '\r'; }
 
   // The candidate tag at source[lt] ('<' and a letter): {end, drop} with `end` just past its '>'
   // and `drop` the [start, end) of each on… attribute, or {stop} where it stopped being one.
+  // Every loop stops at a '<', so no '<' lies between lt and either: the caller goes on from
+  // there, and each character of a line is read once (#918's review: a rescan per attribute
+  // made a long line quadratic).
   function readTag(source, lt) {
     const n = source.length;
     const bad = function (c) { return c === '\n' || c === '<'; };
@@ -150,7 +153,7 @@
           if (k < n && !space(source[k]) && '/>'.indexOf(source[k]) < 0) return { stop: k };
         } else {
           const v = k;
-          while (k < n && !space(source[k]) && '>\n'.indexOf(source[k]) < 0) k++;
+          while (k < n && !space(source[k]) && '>\n<'.indexOf(source[k]) < 0) k++;
           if (k === v || BAD_UNQUOTED.test(source.slice(v, k))) return { stop: k };
         }
         j = k;
@@ -168,7 +171,7 @@
       if (lt < 0) break;
       if (!/[A-Za-z]/.test(source[lt + 1] || '')) { i = lt + 1; continue; }
       const tag = readTag(source, lt);
-      if (tag.end === undefined) { i = lt + 1; continue; }  // not a tag here: left as written
+      if (tag.end === undefined) { i = Math.max(lt + 1, tag.stop); continue; }  // not a tag: as written
       for (const [s, e] of tag.drop) { out += source.slice(at, s); at = e; }
       i = tag.end;
     }
