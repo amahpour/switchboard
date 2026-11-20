@@ -396,6 +396,8 @@ def kept_by_the_upgrade(text: str, original: str) -> bool:
         ("abc\nd", "ab cd"),  # the break loses a word boundary: the original has a space after "ab"
         ("ab\ncd", "abXcd"),  # other words
         ("one\ntwo", "one two\n"),  # the original is not consumed completely
+        ("one\ntwo", "one two three  "),  # a cut text, however many spaces end the original
+        ("one\ntwo", "one  x\ntwo"),  # spaces then other characters before the newline: not a trim
     ],
 )
 def test_a_multi_line_text_that_is_not_a_full_wrap_of_its_original_is_removed(
@@ -418,6 +420,11 @@ def test_a_multi_line_text_that_is_not_a_full_wrap_of_its_original_is_removed(
         ("ab\ncd", "ab   cd"),  # a wrap at a run of spaces: wrapText trims the whole run
         ("ab \ncd", "ab \ncd"),  # a typed newline after a space
         ("ab\ncd\nef", "ab cd\nef"),  # a wrap and a typed newline
+        ("one\ntwo", "one   \ntwo"),  # a typed newline whose trailing spaces were trimmed by the wrap
+        ("one  \ntwo", "one   \ntwo"),  # ... trimmed in part
+        ("one\ntwo\nthree", "one two   \nthree"),  # a wrap, then a trimmed typed newline
+        ("one\ntwo", "one two   "),  # the last segment only had its trailing spaces trimmed
+        ("one\ntwo", "one\ntwo  "),  # a typed newline, then trailing spaces trimmed
     ],
 )
 def test_a_multi_line_text_that_is_equal_to_or_a_full_wrap_of_its_original_is_kept_as_it_is(

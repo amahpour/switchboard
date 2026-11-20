@@ -1287,30 +1287,36 @@ def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
 
 
 def _is_wrap_of(text: str, original: str) -> bool:
-    """True when ``text`` is ``original`` wrapped by Excalidraw, read in order and both consumed
-    completely (no prefix, no cut): every character of ``text`` that is not a line break equals the next
-    one of ``original``, and each ``"\\n"`` in ``text`` stands for one of three things. A line break the
-    person typed (``original`` has ``"\\n"`` there, consumed). A wrap at spaces (``original`` has a run
-    of one or more spaces there, consumed whole): Excalidraw's ``wrapText`` pushes a wrapped line with
-    ``trimEnd()``, so the whole run of spaces where it broke is dropped. Or a break inside a word
-    (nothing in ``original``). A break where ``original`` has a space is therefore never mid-word, so a
-    text that drops a word boundary does not match. An empty ``original`` matches nothing (#893, schema
-    56)."""
+    """True when ``text`` is ``original`` wrapped by Excalidraw, read in order, with nothing left over (no
+    prefix, no cut). Every character of ``text`` that is not a line break equals the next one of
+    ``original``, and each ``"\\n"`` in ``text`` stands for one of these. A line break the person typed
+    (``original`` has ``"\\n"`` there). A wrap at spaces (``original`` has a run of one or more spaces
+    there, consumed whole): ``wrapText`` pushes a wrapped line with ``trimEnd()``, so the whole run is
+    dropped. A break inside a word (nothing in ``original``). Or a typed newline whose trailing spaces were
+    trimmed (``original`` has a run of spaces and then ``"\\n"``): ``wrapText`` splits on typed newlines and
+    wraps each segment alone, and the last line of a wrapped segment can lose its trailing spaces (``Uu``,
+    wholly or in part). A break where ``original`` has a space is never mid-word, so a text that drops a
+    word boundary does not match. At the end, only trailing spaces of ``original`` may be left over (the
+    last segment's). An empty ``original`` matches nothing (#893, schema 56)."""
     if not original:
         return False
-    i = 0
+    i, n = 0, len(original)
     for ch in text:
         if ch == "\n":
-            if i < len(original) and original[i] == "\n":
+            if i < n and original[i] == "\n":
                 i += 1
             else:
-                while i < len(original) and original[i] == " ":
-                    i += 1
-        elif i < len(original) and original[i] == ch:
+                j = i
+                while j < n and original[j] == " ":
+                    j += 1
+                # a run of spaces, then either the typed newline the break stands for (its trailing spaces
+                # were trimmed) or just the wrap at that run
+                i = j + 1 if j > i and j < n and original[j] == "\n" else j
+        elif i < n and original[i] == ch:
             i += 1
         else:
             return False
-    return i == len(original)
+    return not original[i:].strip(" ")  # only trailing spaces of the last segment may be left over
 
 
 def _needs_cleaning(el: dict[str, Any]) -> bool:
