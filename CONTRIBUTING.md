@@ -108,7 +108,7 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
 - **Locally, nothing changes:** run the suite whole with `-n auto` (pytest-split does nothing without `--splits`). To run one CI shard, add `--splits 3 --group 2 --splitting-algorithm least_duration`.
 - **Sharing a machine:** when several agents (or people) work on one machine, the suites run one at a time. `-n auto` starts a worker on every core, and every worker starts brokers and scripted agents; the e2e tests add a Chromium each. Three such runs at once pushed a 30 GB machine into swap until it froze (2026-10-12). Take a lock and cap the workers:
 
-  ```bash
+  ```sh
   PYTEST_XDIST_AUTO_NUM_WORKERS=8 flock "${XDG_RUNTIME_DIR:-/tmp}/switchboard-suite.lock" uv run pytest -q -n auto
   ```
 
@@ -211,7 +211,7 @@ SWITCHBOARD_EVAL=claude uv run pytest -m eval tests/evals -s -q  # one real tria
 - **What it touches:** what the live tests do: a temp directory per trial, the real home for Claude Code's login only, transcripts deleted with the trial, and `~/.claude/settings.json` checked before and after (a change stops the run). No approval is ever given: a prompt that appears is declined with Esc and counted.
 - **Try a change:** run the baseline **twice** (the spread between two runs of the same thing is the noise a change has to beat), then the same command with the change on its own arm. The room's own rules (#105) change what agents read without touching the code: `--rules "When nobody is named, only the agent whose name sorts first answers; the others pass()."` or `--rules-file`. For a change in the code or a plugin, check out that change and run the same command.
 
-  ```sh
+  ```bash
   uv run python tests/evals/run_evals.py compare tests/evals/_results/baseline-1-<time>.json \
     tests/evals/_results/first-answers-<time>.json --repeat tests/evals/_results/baseline-2-<time>.json
   ```
