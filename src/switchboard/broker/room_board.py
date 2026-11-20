@@ -237,12 +237,6 @@ class RoomBoard:
             if agent_raw and (len(result.taken) != len(incoming) or result.rejected):
                 raise ServiceError("bad_request", "the diagram does not fit on this board")
             dropped = len(result.rejected)
-            kept = {e["id"] for e in result.taken}
-            refused = [
-                e["id"]
-                for e in incoming
-                if isinstance(e, dict) and isinstance(e.get("id"), str) and e["id"] not in kept
-            ][: board.MAX_CALL * 4]
             if not result.taken:
                 why = result.rejected[0] if result.rejected else "the board kept a newer copy of that shape"
                 if raw is not None:
@@ -250,7 +244,7 @@ class RoomBoard:
                         "seq": seq,
                         "changed": False,
                         "ids": [],
-                        **({"dropped": dropped, "refused": refused} if from_page else {}),
+                        **({"dropped": dropped} if from_page else {}),
                     }
                 raise ServiceError("bad_request", why)
             try:
@@ -287,7 +281,6 @@ class RoomBoard:
         done = {"seq": published["seq"], "changed": True, "ids": ids, "text": text}
         if from_page:  # what the page asked for that was not kept: the socket answers it with the board
             done["dropped"] = dropped
-            done["refused"] = refused
         return done
 
 

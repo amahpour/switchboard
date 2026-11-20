@@ -134,8 +134,8 @@ async def test_a_page_that_sends_a_secret_stores_and_broadcasts_a_marker(broker:
 def test_a_page_whose_element_was_refused_is_sent_the_committed_board(broker: InProcBroker) -> None:
     """The page keeps its own copy of what it drew until the broker answers. An element the broker refuses
     (here: text its marker would make too long) is never echoed, so without an answer the tab would keep the
-    refused copy for good (#893). The sender is sent the whole board, and its own copy then gives way. Fails
-    if no ``full`` frame comes back."""
+    refused copy for good (#893). The sender is sent the whole board, and its own copy then gives way (no
+    id the page supplied is sent back). Fails if no ``full`` frame comes back."""
     from switchboard import board
 
     web = broker.web_client()
@@ -147,9 +147,7 @@ def test_a_page_whose_element_was_refused_is_sent_the_committed_board(broker: In
         ws.send(json.dumps({"t": "board", "room": "#build", "elements": [page_shape(text=value)]}))
         full = recv_until(ws, lambda f: f.get("t") == "board" and f.get("full") is True and f.get("seq") == 0)
         assert full["elements"] == []
-        assert full["refused"] == [
-            "s1"
-        ]  # only the shape it did not keep is named, so the page puts back only that
+        assert "refused" not in full and "s1" not in json.dumps(full)  # no page-supplied id is sent back
     finally:
         ws.close()
         web.close()

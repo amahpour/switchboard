@@ -7,7 +7,6 @@
   const committed = new Map(); // room -> what the broker has told this tab: the only scene an export may show
   const seqs = new Map(); // room -> the board's seq in the last frame from the broker
   const waiting = new Map(); // room -> an image task that came before the broker's frames caught up to it
-  const pendings = new Map(); // room -> Map(id -> 'version:nonce' this page sent and has not heard back)
   const pendingImages = new Set();
   let playing = false, selected = null;
   const el = id => document.getElementById('whiteboard-' + id);
@@ -95,11 +94,7 @@
       if (!elements || !elements.length) return;
       const merged = rules.batch(rules.merge(cache.get(current) || [], elements));
       if (!merged) return;
-      if (options.send(current, elements)) {
-        cache.set(current, merged);
-        if (!pendings.has(current)) pendings.set(current, new Map());
-        for (const e of elements) pendings.get(current).set(e.id, rules.sig(e));
-      }
+      if (options.send(current, elements)) cache.set(current, merged);
       else options.status.textContent = 'Disconnected. Reconnect before drawing.';
     } else if (m.action === 'rendered' && Object.keys(m).length === 4) {
       reveal(false);
@@ -138,39 +133,21 @@
       options.host.classList.remove('hidden');
     },
     close,
-    receive(room, raw, full, seq, refused) {
+    receive(room, raw, full, seq) {
       const elements = rules.batch(raw);
       if (!elements || typeof room !== 'string') return;
-      // The broker's copy is the committed one: an echo of what this tab sent replaces the optimistic copy (the
-      // broker may have cut a secret out of it), and a full board replaces what the tab has, except for what it
-      // sent and has not heard about. `refused` names what a full board is the answer to: the ids the broker did
-      // not keep as sent. Only those are put back to the broker's copy in the frame, as a copy with a higher
-      // version (the frame keeps the higher version), so the rest of what is being drawn is left alone (#893).
-      const pend = pendings.get(room) || new Map();
-      const overrides = [];
-      if (full) {
-        const ids = Array.isArray(refused) ? refused.filter(v => typeof v === 'string') : null;
-        if (ids === null) pend.clear(); // a board for a page that just connected: nothing it sent is still owed
-        else for (const id of ids) {
-          const sent = pend.get(id);
-          if (sent === undefined) continue;
-          pend.delete(id);
-          const mine = (cache.get(room) || []).find(e => e.id === id);
-          const theirs = elements.find(e => e.id === id);
-          const base = theirs || (mine && Object.assign({}, mine, { isDeleted: true }));
-          if (base) overrides.push(Object.assign({}, base, { version: Math.max(parseInt(sent, 10), theirs ? theirs.version : 0) + 1, versionNonce: 1 }));
-        }
-      }
-      committed.set(room, rules.batch(full ? elements : rules.merge(committed.get(room) || [], elements)) || []);
+      // What the broker sends is the committed copy, and the tab shows its own drawing until it arrives: an echo
+      // of what this tab drew replaces the tab's copy (the broker may have cut a secret out of it), and a full
+      // board replaces what the tab has. A shape the broker did not keep is gone at the next full board.
+      committed.set(room, rules.batch(full ? elements : rules.adopt(committed.get(room) || [], elements)) || []);
       if (typeof seq === 'number') seqs.set(room, seq);
       const held = waiting.get(room);
       if (held && (seqs.get(room) || 0) >= held.seq) { waiting.delete(room); if (pendingImages.has(held.id)) exportCommitted(room, held.id); }
-      const inFlight = full ? (cache.get(room) || []).filter(e => pend.has(e.id)) : [];
-      const merged = rules.batch(full ? rules.merge(elements, inFlight) : rules.settle(cache.get(room) || [], elements, pend));
+      const merged = rules.batch(full ? elements : rules.adopt(cache.get(room) || [], elements));
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {
-        post('elements', { elements: overrides.length ? rules.batch(rules.merge(merged, overrides)) || merged : merged });
+        post('elements', { elements: merged });
         el('play').disabled = !frames().length;
         if (playing) showFrame(Math.max(0, frames().findIndex(f => f.id === selected)));
       }

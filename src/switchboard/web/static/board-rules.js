@@ -34,7 +34,13 @@
     for (const k of ['strokeColor', 'backgroundColor']) {
       if (typeof raw[k] === 'string' && (raw[k] === 'transparent' || /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(raw[k]))) e[k] = raw[k];
     }
-    for (const k of ['text', 'originalText', 'name']) if (typeof raw[k] === 'string') e[k] = text(raw[k]);
+    for (const k of ['originalText', 'name']) if (typeof raw[k] === 'string') e[k] = text(raw[k]);
+    // as the broker: the wrapped `text` is the page's copy of `originalText`, and the broker keeps only the words
+    if (typeof raw.text === 'string') {
+      if (typeof raw.originalText === 'string') e.text = e.originalText;
+      else if (raw.text.includes('\n')) return null;
+      else e.text = text(raw.text);
+    }
     for (const k of ['locked', 'autoResize', 'simulatePressure', 'elbowed']) if (typeof raw[k] === 'boolean') e[k] = raw[k];
     for (const k of ['frameId', 'containerId']) if (k in raw && (raw[k] === null || id(raw[k]))) e[k] = raw[k];
     if (typeof raw.index === 'string' && /^[A-Za-z0-9]{1,120}$/.test(raw.index)) e.index = raw.index;
@@ -87,21 +93,18 @@
     }
     return Array.from(all.values());
   }
-  const sig = e => e.version + ':' + e.versionNonce;
-  // The broker's echo of what this page sent (same id, version and nonce) is the committed copy: the broker may
-  // have cut a secret out of it, and the page's own copy, which wins a tie in `merge`, still holds it. So an
-  // echo that matches a pending revision replaces the page's copy outright (DESIGN §56.5, #893). `pending`
-  // maps an id to the `version:nonce` the page sent and is changed in place; anything else merges as before.
-  function settle(current, incoming, pending) {
-    const echoed = new Map(), rest = [];
+  // What the broker sends back is the committed copy. When the tab already has the element, the broker's copy
+  // wins if its version is the same or higher: a redacted echo of what the tab drew has the same version, and
+  // `merge` would keep the tab's own copy on that tie (DESIGN §56.5, #893). An older broker copy loses.
+  function adopt(current, incoming) {
+    const all = new Map(current.map(e => [e.id, e]));
     for (const e of incoming) {
-      if (pending.get(e.id) === sig(e)) { echoed.set(e.id, e); pending.delete(e.id); } else rest.push(e);
+      const old = all.get(e.id);
+      if (!old || e.version >= old.version) all.set(e.id, e);
     }
-    const base = current.map(o => echoed.get(o.id) || o);
-    for (const e of echoed.values()) if (!base.some(o => o.id === e.id)) base.push(e);
-    return merge(base, rest);
+    return Array.from(all.values());
   }
-  const rules = { clean, batch, merge, settle, sig };
+  const rules = { clean, batch, merge, adopt };
   if (typeof module !== 'undefined') module.exports = rules;
   else root.SBBoardRules = rules;
 })(typeof window === 'undefined' ? globalThis : window);

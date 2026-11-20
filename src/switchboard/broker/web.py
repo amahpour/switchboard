@@ -2830,13 +2830,5 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
     if done.get("dropped") or not done.get("changed"):
         # Something the page drew was not kept as it drew it (refused, or an older copy): the page keeps its
         # own copy until the broker's arrives, so it is given the committed board, which wins (#893).
-        # ``refused`` names the ids it did not keep as sent, so the page puts back only those (#893)
-        sub.offer(
-            {
-                "t": "board",
-                "room": name,
-                **state.room_board.snapshot(room),
-                "refused": done.get("refused", []),
-            }
-        )
+        sub.offer({"t": "board", "room": name, **state.room_board.snapshot(room)})
     return True

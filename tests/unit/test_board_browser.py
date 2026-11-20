@@ -134,23 +134,27 @@ def test_the_browser_sends_whole_text_so_a_secret_across_character_200_reaches_t
     assert "ghp_" not in json.dumps(stored) and "aB3aB3" not in json.dumps(stored)
 
 
-def test_a_broker_echo_replaces_the_optimistic_copy_it_answers_and_nothing_else() -> None:
+def test_a_broker_copy_replaces_the_tabs_when_its_version_is_the_same_or_higher() -> None:
     """The tab that drew keeps its own copy until the broker answers, and ``merge`` keeps the tab's copy on a
     tie (same version and nonce), so the redacted echo lost and the author kept seeing the secret (#893).
-    ``settle`` lets an echo that matches what was sent replace it; an echo of an older revision, an element
-    that was never pending and a newer local copy are left to ``merge``. Fails if the committed copy loses."""
+    ``adopt`` lets the broker's copy win at the same version or higher; an older one loses. Fails if the
+    committed copy loses the tie."""
     base = dict(id="a", type="rectangle", x=0, y=0, width=1, height=1, versionNonce=5)
     mine = {**base, "version": 2, "text": TOKEN}
     echo = {**base, "version": 2, "text": "[redacted: github token]"}
-    older = {**base, "version": 1, "text": "old"}
-    newer = {**base, "version": 3, "text": "mine again"}
-    code = """const [cur, inc, pend] = JSON.parse(require('fs').readFileSync(0,'utf8'));
-const p = new Map(Object.entries(pend));
-const out = r.settle(cur, inc, p);
-process.stdout.write(JSON.stringify({out, left: [...p.keys()]}));"""
-    got: dict = node(code, [[mine], [echo], {"a": "2:5"}])  # type: ignore[assignment]
-    assert [e["text"] for e in got["out"]] == ["[redacted: github token]"] and got["left"] == []
-    got = node(code, [[newer], [echo], {"a": "3:5"}])  # type: ignore[assignment]
-    assert got["out"][0]["text"] == "mine again" and got["left"] == ["a"]  # an echo of an older revision
-    got = node(code, [[mine], [older], {}])  # type: ignore[assignment]
-    assert got["out"][0]["text"] == TOKEN  # not pending: the ordinary merge, an older copy loses
+    code = """const [cur, inc] = JSON.parse(require('fs').readFileSync(0,'utf8'));
+process.stdout.write(JSON.stringify(r.adopt(cur, inc)));"""
+    assert node(code, [[mine], [echo]])[0]["text"] == "[redacted: github token]"  # type: ignore[index]
+    assert node(code, [[mine], [{**echo, "version": 3}]])[0]["version"] == 3  # type: ignore[index]
+    assert node(code, [[mine], [{**echo, "version": 1, "text": "old"}]])[0]["text"] == TOKEN  # type: ignore[index]
+    assert len(node(code, [[mine], [{**echo, "id": "b"}]])) == 2  # type: ignore[arg-type]
+
+
+def test_the_browser_keeps_the_original_words_as_the_text_like_the_broker() -> None:
+    """The client's copy of the allowlist reads ``text`` as the broker does: the original words when there
+    are any, and a text with a line break and no original is not sent. Fails if it keeps the wrapped copy."""
+    el = dict(id="s1", type="text", x=0, y=0, width=10, height=10, version=1, versionNonce=1)
+    code = "process.stdout.write(JSON.stringify(r.clean(JSON.parse(require('fs').readFileSync(0,'utf8')))))"
+    got = node(code, {**el, "text": "one\ntwo", "originalText": "one two"})
+    assert got["text"] == "one two"  # type: ignore[index]
+    assert node(code, {**el, "text": "one\ntwo"}) is None

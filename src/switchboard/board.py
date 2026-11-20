@@ -7,7 +7,8 @@ claim: known fields only, text cut, coordinates clamped, ``link`` forced null, a
 embed or frame-of-a-page never stored.
 
 Every string that can reach a stored shape (a shape's or a label's ``text`` and ``originalText``, a frame's
-``name``) is read by ``_text`` (``read_text``), which cuts obvious secrets out with ``redact`` (§11, #893):
+``name``) is read by ``_text`` (``read_text``), which cuts obvious secrets out with ``redact`` (§11, #893),
+and ``text`` is the read ``originalText`` whenever there is one (``_display_text``):
 the one place, so an agent's action, a Mermaid diagram and a person's page all pass it. The strings kept as
 written (an id, a group id, a reference, ``index``) are checked by ``_no_secret`` and refused when they hold
 one. ``customData`` and ``link`` are never kept, and a Mermaid source is never stored (only the shapes drawn
@@ -141,63 +142,13 @@ def _iint(v: Any, lo: int, hi: int) -> int | None:
 _SCAN_MAX = 100_000  # the most of one string that is read for secrets: text is cut at MAX_TEXT after
 
 
-_BREAKS_MAX = 8  # a wrapped copy with more breaks than this is refused when it has no ``originalText``
-
-
-def _canon(v: str) -> str:
-    return "".join(v.split())
-
-
-def _per_break_ok(text: str, out: str) -> bool:
-    """True when every way of reading each line break as nothing or as one space redacts to ``out`` with its
-    breaks read the same way. A wrap can replace the space before a token and also split the token, so the
-    two uniform readings are not enough: each break is tried both ways (``2 ** n`` readings, ``n`` at most
-    ``_BREAKS_MAX``). A match that swallowed a break leaves ``out`` with fewer, and no per-break comparison
-    is possible then, so only the two uniform readings are compared."""
-    n = text.count("\n")
-    if n > _BREAKS_MAX:
-        return False
-    if out.count("\n") != n:
-        return all(redact(text.replace("\n", sep))[0] == out.replace("\n", sep) for sep in ("", " "))
-    parts, outs = text.split("\n"), out.split("\n")
-    for mask in range(2**n):
-        seps = [" " if mask >> i & 1 else "" for i in range(n)]
-        flat = parts[0] + "".join(sep + part for sep, part in zip(seps, parts[1:], strict=True))
-        ref = outs[0] + "".join(sep + part for sep, part in zip(seps, outs[1:], strict=True))
-        if redact(flat)[0] != ref:
-            return False
-    return True
-
-
-def read_text(text: str, *, wrapped: bool = False) -> str:
+def read_text(text: str) -> str:
     """``text`` (already ``clean``) with obvious secrets cut out (``redact``, §11, #893), then cut to
-    ``MAX_TEXT``. The whole string is read first, then cut, so half a secret is never left at the cut.
-
-    A line break can hide a secret from ``redact`` (a break in the middle of a token, or where a ``Bearer``
-    match needs its space). So a text with a break is read as written and flattened, and two different
-    strings are never reconciled: the value is stored only when every flattened reading redacts to exactly
-    the as-written redaction with its breaks flattened the same way, and otherwise it is refused, naming the
-    kinds and never the value, so no part of a secret is stored. The flattened readings are the two uniform
-    ones (every break as nothing, every break as a space); for ``wrapped``, a wrapped copy that has no
-    ``originalText`` to be derived from, each break is tried both ways, up to ``_BREAKS_MAX`` breaks, and
-    more is refused. A value that fit and that its marker would push past the limit is refused too: a cut
-    would leave half a marker, and a silent one would hide that it was redacted."""
+    ``MAX_TEXT``. The whole string is read first, then cut, so half a secret is never left at the cut. A
+    value that fit and that its marker would push past the limit is refused (``Reject``), naming the kind
+    and never the value: a cut would leave half a marker, and a silent one would hide the redaction."""
     text = text[:_SCAN_MAX]
     out, kinds = redact(text)
-    if "\n" in text:
-        ok = (
-            _per_break_ok(text, out)
-            if wrapped
-            else all(redact(text.replace("\n", sep))[0] == out.replace("\n", sep) for sep in ("", " "))
-        )
-        if not ok:
-            names = ", ".join(
-                dict.fromkeys([*kinds, *(k for sep in ("", " ") for k in redact(text.replace("\n", sep))[1])])
-            )
-            raise Reject(
-                f"text holds what looks like a secret ({names or 'a wrapped value'}) that its line breaks "
-                "hide: leave the secret out"
-            )
     if kinds and len(text) <= MAX_TEXT < len(out):
         raise Reject(
             f"text is too long once what looks like a secret ({', '.join(kinds)}) is cut out: "
@@ -206,29 +157,19 @@ def read_text(text: str, *, wrapped: bool = False) -> str:
     return out[:MAX_TEXT]
 
 
-def _wrapped_text(raw_text: str, raw_original: Any) -> str:
-    """A shape's ``text``, which is ``originalText`` wrapped to the shape's width. With an ``originalText``
-    that is a string, it is the authority (#893): when redacting it changes it, the display copy is the
-    redacted ``originalText`` (unwrapped; the page wraps it again), so a wrap that splits a token, or
-    replaces the space before it, cannot leave pieces of what ``originalText`` had cut out. When it holds
-    nothing to redact, a wrapped ``text`` is kept only if it holds the same characters as ``originalText``
-    (spaces and breaks aside) and redacts to itself as written. With no ``originalText`` the wrapped copy
-    stands alone, and ``read_text(wrapped=True)`` reads it every way a wrap could have joined it."""
-    text = clean(raw_text)[:_SCAN_MAX]
+def _display_text(raw_text: str, raw_original: Any) -> str:
+    """A shape's ``text``, which Excalidraw keeps as ``originalText`` wrapped to the shape's width. With an
+    ``originalText`` the page's wrapped copy is ignored (#893): ``text`` is the read ``originalText``, and the
+    page wraps it again when it draws (Excalidraw's own restore wraps a bound or fixed-width text from the
+    words it is given). A wrap can break a token across lines where no pattern matches, and one string read
+    one way is the simplest thing that cannot be argued with. A ``text`` with a line break and no
+    ``originalText`` is refused: Excalidraw and the agents always send both, so only a hand-built client
+    meets it."""
     if isinstance(raw_original, str):
-        original = clean(raw_original)[:_SCAN_MAX]
-        if redact(original)[1]:
-            return read_text(original)
-        if "\n" not in text:
-            return read_text(text)
-        a, b = _canon(text), _canon(original)
-        if not (b.startswith(a) or a.startswith(b)):
-            raise Reject("text does not match originalText: send the words once, or send them both alike")
-        out, kinds = redact(text)
-        if kinds or len(text) > MAX_TEXT:
-            return read_text(text)  # as written it holds a secret, or it is cut: the plain rules decide
-        return text
-    return read_text(text, wrapped=True)
+        return _text(raw_original)
+    if "\n" in raw_text:
+        raise Reject("text with line breaks needs its originalText")
+    return _text(raw_text)
 
 
 def _text(v: Any) -> str:
@@ -416,7 +357,7 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
         if isinstance(raw.get(key), str):
             el[key] = _text(raw[key])
     if isinstance(raw.get("text"), str):
-        el["text"] = _wrapped_text(raw["text"], raw.get("originalText"))
+        el["text"] = _display_text(raw["text"], raw.get("originalText"))
     size = _iint(raw.get("fontSize"), 8, 48)
     if size is not None:
         el["fontSize"] = size
