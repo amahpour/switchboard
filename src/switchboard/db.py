@@ -30,7 +30,8 @@ on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room
 new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
 agent chat and wake batches (§61);
 53 (#823) adds say retry receipts (§8.4); 54 (#843) says which agent made a person a member of a public room,
-whose members are in ``room_people`` too (§63).
+whose members are in ``room_people`` too (§63); 56 (#823) remembers which client opened each MCP session, so a
+session survives a restart (§49.2).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -54,7 +55,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 55
+SCHEMA_VERSION = 56
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -391,7 +392,8 @@ V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
 V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before home_seen (v45)
 V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard (v46)
 V50_TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
-TABLES = (*V50_TABLES, "say_keys")
+V55_TABLES = (*V50_TABLES, "say_keys")  # schemas 53 through 55, before mcp_sessions (v56)
+TABLES = (*V55_TABLES, "mcp_sessions")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -1133,6 +1135,23 @@ V53_TO_V54 = (
 # what is written from now on. The step has no schema change.
 V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
 
+# Both fresh databases and the migration use these statements (#823, DESIGN.md §49.2): which client opened
+# each MCP session of a token, by the sha256 of the session's ID, so the broker can open it again after a
+# restart for a client that keeps its ID. The client's own claim, cut as ``client_info`` cuts it.
+MCP_SESSIONS_DDL = (
+    "CREATE TABLE mcp_sessions("
+    " token_id INTEGER NOT NULL REFERENCES agent_tokens(id),"
+    " sid_hash TEXT NOT NULL CHECK(length(sid_hash) = 64),"
+    " client_name TEXT NOT NULL CHECK(length(client_name) BETWEEN 1 AND 80),"
+    " client_version TEXT NOT NULL CHECK(length(client_version) <= 80),"
+    " protocol TEXT NOT NULL CHECK(length(protocol) BETWEEN 1 AND 32),"
+    " opened_at REAL NOT NULL,"
+    " PRIMARY KEY(token_id, sid_hash)) WITHOUT ROWID",
+    "CREATE INDEX mcp_sessions_opened ON mcp_sessions(token_id, opened_at)",
+)
+# v55 -> v56 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens.
+V55_TO_V56 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='56' WHERE key='schema_version'")
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1355,6 +1374,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
         53: MigrationStep(54, V53_TO_V54, ()),
         54: MigrationStep(55, V54_TO_V55, ()),
+        55: MigrationStep(56, V55_TO_V56, ("mcp_sessions",)),
     }
     out = []
     v = frm
@@ -1405,6 +1425,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V45_TABLES
     if version <= 52:
         return V50_TABLES  # 51 added a column and 52 indexes, no table
+    if version <= 55:
+        return V55_TABLES  # 54 added a column and 55 cleaned text, no table
     return TABLES
 
 
@@ -1437,7 +1459,7 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL]
+SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL, *MCP_SESSIONS_DDL]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:

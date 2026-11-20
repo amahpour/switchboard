@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import signal
 import threading
 import time
@@ -14,9 +15,9 @@ import httpx
 import pytest
 from conftest import InProcBroker, SubprocBroker
 from fakes.fake_agent import FakeAgent, ids_in
-from test_agents_http import THREAD_A, Codex, make_token, sse_result
+from test_agents_http import EXIT_FIX, THREAD_A, Codex, make_token, sse_result, status
 from test_agents_http_claude import SESSION_1, Claude
-from test_agents_http_cursor import invoke
+from test_agents_http_cursor import SID_A, invoke
 from test_agents_http_wake import claude_hook, joined_claude, listen, parked, participant, until
 
 from switchboard import db
@@ -311,3 +312,94 @@ def test_listener_returns_after_restart_only_if_it_was_idle(broker: InProcBroker
         assert response.status_code == 200 and "after restarting" in response.text
     else:
         assert response.status_code == 409
+
+
+def cursor_call(b: InProcBroker, c: Codex, token: str, use: str, tool: str, **args: Any) -> httpx.Response:
+    """A Cursor tools/call as its hook and client make it: the hook's report, then the call with the IDs."""
+    report = {"harness": "cursor", "event": "preToolUse", "session_id": SID_A, "tool_use_id": use}
+    r = c.c.post(
+        "/mcp/pretool", json={**report, "tool_name": tool}, headers={"authorization": f"Bearer {token}"}
+    )
+    assert r.status_code == 200, r.text
+    body = {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "method": "tools/call",
+        "params": {
+            "name": tool,
+            "arguments": {**args, "switchboard_session_id": SID_A, "switchboard_tool_use_id": use},
+        },
+    }
+    headers = c.headers(
+        {
+            "accept": "application/json, text/event-stream",
+            "content-type": "application/json",
+            "mcp-protocol-version": "2025-11-25",
+        }
+    )
+    return c.c.post("/mcp", json=body, headers=headers, timeout=60)
+
+
+def tool_json(r: httpx.Response) -> dict[str, Any]:
+    assert r.status_code == 200, (r.status_code, r.text)
+    return json.loads(sse_result(r)["result"]["content"][0]["text"])
+
+
+def test_a_client_that_keeps_its_session_id_is_served_after_a_restart(broker: InProcBroker) -> None:
+    """Cursor Agent 2026.11.19 keeps the Mcp-Session-Id it had and never initializes again after a 404
+    (seen live, #823): every switchboard tool then fails in Cursor until it restarts. The broker must
+    reopen the token's session under the same ID, as the client it was (Cursor's prefixed tools, its
+    conversation from the hook), and keep answering with that ID."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker)
+    c = Codex(broker, token, client="Cursor")
+    assert c.start().status_code == 200
+    sid = c.sid
+    listed = c.tools()
+    assert listed and all(name.startswith("switchboard_") for name in listed)  # Cursor's names
+    joined = cursor_call(broker, c, token, "use-1", "switchboard_join", room="#build", screen_name="one")
+    assert tool_json(joined)["ok"]
+    broker.restart()
+    assert c.tools() == listed  # the same client after the restart, not the plain names
+    first = cursor_call(
+        broker, c, token, "use-2", "switchboard_say", room="#build", text="back after the restart"
+    )
+    assert first.headers["mcp-session-id"] == sid
+    assert tool_json(first)["ok"]
+    again = cursor_call(broker, c, token, "use-3", "switchboard_who", room="#build")
+    assert again.headers["mcp-session-id"] == sid and tool_json(again)["ok"]
+    history = broker.call("room.history", {"room": "#build"})["messages"]
+    assert [m["from"] for m in history if m["text"] == "back after the restart"] == ["one"]
+
+
+def test_only_the_token_that_opened_a_session_can_reopen_it(broker: InProcBroker) -> None:
+    """A session ID is no credential: after a restart another device's token presenting it gets the 404
+    an unknown session gets, and the owner's session still reopens afterwards."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    broker.restart()
+    theirs = Codex(broker, make_token(broker, "desk"))
+    theirs.sid = mine.sid
+    assert theirs.raw("who", THREAD_A, room="#build").status_code == 404
+    assert mine.call("who", THREAD_A, room="#build")["ok"]
+
+
+def test_a_reopened_session_still_ends_its_threads_when_deleted(broker: InProcBroker) -> None:
+    """Codex's DELETE at exit takes its threads offline (#449). After a restart that reopened its session,
+    the threads its calls name are still tied to the ID it sends, so its DELETE still ends them; a session
+    it deleted is forgotten for good and is not reopened by a later restart."""
+    broker.call("room.create", {"name": "#build"})
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    codex = Codex(broker, make_token(broker, "laptop"))
+    assert codex.start().status_code == 200
+    assert codex.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    broker.restart()
+    assert codex.call("hook", THREAD_A, event="UserPromptSubmit", session_id=THREAD_A) == {}
+    assert status(broker, "codex-1") == "busy"
+    assert codex.delete(recorded).status_code == 200
+    assert status(broker, "codex-1") == "offline"
+    broker.restart()
+    assert codex.raw("who", THREAD_A, room="#build").status_code == 404

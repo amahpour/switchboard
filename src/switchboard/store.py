@@ -35,6 +35,7 @@ from switchboard.models import (
     FileGrant,
     Item,
     ListenerKeyRow,
+    McpSessionRow,
     Meeting,
     Member,
     Membership,
@@ -2133,6 +2134,40 @@ class Store:
                 "UPDATE agent_tokens SET last_used_at=? WHERE id=? AND revoked_at IS NULL",
                 (self.clock.now(), token_id),
             )
+
+    # ------------------------------------------- MCP sessions a restart reopens (#823, §49.2)
+    # Only the sha256 of a session's ID is kept: the ID is the client's handle, and nothing it opens.
+    def mcp_session_opened(
+        self, token_id: int, sid_hash: str, name: str, version: str, protocol: str, keep: int, idle_s: float
+    ) -> None:
+        """Record which client opened one of ``token_id``'s MCP sessions. A new one first removes the rows
+        older than ``idle_s`` and the token's oldest past ``keep``, so a client that opens a session at every
+        start can't grow the table without end."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM mcp_sessions WHERE opened_at < ?", (now - idle_s,))
+            self.con.execute(
+                "DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash IN (SELECT sid_hash FROM mcp_sessions"
+                " WHERE token_id=? ORDER BY opened_at DESC, sid_hash LIMIT -1 OFFSET ?)",
+                (token_id, token_id, max(keep - 1, 0)),
+            )
+            self.con.execute(
+                "INSERT OR REPLACE INTO mcp_sessions(token_id, sid_hash, client_name, client_version,"
+                " protocol, opened_at) VALUES(?,?,?,?,?,?)",
+                (token_id, sid_hash, name, version, protocol, now),
+            )
+
+    def mcp_session(self, token_id: int, sid_hash: str) -> McpSessionRow | None:
+        """The client that opened this token's session whose ID has this sha256, or None."""
+        r = self.con.execute(
+            "SELECT * FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash)
+        ).fetchone()
+        return McpSessionRow.from_row(r) if r is not None else None
+
+    def mcp_session_forget(self, token_id: int, sid_hash: str) -> None:
+        """The client ended this session (an MCP DELETE): it is never opened again."""
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash))
 
     # ------------------------------------------- listener keys (#488, §49.11)
     # Only the sha256 of a key is kept: the key itself is made on the agent's machine and never sent.

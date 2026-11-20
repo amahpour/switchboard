@@ -150,7 +150,7 @@ def test_the_upgrade_cleans_what_a_board_stored_and_nothing_else(
     old.close()
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 55
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 56
         assert db.row_counts(con, db.tables_of(54)) == counts
         assert db.integrity_ok(con) is None
         dump = json.dumps(
@@ -252,10 +252,11 @@ def test_no_file_of_the_home_keeps_the_old_text_but_the_backup(
 
 
 def test_a_fresh_database_has_nothing_to_clean(tmp_path: Path) -> None:
-    """A new database is made at 55 with no step: the cleaning is only the upgrade's. Fails if it is not."""
+    """A new database is made at the current schema with no step: the cleaning is only the upgrade's. Fails
+    if it is not."""
     con = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == 55
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 56
         assert db.clean_review_rows(con) == 0
     finally:
         con.close()

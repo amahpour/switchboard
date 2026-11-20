@@ -42,6 +42,7 @@ runs on the agent's machine.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
 import json
 import logging
@@ -185,6 +186,13 @@ USES_TTL_S = 120.0  # how long such a report is kept
 HOOK_WAIT_S = 2.0  # how long a Claude Code call waits for its PreToolUse report
 ID_MAX = 128  # a session id or a tool call's id, as a harness sends it
 SESSIONS_MAX = 4096  # MCP sessions remembered, each with the token that opened it
+# A session the broker opened for a token before it restarted is opened again for that token when its client
+# keeps the ID (Cursor does, #823): what opened it is kept for these, the token's newest and for a month.
+REOPEN_KEEP = 100
+REOPEN_IDLE_S = 30 * 86400.0
+REOPEN_ID = "switchboard-reopen"  # the JSON-RPC id of the initialize the broker sends for the client
+SESSION_ID_RE = re.compile(r"[\x21-\x7e]{1,128}")  # an MCP session ID: visible ASCII, cut here
+PROTOCOL_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 TOUCH_S = 60.0  # a token's last use is written at most this often
 # the AgentService method behind each of the tools' calls (the socket's method table, §5.2)
 METHODS = {
@@ -236,6 +244,9 @@ class McpSession:
     token_id: int
     generation: int
     threads: set[str] = field(default_factory=set)
+    # the MCP library's ID for it, when that isn't the one its client sends: a session opened again after a
+    # restart (#823), whose client keeps the ID it had
+    inner: str | None = None
 
 
 def client_info(ctx: Context | None) -> dict[str, str]:
@@ -274,6 +285,39 @@ def _listener_harness(raw: bytes) -> str:
     name = info.get("name") if isinstance(info, dict) else None
     harness = CLIENTS.get(name[:80]) if isinstance(name, str) else None
     return harness if harness is not None and harness in ("claude", "codex") else "unknown"
+
+
+def _opening(raw: bytes) -> tuple[str, str, str] | None:
+    """The client's name and version, and the protocol it asks for, from an ``initialize`` (2025-era MCP) of a
+    bounded size: what the broker needs to open the same session again after a restart (#823). Each is the
+    client's own claim, cut as ``client_info`` cuts it; anything else is None."""
+    if len(raw) > LISTENER_META_MAX:
+        return None
+    try:
+        message = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(message, dict) or message.get("method") != "initialize":
+        return None
+    params = message.get("params")
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    if not isinstance(info, dict) or not isinstance(info.get("name"), str) or not info["name"]:
+        return None
+    protocol = params.get("protocolVersion") if isinstance(params, dict) else None
+    if not isinstance(protocol, str) or not PROTOCOL_RE.fullmatch(protocol):
+        return None
+    version = info.get("version")
+    return info["name"][:80], (version if isinstance(version, str) else "")[:80], protocol
+
+
+def _sid_hash(session_id: str) -> str:
+    return hashlib.sha256(session_id.encode("latin-1")).hexdigest()
+
+
+def _with_session(headers: list[tuple[bytes, bytes]], session_id: str | None) -> list[tuple[bytes, bytes]]:
+    """``headers`` with its ``Mcp-Session-Id`` replaced by ``session_id`` (removed for None)."""
+    out = [(k, v) for k, v in headers if k.lower() != b"mcp-session-id"]
+    return out if session_id is None else [*out, (b"mcp-session-id", session_id.encode("latin-1"))]
 
 
 def _id(value: Any) -> str | None:
@@ -492,7 +536,9 @@ class HttpTools:
         if harness == "codex" and thread is not None and isinstance(key, str):
             self.state.listener_keys.name_codex_session(token, key, thread)
         if harness == "codex" and thread is not None and self.session_auth is not None:
-            sid = _header(scope, b"mcp-session-id")
+            sid = scope.get("state", {}).get(
+                "mcp_session_id"
+            )  # the client's ID (AgentAuth), not the library's
             if sid is not None and scope.get("method") == "POST":
                 self.session_auth.record_thread(sid, token.id, thread)
 
@@ -779,6 +825,7 @@ class AgentAuth:
         self.sessions: OrderedDict[str, McpSession] = OrderedDict()  # Mcp-Session-Id -> owner, threads
         self.latest: dict[tuple[int, str], str] = {}  # token and thread -> latest serving MCP session
         self.touched: dict[int, float] = {}  # token id -> when its last use was written
+        self._reopening = asyncio.Lock()  # one session is opened again at a time: the same ID, once
 
     def token(self, scope: Scope) -> AgentTokenRow | None:
         """The live agent token this request carries: ``Authorization: Bearer sbat_…`` (a hand-made server,
@@ -839,12 +886,14 @@ class AgentAuth:
             self.touched[row.id] = now
             self.state.store.agent_token_used(row.id)
 
-    def bind(self, session_id: str, token_id: int) -> None:
+    def bind(self, session_id: str, token_id: int, inner: str | None = None) -> McpSession:
         if session_id not in self.sessions:
-            self.sessions[session_id] = McpSession(token_id, next(self._session_numbers))
+            self.sessions[session_id] = McpSession(token_id, next(self._session_numbers), inner=inner)
+        session = self.sessions[session_id]
         self.sessions.move_to_end(session_id)
         while len(self.sessions) > SESSIONS_MAX:
             self.forget(next(iter(self.sessions)))
+        return session
 
     def forget(self, session_id: str) -> McpSession | None:
         session = self.sessions.pop(session_id, None)
@@ -865,6 +914,100 @@ class AgentAuth:
             newer = self.sessions.get(previous) if previous is not None else None
             if newer is None or session.generation >= newer.generation:
                 self.latest[key] = session_id
+
+    async def reopen(self, scope: Scope, row: AgentTokenRow, sid: str) -> McpSession | None:
+        """Open again, for this token, a session the broker opened for it before a restart (§49.2, #823).
+
+        Session IDs live in the MCP library's memory, so after a restart every ID answers 404, and a client
+        must initialize a new session. Cursor never does: it keeps the ID and every switchboard tool fails
+        until it restarts. So the broker keeps which client opened each session (``mcp_sessions``, by the
+        ID's sha256) and, when one of the same token's IDs comes back unknown, initializes a session itself
+        as that client did, with nothing else. The client keeps its ID: the broker maps it to the new one.
+        Another token's ID, one the client deleted, or one the broker never opened stays unknown (404)."""
+        if not SESSION_ID_RE.fullmatch(sid):
+            return None
+        async with self._reopening:
+            session = self.sessions.get(sid)
+            if session is not None:  # opened again by a request that came at the same moment
+                return session if session.token_id == row.id else None
+            opened = self.state.store.mcp_session(row.id, _sid_hash(sid))
+            if opened is None:
+                return None
+            asked = _header(scope, b"mcp-protocol-version")
+            protocol = asked if asked is not None and PROTOCOL_RE.fullmatch(asked) else opened.protocol
+            params = {
+                "protocolVersion": protocol,
+                "capabilities": {},
+                "clientInfo": {"name": opened.client_name, "version": opened.client_version},
+            }
+            initialize = {"jsonrpc": "2.0", "id": REOPEN_ID, "method": "initialize", "params": params}
+            status, inner = await self._inner(scope, initialize, None, None)
+            if status != 200 or inner is None:
+                log.warning("could not open an MCP session again after a restart (status %s)", status)
+                return None
+            done = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+            status, _ = await self._inner(scope, done, inner, protocol)
+            if status != 202:
+                log.warning("could not open an MCP session again after a restart (status %s)", status)
+                return None
+            log.info("opened an MCP session again after a restart (%s)", opened.client_name)
+            return self.bind(sid, row.id, inner)
+
+    async def _inner(
+        self, scope: Scope, message: dict[str, Any], session_id: str | None, protocol: str | None
+    ) -> tuple[int | None, str | None]:
+        """Send one JSON-RPC message to the MCP endpoint as the request in ``scope`` would (its host, its
+        token in the request state), and return the answer's status and the session ID it names."""
+        body = json.dumps(message).encode()
+        own = {b"mcp-session-id", b"mcp-protocol-version", b"mcp-method", b"last-event-id"}
+        own |= {b"content-length", b"content-type", b"accept"}
+        headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() not in own]
+        headers += [
+            (b"content-type", b"application/json"),
+            (b"accept", b"application/json, text/event-stream"),
+            (b"content-length", str(len(body)).encode()),
+        ]
+        if protocol is not None:
+            headers.append((b"mcp-protocol-version", protocol.encode()))
+        inner_scope = {
+            **scope,
+            "method": "POST",
+            "query_string": b"",
+            "headers": _with_session(headers, session_id),
+        }
+        finished = asyncio.Event()
+        delivered = False
+        status: int | None = None
+        named: str | None = None
+
+        async def receive() -> dict[str, Any]:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await finished.wait()  # a stream that watches for the client hanging up sees it only now
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            nonlocal status, named
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                named = next(
+                    (
+                        v.decode("latin-1")
+                        for k, v in message.get("headers", [])
+                        if k.lower() == b"mcp-session-id"
+                    ),
+                    None,
+                )
+            elif message["type"] == "http.response.body" and not message.get("more_body", False):
+                finished.set()
+
+        try:
+            await self.app(inner_scope, receive, send)
+        finally:
+            finished.set()
+        return status, named
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -895,10 +1038,20 @@ class AgentAuth:
             or (scope.get("method") == "DELETE" and session is None)
         ):
             # another token's session: as if it didn't exist (the client starts a new one)
+            if session is None and SESSION_ID_RE.fullmatch(sid):
+                self.state.store.mcp_session_forget(row.id, _sid_hash(sid))  # its client ended it
             await _reply(send, 404, {"error": "not_found", "message": "no such MCP session"})
             return
         self.touch(row)
         scope.setdefault("state", {})["agent_token"] = row
+        method = scope.get("method")
+        if sid is not None and session is None and method in ("POST", "GET"):
+            session = await self.reopen(scope, row, sid)
+        if sid is not None:
+            scope["state"]["mcp_session_id"] = sid  # the ID the client knows, whatever the library's is
+        inner = session.inner if session is not None else None
+        if inner is not None:
+            scope = {**scope, "headers": _with_session(list(scope.get("headers", [])), inner)}
         h = listener_keys.ListenerKeys.hash_in(_header(scope, listener_keys.HEADER))
         if h is not None:
             # the signed-in connection carries the sha256 of the key its machine made: the key is its token's
@@ -906,10 +1059,13 @@ class AgentAuth:
             scope["state"]["listener_key"] = h
 
         captured = b""
-        inspect_client = h is not None
+        # a request with no session may be an initialize: what it says is kept, to open it again (#823)
+        opens = sid is None and method == "POST"
+        inspect_client = h is not None or opens
+        opening: tuple[str, str, str] | None = None
 
         async def receive_claim() -> dict[str, Any]:
-            nonlocal captured, inspect_client
+            nonlocal captured, inspect_client, opening
             message = await receive()
             if inspect_client and message["type"] == "http.request":
                 body = message.get("body", b"")
@@ -921,6 +1077,8 @@ class AgentAuth:
                         kind = _listener_harness(captured)
                         if h is not None and kind != "unknown":
                             self.state.listener_keys.claim(row, h, harness=kind)
+                        if opens:
+                            opening = _opening(captured)
                         captured, inspect_client = b"", False
             return message
 
@@ -930,12 +1088,24 @@ class AgentAuth:
             nonlocal response_status
             if message["type"] == "http.response.start":
                 response_status = message["status"]
-                for k, v in message.get("headers", []):
-                    if k.lower() == b"mcp-session-id":
-                        self.bind(v.decode("latin-1"), row.id)
+                headers = list(message.get("headers", []))
+                for k, v in headers:
+                    if k.lower() != b"mcp-session-id":
+                        continue
+                    named = v.decode("latin-1")
+                    if session is not None and inner is not None and named == inner:
+                        # a session opened again answers with the ID its client knows
+                        message = {**message, "headers": _with_session(headers, sid)}
+                        self.bind(sid, row.id)
+                    else:
+                        self.bind(named, row.id)
+                        if opening is not None and response_status == 200 and SESSION_ID_RE.fullmatch(named):
+                            self.state.store.mcp_session_opened(
+                                row.id, _sid_hash(named), *opening, REOPEN_KEEP, REOPEN_IDLE_S
+                            )
             await send(message)
 
-        await self.app(scope, receive_claim if h is not None else receive, send_binding)
+        await self.app(scope, receive_claim if inspect_client else receive, send_binding)
         if sid is not None and scope.get("method") == "DELETE" and response_status in (200, 202, 204):
             # A resumed thread can use a newer MCP session before this old DELETE arrives.
             # Only the session that served it most recently may take it offline.
@@ -946,6 +1116,7 @@ class AgentAuth:
                         conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
                     )
             self.forget(sid)
+            self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
 
 
 class SessionHook:

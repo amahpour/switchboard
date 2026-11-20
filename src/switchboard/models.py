@@ -447,6 +447,24 @@ class ListenerKeyRow:
 
 
 @dataclass(frozen=True)
+class McpSessionRow:
+    """An ``mcp_sessions`` row (DESIGN.md §49.2, #823): the client that opened one of a token's MCP
+    sessions (its own name and version, and the protocol it asked for), kept under the sha256 of the
+    session's ID, so the broker can open that session again after a restart."""
+
+    token_id: int
+    sid_hash: str
+    client_name: str
+    client_version: str
+    protocol: str
+    opened_at: float
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "McpSessionRow":
+        return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
 class OAuthClientRow:
     """An ``oauth_clients`` row (DESIGN.md §49.9): an agent that registered to sign in through the
     browser (RFC 7591). A public client: no secret, and loopback redirect URIs only (``redirect_uris``
