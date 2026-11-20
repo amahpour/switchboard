@@ -888,8 +888,14 @@ def agent_move(
             f"{item.label} is {item.owner}'s: {item.owner} can hand it over, or a person can reassign it"
         )
     if move == "fix" and item.state == "raised":
-        # #904: the holder concedes and fixes a raised finding in one move. Anyone else is told to
-        # concede first. An unknown holder fails closed, and the raiser still cannot concede its own.
+        # #904: the holder concedes and fixes a raised finding in one move. The raiser is checked
+        # first: it cannot concede its own finding, so the refusal names drop and the other side.
+        # Anyone else is told to concede first. An unknown holder fails closed.
+        if actor == item.raised_by:
+            raise ReviewError(
+                f"{item.label} is yours: you can drop it, not fix it from raised. "
+                "The other side concedes or contests it."
+            )
         if not holder or actor != holder:
             named = (
                 f"only {holder}, who holds the board, can fix it from there. "
@@ -899,11 +905,6 @@ def agent_move(
             raise ReviewError(
                 f"{item.label} is raised: {named}"
                 f'Concede it first with review(action="concede", item="{item.label}"), then fix it.'
-            )
-        if actor == item.raised_by:
-            raise ReviewError(
-                f"{item.label} is yours: you can drop it, not fix it from raised. "
-                f'The other side concedes it with review(action="concede", item="{item.label}").'
             )
     elif move == "fix" and actor != item.owner:
         if not owner_here:

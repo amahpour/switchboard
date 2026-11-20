@@ -76,7 +76,7 @@ def test_only_the_owner_marks_a_conceded_finding_fixed() -> None:
     with pytest.raises(ReviewError, match="claude-1's to fix"):
         reviews.agent_move(f, "fix", "codex-1")
     with pytest.raises(ReviewError, match="can't be fixed from there"):
-        reviews.agent_move(finding("raised"), "fix", "codex-1")
+        reviews.agent_move(finding("raised", raised_by="codex-1"), "fix", "devin-1")
 
 
 def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
@@ -88,11 +88,16 @@ def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
     raised = finding("raised", raised_by="codex-1")
     assert reviews.agent_move(raised, "fix", "claude-1", holder="claude-1") == "fixed"
     with pytest.raises(ReviewError, match=r'Concede it first with review\(action="concede", item="F1"\)'):
-        reviews.agent_move(raised, "fix", "devin-1", holder="claude-1")
+        reviews.agent_move(raised, "fix", "devin-1", holder="claude-1")  # neither holder nor raiser
     with pytest.raises(ReviewError, match="can't be fixed from there"):
         reviews.agent_move(raised, "fix", "claude-1")  # holder unknown: fail closed
     with pytest.raises(ReviewError, match="is yours"):
         reviews.agent_move(raised, "fix", "codex-1", holder="codex-1")
+    # the raiser is not the holder: drop is its move, and concede is the other side's
+    with pytest.raises(ReviewError, match="The other side concedes or contests it") as raised_by:
+        reviews.agent_move(raised, "fix", "codex-1", holder="claude-1")
+    assert "Concede it first" not in str(raised_by.value)
+    assert "drop" in str(raised_by.value)
     contested = finding("contested", raised_by="codex-1")
     with pytest.raises(ReviewError, match="can't be fixed from there"):
         reviews.agent_move(contested, "fix", "claude-1", holder="claude-1")

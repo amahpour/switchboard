@@ -17,7 +17,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from switchboard import review_stats, reviews
+from switchboard import db, review_stats, reviews
 from switchboard.models import Room
 from switchboard.reviews import ReviewError
 
@@ -347,7 +347,6 @@ class Boards:
                 params.get("reason"), "reason (the follow-up ticket)", reviews.MAX_TICKET, required=True
             )
             fields["reason"] = ""
-        self.store.move_review_item(item.id, to, **fields)
         shown = (
             "reopened"
             if action == "reopen"
@@ -369,10 +368,15 @@ class Boards:
                 evidence.update(previous_commit=item.commit, previous_proof=item.proof)
         elif action == "reopen":
             evidence = {"reason": fields["reason"], "commit": item.commit, "proof": item.proof}
-        if action == "fix" and item.state == "raised":
-            # the concession this fix stood in for, so the card's history does not skip it (#904)
-            self._event(room, rv, item=item.label, to="conceded", by=actor)
-        self._event(room, rv, item=item.label, to=shown, by=actor, **evidence)
+        # One transaction: a crash between the item and its events must not leave a fixed card
+        # with half a history. A retried fix would then revise, and the concession would be gone
+        # (#904). db.tx joins the store's own transactions. The room hears only after the commit.
+        with db.tx(self.store.con):
+            self.store.move_review_item(item.id, to, **fields)
+            if action == "fix" and item.state == "raised":
+                # the concession this fix stood in for, so the card's history does not skip it
+                self._event(room, rv, item=item.label, to="conceded", by=actor)
+            self._event(room, rv, item=item.label, to=shown, by=actor, **evidence)
         moved = self.store.review_item(rv["id"], kind, n)
         assert moved is not None
         if reassigned:  # a handover, or a takeover from an owner who left (#371)
