@@ -331,6 +331,8 @@ class AgentService:
     def on_membership_ended(self, membership_id: int, reason: str) -> None:
         self._discard_queued_says(membership_id)
         self.run(self.engine.on_membership_ended(membership_id, reason))
+        if self.state.meetings is not None:
+            self.state.meetings.member_left(membership_id)  # a call bar naming it names nobody (§52.13)
 
     def on_memberships_ended(self, membership_ids: list[int], reason: str) -> None:
         """Several at once (``/close``, §28.3): the engine per membership."""

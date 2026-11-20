@@ -46,6 +46,8 @@ connect-opencode-{light,dark,phone-light} (OpenCode V2's plugin, mcp.servers con
 connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
 environment lines, now with the server's address for the plugin's approval hook, #472),
 voices-{default,pinned}-{light,dark,phone} (Members and the Inspector with each agent's voice on a call, #713),
+speaking-now-{light,dark,phone} and speaking-now-done-{light,dark,phone} (the call bar names the agent whose
+``@call`` line is being said, then not once it ends, #913; ``--only speaking_now``),
 oauth-consent-{light,dark,phone-light} (the card an agent that signs in through the browser sends the
 person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
 it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
@@ -3677,6 +3679,117 @@ def shoot_listen(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_speaking_now(browser: Any, out: Path, world: Any) -> None:
+    """#913, who is speaking on a call: a live Zoom call with voice on in a room with claude-1 and codex-1, and
+    claude-1's ``@call`` line held mid-speech by a stand-in joinly client, so the broker's own bridge takes the
+    line and the bar says "claude-1 has the mic" (``speaking-now-{light,dark,phone}``); then the line ends and the
+    words go (``speaking-now-done-{light,dark,phone}``). The same script on ``main`` gives the before: the line
+    is being spoken and the bar does not say so."""
+    import asyncio
+    import time as _time
+
+    from playwright.sync_api import expect
+
+    from switchboard.meeting.bridge import _Live
+
+    class Joinly:
+        """Only what the bridge asks while it speaks: no tools listed, and ``speak_text`` held until released."""
+
+        def __init__(self) -> None:
+            self.spoken: list[str] = []
+            self.gate = asyncio.Event()
+
+        async def list_tools(self) -> list[Any]:
+            return []
+
+        async def call_tool(self, name: str, args: dict[str, Any], timeout: float | None = None) -> str:
+            if name != "speak_text":
+                raise RuntimeError(name)
+            self.spoken.append(args["text"])
+            await self.gate.wait()
+            return "Finished speaking."
+
+    room, b = "#launch", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    world.set_approval_modes(room, {"claude-1": "prompting", "codex-1": "prompting"})
+    joinly = Joinly()
+
+    def begin() -> None:
+        r = b.state.store.get_room(room)
+        row = b.state.store.insert_meeting(r.id, started_by="alice", platform="zoom")
+        b.state.store.set_meeting_live(row.id)
+        b.state.meetings._live[r.id] = _Live(joinly)
+        b.state.meetings.set_voice(r.id, True)
+        b.state.service.publish_settings(r.id)
+
+    b.on_loop(begin)
+    world.say(room.lstrip("#"), "@claude-1 is the build green? Say it on the call.")
+    text = "@call The build is green. I am deploying it now."
+    world.agent_say(room, "claude-1", text)
+    for name in (
+        "claude-1",
+        "codex-1",
+    ):  # their avatars, once claude-1 has spoken as the scripted agent it is
+        world.set_member_harness(room, name, name.split("-")[0])
+    variants = {
+        "light": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="light"),
+        "dark": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    pages = {}
+
+    def speaking() -> Any:
+        return b.on_loop(
+            lambda: (b.state.service.meeting_state(b.state.store.get_room(room)) or {}).get("speaking")
+        )
+
+    try:
+        for name, options in variants.items():
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+            ctx.set_default_timeout(WAIT_MS)
+            page = ctx.new_page()
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            expect(page.locator("#banner-meeting")).to_contain_text("agents can speak")
+            pages[name] = page
+
+        def take(prefix: str) -> None:
+            for name, page in pages.items():
+                page.evaluate(
+                    """() => document.querySelectorAll('#log .line').forEach(e => {
+                      if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+                )
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                page.mouse.move(0, 0)
+                shot(page, out, f"{prefix}-{name}.png")
+
+        # the agent's say went to the bridge, which is now saying it: on main the bar has no word for that
+        deadline = _time.monotonic() + WAIT_MS / 1000
+        while not b.on_loop(lambda: list(joinly.spoken)):
+            assert _time.monotonic() < deadline, "the bridge never spoke the line"
+            _time.sleep(0.05)
+        if speaking():
+            for page in pages.values():
+                expect(page.locator("#banner-meeting-text")).to_contain_text("claude-1 has the mic")
+        take("speaking-now")
+        b.on_loop(joinly.gate.set)
+        r_id = b.on_loop(lambda: b.state.store.get_room(room).id)
+        while b.on_loop(lambda: b.state.meetings._live[r_id].turns.active is not None):
+            assert _time.monotonic() < deadline + WAIT_MS / 1000, "the line never ended"
+            _time.sleep(0.05)
+        for page in pages.values():
+            expect(page.locator("#banner-meeting-text")).not_to_contain_text("has the mic")
+        take("speaking-now-done")
+    finally:
+        for page in pages.values():
+            page.context.close()
+
+
 def shoot_call_card(browser: Any, out: Path, world: Any) -> None:
     """#771, a call as its own transcript card: a live Zoom call in a room with claude-1 and codex-1, call lines
     around a chat message and an agent's ``@call`` line, in ``callcard-{light,dark,phone}``. Run on ``main`` and on
@@ -4802,6 +4915,7 @@ ONLY: dict[str, Any] = {
     "listen": shoot_listen,
     "voices": shoot_voices,
     "call_card": shoot_call_card,
+    "speaking_now": shoot_speaking_now,
     "room_calls": shoot_room_calls,
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,
