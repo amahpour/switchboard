@@ -282,7 +282,9 @@ MADE_HOMES: dict[Path, str] = {}
 def make_tmp_home() -> Path:
     # short on purpose: the broker's socket inside it must fit sun_path (paths.SOCK_MAX_BYTES)
     d = Path(tempfile.mkdtemp(prefix=TMP_HOME_PREFIX, dir=TMP_HOME_ROOT))
-    (d / TEST_MARKER).touch()
+    # The marker names the process that made the home, so the sweep keeps a home whose run is still
+    # going however long it has been quiet (#919); the broker only checks that the marker exists.
+    (d / TEST_MARKER).write_text(f"{os.getpid()}\n")
     MADE_HOMES[d] = os.environ.get("PYTEST_CURRENT_TEST", "outside a test").rsplit(" (", 1)[0]
     return d
 
@@ -320,8 +322,12 @@ def sweep_stale_homes(
     ``tmp_home`` and the e2e worlds remove their home in a ``finally``, which a SIGKILL, the OOM
     killer, a timeout or a cancelled run skips. Only a directory directly under ``root`` named
     ``yk-*``, not a symlink, owned by this user, carrying the ``.switchboard-test`` marker and last
-    changed ``max_age_s`` ago or more is removed: a home without the marker is never touched, and a
-    young one may belong to a run going on alongside. Errors are ignored, so it never fails a run.
+    changed ``max_age_s`` ago or more is a candidate: a home without the marker is never touched, and
+    a young one may belong to a run going on alongside. A candidate whose marker names the process
+    that made it (``make_tmp_home``) is removed only once that process is gone: a broker writes to
+    files that already exist, so a paused or long run's home can look old while it is still in use.
+    A marker with no pid (a home made by an older checkout, or by a helper that only touches it) leaves
+    the age alone to decide. Errors are ignored, so it never fails a run.
     """
     now = time.time() if now is None else now
     uid = os.getuid()
@@ -337,14 +343,47 @@ def sweep_stale_homes(
             st = entry.stat(follow_symlinks=False)
             if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or now - st.st_mtime < max_age_s:
                 continue
-            marker = os.lstat(os.path.join(entry.path, TEST_MARKER))
-            if not stat.S_ISREG(marker.st_mode):
+            marker = os.path.join(entry.path, TEST_MARKER)
+            if not stat.S_ISREG(os.lstat(marker).st_mode):
                 continue
         except OSError:
+            continue
+        owner = _marker_pid(marker)
+        if owner is not None and _process_alive(owner):
             continue
         shutil.rmtree(entry.path, ignore_errors=True)
         removed.append(Path(entry.path))
     return removed
+
+
+def _marker_pid(marker: str) -> int | None:
+    """The pid a home's marker holds, or None for an empty, unreadable or malformed one (#919). Read
+    without following a symlink and cut short: the marker is a claim, and a pid of 0 or less would
+    name a process group to ``os.kill``, never one process."""
+    try:
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            text = os.read(fd, 32).decode("ascii").strip()
+        finally:
+            os.close(fd)
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.isdigit() or len(text) > 10:
+        return None
+    pid = int(text)
+    return pid if pid > 0 else None
+
+
+def _process_alive(pid: int) -> bool:
+    """Whether a process ``pid`` exists. Only ``ProcessLookupError`` says it is gone: a process of
+    another user (``PermissionError``) is alive, and a pid reused since only keeps a home, the safe side."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

@@ -1224,6 +1224,7 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                      builds every child env from an allowlist {PATH, HOME=<tmp>, LANG, TMPDIR, SWITCHBOARD_TEST=1}
                    tmp_home (short /tmp path with .switchboard-test marker), FakeClock, cfg_fast (quiet_s=0, max_hold_s=0),
                    sweep_stale_homes() at session start, on the controller only: old marked /tmp/yk-* homes a killed run left
+                     (a marker holding its maker's pid goes only once that process is gone; an empty one, on age alone)
                    no_homes_left_behind: session autouse; fails the run, naming each, if a home make_tmp_home() made in
                      this process (each xdist worker) is still there after every fixture's teardown
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),

@@ -8,11 +8,14 @@ shared machine. The sweep removes only what a run of ours made and nobody still 
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
-from conftest import STALE_HOME_AGE_S, sweep_stale_homes
+from conftest import STALE_HOME_AGE_S, make_tmp_home, sweep_stale_homes
 
 from switchboard.paths import TEST_MARKER
 
@@ -23,12 +26,14 @@ def _age(p: Path, seconds: float) -> None:
     os.utime(p, (NOW - seconds, NOW - seconds), follow_symlinks=False)
 
 
-def _home(root: Path, name: str, *, marked: bool = True, age_s: float = 0.0) -> Path:
+def _home(
+    root: Path, name: str, *, marked: bool = True, age_s: float = 0.0, owner: str | None = None
+) -> Path:
     d = root / name
     d.mkdir()
     (d / "broker.sock.d").mkdir()
     if marked:
-        (d / TEST_MARKER).touch()
+        (d / TEST_MARKER).write_text(owner or "")
     _age(d, age_s)
     return d
 
@@ -110,3 +115,72 @@ def test_sweep_runs_on_the_controller_only(monkeypatch: pytest.MonkeyPatch) -> N
     assert calls == []
     conftest.pytest_sessionstart(controller)  # type: ignore[arg-type]
     assert calls == [1]
+
+
+def _gone_pid() -> int:
+    """The pid of a process that has exited and been reaped: started, waited for, so nothing has it."""
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
+def test_make_tmp_home_records_the_process_that_made_it() -> None:
+    """The marker holds this process's pid, so the sweep can ask whether the home's run is still going.
+
+    Fails on a ``make_tmp_home`` that only touches the marker (an empty marker: the age alone decides)."""
+    home = make_tmp_home()
+    try:
+        assert (home / TEST_MARKER).read_text().strip() == str(os.getpid())
+    finally:
+        shutil.rmtree(home)
+
+
+def test_sweep_keeps_an_old_home_whose_maker_is_alive(tmp_path: Path) -> None:
+    """A home older than the cutoff whose recorded maker is still running is kept (#919, review F1).
+
+    A broker writes to files that already exist, so the home's mtime need not move: a paused or long
+    run's home looked stale and another session's sweep removed it under the running test. Fails on a
+    sweep that reads only the age."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    home = _home(root, "yk-paused", age_s=STALE_HOME_AGE_S * 4, owner=f"{os.getpid()}\n")
+    assert sweep_stale_homes(root, now=NOW) == []
+    assert home.exists()
+
+
+def test_sweep_removes_an_old_home_whose_maker_is_gone(tmp_path: Path) -> None:
+    """An old home whose recorded maker has exited is removed: a killed run's homes still go."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    home = _home(root, "yk-killed", age_s=STALE_HOME_AGE_S + 60, owner=f"{_gone_pid()}\n")
+    assert sweep_stale_homes(root, now=NOW) == [home]
+    assert not home.exists()
+
+
+@pytest.mark.parametrize("marker", ["", "not a pid", "0", "-1", "99999999999999"])
+def test_sweep_falls_back_to_the_age_for_a_marker_without_a_pid(tmp_path: Path, marker: str) -> None:
+    """A marker with no usable pid (an older checkout's empty one, or garbage) leaves the age to decide:
+    an old home goes, a young one stays. A pid of 0 or less is never handed to ``os.kill``, where it
+    would name a process group and read as alive."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    old = _home(root, "yk-old", age_s=STALE_HOME_AGE_S + 60, owner=marker)
+    young = _home(root, "yk-young", age_s=STALE_HOME_AGE_S - 60, owner=marker)
+    assert sweep_stale_homes(root, now=NOW) == [old]
+    assert young.exists()
+
+
+def test_sweep_counts_a_maker_of_another_user_as_alive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``os.kill(pid, 0)`` refused (``PermissionError``) means the process exists: its home stays."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    home = _home(root, "yk-other", age_s=STALE_HOME_AGE_S * 2, owner="4242")
+
+    def refused(pid: int, sig: int) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "kill", refused)
+    assert sweep_stale_homes(root, now=NOW) == []
+    assert home.exists()
