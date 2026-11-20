@@ -1265,6 +1265,28 @@ _WRAP_BREAKS_MAX = 8  # a stored wrapped text with more breaks is ambiguous (rea
 _WRAP_SCAN_MAX = 2000
 
 
+def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
+    """``el`` without what points at a dropped id: its entry in a bound list or group list, a binding,
+    ``frameId`` or ``containerId`` set to ``None``. A copy when it changes, ``el`` itself when it does
+    not."""
+    if not dropped:
+        return el
+    el = dict(el)
+    if isinstance(el.get("boundElements"), list):
+        el["boundElements"] = [
+            b for b in el["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
+        ]
+    if isinstance(el.get("groupIds"), list):
+        el["groupIds"] = [g for g in el["groupIds"] if g not in dropped]
+    for key in ("startBinding", "endBinding"):
+        if isinstance(el.get(key), dict) and el[key].get("elementId") in dropped:
+            el[key] = None
+    for key in ("frameId", "containerId"):
+        if el.get(key) in dropped and el.get(key) is not None:
+            el[key] = None
+    return el
+
+
 def _wrap_hides(text: str) -> list[str] | None:
     """For a stored text with line breaks and no ``originalText`` (so nothing says what it was before the
     wrap): the kinds a flattened reading finds that the as-written redaction did not fully remove, or
@@ -1327,18 +1349,7 @@ def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
                     el["text"] = _normal_text(text)
                     if "\n" in el["text"]:
                         el["originalText"] = el["text"]
-        if isinstance(el.get("boundElements"), list):
-            el["boundElements"] = [
-                b for b in el["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
-            ]
-        if isinstance(el.get("groupIds"), list):
-            el["groupIds"] = [g for g in el["groupIds"] if g not in dropped]
-        for key in ("startBinding", "endBinding"):
-            if isinstance(el.get(key), dict) and el[key].get("elementId") in dropped:
-                el[key] = None
-        for key in ("frameId", "containerId"):
-            if el.get(key) in dropped and el.get(key) is not None:
-                el[key] = None
+        el = drop_references(el, dropped)
         out.append(el)
     return out, dropped
 
@@ -1352,32 +1363,48 @@ def _scene_bytes(elements: list[dict[str, Any]]) -> int:
     return len(json.dumps(elements, ensure_ascii=False, separators=(",", ":")).encode())
 
 
-def fit_stored(before: list[Any], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """``after`` (``clean_stored`` of ``before``) within the board's byte limit, the same measure the
-    live write
-    path and the browser use (``MAX_BYTES`` of the encoded scene; the column's character count is never more).
-    Cleaning can grow a board: a short secret becomes a longer marker, and a legacy text is copied into
-    ``originalText``. Only the elements the cleaning changed are touched, never an unchanged one, and
-    the answer
-    is deterministic: the text fields that grew become the shortest marker, and if it still does not fit the
-    changed elements are dropped, largest first, until it does. The upgrade is never rolled back for size
+def _shape_bytes(el: dict[str, Any]) -> int:
+    """The measure of the live write path (``clean_element``): the browser's is never more."""
+    return len(json.dumps(el, separators=(",", ":")).encode())
+
+
+def fit_stored(before: list[Any], after: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], set[str]]:
+    """``after`` (``clean_stored`` of ``before``) within every limit the live write path and the browser
+    enforce: ``MAX_SHAPE_BYTES`` for each shape, ``MAX_ELEMENTS`` shapes and ``MAX_BYTES`` for the
+    encoded scene (the column's character count is never more). Cleaning can grow a shape: a short secret
+    becomes a longer marker, and a legacy text is copied into ``originalText``. Only the shapes the
+    cleaning changed are touched, never an unchanged one, and the answer is deterministic: the text
+    fields that grew become the shortest marker, and a shape that still does not fit, or the changed
+    shapes (largest first) until the scene fits, are dropped. The upgrade is never rolled back for size.
+    Returns the shapes and the ids dropped here, whose references the caller removes with the others
     (#893, schema 56)."""
-    if _scene_bytes(after) <= MAX_BYTES:
-        return after
     was = {e["id"]: e for e in before if isinstance(e, dict) and isinstance(e.get("id"), str)}
-    changed = [i for i, e in enumerate(after) if was.get(e["id"]) != e]
     out = list(after)
-    for i in changed:
+    changed = [i for i, e in enumerate(out) if was.get(e["id"]) != e]
+
+    def shrink(i: int) -> None:
         el, old = dict(out[i]), was[out[i]["id"]]
         for key in ("text", "originalText", "name"):
             if isinstance(el.get(key), str) and len(el[key]) > len(old.get(key) or ""):
                 el[key] = "[redacted]"
         out[i] = el
-    if _scene_bytes(out) <= MAX_BYTES:
-        return out
-    drop: set[int] = set()
-    for i in sorted(changed, key=lambda i: (-_scene_bytes([out[i]]), i)):
-        drop.add(i)
-        if _scene_bytes([e for j, e in enumerate(out) if j not in drop]) <= MAX_BYTES:
-            break
-    return [e for j, e in enumerate(out) if j not in drop]
+
+    gone: set[int] = set()
+    for i in changed:  # a shape over its own limit: shrunk, else dropped
+        if _shape_bytes(out[i]) > MAX_SHAPE_BYTES:
+            shrink(i)
+            if _shape_bytes(out[i]) > MAX_SHAPE_BYTES:
+                gone.add(i)
+
+    def kept() -> list[dict[str, Any]]:
+        return [e for j, e in enumerate(out) if j not in gone]
+
+    if len(kept()) > MAX_ELEMENTS or _scene_bytes(kept()) > MAX_BYTES:
+        for i in changed:
+            if i not in gone:
+                shrink(i)
+        for i in sorted((i for i in changed if i not in gone), key=lambda i: (-_scene_bytes([out[i]]), i)):
+            if len(kept()) <= MAX_ELEMENTS and _scene_bytes(kept()) <= MAX_BYTES:
+                break
+            gone.add(i)
+    return kept(), {out[i]["id"] for i in gone}

@@ -11,11 +11,14 @@ is built from pieces, so no scanner reads this file as a leak."""
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import child_env
 
 from switchboard import board, db
 
@@ -235,37 +238,119 @@ def test_a_stored_board_that_is_not_a_board_is_cleared_and_its_neighbour_is_stil
             assert TOKEN.encode() not in f.read_bytes(), f.name
 
 
-def board_over_the_limit(word: str, secret: str) -> list[dict[str, Any]]:
-    """A board whose size is just under the limit as stored and over it once its short secrets are
-    markers: many
-    unchanged shapes, and changed ones (``word`` plus a short secret in ``text`` and ``originalText``)."""
-    changed = [
-        el(f"c{i}", type="text", text=f"{word} {secret}", originalText=f"{word} {secret}")
-        for i in range(1500)
-    ]
-    each = board_bytes([el("u00000", fontSize=16, strokeColor="#000000")]) + 1
-    fill = (985_000 - board_bytes(changed)) // each  # the unchanged shapes that fill the rest
-    scene = [*changed, *(el(f"u{n:05d}", fontSize=16, strokeColor="#000000") for n in range(fill))]
-    return scene
-
-
 def board_bytes(scene: list[dict[str, Any]]) -> int:
     return len(json.dumps(scene, ensure_ascii=False, separators=(",", ":")).encode())
 
 
+def shape_bytes(shape: dict[str, Any]) -> int:
+    return len(json.dumps(shape, separators=(",", ":")).encode())
+
+
+def big_shape(eid: str, **fields: Any) -> dict[str, Any]:
+    """A pen stroke the live write path could have stored (500 points and pressures, 16 group ids, 40 bound
+    elements: every list at its cap) sized to between 31,985 and 31,998 bytes of its 32,000: so little room
+    that a few bytes of growth put it over."""
+
+    def build(points: int, pad: int) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "type": "freedraw", "points": [[-19999.123456789012, -19999.123456789012]] * points,
+            "pressures": [0.12345678901234568] * 500, "index": "a" * pad,
+            "groupIds": [f"g{i:02d}" + "x" * 60 for i in range(16)],
+            "boundElements": [{"id": f"b{i:02d}" + "y" * 55, "type": "arrow"} for i in range(40)],
+        }  # fmt: skip
+        return el(eid, **{**base, **fields})
+
+    points = 500
+    while shape_bytes(build(points, 1)) > 31_920:  # a point is about 40 bytes: the index fills the rest
+        points -= 1
+    for pad in range(1, 121):
+        if shape_bytes(build(points, pad)) >= 31_985:
+            break
+    out = build(points, pad)
+    assert 31_985 <= shape_bytes(out) <= 31_998, shape_bytes(out)
+    return out
+
+
+def test_a_shape_the_cleaning_grows_past_its_own_limit_is_shrunk_and_the_board_still_loads_in_the_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The browser refuses a whole board when one shape is over 32,000 bytes (the live write path refuses the
+    shape), even if the scene fits. A shape at the limit whose short secrets grow into markers is shrunk (its
+    grown fields become the shortest marker) and kept; its neighbours are as stored. The migrated scene passes
+    the browser's own cleaner (``board-rules.js``). Fails if the scene-wide check alone is made, which returns
+    the board as it is and the browser then drops every shape."""
+    text = "a password=abcdefgh"
+    scene = [big_shape("big", text=text, originalText=text), el("small", text="ok", originalText="ok")]
+    assert shape_bytes(scene[0]) <= board.MAX_SHAPE_BYTES and board_bytes(scene) < board.MAX_BYTES
+    cleaned, _ = board.clean_stored(scene)
+    assert shape_bytes(cleaned[0]) > board.MAX_SHAPE_BYTES  # the problem is real
+    path = at_55_with(
+        tmp_path, monkeypatch, [(1, json.dumps(scene, ensure_ascii=False, separators=(",", ":")))]
+    )
+    con = db.open_db(path)
+    try:
+        raw = con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0]
+    finally:
+        con.close()
+    got = {e["id"]: e for e in json.loads(raw)}
+    assert shape_bytes(got["big"]) <= board.MAX_SHAPE_BYTES and got["big"]["text"] == "[redacted]"
+    assert got["small"] == scene[1]
+    rules = Path(__file__).resolve().parents[2] / "src/switchboard/web/static/board-rules.js"
+    code = "const r=require(process.argv[1]);const e=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+    code += "process.stdout.write(JSON.stringify(r.batch(e, true) === null))"
+    out = subprocess.run(
+        [shutil.which("node") or "node", "-e", code, str(rules)],
+        input=raw, capture_output=True, text=True, check=True, env=child_env(),
+    )  # fmt: skip
+    assert json.loads(out.stdout) is False  # the browser's cleaner accepts the whole board
+
+
 @pytest.mark.parametrize("word", ["note", "\u30e1\u30e2" * 20], ids=["ascii", "multibyte"])
-def test_a_board_near_the_limit_still_fits_after_the_cleaning_and_unchanged_shapes_are_untouched(
+def test_a_board_near_the_scene_limit_that_the_cleaning_grows_is_brought_back_inside_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, word: str
 ) -> None:
-    """Cleaning grows a board: a short secret becomes a longer marker. The scene must still fit the byte limit
-    the live write path and the browser use, in the column's character count and in encoded bytes (multibyte
-    text passes the first and not the second), and the upgrade must not roll back. Only the changed shapes are
-    touched, and the unchanged ones are as stored. Fails if the migrated board is over the limit (the upgrade
-    aborts on the column's CHECK, or the browser refuses the whole board) or an unchanged shape is altered."""
-    scene = board_over_the_limit(word, "password=" + "ab" * 4)
-    assert board_bytes(scene) <= board.MAX_BYTES
+    """A scene the OLD broker could have saved (at most 1,500 shapes, each within 32,000 bytes, the scene
+    within 1,000,000) that the cleaning pushes over the scene limit: it is held to the limit in encoded
+    bytes (what the live path and the browser measure; multibyte text passes the column's character count
+    and not the bytes), and the upgrade does not roll back. Legacy wrapped texts (no ``originalText``)
+    gain one, which no shrinking undoes, so the largest changed shapes are dropped; the unchanged shapes
+    are as stored. Fails if the upgrade aborts on the column's CHECK or the migrated board is over the
+    limit."""
+    groups = 4  # group ids make the shapes a few hundred bytes each: 1,500 of them near 1 MB
+
+    def ids() -> list[str]:
+        return [f"g{i:02d}" + "x" * 60 for i in range(groups)]
+
+    def changed(i: int, fill: int) -> dict[str, Any]:
+        return el(
+            f"c{i:04d}",
+            type="text",
+            text=f"{word}\nsecond line",
+            groupIds=ids(),
+            name="n" * 200,
+            index="a" * fill,
+        )
+
+    def plain(i: int, fill: int) -> dict[str, Any]:
+        return el(
+            f"u{i:04d}",
+            type="text",
+            text="ok",
+            originalText="ok",
+            groupIds=ids(),
+            name="n" * 200,
+            index="a" * fill,
+        )
+
+    while groups and 1_500 * (board_bytes([changed(0, 0)]) + 1) > board.MAX_BYTES - 1_500:
+        groups -= 1  # multibyte text is wider: fewer ids
+    fill = 0  # the name filler brings the scene to just under the limit as stored
+    while 1_500 * (board_bytes([changed(0, fill)]) + 1) < board.MAX_BYTES - 1_500 and fill < 320:
+        fill += 1
+    scene = [changed(i, fill) for i in range(1_200)] + [plain(i, fill) for i in range(300)]
+    assert len(scene) == 1_500 and all(shape_bytes(e) <= board.MAX_SHAPE_BYTES for e in scene)
     cleaned, _ = board.clean_stored(scene)
-    assert board_bytes(cleaned) > board.MAX_BYTES  # the problem is real
+    assert board_bytes(scene) <= board.MAX_BYTES < board_bytes(cleaned)  # the problem is real
     path = at_55_with(
         tmp_path, monkeypatch, [(1, json.dumps(scene, ensure_ascii=False, separators=(",", ":")))]
     )
@@ -273,11 +358,57 @@ def test_a_board_near_the_limit_still_fits_after_the_cleaning_and_unchanged_shap
     try:
         assert db.schema_version(con) == 56
         raw = con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0]
-        assert len(raw.encode()) <= board.MAX_BYTES and len(raw) <= 1_000_000
-        got = {e["id"]: e for e in json.loads(raw)}
-        assert all(got[e["id"]] == e for e in scene if e["id"].startswith("u"))
-        assert any(i.startswith("c") for i in got)  # changed shapes that fit are kept, with their marker
-        assert "ab" * 4 not in raw.replace("[redacted", "")
+    finally:
+        con.close()
+    assert len(raw.encode()) <= board.MAX_BYTES and len(raw) <= 1_000_000
+    got = {e["id"]: e for e in json.loads(raw)}
+    assert all(got[e["id"]] == e for e in scene if e["id"].startswith("u"))
+    assert any(i.startswith("c") for i in got)  # changed shapes are kept where they fit
+    shrunk = any(e.get("originalText") == "[redacted]" for e in got.values())
+    assert shrunk or len(got) < len(scene)  # grown ones shrink first, and are dropped if that is not enough
+
+
+def test_shapes_dropped_for_size_leave_no_reference_and_no_change_record_naming_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ids a size drop removes are removed from every other shape's references (a binding, a container, a
+    group, a frame, a bound list) and from the change records, with the secret-id drops: one final set. Here a
+    legacy wrapped text at its shape limit gains an ``originalText`` and cannot be shrunk back, so it is
+    dropped. Fails if any reference or any change id still names it."""
+    victim = big_shape(
+        "victim", type="text", text="one\ntwo"
+    )  # no originalText: it gains one, over the limit
+    scene = [
+        victim,
+        el(
+            "arrow1",
+            type="arrow",
+            points=[[0, 0], [5, 5]],
+            startBinding={"elementId": "victim", "focus": 0, "gap": 1},
+        ),
+        el("label", type="text", containerId="victim", text="in", originalText="in"),
+        el("grouped", groupIds=["victim", "other"]),
+        el("framed", frameId="victim"),
+        el("holder", boundElements=[{"id": "victim", "type": "arrow"}, {"id": "arrow1", "type": "arrow"}]),
+    ]
+    assert shape_bytes(victim) <= board.MAX_SHAPE_BYTES
+    path = at_55_with(tmp_path, monkeypatch, [(1, json.dumps(scene, separators=(",", ":")))])
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO room_board_changes(room_id, seq, actor, at, ids, n) VALUES(1, 1, 'a', 1.0, ?, 2)",
+        (json.dumps(["victim", "label"]),),
+    )
+    con.commit()
+    con.close()
+    con = db.open_db(path)
+    try:
+        got = load(con)
+        assert "victim" not in got and set(got) == {"arrow1", "label", "grouped", "framed", "holder"}
+        assert got["arrow1"]["startBinding"] is None and got["label"]["containerId"] is None
+        assert got["grouped"]["groupIds"] == ["other"] and got["framed"]["frameId"] is None
+        assert got["holder"]["boundElements"] == [{"id": "arrow1", "type": "arrow"}]
+        assert "victim" not in json.dumps(got)
+        assert [json.loads(r[0]) for r in con.execute("SELECT ids FROM room_board_changes")] == [["label"]]
     finally:
         con.close()
 

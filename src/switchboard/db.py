@@ -1304,9 +1304,12 @@ def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
                 changed += 1
             continue
         cleaned, gone = board.clean_stored(loaded)
+        if cleaned != loaded:
+            cleaned, more = board.fit_stored(loaded, cleaned)
+            gone |= more  # the final set: secret-id drops and size drops, for every reference and record
+            cleaned = [board.drop_references(e, more) for e in cleaned]
         dropped[row["room_id"]] = gone
         if cleaned != loaded:
-            cleaned = board.fit_stored(loaded, cleaned)
             text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
             con.execute("UPDATE room_boards SET elements=? WHERE room_id=?", (text, row["room_id"]))
             changed += 1
