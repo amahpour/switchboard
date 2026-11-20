@@ -26,8 +26,6 @@ from switchboard.redact import redact
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
-# a lookup may be given a URL as shown, and cutting secrets out can make a URL longer than it was stored
-MAX_LOOKUP = 5 * MAX_URL
 MAX_TITLE = 200
 MAX_DETAIL = 4000
 MAX_FILE = 300
@@ -195,26 +193,47 @@ def _link(what: str, kinds: list[str]) -> None:
         )
 
 
-# user:password@ in front of a host: a password has no token's shape, so the patterns can't see it
-_USERINFO_RE = re.compile(r"(?i)\b(https?://)[^\s/@<>\"'?#]*@")
+# the authority of an http(s) link: everything up to the first /, ? or #. Credentials are all of it up to the
+# LAST @, as a URL parser reads it, so ``user:p@ss@host`` loses all of ``user:p@ss@``.
+_AUTHORITY_RE = re.compile(r"(?i)\b(https?://)([^\s/?#<>\"']*)")
+# a marker as redact writes it, whose space can't be in a link
+_MARKER_RE = re.compile(r"\[redacted: [^\]]*\]")
+
+
+def _credentials_out(value: str, replacement: str) -> str:
+    """``value`` with the user name and password of each http(s) link in it replaced (``replacement``, which
+    is put in front of the host's ``@``, or nothing)."""
+
+    def host_only(m: re.Match[str]) -> str:
+        authority = m.group(2)
+        if "@" not in authority:
+            return m.group(0)
+        return m.group(1) + replacement + authority.rsplit("@", 1)[1]
+
+    return _AUTHORITY_RE.sub(host_only, value)
 
 
 def scrub(value: str) -> str:
     """``value`` with every obvious secret cut out, and the credentials of any http(s) link in it (#890).
-    Never refuses and never fails: it is for text that is only being shown or posted, whatever an older
-    row holds, and applying it twice changes nothing. What a board takes in goes through ``text`` (which
-    refuses what it can't repair); what it says out loud, a notice, a line in the room, an event and a
-    board's own URL as shown, goes through here as well, so a row stored before this check, or a value
-    copied from one into a new message, is cut too."""
-    # the credentials first: a marker has a space in it, and a space would end the match of what follows
-    return redact(_USERINFO_RE.sub(r"\1[redacted: url credentials]@", value))[0]
+    Never refuses and never fails, and applying it twice changes nothing. What a board takes in goes through
+    ``text`` (which refuses what it can't repair); this is for text composed from stored words, which is
+    posted as a message (``Boards._say``), and for the one-time cleaning of rows stored before the check
+    (``clean_url``, ``clean_text``, ``db.clean_review_rows``)."""
+    # the credentials first: a marker has a space in it, and a space would end the authority's match
+    return redact(_credentials_out(value, "[redacted: url credentials]@"))[0]
 
 
-def lookup_url(value: Any) -> str:
-    """A URL given to find a board that exists (a lookup, never a write): a string of the right length,
-    not checked for shape or secrets. A board of an older row may hold a URL ``url`` would now refuse, and
-    its owner must still be able to open and close it, by the URL as ``scrub`` shows it or as stored."""
-    return _string(value, "url", MAX_LOOKUP, required=True)
+def clean_url(value: str) -> str:
+    """A stored board's or proof's URL as the upgrade keeps it: no credentials, no secret, and still a link
+    that ``url`` takes (a marker has no space in it: ``[redacted]``), so a cleaned board still opens by it."""
+    return _MARKER_RE.sub("[redacted]", redact(_credentials_out(value, ""))[0])
+
+
+def clean_text(value: str, limit: int) -> str:
+    """Stored text as the upgrade keeps it: ``scrub``, and cut to the column's ``limit`` since a marker can
+    be longer than what it replaced (a cleaned value is cut, never refused: nothing can be asked of whoever
+    wrote it)."""
+    return scrub(value)[:limit]
 
 
 def _no_credentials(what: str, link: str) -> None:

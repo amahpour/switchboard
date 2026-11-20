@@ -332,7 +332,7 @@ def snooze_board(state: Any, person_key: int, room: Room, url: Any) -> float:
     if not isinstance(url, str) or not 0 < len(url) <= 500:
         raise ServiceError("bad_request", "give url, a board's address")
     for rv in state.store.open_reviews(room.id):
-        if url in (rv["url"], reviews.scrub(rv["url"])):  # the page sends the URL as it is shown
+        if rv["url"] == url:
             at = state.clock.now()
             state.store.home_snooze(person_key, room.id, rv["id"], at)
             return at

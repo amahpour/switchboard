@@ -38,20 +38,22 @@ every step up to the current version in one transaction; a newer one is refused.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
+from switchboard import reviews
 from switchboard.models import Room, room_slug
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 54
+SCHEMA_VERSION = 55
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -1125,12 +1127,115 @@ V53_TO_V54 = (
 )
 
 
+# v54 -> v55 (#890, DESIGN.md §11 item 10, §37.2): a review board's stored text is cleaned once, by
+# ``clean_review_rows`` (a step that computes), since the check on what a board takes in applies only to
+# what is written from now on. The step has no schema change.
+V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
+
+# What the cleaning reads: the review board's free text, with each column's length limit in the schema.
+# Names (who raised, owned, answered or closed something) are not text: the room's members' names were
+# checked when they joined, and a pick is keyed by one.
+_ITEM_TEXT = {
+    "title": 200,
+    "detail": 4000,
+    "file": 300,
+    "reason": 500,
+    "answer": 500,
+    "deferred_to": 200,
+    "insisted": 500,
+}
+_URL_MAX = 500
+
+
+def _clean_json(value: object) -> object:
+    """``value`` with every string in it (not a key) cleaned by ``reviews.scrub``."""
+    if isinstance(value, str):
+        return reviews.scrub(value)
+    if isinstance(value, dict):
+        return {k: _clean_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean_json(v) for v in value]
+    return value
+
+
+def _clean_board_urls(con: sqlite3.Connection) -> int:
+    """Each board's URL without credentials or secret, still a link. A room's boards are its distinct URLs
+    (a reset adds a row under the same one), and two that clean to the same string must stay two: a URL
+    already clean keeps it; of the others the board opened last (its newest row has the higher id) keeps it,
+    and each older one gets ``#board-<its newest row's id>`` on the end, so its key is unique and it still
+    opens the same pull request. A cleaned URL over 500 characters is cut to fit the column before that
+    ending. Returns how many boards changed."""
+    changed = 0
+    by_room: dict[int, dict[str, int]] = {}
+    for rid, room_id, url in con.execute("SELECT id, room_id, url FROM reviews ORDER BY id"):
+        by_room.setdefault(room_id, {})[url] = rid  # the last row of a URL is its newest
+    for room_id, newest in by_room.items():
+        cleaned = {url: reviews.clean_url(url) for url in newest}
+        taken = {url for url, new in cleaned.items() if new == url}
+        for url in sorted((u for u in newest if cleaned[u] != u), key=lambda u: -newest[u]):
+            new = cleaned[url]
+            if new in taken or len(new) > _URL_MAX:
+                tail = f"#board-{newest[url]}"
+                new = new[: _URL_MAX - len(tail)] + tail
+            taken.add(new)
+            con.execute("UPDATE reviews SET url=? WHERE room_id=? AND url=?", (new, room_id, url))
+            changed += 1
+    return changed
+
+
+def clean_review_rows(con: sqlite3.Connection) -> int:
+    """Run every string a review board stored through the cleaning its input gets (#890): the boards' URLs,
+    each card's text (title, detail, file, reason, options, answer, proof, ticket and the raiser's answer to
+    a contest) and every string in the data of a board's events (``review``, ``review_line``). Room chat is
+    not rewritten, as for #819. Idempotent. Returns how many values changed. Run it with
+    ``secure_delete`` on, so the old bytes are zeroed, not left in a free page (``_migrate``)."""
+    changed = _clean_board_urls(con)
+    for row in con.execute("SELECT * FROM review_items").fetchall():
+        new: dict[str, object] = {c: reviews.clean_text(row[c], n) for c, n in _ITEM_TEXT.items()}
+        proof = row["proof"]
+        new["proof"] = reviews.clean_url(proof) if proof.startswith(("http://", "https://")) else None
+        if new["proof"] is None:
+            new["proof"] = reviews.clean_text(proof, 500)
+        try:
+            options = json.loads(row["options"])
+        except ValueError:
+            options = None
+        if isinstance(options, list):
+            new["options"] = json.dumps(_clean_json(options))
+        sets = {c: v for c, v in new.items() if v != row[c]}
+        if sets:
+            cols = ", ".join(f"{c}=?" for c in sets)
+            con.execute(f"UPDATE review_items SET {cols} WHERE id=?", (*sets.values(), row["id"]))
+            changed += len(sets)
+    events = con.execute(
+        "SELECT id, data FROM events WHERE kind='review' OR kind LIKE 'review\\_%' ESCAPE '\\'"
+    ).fetchall()
+    for event_id, data in events:
+        try:
+            loaded = json.loads(data)
+        except ValueError:
+            continue
+        cleaned = _clean_json(loaded)
+        if cleaned != loaded:
+            con.execute("UPDATE events SET data=? WHERE id=?", (json.dumps(cleaned), event_id))
+            changed += 1
+    return changed
+
+
+# The steps that also rewrite rows with code, by the version they migrate to: run inside the migration's
+# transaction after the step's statements. Defined after ``clean_review_rows``, below.
+REWRITES: dict[int, Callable[[sqlite3.Connection], int]] = {}
+
+
 class MigrationStep(NamedTuple):
     to: int
     statements: tuple[str, ...]
     new_tables: tuple[str, ...]
     # Nonempty enables writable_schema for this step and verifies each required SQL fragment.
     schema_edits: tuple[tuple[str, str], ...] = ()
+
+
+REWRITES[55] = clean_review_rows
 
 
 def _steps(frm: int) -> list[MigrationStep]:
@@ -1197,6 +1302,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         51: MigrationStep(52, V51_TO_V52, ()),
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
         53: MigrationStep(54, V53_TO_V54, ()),
+        54: MigrationStep(55, V54_TO_V55, ()),
     }
     out = []
     v = frm
@@ -1433,6 +1539,9 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     old_tables = tables_of(frm)
     dest, counts = backup_verified(con, backup_to, tables=old_tables)
     log.warning("schema migration %d -> %d: backup written to %s", frm, SCHEMA_VERSION, dest.name)
+    # a rewrite zeroes the bytes it replaces, and leaves none in a free page (#890)
+    secure = con.execute("PRAGMA secure_delete").fetchone()[0]
+    con.execute("PRAGMA secure_delete=ON")
     con.execute("BEGIN IMMEDIATE")
     try:
         v = schema_version(con)
@@ -1448,6 +1557,8 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             try:
                 for stmt in stmts:
                     con.execute(stmt)
+                if to in REWRITES:
+                    log.warning("schema migration to %d rewrote %d stored values", to, REWRITES[to](con))
                 for table, required in schema_edits:
                     row = con.execute(
                         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -1487,6 +1598,9 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             ) from e
         raise
     con.execute("COMMIT")
+    con.execute(f"PRAGMA secure_delete={int(secure)}")
+    # the WAL holds the pages as they were before the rewrite: fold it into the database and empty it
+    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
     return dest
 

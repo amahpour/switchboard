@@ -150,3 +150,22 @@ def test_scrub_cuts_a_links_whole_authority_before_a_marker_can_hide_the_rest() 
     out = reviews.scrub(f"see https://bob:{TOKEN}:hunter2@example.com/x")
     assert "hunter2" not in out and TOKEN not in out and "example.com/x" in out
     assert reviews.scrub(out) == out
+
+
+def test_credentials_go_up_to_the_last_at_sign_as_a_url_parser_reads_them() -> None:
+    """``user:p@ss@host`` has its credentials up to the last ``@``, and a pattern that stopped at the first
+    left ``ss@host`` in the link. Fails if any of the password is kept by ``scrub`` or ``clean_url``, or if
+    a link without credentials, or an ``@`` in its path, changes."""
+    link = "https://al" + "ice:p@" + "ss@example.com/shop/pull/7"
+    assert reviews.clean_url(link) == "https://example.com/shop/pull/7"
+    assert "ss@" not in reviews.scrub(f"see {link}") and "example.com/shop/pull/7" in reviews.scrub(link)
+    plain = "https://example.com/shop/pull/7@x?a=b@c"
+    assert reviews.clean_url(plain) == reviews.scrub(plain) == plain
+
+
+def test_clean_url_keeps_a_link_a_link_and_is_stable() -> None:
+    """The upgrade's URL is read back by ``url`` (no space in a marker), so a cleaned board still opens by
+    it; applying it again changes nothing. Fails if the cleaned URL is refused or changes on a second run."""
+    cleaned = reviews.clean_url(f"https://example.com/shop/pull/7?access_token={PASSWORD}&x={TOKEN}")
+    assert cleaned == "https://example.com/shop/pull/7?access_token=[redacted]&x=[redacted]"
+    assert reviews.url(cleaned) == cleaned and reviews.clean_url(cleaned) == cleaned

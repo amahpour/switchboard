@@ -408,11 +408,7 @@ def _parse_review(raw: str) -> Command:
     try:
         url = reviews.url(words[1])
     except ReviewError as e:
-        # a link that is only refused for a secret or credentials may still be an older board's stored URL,
-        # which ``person_open`` finds before it applies the check to a new one (#890); else it stops here
-        if len(words[1]) > reviews.MAX_URL or not reviews.URL_RE.match(words[1]):
-            raise CommandError("bad_request", f"/review: {e}") from None
-        url = words[1]
+        raise CommandError("bad_request", f"/review: {e}") from None
     note = catchup.clean_text(words[2]) if len(words) > 2 else ""
     return Command(name="review", args=(url, note), raw=raw)
 
@@ -443,14 +439,12 @@ def _review(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resul
     have others open (§37.14). Every check comes before the board opens, so a refusal leaves
     nothing behind."""
     url, note = cmd.args
-    # shown: an older board's URL may hold a secret; what is posted and said names it as lists do
-    shown = reviews.scrub(url)
     agents = [m.name for m in svc.store.members(room.id)]
     if not agents:
         raise CommandError(
             "bad_request", f"/review: no agents in {room.name} to review it: ask one to join first"
         )
-    text = review_request(agents, shown, note)
+    text = review_request(agents, url, note)
     limit = svc.cfg.delivery.max_msg_chars
     if len(text) > limit:
         fits = max(limit - (len(text) - len(note)), 0)
@@ -468,10 +462,10 @@ def _review(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Resul
     # a board kept after it was closed comes back with its findings (§37.14); an open one stays as it is
     lines = [
         {
-            "reopened": f"opened the review board for {shown} again, with its findings and history,"
+            "reopened": f"opened the review board for {url} again, with its findings and history,"
             f" and asked {who} to review it",
-            "kept": f"the review board for {shown} is open already: asked {who} to review it",
-        }.get(how, f"opened the review board for {shown} and asked {who} to review it")
+            "kept": f"the review board for {url} is open already: asked {who} to review it",
+        }.get(how, f"opened the review board for {url} and asked {who} to review it")
     ]
     if room.paused:
         lines.append(f"{room.name} is paused: the request goes out after /resume")
