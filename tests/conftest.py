@@ -17,7 +17,7 @@
 - ``no_homes_left_behind`` (session, autouse): fails the run, naming them, if any home
   ``make_tmp_home()`` made in this process is still there once every fixture is torn down (#919).
 - ``sweep_stale_homes()``, run once per session from the controller (``pytest_sessionstart``):
-  removes the marked homes a killed run left in /tmp (#919).
+  removes the marked homes a killed run left in /tmp that it can show nobody uses; none without /proc (#919).
 - ``broker``: an in-process broker (uvicorn in a thread, AllowAllHumans, test mode).
 - ``web``: an httpx client on http://switchboard.localhost:<port>, signed in.
 - ``SubprocBroker``: ``switchboard start --foreground`` in a child process.
@@ -272,6 +272,10 @@ TMP_HOME_PREFIX = "yk-"
 # still clears a killed run's homes the same day (#919).
 STALE_HOME_AGE_S = 6 * 3600
 
+# Where the sweep reads the running processes (Linux's procfs); a test points it
+# elsewhere. With no procfs the sweep can't show a home unused, so it removes nothing (#919).
+PROC_ROOT = Path("/proc")
+
 
 # Every home make_tmp_home() made in this process (an xdist worker is a process of its own), for
 # no_homes_left_behind: only these are ever counted, so a home another run made never is (#919). Each
@@ -315,28 +319,45 @@ def no_homes_left_behind() -> Iterator[None]:
 
 
 def sweep_stale_homes(
-    root: Path = TMP_HOME_ROOT, *, now: float | None = None, max_age_s: float = STALE_HOME_AGE_S
+    root: Path = TMP_HOME_ROOT,
+    *,
+    now: float | None = None,
+    max_age_s: float = STALE_HOME_AGE_S,
+    proc: Path | None = None,
 ) -> list[Path]:
     """Remove the test homes a killed run left behind, and return the ones removed (#919).
 
     ``tmp_home`` and the e2e worlds remove their home in a ``finally``, which a SIGKILL, the OOM
-    killer, a timeout or a cancelled run skips. Only a directory directly under ``root`` named
-    ``yk-*``, not a symlink, owned by this user, carrying the ``.switchboard-test`` marker and last
-    changed ``max_age_s`` ago or more is a candidate: a home without the marker is never touched, and
-    a young one may belong to a run going on alongside. A candidate whose marker names the process
-    that made it (``make_tmp_home``) is removed only once that process is gone: a broker writes to
-    files that already exist, so a paused or long run's home can look old while it is still in use.
-    A marker with no pid (a home made by an older checkout, or by a helper that only touches it) leaves
-    the age alone to decide. Errors are ignored, so it never fails a run, and only the homes that are
-    gone are returned.
+    killer, a timeout or a cancelled run skips. The sweep removes a home only when it can show that
+    nobody uses it; anything it can't determine keeps the home. All of these must hold:
+
+    1. it is a directory directly under ``root`` named ``yk-*``, not a symlink, owned by this user,
+       carrying the ``.switchboard-test`` marker as a regular file, and last changed ``max_age_s`` ago
+       or more (a young one may belong to a run going on alongside);
+    2. the marker holds a valid pid (a positive decimal) and that process is gone
+       (``ProcessLookupError``). An empty marker (an older checkout's), a malformed one, or any
+       other answer from ``os.kill`` keeps it;
+    3. no running process has anything inside it open: its cwd, its root or any open file
+       (``/proc/<pid>/cwd``, ``root`` and every ``fd/*``), or a Unix socket bound inside it
+       (``/proc/net/unix``). The marker's pid is the pytest process
+       that made the home, but ``SubprocBroker`` starts a broker of its own that can outlive it, with
+       its database and socket in the home; this check finds it, and any other child, without naming
+       them. Entries the kernel won't show (another user's processes) are skipped; any other failure
+       to read the process list leaves the scan unproven, and nothing is removed.
+
+    Without procfs (macOS, Windows) check 3 can't be made, so the sweep fails closed and removes
+    nothing. Errors are ignored, so it never fails a run, and only the homes that are gone are
+    returned.
     """
     now = time.time() if now is None else now
+    proc = PROC_ROOT if proc is None else proc
     uid = os.getuid()
     removed: list[Path] = []
     try:
         entries = list(os.scandir(root))
     except OSError:
         return removed
+    candidates: list[str] = []
     for entry in entries:
         if not entry.name.startswith(TMP_HOME_PREFIX):
             continue
@@ -350,13 +371,73 @@ def sweep_stale_homes(
         except OSError:
             continue
         owner = _marker_pid(marker)
-        if owner is not None and _process_alive(owner):
+        if owner is None or _process_alive(owner):
             continue
-        shutil.rmtree(entry.path, ignore_errors=True)
+        candidates.append(entry.path)
+    if not candidates:
+        return removed
+    in_use = _open_paths(proc)
+    if in_use is None:
+        return removed
+    for home in candidates:
+        if _used(home, in_use):
+            continue
+        shutil.rmtree(home, ignore_errors=True)
         # ignore_errors can leave some or all of it: only a home that is gone counts as removed
-        if not os.path.lexists(entry.path):
-            removed.append(Path(entry.path))
+        if not os.path.lexists(home):
+            removed.append(Path(home))
     return removed
+
+
+def _open_paths(proc: Path) -> set[str] | None:
+    """Every path a running process has as its cwd, its root or an open file, and every Unix socket
+    path bound, read from procfs (#919); None when that can't be read at all (no procfs, no process
+    list) or an entry fails in a way that isn't "gone" or "denied".
+
+    A process that exits during the scan is skipped (its entries are gone, and so is its use). An
+    entry the kernel won't show (``PermissionError``) is skipped: that is another user's process, whose
+    home would be its own (the sweep only removes this user's), or a non-dumpable one, which no test
+    run starts."""
+    paths: set[str] = set()
+    try:
+        pids = [e.path for e in os.scandir(proc) if e.name.isdigit()]
+    except OSError:
+        return None
+    if not pids:
+        return None
+    for pid in pids:
+        links = [os.path.join(pid, "cwd"), os.path.join(pid, "root")]
+        try:
+            links += [os.path.join(pid, "fd", fd) for fd in os.listdir(os.path.join(pid, "fd"))]
+        except (FileNotFoundError, PermissionError):
+            pass
+        except OSError:
+            return None
+        for link in links:
+            try:
+                paths.add(os.readlink(link))
+            except (FileNotFoundError, PermissionError):
+                continue
+            except OSError:
+                return None
+    # A bound Unix socket (a broker's) shows in its fds only as ``socket:[inode]``: its path is here.
+    try:
+        with open(proc / "net" / "unix", encoding="utf-8", errors="replace") as f:
+            next(f, None)
+            for line in f:
+                fields = line.split(None, 7)
+                if len(fields) == 8:
+                    paths.add(fields[7].rstrip("\n").lstrip("@"))
+    except OSError:
+        return None
+    return paths
+
+
+def _used(home: str, in_use: set[str]) -> bool:
+    """Whether any open path is ``home`` or inside it, by its own path or its resolved one (a /tmp
+    that is a symlink). A deleted file reads as ``<path> (deleted)`` and still matches."""
+    prefixes = {home.rstrip("/"), os.path.realpath(home).rstrip("/")}
+    return any(p == h or p.startswith(h + "/") or p == h + " (deleted)" for p in in_use for h in prefixes)
 
 
 def _marker_pid(marker: str) -> int | None:
