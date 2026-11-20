@@ -17,7 +17,7 @@ import httpx
 import pytest
 from conftest import InProcBroker, SubprocBroker
 from fakes.fake_agent import FakeAgent, ids_in
-from test_agents_http import EXIT_FIX, THREAD_A, Codex, make_token, sse_result, status
+from test_agents_http import EXIT_FIX, THREAD_A, THREAD_B, Codex, make_token, sse_result, status
 from test_agents_http_claude import SESSION_1, Claude
 from test_agents_http_cursor import SID_A, invoke
 from test_agents_http_wake import claude_hook, joined_claude, listen, parked, participant, until
@@ -766,3 +766,59 @@ def test_a_database_error_finishing_a_reopen_leaves_no_library_session(broker: I
     assert mine.sid not in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
     del store.mcp_session_reopened
     assert mine.call("who", THREAD_A, room="#build")["ok"]  # the record stayed: it opens now
+
+
+def expire_in_library(b: InProcBroker, sid: str) -> None:
+    """End a session inside the MCP library alone, as its idle timeout or a crash of the session's task does
+    (the manager's own ``_discard_session``, which both end in), leaving AgentAuth's map as it was."""
+    manager = b.state.agent_auth.app.session_manager
+
+    async def discard() -> None:
+        await manager._discard_session(sid, manager._server_instances[sid])
+
+    assert b.loop is not None
+    asyncio.run_coroutine_threadsafe(discard(), b.loop).result(10)
+    assert sid not in library_sessions(b)
+    assert sid in b.on_loop(lambda: set(b.state.agent_auth.sessions))
+
+
+def test_a_delete_of_a_session_the_library_expired_is_never_reopened(broker: InProcBroker) -> None:
+    """The library expires idle sessions apart from AgentAuth's map. A client's DELETE of such an ID then gets
+    the library's 404, and must still forget the ID and its record: after a restart that deleted ID is not
+    opened again (404). Fails if only a 200, 202 or 204 forgets it (#903, F10)."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    expire_in_library(broker, mine.sid)
+    assert mine.delete(recorded).status_code == 404  # the library's own answer
+    assert mine.sid not in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+    key = hashlib.sha256(mine.sid.encode()).hexdigest()
+    row = token_row(broker, token)
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S) is None
+    broker.restart()
+    assert mine.raw("who", THREAD_A, room="#build").status_code == 404
+    assert library_sessions(broker) == set()
+
+
+def test_a_delete_the_library_answers_404_ends_only_the_threads_it_served_last(broker: InProcBroker) -> None:
+    """The client's DELETE ends its session whatever the library answers, and the rule of #449 still holds
+    for a 404: it takes offline only the threads no newer session has served since. Fails if a 404 ends a
+    thread a newer session serves, or leaves the still-old one online (#903, F10)."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    old = Codex(broker, token)
+    assert old.start().status_code == 200
+    for thread, name in ((THREAD_A, "codex-1"), (THREAD_B, "codex-2")):
+        assert old.call("join", thread, room="#build", screen_name=name)["ok"]
+        assert old.call("hook", thread, event="Stop", session_id=thread) == {}
+    resumed = Codex(broker, token)
+    assert resumed.start().status_code == 200
+    assert resumed.call("who", THREAD_A, room="#build")["ok"]
+    expire_in_library(broker, old.sid)
+    assert old.delete(recorded).status_code == 404
+    assert status(broker, "codex-1") == "idle"
+    assert status(broker, "codex-2") == "offline"

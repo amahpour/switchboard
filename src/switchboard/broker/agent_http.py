@@ -1199,18 +1199,26 @@ class AgentAuth:
                                 )
             await send(message)
 
-        await self.app(scope, receive_claim if inspect_client else receive, send_binding)
-        if sid is not None and scope.get("method") == "DELETE" and response_status in (200, 202, 204):
-            # A resumed thread can use a newer MCP session before this old DELETE arrives.
-            # Only the session that served it most recently may take it offline.
-            for thread in session.threads if session is not None else ():
-                if self.latest.get((row.id, thread)) == sid:
-                    conn = self.tools.conn_for(row, "codex")
-                    await self.state.agents.http_hook(
-                        conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
-                    )
+        if sid is None or method != "DELETE" or session is None:
+            await self.app(scope, receive_claim if inspect_client else receive, send_binding)
+            return
+        # The client's DELETE of a session this token owns ends it for the broker whatever the library answers:
+        # the library expires idle sessions on its own, and its 404 then must not leave a record that a later
+        # restart would open again (#903, F10).
+        # A resumed thread can use a newer MCP session before this old DELETE arrives: only the session that
+        # served a thread most recently may take it offline, as it was when the DELETE was answered.
+        try:
+            await self.app(scope, receive_claim if inspect_client else receive, send_binding)
+        finally:
+            newest = [t for t in sorted(session.threads) if self.latest.get((row.id, t)) == sid]
             self.forget(sid)
             self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
+        if response_status in (200, 202, 204, 404):  # 404: the library had already expired it
+            for thread in newest:
+                conn = self.tools.conn_for(row, "codex")
+                await self.state.agents.http_hook(
+                    conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
+                )
 
 
 class SessionHook:
