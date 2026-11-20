@@ -1295,23 +1295,29 @@ def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
         try:
             loaded = json.loads(row["elements"])
         except ValueError:
-            continue
+            loaded = None
         if not isinstance(loaded, list):
+            # not a board (``Store.board_load`` reads it as empty): cleared, so nothing in it is kept (fail
+            # closed), and the upgrade goes on
+            if row["elements"] != "[]":
+                con.execute("UPDATE room_boards SET elements='[]' WHERE room_id=?", (row["room_id"],))
+                changed += 1
             continue
         cleaned, gone = board.clean_stored(loaded)
         dropped[row["room_id"]] = gone
-        text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
         if cleaned != loaded:
+            cleaned = board.fit_stored(loaded, cleaned)
+            text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
             con.execute("UPDATE room_boards SET elements=? WHERE room_id=?", (text, row["room_id"]))
             changed += 1
     for row in con.execute("SELECT id, room_id, ids FROM room_board_changes").fetchall():
         try:
             ids = json.loads(row["ids"])
         except ValueError:
-            continue
-        if not isinstance(ids, list):
-            continue
-        kept = board.clean_change_ids(ids, dropped.get(row["room_id"], set()))
+            ids = None
+        kept = (
+            board.clean_change_ids(ids, dropped.get(row["room_id"], set())) if isinstance(ids, list) else []
+        )
         if kept != ids:
             con.execute(
                 "UPDATE room_board_changes SET ids=? WHERE id=?",
@@ -1685,11 +1691,9 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
-        owed = (
-            SCHEMA_VERSION >= 55 and frm < 55 and con.execute("SELECT 1 FROM reviews LIMIT 1").fetchone()
-        ) or (
-            SCHEMA_VERSION >= 56 and frm < 56 and con.execute("SELECT 1 FROM room_boards LIMIT 1").fetchone()
-        )
+        # always owed by the upgrade to 55 or 56, whatever survives: a room deleted before the upgrade left
+        # its board's text in free pages or the log (DESIGN §28.6), and cleaning rows cannot reach that
+        owed = (SCHEMA_VERSION >= 55 and frm < 55) or (SCHEMA_VERSION >= 56 and frm < 56)
         if owed:
             # a rewrite can't zero what earlier edits left in free pages: a VACUUM after the commit does,
             # and this row (written with it, after the counts above) says it is still owed

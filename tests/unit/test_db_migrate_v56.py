@@ -176,10 +176,187 @@ def test_a_fresh_database_has_nothing_to_clean(tmp_path: Path) -> None:
         con.close()
 
 
-def test_a_board_that_is_not_a_list_is_left_alone(tmp_path: Path) -> None:
-    """A row the cleaning cannot read is skipped, not turned into an error that stops the upgrade."""
-    con = db.open_db(tmp_path / "odd.db")
+def at_55_with(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: list[tuple[int, str]]) -> Path:
+    """A database at 55 whose room boards are exactly ``rows`` (room id, raw elements text)."""
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
     try:
-        assert db.clean_whiteboard_rows(con) == 0
+        old.executescript(FIXTURE.read_text())
+    finally:
+        old.close()
+    with monkeypatch.context() as mp:
+        mp.setattr(db, "SCHEMA_VERSION", 55)
+        con = db.open_db(path)
+        with db.tx(con):
+            for room, raw in rows:
+                con.execute(
+                    "INSERT INTO room_boards(room_id, seq, elements, updated_at) VALUES(?, 3, ?, 1.0)",
+                    (room, raw),
+                )
+        con.close()
+    return path
+
+
+def test_a_stored_board_that_is_not_a_board_is_cleared_and_its_neighbour_is_still_cleaned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row that is not JSON, or JSON that is not a list, is not a board (``Store.board_load`` reads it as
+    empty): it is cleared, since nothing in it can be checked, and the upgrade goes on to clean the board next
+    to it. A change record whose ids are not a list is cleared the same way. Fails if the JSON or list check
+    is removed (the upgrade aborts), or the neighbour keeps a canary."""
+    good = json.dumps([el("plain", text=f"uses {TOKEN}", originalText=f"uses {TOKEN}")])
+    path = at_55_with(
+        tmp_path,
+        monkeypatch,
+        [(1, good), (2, f"not json {TOKEN}"), (3, json.dumps({"elements": f"object {TOKEN}"}))],
+    )
+    con = sqlite3.connect(path)
+    con.execute(
+        "INSERT INTO room_board_changes(room_id, seq, actor, at, ids, n) VALUES(1, 1, 'a', 1.0, ?, 1)",
+        (f"[not {TOKEN}",),
+    )
+    con.execute(
+        "INSERT INTO room_board_changes(room_id, seq, actor, at, ids, n) VALUES(1, 2, 'a', 1.0, ?, 1)",
+        (json.dumps({"x": TOKEN}),),
+    )
+    con.commit()
+    con.close()
+    con = db.open_db(path)
+    try:
+        rows = {r[0]: r[1] for r in con.execute("SELECT room_id, elements FROM room_boards")}
+        assert rows[2] == "[]" and rows[3] == "[]"
+        assert json.loads(rows[1])[0]["text"] == "uses [redacted: github token]"
+        assert [r[0] for r in con.execute("SELECT ids FROM room_board_changes ORDER BY seq")] == ["[]", "[]"]
     finally:
         con.close()
+    backup = db.backup_path_for(path, 55)
+    for f in tmp_path.rglob("*"):
+        if f.is_file() and f != backup:
+            assert TOKEN.encode() not in f.read_bytes(), f.name
+
+
+def board_over_the_limit(word: str, secret: str) -> list[dict[str, Any]]:
+    """A board whose size is just under the limit as stored and over it once its short secrets are
+    markers: many
+    unchanged shapes, and changed ones (``word`` plus a short secret in ``text`` and ``originalText``)."""
+    changed = [
+        el(f"c{i}", type="text", text=f"{word} {secret}", originalText=f"{word} {secret}")
+        for i in range(1500)
+    ]
+    each = board_bytes([el("u00000", fontSize=16, strokeColor="#000000")]) + 1
+    fill = (985_000 - board_bytes(changed)) // each  # the unchanged shapes that fill the rest
+    scene = [*changed, *(el(f"u{n:05d}", fontSize=16, strokeColor="#000000") for n in range(fill))]
+    return scene
+
+
+def board_bytes(scene: list[dict[str, Any]]) -> int:
+    return len(json.dumps(scene, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+@pytest.mark.parametrize("word", ["note", "\u30e1\u30e2" * 20], ids=["ascii", "multibyte"])
+def test_a_board_near_the_limit_still_fits_after_the_cleaning_and_unchanged_shapes_are_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, word: str
+) -> None:
+    """Cleaning grows a board: a short secret becomes a longer marker. The scene must still fit the byte limit
+    the live write path and the browser use, in the column's character count and in encoded bytes (multibyte
+    text passes the first and not the second), and the upgrade must not roll back. Only the changed shapes are
+    touched, and the unchanged ones are as stored. Fails if the migrated board is over the limit (the upgrade
+    aborts on the column's CHECK, or the browser refuses the whole board) or an unchanged shape is altered."""
+    scene = board_over_the_limit(word, "password=" + "ab" * 4)
+    assert board_bytes(scene) <= board.MAX_BYTES
+    cleaned, _ = board.clean_stored(scene)
+    assert board_bytes(cleaned) > board.MAX_BYTES  # the problem is real
+    path = at_55_with(
+        tmp_path, monkeypatch, [(1, json.dumps(scene, ensure_ascii=False, separators=(",", ":")))]
+    )
+    con = db.open_db(path)
+    try:
+        assert db.schema_version(con) == 56
+        raw = con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0]
+        assert len(raw.encode()) <= board.MAX_BYTES and len(raw) <= 1_000_000
+        got = {e["id"]: e for e in json.loads(raw)}
+        assert all(got[e["id"]] == e for e in scene if e["id"].startswith("u"))
+        assert any(i.startswith("c") for i in got)  # changed shapes that fit are kept, with their marker
+        assert "ab" * 4 not in raw.replace("[redacted", "")
+    finally:
+        con.close()
+
+
+def test_a_legacy_wrapped_text_whose_wrap_split_a_token_is_replaced_by_a_marker() -> None:
+    """A legacy text with line breaks and no ``originalText`` is unverified: the wrap may have broken a
+    token, or
+    the space before it, where no pattern matches, so as written it looks clean and copying it into
+    ``originalText`` would make the pieces authoritative. It is read flattened every way (each break as
+    nothing
+    and as a space, in every combination, up to 8 breaks), and if a reading finds what the as-written one did
+    not remove, the shape keeps one marker naming the kinds instead (kept, not dropped, so the board's layout
+    stays). More breaks than can be read, or a text too long, is ambiguous and gets one marker too.
+    Fails if any
+    piece of the token stays in text or originalText."""
+    body = "a1b2c3d4e5f6" * 4
+    for wrapped in (
+        f"sk-{body[:14]}\n{body[14:]}",
+        "Bearer\n" + body,
+        "Bearer\n" + body[:14] + "\n" + body[14:],
+    ):
+        (out,), _ = board.clean_stored([el("w", type="text", text=wrapped)])
+        assert out["text"] == out["originalText"] and out["text"].startswith("[redacted: ")
+        assert body[:14] not in json.dumps(out) and body[14:] not in json.dumps(out)
+    many = "\n".join(["word"] * 10)
+    (out,), _ = board.clean_stored([el("w", type="text", text=many)])
+    assert out["text"] == "[redacted: wrapped text]"
+    (kept,), _ = board.clean_stored([el("w", type="text", text="two\nlines")])  # nothing hidden: kept
+    assert kept["text"] == kept["originalText"] == "two\nlines"
+
+
+def test_the_upgrade_always_cleans_the_files_even_when_every_whiteboard_and_review_board_was_deleted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting a room removes its tables' rows and leaves their bytes in free pages (DESIGN §28.6), and the
+    cleaning cannot reach what is not a row. The upgrade schedules the one ``VACUUM`` and checked checkpoint
+    whatever survives, so a database whose only whiteboard and review board were deleted before the upgrade
+    comes out with no trace of their text. Fails if the deleted text is still in any file but the backup."""
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    try:
+        old.executescript(FIXTURE.read_text())
+    finally:
+        old.close()
+    big = json.dumps(
+        [el(f"s{i}", text=f"leaked {TOKEN}", originalText=f"leaked {TOKEN}") for i in range(200)]
+    )
+    with monkeypatch.context() as mp:
+        mp.setattr(db, "SCHEMA_VERSION", 55)
+        con = db.open_db(path)
+        with db.tx(con):
+            con.execute(
+                "INSERT INTO room_boards(room_id, seq, elements, updated_at) VALUES(1, 3, ?, 1.0)", (big,)
+            )
+            con.execute(
+                "INSERT INTO reviews(id, room_id, url, opened_by, opened_at) VALUES(201, 1, ?, 'a', 1.0)",
+                ("https://example.com/shop/pull/9",),
+            )
+            con.execute(
+                "INSERT INTO review_items(id, review_id, kind, n, state, title, detail, raised_by,"
+                " created_at, updated_at)"
+                " VALUES(201, 201, 'finding', 1, 'raised', 't', ?, 'a', 1.0, 1.0)",
+                (f"prints {TOKEN} " * 70,),
+            )
+        with db.tx(con):  # the room's boards deleted, as room deletion does
+            con.execute("DELETE FROM room_boards")
+            con.execute("DELETE FROM review_items WHERE review_id=201")
+            con.execute("DELETE FROM reviews WHERE id=201")
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        con.close()
+    assert TOKEN.encode() in path.read_bytes()  # the deleted text is still in a free page of the file
+    con = db.open_db(path)
+    try:
+        assert con.execute("SELECT count(*) FROM room_boards").fetchone()[0] == 0
+        assert not con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
+    finally:
+        con.close()
+    backup = db.backup_path_for(path, 55)
+    assert backup.exists()
+    for f in tmp_path.rglob("*"):
+        if f.is_file() and f != backup:
+            assert TOKEN.encode() not in f.read_bytes(), f.name

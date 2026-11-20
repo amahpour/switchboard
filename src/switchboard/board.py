@@ -28,7 +28,7 @@ from typing import Any
 from switchboard import board_checks, board_layout, board_style
 from switchboard.board_style import DEFAULT_STROKE, nearest_name
 from switchboard.envelope import clean
-from switchboard.redact import redact
+from switchboard.redact import MARKER, redact
 
 # The spike's caps (#622, question 7). Text is cut for everyone, so what an agent reads back
 # stays bounded; a person drawing by hand meets the same cut.
@@ -1261,6 +1261,39 @@ def _normal_text(v: Any) -> str:
     return redact(clean(v)[:_SCAN_MAX])[0][:MAX_TEXT] if isinstance(v, str) else ""
 
 
+_WRAP_BREAKS_MAX = 8  # a stored wrapped text with more breaks is ambiguous (read once, at the upgrade)
+_WRAP_SCAN_MAX = 2000
+
+
+def _wrap_hides(text: str) -> list[str] | None:
+    """For a stored text with line breaks and no ``originalText`` (so nothing says what it was before the
+    wrap): the kinds a flattened reading finds that the as-written redaction did not fully remove, or
+    ``["wrapped text"]`` when it cannot be read every way (more than ``_WRAP_BREAKS_MAX`` breaks, or long).
+    A wrap can break a token, or the space before it, where no pattern matches. Each break is tried as nothing
+    and as a space in every combination; every reading must redact to the as-written redaction with its breaks
+    read the same way. None when they all do (#893, schema 56)."""
+    n = text.count("\n")
+    if n > _WRAP_BREAKS_MAX or len(text) > _WRAP_SCAN_MAX:
+        return ["wrapped text"]
+    out, kinds = redact(text)
+    parts = text.split("\n")
+    outs = out.split("\n") if out.count("\n") == n else None
+    found: list[str] = []
+    for mask in range(2**n):
+        seps = [" " if mask >> i & 1 else "" for i in range(n)]
+        flat = parts[0] + "".join(sep + part for sep, part in zip(seps, parts[1:], strict=True))
+        flat_out, flat_kinds = redact(flat)
+        if outs is not None:
+            ref = outs[0] + "".join(sep + part for sep, part in zip(seps, outs[1:], strict=True))
+        else:  # a match swallowed a break: compare with the as-written result, breaks read alike
+            ref = out.replace("\n", seps[0] if seps else "")
+        if flat_out != ref:
+            found += [k for k in (*flat_kinds, *kinds) if k not in found]
+            if not found:
+                return ["wrapped text"]
+    return found or None
+
+
 def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
     """A stored whiteboard as the cleaner of a write would leave it, for the upgrade that cleans old data
     (#893, schema 56). Unlike a write it normalizes and never refuses. Every text field is redacted and cut;
@@ -1286,9 +1319,14 @@ def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
             elif isinstance(el.get("originalText"), str):
                 el["text"] = el["originalText"]
             else:
-                el["text"] = _normal_text(el["text"])
-                if "\n" in el["text"]:
-                    el["originalText"] = el["text"]
+                text = clean(el["text"])[:_SCAN_MAX]
+                hidden = _wrap_hides(text) if "\n" in text else None
+                if hidden:  # unverified wrapped words that a flattened reading finds a secret in: not kept
+                    el["text"] = el["originalText"] = " ".join(MARKER.format(kind=k) for k in hidden)
+                else:
+                    el["text"] = _normal_text(text)
+                    if "\n" in el["text"]:
+                        el["originalText"] = el["text"]
         if isinstance(el.get("boundElements"), list):
             el["boundElements"] = [
                 b for b in el["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
@@ -1308,3 +1346,38 @@ def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
 def clean_change_ids(ids: list[Any], dropped: set[str]) -> list[str]:
     """A change record's element ids without a dropped id or one that holds a secret (#893, schema 56)."""
     return [i for i in ids if isinstance(i, str) and i not in dropped and not redact(i)[1]]
+
+
+def _scene_bytes(elements: list[dict[str, Any]]) -> int:
+    return len(json.dumps(elements, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def fit_stored(before: list[Any], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``after`` (``clean_stored`` of ``before``) within the board's byte limit, the same measure the
+    live write
+    path and the browser use (``MAX_BYTES`` of the encoded scene; the column's character count is never more).
+    Cleaning can grow a board: a short secret becomes a longer marker, and a legacy text is copied into
+    ``originalText``. Only the elements the cleaning changed are touched, never an unchanged one, and
+    the answer
+    is deterministic: the text fields that grew become the shortest marker, and if it still does not fit the
+    changed elements are dropped, largest first, until it does. The upgrade is never rolled back for size
+    (#893, schema 56)."""
+    if _scene_bytes(after) <= MAX_BYTES:
+        return after
+    was = {e["id"]: e for e in before if isinstance(e, dict) and isinstance(e.get("id"), str)}
+    changed = [i for i, e in enumerate(after) if was.get(e["id"]) != e]
+    out = list(after)
+    for i in changed:
+        el, old = dict(out[i]), was[out[i]["id"]]
+        for key in ("text", "originalText", "name"):
+            if isinstance(el.get(key), str) and len(el[key]) > len(old.get(key) or ""):
+                el[key] = "[redacted]"
+        out[i] = el
+    if _scene_bytes(out) <= MAX_BYTES:
+        return out
+    drop: set[int] = set()
+    for i in sorted(changed, key=lambda i: (-_scene_bytes([out[i]]), i)):
+        drop.add(i)
+        if _scene_bytes([e for j, e in enumerate(out) if j not in drop]) <= MAX_BYTES:
+            break
+    return [e for j, e in enumerate(out) if j not in drop]
