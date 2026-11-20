@@ -1656,8 +1656,7 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     con.execute("COMMIT")
     con.execute(f"PRAGMA secure_delete={int(secure)}")
     log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
-    finish_review_clean(con)
-    return dest
+    return dest  # the cleanup it owes is finished by ``migrate``, once for the start
 
 
 CLEAN_PENDING = "review_clean_pending"

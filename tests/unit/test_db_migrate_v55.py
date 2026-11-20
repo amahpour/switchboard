@@ -283,3 +283,30 @@ def test_a_busy_checkpoint_leaves_the_cleaning_owed_and_the_next_start_finishes_
     finally:
         reader.close()
         con.close()
+
+
+def test_a_busy_cleanup_rebuilds_the_database_once_in_a_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The upgrade owes its ``VACUUM`` and checkpoint, and ``migrate`` pays them once whatever the upgrade
+    did: a busy first attempt leaves the flag for the next start and does not rebuild the file again in
+    this one. Fails if a start runs ``VACUUM`` twice."""
+    path = at_54(tmp_path, monkeypatch)
+    con = db.connect(path)
+    reader = db.connect(path)
+    statements: list[str] = []
+    try:
+        con.execute("PRAGMA busy_timeout=0")
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM meta").fetchone()  # an old snapshot: the checkpoint will be busy
+        con.set_trace_callback(statements.append)
+        db.migrate(con, backup_to=db.backup_path_for(path, 54))
+        assert [s for s in statements if s.startswith("VACUUM")] == ["VACUUM"]
+        assert con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
+        reader.execute("ROLLBACK")
+        db.migrate(con)  # the next start finishes it
+        assert [s for s in statements if s.startswith("VACUUM")] == ["VACUUM", "VACUUM"]
+        assert not con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
+    finally:
+        reader.close()
+        con.close()
