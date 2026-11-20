@@ -24,7 +24,9 @@ ITEMS = (
     "SELECT id, review_id, kind, n, state, title, raised_by, options FROM review_items"
     " WHERE review_id = 7 ORDER BY id"
 )
-PICKS = "SELECT item_id, agent, choice, picked_at FROM review_picks WHERE item_id IN (11, 12) ORDER BY item_id"
+PICKS = (
+    "SELECT item_id, agent, choice, picked_at FROM review_picks WHERE item_id IN (11, 12) ORDER BY item_id"
+)
 SEEDED_BOARDS = [(7, 1, "https://example.com/a/pull/9", "abc123", "alice", "open", 2, "none", "bob")]
 SEEDED_ITEMS = [
     (11, 7, "finding", 1, "raised", "a leak", "bob", "[]"),
@@ -34,8 +36,8 @@ SEEDED_PICKS = [(12, "carol", 1, 3.0)]
 
 
 def at_56(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fixture (which holds a board of its own) upgraded to schema 56, with another board whose CI is a legacy value, a finding, a question
-    and a pick on it: the rows the step must keep."""
+    """The fixture (which holds a board of its own) upgraded to schema 56, with another board whose CI
+    is a legacy value, a finding, a question and a pick on it: the rows the step must keep."""
     with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
     with monkeypatch.context() as mp:
@@ -48,14 +50,17 @@ def at_56(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             " 'open', 2, 'none', 'bob', 2.0)"
         )
         seed.execute(
-            "INSERT INTO review_items(id, review_id, kind, n, state, title, raised_by, created_at, updated_at)"
-            " VALUES (11, 7, 'finding', 1, 'raised', 'a leak', 'bob', 1.0, 1.0)"
+            "INSERT INTO review_items(id, review_id, kind, n, state, title, raised_by, created_at,"
+            " updated_at) VALUES (11, 7, 'finding', 1, 'raised', 'a leak', 'bob', 1.0, 1.0)"
         )
         seed.execute(
             "INSERT INTO review_items(id, review_id, kind, n, state, title, raised_by, options, created_at,"
-            " updated_at) VALUES (12, 7, 'question', 1, 'open', 'which way', 'bob', '[\"a\", \"b\"]', 1.0, 1.0)"
+            " updated_at) VALUES (12, 7, 'question', 1, 'open', 'which way', 'bob', '[\"a\", \"b\"]',"
+            " 1.0, 1.0)"
         )
-        seed.execute("INSERT INTO review_picks(item_id, agent, choice, picked_at) VALUES (12, 'carol', 1, 3.0)")
+        seed.execute(
+            "INSERT INTO review_picks(item_id, agent, choice, picked_at) VALUES (12, 'carol', 1, 3.0)"
+        )
 
 
 def assert_seeded(con: sqlite3.Connection) -> None:
@@ -63,7 +68,10 @@ def assert_seeded(con: sqlite3.Connection) -> None:
     assert [tuple(r) for r in con.execute(BOARD)] == SEEDED_BOARDS
     assert [tuple(r) for r in con.execute(ITEMS)] == SEEDED_ITEMS
     assert [tuple(r) for r in con.execute(PICKS)] == SEEDED_PICKS
-    joined = "SELECT p.agent, i.kind, r.url FROM review_picks p JOIN review_items i ON i.id = p.item_id JOIN reviews r ON r.id = i.review_id WHERE r.id = 7"  # noqa: E501
+    joined = (
+        "SELECT p.agent, i.kind, r.url FROM review_picks p JOIN review_items i ON i.id = p.item_id"
+        " JOIN reviews r ON r.id = i.review_id WHERE r.id = 7"
+    )
     assert [tuple(r) for r in con.execute(joined)] == [("carol", "question", "https://example.com/a/pull/9")]
 
 
