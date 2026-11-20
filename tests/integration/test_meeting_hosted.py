@@ -97,14 +97,22 @@ class World:
         cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0, rate_limit_s=0.0)
         self.clock = clock
         self.home = home
-        self.b = InProcBroker(home, cfg, clock=clock).start()
-        self.web = self.b.web_client()
-        for room in ("#build", "#uploads", "#third"):
-            assert (
-                self.web.post("/api/rooms", json={"name": room}, headers=self.b.write_headers()).status_code
-                == 200
-            )
-        self.relay = Relay(self.b)
+        self.b = InProcBroker(home, cfg, clock=clock)
+        try:
+            self.b.start()
+            self.web = self.b.web_client()
+            for room in ("#build", "#uploads", "#third"):
+                r = self.web.post("/api/rooms", json={"name": room}, headers=self.b.write_headers())
+                assert r.status_code == 200, r.text
+            self.relay = Relay(self.b)
+        except BaseException as e:
+            # The caller's ``try`` only starts once this returns: stop what was started and remove the home
+            # here, or a failed start leaves both (#919, review F3).
+            try:
+                self.stop()
+            except Exception as cleanup:
+                e.add_note(f"and stopping the World failed too: {cleanup!r}")
+            raise
 
     def stop(self) -> None:
         """Close the relay and the web client and stop the broker, each even if one before it raised, then
@@ -112,7 +120,9 @@ class World:
         home fails with errors that hide why it would not stop (#832). A home kept is raised about, and
         ``no_homes_left_behind`` names it too (#919)."""
         errors: list[Exception] = []
-        for close in (self.relay.close, self.web.close, self.b.stop):
+        # a World whose start failed has neither yet (``__init__``)
+        made = (getattr(self, "relay", None), getattr(self, "web", None))
+        for close in (*(c.close for c in made if c is not None), self.b.stop):
             try:
                 close()
             except Exception as e:
@@ -245,6 +255,39 @@ def test_world_stop_keeps_the_home_of_a_broker_that_would_not_stop(tmp_path: Pat
     finally:
         release.set()
         running.join()
+
+
+def test_a_world_that_fails_to_provision_stops_its_broker_and_removes_its_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure while ``World()`` makes its rooms stops the broker it started and removes its home before
+    the error goes on (#919, review F3).
+
+    Fails on a ``World.__init__`` with no cleanup of its own: the fixture's ``try`` starts only once
+    ``World()`` returns, so the home stayed in /tmp and the broker ran on."""
+    started: list[InProcBroker] = []
+    real_start = InProcBroker.start
+
+    def start(self: InProcBroker) -> InProcBroker:
+        started.append(self)
+        return real_start(self)
+
+    def refused(self: InProcBroker) -> dict[str, str]:
+        raise RuntimeError("provisioning failed")
+
+    monkeypatch.setattr(InProcBroker, "start", start)
+    monkeypatch.setattr(InProcBroker, "write_headers", refused)
+    home = make_tmp_home()
+    try:
+        with pytest.raises(RuntimeError, match="provisioning failed"):
+            World(home, FakeClock())
+        [b] = started
+        assert b.thread is not None and not b.thread.is_alive()
+        assert not home.exists()
+    finally:
+        for b in started:
+            b.stop()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def poll_waiting(w: World) -> bool:
