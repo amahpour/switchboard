@@ -28,7 +28,7 @@ from typing import Any
 from switchboard import board_checks, board_layout, board_style
 from switchboard.board_style import DEFAULT_STROKE, nearest_name
 from switchboard.envelope import clean
-from switchboard.redact import MARKER, redact
+from switchboard.redact import redact
 
 # The spike's caps (#622, question 7). Text is cut for everyone, so what an agent reads back
 # stays bounded; a person drawing by hand meets the same cut.
@@ -1267,24 +1267,24 @@ _WRAP_SCAN_MAX = 2000
 
 def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
     """``el`` without what points at a dropped id: its entry in a bound list or group list, a binding,
-    ``frameId`` or ``containerId`` set to ``None``. A copy when it changes, ``el`` itself when it does
-    not."""
+    ``frameId`` or ``containerId`` set to ``None``. ``el`` itself when nothing in it names a dropped id;
+    otherwise a copy, which has only lost entries, so it is never larger."""
     if not dropped:
         return el
-    el = dict(el)
-    if isinstance(el.get("boundElements"), list):
-        el["boundElements"] = [
-            b for b in el["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
+    new = dict(el)
+    if isinstance(new.get("boundElements"), list):
+        new["boundElements"] = [
+            b for b in new["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
         ]
-    if isinstance(el.get("groupIds"), list):
-        el["groupIds"] = [g for g in el["groupIds"] if g not in dropped]
+    if isinstance(new.get("groupIds"), list):
+        new["groupIds"] = [g for g in new["groupIds"] if g not in dropped]
     for key in ("startBinding", "endBinding"):
-        if isinstance(el.get(key), dict) and el[key].get("elementId") in dropped:
-            el[key] = None
+        if isinstance(new.get(key), dict) and new[key].get("elementId") in dropped:
+            new[key] = None
     for key in ("frameId", "containerId"):
-        if el.get(key) in dropped and el.get(key) is not None:
-            el[key] = None
-    return el
+        if new.get(key) in dropped and new.get(key) is not None:
+            new[key] = None
+    return new if new != el else el
 
 
 def _wrap_hides(text: str) -> list[str] | None:
@@ -1316,95 +1316,37 @@ def _wrap_hides(text: str) -> list[str] | None:
     return found or None
 
 
+def _needs_cleaning(el: dict[str, Any]) -> bool:
+    """True when a stored shape is one the cleaning of a write would change in any way (#893, schema 56):
+    an id or an id-like string that holds a secret; a tombstone with text; a text, ``originalText`` or
+    ``name`` that redaction or the cut would change; a ``text`` with line breaks and no ``originalText``,
+    or one whose wrap hides a secret."""
+    if not isinstance(el.get("id"), str) or any(redact(v)[1] for v in _id_strings(el)):
+        return True
+    fields = [el.get(k) for k in ("text", "originalText", "name") if isinstance(el.get(k), str)]
+    if el.get("isDeleted") is True:
+        return any(fields)
+    if any(_normal_text(v) != v for v in fields):
+        return True
+    text = el.get("text")
+    if isinstance(text, str) and "\n" in text:
+        return not isinstance(el.get("originalText"), str) or bool(_wrap_hides(text))
+    return False
+
+
 def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
-    """A stored whiteboard as the cleaner of a write would leave it, for the upgrade that cleans old data
-    (#893, schema 56). Unlike a write it normalizes and never refuses. Every text field is redacted and cut;
-    a tombstone keeps no text; a ``text`` with a line break and no ``originalText`` gets that text as its
-    ``originalText``. An element whose id, or whose id-like string in any reference, holds something
-    ``redact`` finds is dropped, and the references other elements hold to a dropped element are removed
-    (its entry in a bound list, a binding, ``frameId`` or ``containerId`` set to ``None``). Returns the
-    elements and the ids that were dropped. Idempotent."""
-    dropped = {e["id"] for e in elements if isinstance(e, dict) and isinstance(e.get("id"), str)
-               and any(redact(v)[1] for v in _id_strings(e))}  # fmt: skip
-    out: list[dict[str, Any]] = []
-    for e in elements:
-        if not isinstance(e, dict) or e.get("id") in dropped or not isinstance(e.get("id"), str):
-            continue
-        el = dict(e)
-        deleted = el.get("isDeleted") is True
-        for key in ("originalText", "name"):
-            if isinstance(el.get(key), str):
-                el[key] = "" if deleted else _normal_text(el[key])
-        if isinstance(el.get("text"), str):
-            if deleted:
-                el["text"] = ""
-            elif isinstance(el.get("originalText"), str):
-                el["text"] = el["originalText"]
-            else:
-                text = clean(el["text"])[:_SCAN_MAX]
-                hidden = _wrap_hides(text) if "\n" in text else None
-                if hidden:  # unverified wrapped words that a flattened reading finds a secret in: not kept
-                    el["text"] = el["originalText"] = " ".join(MARKER.format(kind=k) for k in hidden)
-                else:
-                    el["text"] = _normal_text(text)
-                    if "\n" in el["text"]:
-                        el["originalText"] = el["text"]
-        el = drop_references(el, dropped)
-        out.append(el)
-    return out, dropped
+    """A stored whiteboard cleaned once, for the upgrade that cleans old data (#893, schema 56). A shape that
+    needs any change (``_needs_cleaning``) is **removed**, not rewritten, and a shape that needs none is kept
+    as it is. The references the kept shapes held to a removed one go with it (its entry in a bound list or
+    group list, a binding, a ``frameId`` or ``containerId`` set to ``None``). So a board can only shrink: no
+    size limit can be crossed. Returns the kept shapes and the ids removed, which the caller also removes from
+    the change records. Anything that is not a shape (not a dict, no string id) is removed. Idempotent."""
+    shapes = [e for e in elements if isinstance(e, dict)]
+    dropped = {e["id"] for e in shapes if isinstance(e.get("id"), str) and _needs_cleaning(e)}
+    kept = [e for e in shapes if isinstance(e.get("id"), str) and e["id"] not in dropped]
+    return [drop_references(e, dropped) for e in kept], dropped
 
 
 def clean_change_ids(ids: list[Any], dropped: set[str]) -> list[str]:
     """A change record's element ids without a dropped id or one that holds a secret (#893, schema 56)."""
     return [i for i in ids if isinstance(i, str) and i not in dropped and not redact(i)[1]]
-
-
-def _scene_bytes(elements: list[dict[str, Any]]) -> int:
-    return len(json.dumps(elements, ensure_ascii=False, separators=(",", ":")).encode())
-
-
-def _shape_bytes(el: dict[str, Any]) -> int:
-    """The measure of the live write path (``clean_element``): the browser's is never more."""
-    return len(json.dumps(el, separators=(",", ":")).encode())
-
-
-def fit_stored(before: list[Any], after: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], set[str]]:
-    """``after`` (``clean_stored`` of ``before``) within every limit the live write path and the browser
-    enforce: ``MAX_SHAPE_BYTES`` for each shape, ``MAX_ELEMENTS`` shapes and ``MAX_BYTES`` for the
-    encoded scene (the column's character count is never more). Cleaning can grow a shape: a short secret
-    becomes a longer marker, and a legacy text is copied into ``originalText``. Only the shapes the
-    cleaning changed are touched, never an unchanged one, and the answer is deterministic: the text
-    fields that grew become the shortest marker, and a shape that still does not fit, or the changed
-    shapes (largest first) until the scene fits, are dropped. The upgrade is never rolled back for size.
-    Returns the shapes and the ids dropped here, whose references the caller removes with the others
-    (#893, schema 56)."""
-    was = {e["id"]: e for e in before if isinstance(e, dict) and isinstance(e.get("id"), str)}
-    out = list(after)
-    changed = [i for i, e in enumerate(out) if was.get(e["id"]) != e]
-
-    def shrink(i: int) -> None:
-        el, old = dict(out[i]), was[out[i]["id"]]
-        for key in ("text", "originalText", "name"):
-            if isinstance(el.get(key), str) and len(el[key]) > len(old.get(key) or ""):
-                el[key] = "[redacted]"
-        out[i] = el
-
-    gone: set[int] = set()
-    for i in changed:  # a shape over its own limit: shrunk, else dropped
-        if _shape_bytes(out[i]) > MAX_SHAPE_BYTES:
-            shrink(i)
-            if _shape_bytes(out[i]) > MAX_SHAPE_BYTES:
-                gone.add(i)
-
-    def kept() -> list[dict[str, Any]]:
-        return [e for j, e in enumerate(out) if j not in gone]
-
-    if len(kept()) > MAX_ELEMENTS or _scene_bytes(kept()) > MAX_BYTES:
-        for i in changed:
-            if i not in gone:
-                shrink(i)
-        for i in sorted((i for i in changed if i not in gone), key=lambda i: (-_scene_bytes([out[i]]), i)):
-            if len(kept()) <= MAX_ELEMENTS and _scene_bytes(kept()) <= MAX_BYTES:
-                break
-            gone.add(i)
-    return kept(), {out[i]["id"] for i in gone}

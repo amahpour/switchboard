@@ -1280,13 +1280,13 @@ def clean_review_rows(con: sqlite3.Connection) -> int:
 
 
 def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
-    """Clean what a room's whiteboard stored (#893): every board's elements and every change record's ids,
-    through ``board.clean_stored`` and ``board.clean_change_ids``. A text is redacted and cut, a
-    tombstone keeps
-    no text, a multi-line text with no ``originalText`` gets one, and an element whose id or reference holds a
-    secret is dropped with the references to it, and its id is removed from the change records, so no
-    secret id
-    survives anywhere. Idempotent. Returns how many values changed. Run with ``secure_delete`` on."""
+    """Clean what a room's whiteboard stored (#893): every board's elements and every change record's
+    ids. A shape that needs any change (a secret in its text, original text or name, a legacy multi-line
+    text without its original words, an id or reference that is a secret, a tombstone with text) is
+    **removed**, with the references to it and its id in the change records (``board.clean_stored``,
+    ``board.clean_change_ids``), and a shape that needs none is kept as it is. A board can only shrink. A
+    row that is not a board is cleared. Idempotent. Returns how many values changed. Run with
+    ``secure_delete`` on."""
     from switchboard import board
 
     changed = 0
@@ -1304,10 +1304,6 @@ def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
                 changed += 1
             continue
         cleaned, gone = board.clean_stored(loaded)
-        if cleaned != loaded:
-            cleaned, more = board.fit_stored(loaded, cleaned)
-            gone |= more  # the final set: secret-id drops and size drops, for every reference and record
-            cleaned = [board.drop_references(e, more) for e in cleaned]
         dropped[row["room_id"]] = gone
         if cleaned != loaded:
             text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
