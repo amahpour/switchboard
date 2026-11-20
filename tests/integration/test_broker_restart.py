@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import signal
 import threading
@@ -21,6 +22,7 @@ from test_agents_http_cursor import SID_A, invoke
 from test_agents_http_wake import claude_hook, joined_claude, listen, parked, participant, until
 
 from switchboard import db
+from switchboard.broker import agent_tokens
 from switchboard.clock import SystemClock
 from switchboard.config import Config
 from switchboard.store import Store
@@ -359,8 +361,14 @@ def test_a_client_that_keeps_its_session_id_is_served_after_a_restart(broker: In
     assert listed and all(name.startswith("switchboard_") for name in listed)  # Cursor's names
     joined = cursor_call(broker, c, token, "use-1", "switchboard_join", room="#build", screen_name="one")
     assert tool_json(joined)["ok"]
+    row = broker.state.store.agent_token_by_hash(agent_tokens.token_hash(token))
+    key = hashlib.sha256(sid.encode()).hexdigest()
+    before = broker.state.store.mcp_session(row.id, key)
+    assert before is not None and before.client_name == "Cursor"
     broker.restart()
     assert c.tools() == listed  # the same client after the restart, not the plain names
+    after = broker.state.store.mcp_session(row.id, key)
+    assert after is not None and after.opened_at > before.opened_at  # its month starts again
     first = cursor_call(
         broker, c, token, "use-2", "switchboard_say", room="#build", text="back after the restart"
     )
@@ -368,6 +376,9 @@ def test_a_client_that_keeps_its_session_id_is_served_after_a_restart(broker: In
     assert tool_json(first)["ok"]
     again = cursor_call(broker, c, token, "use-3", "switchboard_who", room="#build")
     assert again.headers["mcp-session-id"] == sid and tool_json(again)["ok"]
+    broker.restart()  # a second restart reopens the same ID again, not the one the first reopen made
+    second = cursor_call(broker, c, token, "use-4", "switchboard_who", room="#build")
+    assert second.headers["mcp-session-id"] == sid and tool_json(second)["ok"]
     history = broker.call("room.history", {"room": "#build"})["messages"]
     assert [m["from"] for m in history if m["text"] == "back after the restart"] == ["one"]
 

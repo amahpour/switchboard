@@ -187,7 +187,8 @@ HOOK_WAIT_S = 2.0  # how long a Claude Code call waits for its PreToolUse report
 ID_MAX = 128  # a session id or a tool call's id, as a harness sends it
 SESSIONS_MAX = 4096  # MCP sessions remembered, each with the token that opened it
 # A session the broker opened for a token before it restarted is opened again for that token when its client
-# keeps the ID (Cursor does, #823): what opened it is kept for these, the token's newest and for a month.
+# keeps the ID (Cursor does, #823): what opened it is kept for the token's newest, a month from when it was
+# opened or last opened again; a revoked token's go at once.
 REOPEN_KEEP = 100
 REOPEN_IDLE_S = 30 * 86400.0
 REOPEN_ID = "switchboard-reopen"  # the JSON-RPC id of the initialize the broker sends for the client
@@ -951,6 +952,7 @@ class AgentAuth:
                 log.warning("could not open an MCP session again after a restart (status %s)", status)
                 return None
             log.info("opened an MCP session again after a restart (%s)", opened.client_name)
+            self.state.store.mcp_session_reopened(row.id, opened.sid_hash)
             return self.bind(sid, row.id, inner)
 
     async def _inner(
@@ -1093,7 +1095,7 @@ class AgentAuth:
                     if k.lower() != b"mcp-session-id":
                         continue
                     named = v.decode("latin-1")
-                    if session is not None and inner is not None and named == inner:
+                    if sid is not None and inner is not None and named == inner:
                         # a session opened again answers with the ID its client knows
                         message = {**message, "headers": _with_session(headers, sid)}
                         self.bind(sid, row.id)

@@ -1,5 +1,5 @@
-"""Schema 56 keeps which client opened each MCP session, so a restart can open it again (DESIGN.md §49.2, #823).
-The step is from 55."""
+"""Schema 57 keeps which client opened each MCP session, so a restart can open it again (DESIGN.md §49.2,
+#823). The step is from 55: 56 is #896's, not merged yet."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def test_mcp_session_table_matches_fresh_schema(tmp_path: Path, monkeypatch: pyt
     backup = db.connect(path.with_name("old.db.v55.bak"), readonly=True)
     try:
         query = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='mcp_sessions' ORDER BY name"
-        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 56
+        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 57
         assert db.schema_version(backup) == 55
         assert db.row_counts(upgraded, db.TABLES) == {**counts, "mcp_sessions": 0}
         assert [tuple(r) for r in upgraded.execute(query)] == [tuple(r) for r in fresh.execute(query)]

@@ -71,3 +71,29 @@ def test_a_month_old_session_is_swept_when_a_new_one_opens(store: Store, clock: 
     opened(store, new, 2)
     assert store.mcp_session(old.id, sid_hash(1)) is None
     assert store.mcp_session(new.id, sid_hash(2)) is not None
+
+
+def test_a_session_opened_again_starts_its_month_again(store: Store, clock: FakeClock) -> None:
+    """A Cursor that stays open through restarts keeps one session ID for weeks: each time the broker opens
+    it again its month restarts, so it is not swept while its client still holds the ID. Fails if the sweep
+    counts only from the first open."""
+    mine, other = token(store, 1), token(store, 2)
+    opened(store, mine, 1)
+    clock.advance(REOPEN_IDLE_S - 10)
+    store.mcp_session_reopened(mine.id, sid_hash(1))
+    clock.advance(20)
+    opened(store, other, 2)  # the sweep runs here
+    assert store.mcp_session(mine.id, sid_hash(1)) is not None
+
+
+@pytest.mark.parametrize("by_id", [False, True])
+def test_a_revoked_token_keeps_no_session_to_open_again(store: Store, by_id: bool) -> None:
+    """A revoked token can't be used, so what its sessions were is kept for nothing: revoking it, by its
+    person or by the broker, removes them, and another token's stay. Fails if they wait for the sweep."""
+    mine, theirs = token(store, 1), token(store, 2)
+    opened(store, mine, 1)
+    opened(store, theirs, 2)
+    revoked = store.agent_token_revoke_id(mine.id) if by_id else store.agent_token_revoke(mine.id, None)
+    assert revoked is not None
+    assert store.mcp_session(mine.id, sid_hash(1)) is None
+    assert store.mcp_session(theirs.id, sid_hash(2)) is not None

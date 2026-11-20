@@ -150,7 +150,7 @@ def test_the_upgrade_cleans_what_a_board_stored_and_nothing_else(
     old.close()
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 56
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 57
         assert db.row_counts(con, db.tables_of(54)) == counts
         assert db.integrity_ok(con) is None
         dump = json.dumps(
@@ -256,7 +256,7 @@ def test_a_fresh_database_has_nothing_to_clean(tmp_path: Path) -> None:
     if it is not."""
     con = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 56
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 57
         assert db.clean_review_rows(con) == 0
     finally:
         con.close()

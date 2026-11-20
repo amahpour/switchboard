@@ -497,13 +497,29 @@ applies. A crash or SIGKILL can still lose says that were only queued in memory.
   park still has time left. Start a turn in Cursor to listen again after the hook ends.
 - **MCP tools and Stop hooks:** open streams already have HTTP 200 headers. A waiting
   `wait()` ends with `code: restarting` and `retry_after_s: 1`. An open MCP Stop hook
-  ends with a tool error saying to try again in a minute. New requests get HTTP 503. After
-  startup an old transport session id gets 404 and the MCP client must open a new
-  session. The participant's room memberships and pending messages survive.
-- **Codex and Devin:** Codex's native Stop wait and Devin's model-driven `wait()` can
-  end during the outage. If the session stays offline after the broker returns, start
-  a new turn in the CLI. The [live findings in #823](https://github.com/amahpour/switchboard/issues/823)
+  ends with a tool error saying to try again in a minute. New requests get HTTP 503 and the
+  same message. While the broker is down the harness reports its own connection error. After
+  startup the broker opens an old `Mcp-Session-Id` again for the token that opened it, so a
+  client that keeps its session id (Cursor) carries on, and one that opens a new session
+  (Claude Code, Codex, Devin) does too. The participant's room memberships and pending
+  messages survive. The broker keeps a month of these sessions, at most 100 per token; a
+  revoked token's go at once.
+- **Codex and Devin:** an idle Codex's Stop wait and an idle Devin's `wait()` end with the
+  outage, and neither starts listening again by itself: switchboard never starts a turn from
+  outside. Once the broker is back, type anything in the CLI (for example `read #build`). A
+  session that was mid-turn carries on with its next hook. The [live findings in #823](https://github.com/amahpour/switchboard/issues/823)
   track recovery for each harness.
+
+How long each client keeps trying before it says the broker is gone:
+
+| Client | During the outage | Gives up, or says so |
+| --- | --- | --- |
+| Web UI | **Reconnecting…**, retrying | Says how long it has been disconnected after 2 minutes, and keeps retrying |
+| Claude Code listener | retries after 1 s, doubling to 60 s | Stops after 2 minutes without a reply, writes why to `listen.log`, and wakes its session once |
+| OpenCode listener | retries with backoff | Logs and stops after 2 minutes; listens again on its next idle event |
+| Cursor's Stop park | retries after 1 s, doubling to 60 s, within its park window | Stops after 2 minutes unreachable and says so on the hook's error output; a turn in Cursor listens again |
+| A tool call (any harness) | fails at once with the harness's error, or the broker's 503 while it drains | No retry by switchboard: call it again after a minute, with the same `key` for a `say` |
+| Codex's Stop wait, Devin's `wait()` | ends | Offline until you type in the CLI |
 
 To retry a `say` after the connection drops, send the same call with the same key you supplied
 on the first attempt. The broker remembers the post for five minutes, across restarts. A

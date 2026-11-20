@@ -2109,6 +2109,8 @@ class Store:
                 != 1
             ):
                 return None
+            # a revoked token opens nothing again: what its MCP sessions were goes with it (#823)
+            self.con.execute("DELETE FROM mcp_sessions WHERE token_id=?", (token_id,))
             r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
         return AgentTokenRow.from_row(r)
 
@@ -2124,6 +2126,8 @@ class Store:
                 != 1
             ):
                 return None
+            # a revoked token opens nothing again: what its MCP sessions were goes with it (#823)
+            self.con.execute("DELETE FROM mcp_sessions WHERE token_id=?", (token_id,))
             r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
         return AgentTokenRow.from_row(r)
 
@@ -2163,6 +2167,15 @@ class Store:
             "SELECT * FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash)
         ).fetchone()
         return McpSessionRow.from_row(r) if r is not None else None
+
+    def mcp_session_reopened(self, token_id: int, sid_hash: str) -> None:
+        """The broker opened this session again after a restart: its month starts again from now, so a
+        session in use through several restarts is not swept while its client still holds the ID."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE mcp_sessions SET opened_at=? WHERE token_id=? AND sid_hash=?",
+                (self.clock.now(), token_id, sid_hash),
+            )
 
     def mcp_session_forget(self, token_id: int, sid_hash: str) -> None:
         """The client ended this session (an MCP DELETE): it is never opened again."""
