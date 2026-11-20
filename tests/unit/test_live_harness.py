@@ -169,8 +169,9 @@ def test_the_preflight_flags_another_mcp_server_under_the_cli() -> None:
 def test_cursors_own_worker_server_is_its_helper_and_a_look_alike_is_not() -> None:
     """Cursor Agent 2026.11.19 starts its own worker on a resume after a long idle: its bundled node running
     its own index.js. Fails if that is flagged as another MCP server (the resume test then fails, as it did
-    live after #885's long park), or if a look-alike is let through: another install's index.js, a script
-    elsewhere named the same, or the worker with arguments added."""
+    live after #885's long park), or if a look-alike is let through: another install's index.js (another
+    version, or the same version in another folder), a script elsewhere named the same, a command that only
+    ends in the worker's shape, or the worker with arguments added."""
     v = "/tmp/h/.local/share/cursor-agent/versions"
     ps = "\n".join(
         [
@@ -181,11 +182,13 @@ def test_cursors_own_worker_server_is_its_helper_and_a_look_alike_is_not() -> No
             "104 101 node /tmp/evil/index.js worker-server",
             f"105 101 {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js worker-server --mcp x",
             "106 101 node /tmp/h/.npm/_npx/9/node_modules/.bin/typescript-language-server",
+            f"107 101 {v}/2026.11.19-f005e9d/node /tmp/cursor-agent/versions/2026.11.19-f005e9d/index.js worker-server",
+            f"108 101 node /tmp/server.js {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js worker-server",
         ]
     )
     procs = preflight.parse(ps)
     flagged = sorted(x.split(":")[0] for x in preflight.problems(101, cursor.CursorRun.helpers, procs=procs))
-    assert flagged == ["103", "104", "105"]
+    assert flagged == ["103", "104", "105", "107", "108"]
     assert preflight.is_helper(procs[2][2], cursor.CursorRun.helpers)
     assert not preflight.is_helper(procs[4][2], cursor.CursorRun.helpers)
 
