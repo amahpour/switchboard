@@ -7929,8 +7929,10 @@
   function markRoomSeen(r, refresh) {
     // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
     const note = !!(r && r.joinedWith);
-    if (!r || (!note && (!r.lastId || (r.seenSent || 0) >= r.lastId))) return;
-    const upto = r.lastId || 0;
+    // under a filter the person saw the log up to where All left it, not what arrived since and was left out (#914)
+    const f = filterOf(r);
+    const upto = f ? Math.min(r.lastId || 0, f.allId) : (r && r.lastId) || 0;
+    if (!r || (!note && (!upto || (r.seenSent || 0) >= upto))) return;
     r.seenSent = Math.max(r.seenSent || 0, upto);
     r.joinedWith = '';
     const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
@@ -9598,7 +9600,7 @@
   // are the broker's answer, GET /api/rooms/{slug}/filter, so a message older than the loaded history is
   // found too; "Show older" asks for the page before. The room stays open under a filter: posting, opening
   // another room or a search result, or All, goes back to the live log.
-  state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
+  state.filter = null;  // { room, show, msgs, next, busy, failed, allId }: the active room under a filter
 
   const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
   const FILTER_EMPTY = {
@@ -9696,8 +9698,11 @@
     if (show === 'all' || !FILTER_EMPTY[show]) { leaveFilter(true); return; }
     const was = filterOf(r);
     if (was && was.show === show && !was.failed) return;
+    // what All had shown when the person left it: the seen mark goes no further while a filter is on. A window
+    // around a search result did not show the latest, and another filter adds nothing to what All showed.
+    const allId = was ? was.allId : state.around ? (r.seenSent || 0) : r.lastId;
     if (state.around) { state.around = null; resetSearch(); }  // a filter replaces a window around a result
-    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false };
+    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false, allId: allId };
     state.filter = f;
     renderLog();
     loadFilter(f, false);

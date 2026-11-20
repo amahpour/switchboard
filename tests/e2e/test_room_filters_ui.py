@@ -335,3 +335,47 @@ def test_an_agents_upload_shows_under_files_once_it_is_stored(ui: UI) -> None:
         expect(page.locator("#room-filter-note")).to_have_text("1 message with a file")
     finally:
         ui.world.close_extra_agents()
+
+
+def live_file(world: UIWorld, room: str, name: str) -> int:
+    """A person's stored file and the message bound to it, sent to the open pages as the broker sends one."""
+
+    def run() -> int:
+        state = world.broker.state
+        r = state.store.get_room("#" + room)
+        assert r is not None
+        fid = secrets.token_hex(16)
+        line = f"artifact: {name} | 3 | sha256:{'0' * 64} | switchboard:file/{fid}"
+        m = state.store.insert_message(r.id, sender_name="bob", sender_kind="human", via="web", text=line)
+        state.store.file_insert(
+            file_id=fid, room_id=r.id, name=name, size=3, sha256="0" * 64, content_type="text/plain",
+            uploader_name="bob", uploader_kind="human", state="stored", created_at=1.0, stored_at=1.0,
+            message_id=m.id,
+        )  # fmt: skip
+        state.service.hub.message(r.name, state.service.message_frame(m))
+        return m.id
+
+    return int(world.broker.on_loop(run))
+
+
+def test_a_mention_that_came_under_files_is_still_waiting_on_home(ui: UI) -> None:
+    """With Files on, an agent's @mention of alice arrives and is not shown; then a file arrives and is.
+    Opening Home marks the room seen only as far as All had shown it, so the mention is still waiting on alice
+    there. Fails if the page marks seen the newest line it holds, which the filter left out."""
+    room = "e2e-filters-seen"
+    fresh_room(ui.world, room, agent="asker")
+    try:
+        page = ui.open(room)
+        button(page, "files").click()
+        expect(page.locator("#room-filter-note")).to_have_text("No files in this room yet.")
+        asked = ui.world.agent_say("#" + room, "asker", "@alice which branch should ship?")
+        fid = live_file(ui.world, room, "plan.txt")  # after the mention on the same socket
+        expect(page.locator(f'#log .line[data-id="{fid}"]')).to_have_count(1)
+        assert asked not in shown(page)
+        page.locator("#home-nav").click()
+        expect(page.locator("#room-title")).to_have_text("Home")
+        card = page.locator("#home .home-card", has_text="#" + room)
+        expect(card).to_have_count(1)
+        expect(card).to_contain_text("which branch should ship?")
+    finally:
+        ui.world.close_extra_agents()
