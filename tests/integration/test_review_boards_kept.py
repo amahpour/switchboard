@@ -80,7 +80,10 @@ async def test_closing_a_board_keeps_it_and_open_brings_back_its_items_history_a
             shown = await tool(author, action="show", url=PR_A)
             assert shown["ok"], shown
             head_line, *lines = shown["board"].splitlines()
-            assert head_line.startswith(f"Review of {PR_A} at aaa1111: open (closed by codex-1 on ")
+            # the header names the fix, which is newer than the commit the board was opened at (#906)
+            assert head_line.startswith(
+                f"Review of {PR_A} at bbb2222 (last fix): open (closed by codex-1 on "
+            )
             assert head_line.endswith("; open(url) brings it back)")
             assert any(x.startswith("F2 [raised] rounding") for x in lines)
             assert any(x.startswith("F1 [fixed] wrong total") for x in lines)

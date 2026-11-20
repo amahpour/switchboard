@@ -289,6 +289,105 @@ def test_the_board_text_puts_open_work_first_and_stays_short() -> None:
     assert lines[3].startswith("F1 [fixed]") and len(lines) == 4
 
 
+def test_show_names_the_newest_commit_the_board_was_told_and_keeps_the_opened_one() -> None:
+    """#906: the first line kept the commit the board was opened at after fixes landed at newer
+    ones, so a reader could think the review was of that old commit. ``show`` names the latest
+    commit an open, a fix or a report told the board, and says which when it is not the board's
+    head. The stored head is left as open set it. Fails if the line still names the opened
+    commit after a later fix, if a later open or report does not take the line, or if opening
+    again at the same head hides the fix."""
+    url = "https://example.com/pr/7"
+    opened, fix, moved, reported = "4f2c9e1a7b30", "9a1b2c3d4e5f", "7b9c2a4d6e8f", "aeb613ed0011"
+    review = {"url": url, "head": opened, "opened_at": 1.0}
+    items = [replace(finding("fixed", owner="claude-1"), commit=fix)]
+    told = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {"ts": 2.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": fix, "proof": "t"}},
+    ]
+    present = ("claude-1", "codex-1")
+
+    def first(events: list[dict[str, object]], row: dict[str, object] | None = None) -> str:
+        return reviews.render(row or review, items, None, present, (), events).splitlines()[0]
+
+    assert reviews.header_commit(review, items, told) == (fix, "last fix")
+    assert first(told) == f"Review of {url} at {fix} (last fix): settled"
+    # a later fix replaces an earlier one; the tag stays "last fix"
+    later = "656cfb2d395b"
+    two = told + [
+        {"ts": 3.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": later, "proof": "t"}}
+    ]
+    assert reviews.header_commit(review, [replace(items[0], commit=later)], two) == (later, "last fix")
+    # opening again at the same head is not a newer commit, so the fix stays
+    kept = told + [{"ts": 4.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "kept"}}]
+    assert first(kept) == f"Review of {url} at {fix} (last fix): settled"
+    # a later open that moves the head wins, and the line names that head with no tag
+    moved_row = {**review, "head": moved}
+    moved_events = told + [{"ts": 5.0, "data": {"open": url, "head": moved, "by": "codex-1", "how": "moved"}}]
+    assert reviews.header_commit(moved_row, items, moved_events) == (moved, "")
+    assert first(moved_events, moved_row) == f"Review of {url} at {moved}: settled"
+    # a report's head is a commit the board was told, and it does not replace the stored one
+    reported_events = told + [
+        {"ts": 5.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": reported}}
+    ]
+    assert reviews.header_commit(review, items, reported_events) == (reported, "reported")
+    assert first(reported_events) == f"Review of {url} at {reported} (reported): settled"
+    assert review["head"] == opened
+    # a close's merge commit is a commit the board was told (#894), later than the fix
+    merged = "c0ffee123456"
+    merge_events = told + [
+        {"ts": 6.0, "data": {"report": {"pr_state": "merged", "commit": merged}, "by": "claude-1"}}
+    ]
+    assert reviews.header_commit(review, items, merge_events) == (merged, "merged")
+    assert first(merge_events) == f"Review of {url} at {merged} (merged): settled"
+    # a non-hex commit is ignored. It must not promote the row's older commit over a
+    # commit told since: the row still holds the first fix.
+    between = "abababababab"
+    junk = told + [
+        {"ts": 8.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": between}},
+        {"ts": 9.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": "main"}},
+    ]
+    assert reviews.header_commit(review, items, junk) == (between, "reported")
+    # an old agent fix event has no commit field: the finding's commit is what it named
+    legacy = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {"ts": 2.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "proof": "t"}},
+    ]
+    assert reviews.header_commit(review, items, legacy) == (fix, "last fix")
+    # a person's mark-fixed names no commit. The row still holds A after a reopen, and
+    # that ruling must not put A back over a commit the board was told since (B).
+    fixed_at, told_b = "aaa1111aaa11", "bbb2222bbb22"
+    ruled = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {
+            "ts": 2.0,
+            "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": fixed_at, "proof": "t"},
+        },
+        {"ts": 3.0, "data": {"item": "F1", "to": "conceded", "by": "codex-1"}},
+        {"ts": 4.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": told_b}},
+        {"ts": 5.0, "data": {"item": "F1", "to": "fixed", "by": "alice", "person": True}},
+    ]
+    assert reviews.header_commit(
+        review, [replace(finding("conceded", owner="claude-1"), commit=fixed_at)], ruled
+    ) == (told_b, "reported")
+    # a merge commit and a head on the same event: the merge commit is the one named
+    both = "dddddddddddd"
+    tie = [
+        {
+            "ts": 1.0,
+            "data": {
+                "report": {"pr_state": "merged", "commit": merged},
+                "by": "claude-1",
+                "head": both,
+            },
+        }
+    ]
+    assert reviews.header_commit(review, items, tie) == (merged, "merged")
+    # with no events the line is the stored head, as a caller that has not loaded history reads it
+    assert reviews.render(review, items, None, present).splitlines()[0] == (
+        f"Review of {url} at {opened}: settled"
+    )
+
+
 def test_the_handoff_plan_includes_all_settled_outcomes_in_one_summary() -> None:
     items = [
         replace(finding("fixed", owner="claude-1", n=1), commit="9a1b2c3d4e5f6"),

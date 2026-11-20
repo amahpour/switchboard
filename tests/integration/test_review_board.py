@@ -586,6 +586,40 @@ async def test_a_report_of_ci_blocked_by_a_conflict_shows_on_the_board_and_in_sh
         web.close()
 
 
+async def test_a_report_with_a_head_and_ci_blocked_shows_both_in_show_and_on_the_page(
+    broker: InProcBroker,
+) -> None:
+    """#906 with #907: one report can name a newer commit and say CI is blocked by a conflict. `show`
+    names the commit with "(reported)" on its first line and the conflict on the next, and the page gets
+    the commit, the note and pr_ci="blocked" together. Fails if either part drops the other, or the
+    blocked notice is lost when the report carries a head."""
+    reported = "c0ffee0c0ffee0"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "kc-r") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR, head="a1b2c3d4e5f6")
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked", head=reported)
+            assert r["ok"], r
+            shown = (await reviewer.call("review", room="#build", action="show"))["board"].splitlines()
+            assert shown[0].startswith(f"Review of {PR} at {reported[:12]} (reported): "), shown
+            blocked = "The pull request: CI blocked: conflicts with its base (per codex-1"
+            assert shown[1].startswith(blocked), shown
+            page = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert page is not None
+            assert page["head"] == "a1b2c3d4e5f6" and page["head_sha"] == reported
+            assert page["head_note"] == "reported" and page["pr_ci"] == "blocked"
+            assert page["report"].startswith("CI blocked: conflicts with its base (per codex-1"), page
+        texts = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        assert f"codex-1 reports CI blocked on {PR}: it conflicts with its base" in texts, texts
+    finally:
+        web.close()
+
+
 async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
     broker: InProcBroker,
 ) -> None:
@@ -1026,9 +1060,10 @@ async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: I
             mine = [line for line in text.splitlines() if " from=alice " in line]
             assert mine and not any(PR in line or "expired codes" in line for line in mine)
             r = await reviewer.call("review", room="#build", action="show")
+            # the board was opened with no head; the fix is the commit it was told (#906)
             assert (
                 r["board"].splitlines()[0]
-                == f"Review of {PR}: handed off to codex-1: post one review now, once"
+                == f"Review of {PR} at 9a1b2c3 (last fix): handed off to codex-1: post one review now, once"
             )
             assert "F2 Dropped: style nit" in r["board"]
     finally:
@@ -1924,6 +1959,158 @@ async def test_an_independent_reviewer_takes_a_departed_raisers_findings(broker:
             assert done["ok"] and done["settled"]
     finally:
         web.close()
+
+
+async def test_show_and_the_page_name_the_newest_commit_the_board_was_told(broker: InProcBroker) -> None:
+    """#906: after a fix at a newer commit, ``show`` and the page named the commit the board was
+    opened at, so a reader could think the review was of that old commit. Both name the newest
+    commit an open, a fix or a report told the board. ``list``, the stored head and the outdated
+    mark keep the commit the board was opened or moved to. A report's head does not move the
+    board, and opening again at the same head does not hide the fix."""
+    opened, fix, reported, moved, newer = (
+        "4f2c9e1a7b30",
+        "9a1b2c3d4e5f",
+        "aeb613ed0011",
+        "7b9c2a4d6e8f",
+        "656cfb2d395b",
+    )
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            opened_board = await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+            assert opened_board["board"].splitlines()[0] == f"Review of {PR} at {opened}: settled"
+            await reviewer.call(
+                "review", room="#build", action="raise", title="Expired codes still apply",
+                where="shop/codes.py:12",
+            )  # fmt: skip
+            await author.call("review", room="#build", action="concede", item="F1")
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=fix, proof="test_expiry"
+            )
+            assert fixed["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+
+            page = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert page is not None
+            assert page["head"] == opened
+            assert page["head_sha"] == fix
+            assert page["head_note"] == "last fix"
+            assert page["items"][0]["outdated_head"] == ""
+
+            listed = await reviewer.call("review", room="#build", action="list")
+            assert f"at {opened}" in listed["boards"]
+            assert "(last fix)" not in listed["boards"]
+            assert fix not in listed["boards"]
+
+            kept = await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+            assert kept["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+
+            bad = await reviewer.call("review", room="#build", action="report", state="open", head="main")
+            assert bad["ok"] is False and "commit hash" in bad["error"]
+            still = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert still is not None and still["head"] == opened and still["head_sha"] == fix
+
+            told = await reviewer.call("review", room="#build", action="report", state="open", head=reported)
+            assert told["board"].splitlines()[0] == f"Review of {PR} at {reported} (reported): open"
+            after = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert after is not None
+            assert after["head"] == opened and after["head_sha"] == reported
+            assert after["head_note"] == "reported"
+            assert after["items"][0]["outdated_head"] == ""
+
+            moved_board = await reviewer.call("review", room="#build", action="open", url=PR, head=moved)
+            assert moved_board["board"].splitlines()[0] == f"Review of {PR} at {moved}: open"
+            shifted = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert shifted is not None
+            assert shifted["head"] == moved and shifted["head_sha"] == moved and shifted["head_note"] == ""
+            assert shifted["items"][0]["outdated_head"] == moved
+
+            again = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=newer, proof="test_expiry"
+            )
+            assert again["board"].splitlines()[0] == f"Review of {PR} at {newer} (last fix): open"
+            latest = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert latest is not None
+            assert latest["head"] == moved and latest["head_sha"] == newer
+            assert latest["head_note"] == "last fix"
+
+            merged = "c0ffee123456"
+            before = [row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")]
+            closed = await reviewer.call(
+                "review", room="#build", action="close", state="merged", commit=merged, reason="landed"
+            )
+            assert closed["ok"] and closed["closed"] is True
+            shown = await reviewer.call("review", room="#build", action="show", url=PR)
+            assert shown["board"].splitlines()[0].startswith(f"Review of {PR} at {merged} (merged)")
+            # the same merged report, naming only a newer head, does not say the close again
+            again_report = await reviewer.call(
+                "review", room="#build", action="report", state="merged", url=PR, head="b0b0b0b0b0b0"
+            )
+            assert again_report["ok"] and again_report["closed"] is True
+            after = [row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")]
+            added = after[len(before) :]
+            assert any(merged in line and "closed by" in line for line in added)
+            assert not any("remains closed" in line or "the review board is closed" in line for line in added)
+            reread = await reviewer.call("review", room="#build", action="show", url=PR)
+            assert reread["board"].splitlines()[0].startswith(f"Review of {PR} at b0b0b0b0b0b0 (reported)")
+    finally:
+        web.close()
+
+
+async def test_a_holders_one_move_fix_at_a_new_commit_names_that_commit(broker: InProcBroker) -> None:
+    """#909 and #906 together: the holder's fix on a raised finding writes a concession and a fix
+    event in one move, and its open event records ``opener``. The header must read that fix's
+    commit as an agent fix and name it with (last fix); the opener on the open event must not
+    change the commit the board was opened at. Fails if the combined move's fix event is skipped,
+    or the open event's opener makes the header lose the opened head."""
+    opened, fix = "4f2c9e1a7b30", "9a1b2c3d4e5f"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            board = await author.call("review", room="#build", action="open", url=PR, head=opened)
+            assert board["board"].splitlines()[0] == f"Review of {PR} at {opened}: settled"
+            assert q(broker, "SELECT count(*) FROM events WHERE kind='review' AND data LIKE '%opener%'")[0][0]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            raised = await author.call("review", room="#build", action="show", url=PR)
+            assert raised["board"].splitlines()[0] == f"Review of {PR} at {opened}: open"
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=fix, proof="test_total"
+            )
+            assert fixed["ok"], fixed
+            assert fixed["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+            page = page_board(web.get("/api/rooms/build/review"))
+            assert page is not None
+            assert page["head"] == opened and page["head_sha"] == fix and page["head_note"] == "last fix"
+            assert [h["did"] for h in page["items"][0]["history"]] == ["raised it", "conceded it", "fixed it"]
+    finally:
+        web.close()
+
+
+async def test_a_repeated_report_after_a_reopen_records_the_head_again(broker: InProcBroker) -> None:
+    """A closed outcome reported at B, a reopen at C, then a close with no outcome, keeps
+    ``pr_state``. Reporting B again used to see B on the old report and return without
+    recording it, so the header stayed at C although B was the latest head told. Fails if
+    that second report is dropped."""
+    opened, reported, moved = "4f2c9e1a7b30", "bbbbbbbbbbbb", "cccccccccccc"
+    async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+        closed = await reviewer.call("review", room="#build", action="report", state="closed", head=reported)
+        assert closed["ok"] and closed["closed"] is True, closed
+        back = await reviewer.call("review", room="#build", action="open", url=PR, head=moved)
+        assert back["board"].splitlines()[0].startswith(f"Review of {PR} at {moved}")
+        shut = await reviewer.call("review", room="#build", action="close", reason="pausing")
+        assert shut["ok"] and shut["closed"] is True, shut
+        again = await reviewer.call(
+            "review", room="#build", action="report", state="closed", url=PR, head=reported
+        )
+        assert again["ok"] and again["closed"] is True, again
+        shown = await reviewer.call("review", room="#build", action="show", url=PR)
+        assert shown["board"].splitlines()[0].startswith(f"Review of {PR} at {reported} (reported)")
 
 
 async def test_concede_on_a_reopened_card_says_it_is_already_yours(broker: InProcBroker) -> None:

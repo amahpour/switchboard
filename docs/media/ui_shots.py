@@ -62,6 +62,8 @@ redact-{light,dark,phone-light} (a pasted token, with and without the redaction 
 past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
 merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
 ``--only past_boards``),
+board-header-commit-{light,dark,phone-light} (the header names the newest commit the board was told, #906;
+``--only header_commit``),
 report-conflict-{before,after}-{light,dark,phone-light} (the board's header for a pull request that
 conflicts with its base: only "CI none", then "conflicts with its base", #907; ``--only report_conflict``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
@@ -4246,6 +4248,47 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_header_commit(browser: Any, out: Path, world: Any) -> None:
+    """#906: the header names the newest commit the board was told. The seed opens at one commit
+    and fixes a finding at a later one, so the header reads that later commit, with (last fix)."""
+    from playwright.sync_api import expect
+
+    world.create_room("#header-commit")
+    world.add_agents("#header-commit", ("claude-1", "codex-1"))
+    world.seed_review("#header-commit")
+
+    def clip_of(page: Any) -> dict[str, float]:
+        settle(page)
+        return page.evaluate(
+            "(pad) => { const b = document.querySelector('#board .board-head').getBoundingClientRect();"
+            " return {x: Math.max(0, b.left - pad), y: Math.max(0, b.top - pad),"
+            " width: b.width + pad * 2, height: b.height + pad * 2}; }",
+            12,
+        )
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#header-commit"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            expect(page.locator("#board .board-head-sha")).to_have_text("9a1b2c3")
+            expect(page.locator("#board .board-head-note")).to_have_text("(last fix)")
+            shot(page, out, f"board-header-commit-{slug}.png", clip_of(page))
+        finally:
+            ctx.close()
+
+
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names``, ``admins`` and ``backups`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
@@ -4766,6 +4809,7 @@ ONLY: dict[str, Any] = {
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
     "room_members": shoot_room_members,
+    "header_commit": shoot_header_commit,
 }
 
 

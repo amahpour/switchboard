@@ -3687,6 +3687,22 @@ def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -
     expect(report).to_have_css("color", muted)
 
 
+def test_the_board_header_shows_a_reported_commit_beside_ci_blocked_on_a_phone(ui: UI) -> None:
+    """#906 with #907: a report that names a newer commit and says CI is blocked puts both in the header,
+    the commit with "(reported)" and the conflict in red, and on a phone nothing scrolls sideways. Fails
+    if one replaces the other or the longer header pushes the page wider than the screen."""
+    page = review_room(ui, "e2e-board-conflict-head", **PHONE)
+    room = "#e2e-board-conflict-head"
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked", head="c0ffee0c0ffee0")
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-head-sha")).to_have_text("c0ffee0")
+    expect(page.locator("#board .board-head-note")).to_have_text("(reported)")
+    report = page.locator("#board-report")
+    expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
+    expect(report).to_have_class(re.compile(r"\bconflict\b"))
+    no_horizontal_scroll(page)
+
+
 def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> None:
     """#786: Edit opens the card's text, Save writes the fields that changed, and the history
     names them. Fails while a card has no edit, so a wrong title stays on the card."""
@@ -4001,13 +4017,54 @@ def test_the_board_header_names_the_forge_repository_and_number(
     expect(link.locator(".board-pr-num")).to_have_text(ref)
     name = "GitHub pull request" if kind == "github" else "GitLab merge request"
     expect(link).to_have_attribute("aria-label", f"{name} {repo} {ref}")
+    # the seed fixes F2 at a later commit than the one the board was opened at (#906)
     sha = page.locator("#board .board-head-sha")
-    expect(sha).to_have_text("4f2c9e1")
-    expect(sha).to_have_attribute("title", "4f2c9e1a7b30")
+    expect(sha).to_have_text("9a1b2c3")
+    expect(sha).to_have_attribute("title", "9a1b2c3d4e5f (last fix)")
+    expect(page.locator("#board .board-head-note")).to_have_text("(last fix)")
     cut = "e => e.scrollWidth > e.clientWidth"
     assert not link.locator(".board-pr-num").evaluate(cut)  # the number is never cut
     assert not link.locator(".board-pr-repo").evaluate(cut)  # nor a name this short, on a phone too
     no_horizontal_scroll(page)
+
+
+def test_the_board_header_names_the_newest_commit_it_was_told(ui: UI) -> None:
+    """#906: the header kept the commit the board was opened at after a fix landed at a newer
+    one. It names the newest commit a fix or an open told it, and the note is there only when
+    that commit is not the board's head. A later open at a new head takes the line back."""
+    slug = "e2e-board-header-commit"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    sha = page.locator("#board .board-head-sha")
+    note = page.locator("#board .board-head-note")
+    expect(sha).to_have_text("9a1b2c3")
+    expect(note).to_have_text("(last fix)")
+    wait_for(
+        lambda: ui.world.broker.on_loop(
+            lambda: any(
+                room in sub.rooms and "review" in sub.kinds and not sub.closed
+                for sub in ui.world.broker.state.hub.subs
+            )
+        ),
+        what="the browser's review subscription",
+    )
+    newer = "656cfb2d395b"
+    ui.world.agent_call(
+        room, "codex-1", "review", action="fix", item="F4", commit=newer, proof="tests/test_codes.py"
+    )
+    expect(sha).to_have_text(newer[:7])
+    expect(sha).to_have_attribute("title", f"{newer} (last fix)")
+    expect(note).to_have_text("(last fix)")
+    moved = "7b9c2a4d6e8f"
+    ui.world.agent_call(
+        room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7", head=moved
+    )
+    expect(sha).to_have_text(moved[:7])
+    expect(sha).to_have_attribute("title", moved)
+    expect(note).to_have_count(0)
+    # the line links stay on the commit the board was moved to, not the last fix
+    expect(page.locator("#board .board-outdated").first).to_be_visible()
 
 
 def test_a_url_that_names_no_forge_is_shown_as_it_is(ui: UI) -> None:

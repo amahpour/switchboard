@@ -3187,7 +3187,9 @@ body.login {
 .board-pr.forge-gitlab .mark { fill: var(--forge-gitlab); }
 .board-pr-repo { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .board-pr-num { flex: none; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.board-head-commit { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
 .board-head-sha { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
+.board-head-note { color: var(--muted-2); font-size: calc(12px * var(--text-scale)); }
 /* Two or more open boards in a room (#445, DESIGN.md §37.14): tabs on the header's first row, one
    board on show below. A tab is the pull request's mark and short name, and the number of items
    that need a person on it, in the chip-danger colors. */

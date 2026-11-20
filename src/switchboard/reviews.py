@@ -42,6 +42,9 @@ MAX_LISTED = 50  # boards `list` names, open ones first
 FIX_CONFIRM_TIMEOUT_S = 24 * 60 * 60
 
 HEAD_RE = re.compile(r"^[0-9a-f]{7,64}$")
+# what the header may say a commit is, besides the board's own head (#906). Fixed strings: a
+# stored event cannot put its own words next to the sha.
+HEADER_NOTES = ("last fix", "reported", "merged")
 LINES_RE = re.compile(r"^[1-9][0-9]{0,6}(-[1-9][0-9]{0,6})?$")
 URL_RE = re.compile(r"^https?://[^\s<>\"']+$")
 # The forge a board's URL names, from its path (forge()): a GitHub pull request, or a GitLab
@@ -1362,18 +1365,129 @@ def options_text(item: Item, present: Sequence[str]) -> str:
     return text
 
 
+def _told_sha(value: Any) -> str:
+    """A commit a row or an event claims, or "" when it is not 7 to 64 hex digits. The header
+    shows only a commit; anything else in a stored event is left out rather than printed."""
+    if not isinstance(value, str) or not HEAD_RE.fullmatch(value.strip().lower()):
+        return ""
+    return value.strip().lower()
+
+
+def _event_time(event: dict[str, Any], index: int) -> tuple[float, int]:
+    """When the board was told ``event``, then its order, so two at one moment stay in order.
+    A missing or non-numeric time sorts first: it cannot outrank a commit that has one."""
+    ts = event.get("ts")
+    when = float(ts) if type(ts) is int or type(ts) is float else 0.0
+    return when, index
+
+
+def header_commit(
+    review: dict[str, Any], items: Sequence[Item], events: Sequence[dict[str, Any]] = ()
+) -> tuple[str, str]:
+    """The commit the header and ``show`` name, and a tag for what named it (#906).
+
+    ``("", "")`` when the board was told no commit. The tag is ``""`` when the commit is the
+    board's head (what ``open`` set or moved it to), ``"last fix"`` when a fix named a later
+    one, ``"reported"`` when a report's ``head`` did, and ``"merged"`` when a close stored a
+    merge commit on its report. The latest is the one told last, from the board's own events:
+    switchboard never asks a forge, and it cannot know git order.
+
+    An ``open`` that keeps the head already stored (``how`` ``kept``, or a reopen that passes
+    it again) is not a newer commit, so it does not hide a fix told since. A fix or a report
+    never replaces the stored head: that commit stays what history, ``list``, the outdated
+    mark and a GitLab line link use. With no events, the stored head is the answer, so a
+    caller that has not loaded the history reads the board as it did before.
+
+    A person's mark-fixed (``person`` true) names no commit and is skipped: the finding's
+    row can still hold an older one. An agent fix event with no ``commit`` field is an old
+    event and uses the finding's commit; a ``commit`` that is not a hash is ignored, not
+    replaced by the row. A merge commit on the same event as a head outranks that head.
+    """
+    stored = _told_sha(review.get("head"))
+    if not events:
+        return stored, ""
+    current = ""
+    # when, event order, then a rank so a merge commit beats a head on the same event.
+    # A sha is never part of the order: hex order is not git order.
+    candidates: list[tuple[float, int, int, str, str]] = []
+    by_label = {item.label: item for item in items}
+    for index, event in enumerate(events):
+        data = event.get("data") if isinstance(event, dict) else None
+        if not isinstance(data, dict):
+            continue
+        when, order = _event_time(event, index)
+        named = _told_sha(data.get("head"))
+        how = data.get("how") if isinstance(data.get("how"), str) else ""
+        if "open" in data and named and how != "kept" and (how in ("opened", "moved") or named != current):
+            current = named
+            candidates.append((when, order, 0, named, ""))
+        if data.get("to") == "fixed" and data.get("person") is not True:
+            if "commit" in data:
+                commit = _told_sha(data.get("commit"))
+            elif isinstance(data.get("item"), str):
+                item = by_label.get(data["item"])
+                commit = _told_sha(item.commit) if item is not None else ""
+            else:
+                commit = ""
+            if commit:
+                candidates.append((when, order, 0, commit, "last fix"))
+        if "report" in data:
+            # a report's own head, or the merge commit a close stores inside the report (#894)
+            reported = _told_sha(data.get("head"))
+            body = data.get("report")
+            merged = _told_sha(body.get("commit")) if isinstance(body, dict) else ""
+            if reported:
+                candidates.append((when, order, 0, reported, "reported"))
+            if merged:
+                candidates.append((when, order, 1, merged, "merged"))
+    if stored and not any(sha == stored and note == "" for _, _, _, sha, note in candidates):
+        opened = review.get("opened_at")
+        when = float(opened) if type(opened) is int or type(opened) is float else 0.0
+        candidates.append((when, -1, 0, stored, ""))
+    if not candidates:
+        return "", ""
+    _, _, _, sha, note = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    if sha == stored:
+        note = ""
+    return sha, note
+
+
+def header_phrase(
+    review: dict[str, Any], items: Sequence[Item], events: Sequence[dict[str, Any]] = ()
+) -> str:
+    """`` at <sha>`` for the header line, plus `` (last fix)``, `` (reported)`` or `` (merged)``
+    when that is what named a commit other than the board's head. Empty when there is none.
+
+    A board dict the broker built carries ``head_sha`` and ``head_note``, the same answer
+    ``header_commit`` gave the page, so ``show`` and the page cannot drift. A value that is
+    not a commit is dropped. Without those fields the events are read here."""
+    if "head_sha" in review:
+        raw = review.get("head_sha")
+        sha = _told_sha(raw) if isinstance(raw, str) else ""
+        note = review.get("head_note") if review.get("head_note") in HEADER_NOTES else ""
+        if sha == _told_sha(review.get("head")):
+            note = ""
+    else:
+        sha, note = header_commit(review, items, events)
+    if not sha:
+        return ""
+    return f" at {sha[:12]}" + (f" ({note})" if note else "")
+
+
 def render(
     review: dict[str, Any],
     items: list[Item],
     now: float | None = None,
     present: Sequence[str] = (),
     offline: Collection[str] = (),
+    events: Sequence[dict[str, Any]] = (),
 ) -> str:
     """The board as an agent reads it: one line per item, open work first. Short on purpose:
     the board replaces a wall of text in the room, it mustn't become one. ``present``: the room's
     agents, who must all pick an option for it to read "recommended by" (``consensus``), and whose
-    raiser a contested finding waits on; ``offline``: those among them who are not there (#424)."""
-    head_s = f" at {review['head'][:12]}" if review.get("head") else ""
+    raiser a contested finding waits on; ``offline``: those among them who are not there (#424).
+    The first line names the newest commit the board was told (#906, ``header_commit``)."""
+    head_s = header_phrase(review, items, events)
     closed = review.get("closed_at") is not None
     state = "settled" if settled(items) else "open"
     if review.get("posted_by"):
@@ -1431,7 +1545,7 @@ def render_item(
     offline: Collection[str] = (),
 ) -> str:
     """One card in full (#782), with the same bounded history the page reads."""
-    out = [render({**review, "plan": None}, [item], now, present, offline)]
+    out = [render({**review, "plan": None}, [item], now, present, offline, events)]
     for label, value in (
         ("Detail", item.detail),
         ("Owner", item.owner),
