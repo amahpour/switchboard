@@ -869,6 +869,47 @@ class Store:
         ).fetchall()
         return [Message.from_row(r) for r in rows]
 
+    def room_addressed(
+        self, room_id: int, me: str, before: int, limit: int
+    ) -> list[tuple[Message, bool]]:
+        """A room's chat messages addressed to the person ``me``, newest first, ``id < before``: the
+        Mentions filter (DESIGN.md §64). Each comes as ``(message, replies_to_me)`` for ``home.addressed_to``,
+        the one test of "addressed to me", which the caller applies; the SQL here finds the same rows (a
+        screen name is ASCII without quotes, so its quoted form in the JSON text of ``mentions`` is exact)
+        and only narrows. The first terms are ``messages_addressed``'s own condition, so SQLite walks that
+        partial index (schema 59) and not the room's whole history."""
+        rows = self.con.execute(
+            "SELECT m.*, EXISTS (SELECT 1 FROM messages p WHERE p.id=m.reply_to AND p.room_id=m.room_id"
+            "  AND p.sender_kind='human' AND lower(p.sender_name)=:me) AS to_me"
+            " FROM messages m WHERE m.room_id=:room AND m.id<:before"
+            " AND m.kind='chat' AND (m.mentions!='[]' OR m.reply_to IS NOT NULL)"
+            " AND NOT (m.sender_kind='human' AND lower(m.sender_name)=:me)"
+            " AND (instr(lower(m.mentions), :mention)>0 OR instr(lower(m.mentions), '\"humans\"')>0"
+            "  OR (m.sender_kind!='human' AND EXISTS (SELECT 1 FROM messages p WHERE p.id=m.reply_to"
+            "   AND p.room_id=m.room_id AND p.sender_kind='human' AND lower(p.sender_name)=:me)))"
+            " ORDER BY m.id DESC LIMIT :n",
+            {
+                "room": room_id,
+                "me": me.lower(),
+                "mention": f'"{me.lower()}"',
+                "before": int(before),
+                "n": max(1, min(int(limit), 1000)),
+            },
+        ).fetchall()
+        return [(Message.from_row(r), bool(r["to_me"])) for r in rows]
+
+    def room_with_files(self, room_id: int, before: int, limit: int) -> list[Message]:
+        """A room's messages that carry a stored file (an attachment, a call's snapshot), newest first,
+        ``id < before``: the Files filter (DESIGN.md §64). It starts from the room's files (``files_room``),
+        so it reads the room's files and not its history; a file still uploading is not one."""
+        rows = self.con.execute(
+            "SELECT m.* FROM files f CROSS JOIN messages m ON m.id=f.message_id"
+            " WHERE f.room_id=:room AND f.state='stored' AND f.message_id<:before AND m.room_id=:room"
+            " GROUP BY m.id ORDER BY m.id DESC LIMIT :n",
+            {"room": room_id, "before": int(before), "n": max(1, min(int(limit), 1000))},
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
     def count_messages(
         self, room_id: int, after: int = 0, before: int | None = None, kind: str | None = None
     ) -> int:

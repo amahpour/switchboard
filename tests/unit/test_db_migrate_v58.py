@@ -44,7 +44,7 @@ def test_a_schema_56_database_takes_57s_check_edit_and_gains_mcp_sessions_at_58(
     backup = db.connect(db.backup_path_for(path, 56), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 58
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 59
         assert db.schema_version(backup) == 56
         assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0}
         same_table_as_fresh(con, tmp_path)
@@ -88,7 +88,7 @@ def test_a_schema_57_database_only_gains_mcp_sessions(
     con = db.open_db(path)
     backup = db.connect(db.backup_path_for(path, 57), readonly=True)
     try:
-        assert db.schema_version(con) == 58
+        assert db.schema_version(con) == db.SCHEMA_VERSION
         assert db.schema_version(backup) == 57
         assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0}
         same_table_as_fresh(con, tmp_path)
@@ -120,7 +120,7 @@ def test_a_schema_58_database_opens_unchanged(tmp_path: Path) -> None:
     con.close()
     again = db.open_db(path)
     try:
-        assert db.schema_version(again) == 58
+        assert db.schema_version(again) == db.SCHEMA_VERSION
         assert sorted(tuple(r) for r in again.execute("SELECT type, name, sql FROM sqlite_master")) == schema
         assert [tuple(r) for r in again.execute("SELECT client_name FROM mcp_sessions")] == [("Cursor",)]
         assert not list(tmp_path.glob("now.db.v*.bak*"))
