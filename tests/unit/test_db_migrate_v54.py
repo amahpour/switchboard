@@ -72,7 +72,7 @@ def test_the_step_adds_only_the_column(tmp_path: Path, monkeypatch: pytest.Monke
     try:
         assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 58
         assert db.schema_version(backup) == 53
-        assert db.row_counts(upgraded, db.TABLES) == {**counts, "mcp_sessions": 0}  # 57's table, empty
+        assert db.row_counts(upgraded, db.TABLES) == {**counts, "mcp_sessions": 0}  # 58's table, empty
         assert columns(upgraded) == columns(fresh)
         assert ("joined_with", "TEXT", 0, None, 0) in columns(upgraded)
         assert all(r[0] is None for r in upgraded.execute("SELECT joined_with FROM room_people"))
