@@ -312,6 +312,8 @@ class Boards:
             if owner not in here:
                 raise ReviewError(f"owner must be an agent in {room.name}: {owner!r} isn't")
             if reassigned and owner == item.owner:
+                if owner == actor:  # a reopened card comes back to its owner (#905): not a handoff
+                    raise ReviewError(f"{item.label} is already yours to fix: the next move is fix")
                 raise ReviewError(f"{item.label} is {owner}'s already: name the agent who takes it over")
             fields["owner"] = owner
         elif action == "fix":
