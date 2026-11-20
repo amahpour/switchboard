@@ -5,3 +5,4 @@
 ### Fixed
 
 - **A holder's fix stores its whole card history, or none of it.** The finding, the concession and the fix are one write. A failed write leaves the finding raised, with neither step in its history.
+- **A raised fix on a board no agent holds does not name that holder.** A board opened from a posted link, or by a person, is refused and told to concede. The refusal names no one.

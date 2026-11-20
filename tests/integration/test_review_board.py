@@ -18,6 +18,7 @@ from fakes.fake_agent import FakeAgent
 from test_passkeys import hosted_broker, stop
 from test_people import join_as_bob, set_up
 
+from switchboard.broker import reviews as review_boards
 from switchboard.config import Config
 from switchboard.models import session_key
 from switchboard.store import Store
@@ -210,6 +211,76 @@ async def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes_in_one_mov
             )
             assert not own["ok"] and "is yours" in own["error"]
             assert page_board(web.get("/api/rooms/build/review"))["items"][2]["state"] == "raised"
+    finally:
+        web.close()
+
+
+async def test_a_raised_fix_on_a_board_no_agent_holds_names_no_one(
+    broker: InProcBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#904: a board opened from a posted link is held by the reserved opener, and one a person
+    opened is held by that person. Neither is an agent in the room, so the author's raised fix is
+    refused the way an unknown holder is: it can't be fixed from there, then concede, and the
+    refusal names no one. Fails while a link's refusal says only switchboard, who holds the board,
+    can fix it from there, and a person's says only alice."""
+    web = broker.web_client()
+    monkeypatch.setattr(
+        review_boards,
+        "vendor_of",
+        lambda member: {"claude-1": "claude", "codex-1": "codex"}.get(member.name, member.harness),
+    )
+    person_pr = "https://github.com/example/shop/pull/8"
+    try:
+        async with (
+            FakeAgent(broker.home, "link-author") as author,
+            FakeAgent(broker.home, "link-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            turned = web_cmd(broker, web, "/room review on")
+            assert turned.status_code == 200, turned.text
+            broker.on_loop(
+                lambda: broker.state.boards.on_agent_say(
+                    broker.state.store.get_room("#build"), "claude-1", GITHUB_PR
+                )
+            )
+            assert [row["opened_by"] for row in q(broker, "SELECT opened_by FROM reviews")] == ["switchboard"]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total", url=GITHUB_PR)
+            refused = await author.call(
+                "review",
+                room="#build",
+                action="fix",
+                item="F1",
+                commit="abc1234",
+                proof="test_total",
+                url=GITHUB_PR,
+            )
+            assert not refused["ok"]
+            assert "can't be fixed from there" in refused["error"]
+            assert 'review(action="concede", item="F1")' in refused["error"]
+            assert "switchboard" not in refused["error"].lower()
+            assert q(broker, "SELECT state FROM review_items")[0]["state"] == "raised"
+            opened = web_cmd(broker, web, f"/review {person_pr}")
+            assert opened.status_code == 200, opened.text
+            holders = {
+                row["url"]: row["opened_by"] for row in q(broker, "SELECT url, opened_by FROM reviews")
+            }
+            assert holders[person_pr] == "alice"
+            await reviewer.call("review", room="#build", action="raise", title="tax order", url=person_pr)
+            by_person = await author.call(
+                "review",
+                room="#build",
+                action="fix",
+                item="F1",
+                commit="abc1234",
+                proof="test_total",
+                url=person_pr,
+            )
+            assert not by_person["ok"]
+            assert "can't be fixed from there" in by_person["error"]
+            assert 'review(action="concede", item="F1")' in by_person["error"]
+            assert "alice" not in by_person["error"].lower()
+            assert "switchboard" not in by_person["error"].lower()
     finally:
         web.close()
 

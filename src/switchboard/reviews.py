@@ -693,9 +693,22 @@ def ref(f: dict[str, Any] | None) -> str:
 
 
 def holder(review: dict[str, Any]) -> str:
-    """Who holds a board: the agent that opened it, or opened it again last (§37.14). Only the
-    holder or a person closes or resets it."""
+    """Who holds a board: who opened it, or opened it again last (§37.14). An agent, a person, or
+    the reserved opener of a link. Only the holder or a person closes or resets it."""
     return str(review.get("reopened_by") or review.get("opened_by") or "")
+
+
+def holder_in_room(name: str, agents: Collection[str]) -> bool:
+    """Whether ``name`` is an agent in the room (``agents``: its active screen names).
+
+    The holder comes off the board row (``holder``). A board opened from a posted link is held by
+    the reserved opener, and one a person opened or last reopened is held by that person. Neither
+    is a membership, so the spelling is not a kind: only a name the room's agents hold counts.
+    Empty does not. Compared case-folded, as members are."""
+    if not name:
+        return False
+    folded = name.casefold()
+    return any(isinstance(agent, str) and agent.casefold() == folded for agent in agents)
 
 
 def when(ts: float | None) -> str:
@@ -842,13 +855,15 @@ def agent_move(
     *,
     raiser_here: bool = True,
     holder: str = "",
+    holder_here: bool = False,
 ) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
     or contest it (that's the other side's call). Dropping, deferring and insisting belong to
     its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The board's
     holder may fix a raised finding in one move, which is that concession to itself and the fix
-    (#904); ``holder`` empty means the holder is unknown, and that fix is refused. The owner may
+    (#904), only when ``holder_here``: that holder is an agent in the room. A holder that is not
+    (empty, a person, or the reserved opener of a link) is refused without being named. The owner may
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
@@ -888,18 +903,19 @@ def agent_move(
             f"{item.label} is {item.owner}'s: {item.owner} can hand it over, or a person can reassign it"
         )
     if move == "fix" and item.state == "raised":
-        # #904: the holder concedes and fixes a raised finding in one move. The raiser is checked
-        # first: it cannot concede its own finding, so the refusal names drop and the other side.
-        # Anyone else is told to concede first. An unknown holder fails closed.
+        # #904: the holder concedes and fixes a raised finding in one move, when that holder is an
+        # agent in the room. The raiser is checked first: it cannot concede its own finding, so the
+        # refusal names drop and the other side. A holder that is not an agent (a person, the reserved
+        # opener of a link, or unknown) is refused without being named. Anyone else is told to concede.
         if actor == item.raised_by:
             raise ReviewError(
                 f"{item.label} is yours: you can drop it, not fix it from raised. "
                 "The other side concedes or contests it."
             )
-        if not holder or actor != holder:
+        if not holder or not holder_here or actor != holder:
             named = (
                 f"only {holder}, who holds the board, can fix it from there. "
-                if holder
+                if holder and holder_here
                 else "it can't be fixed from there. "
             )
             raise ReviewError(

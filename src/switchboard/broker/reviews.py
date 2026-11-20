@@ -287,13 +287,16 @@ class Boards:
             return self._edit(room, rv, item, actor, params, by_person=False)
         if action == "abstain":
             return self._abstain(room, rv, item, actor, here)
+        held = reviews.holder(rv)
         to = reviews.agent_move(
             item,
             action,
             actor,
             owner_here=item.owner in here,
             raiser_here=item.raised_by in here,
-            holder=reviews.holder(rv),
+            holder=held,
+            # the board row names the opener; only an agent in the room can be that holder (#904)
+            holder_here=reviews.holder_in_room(held, here),
         )
         if action == "reopen":
             self._guard_slot(room, rv)

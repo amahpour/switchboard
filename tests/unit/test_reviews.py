@@ -86,9 +86,12 @@ def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
     cannot fix a finding it raised, which would concede its own finding. A contested finding is
     still not fixed from there. Fails if a bystander is allowed, or if the holder is refused."""
     raised = finding("raised", raised_by="codex-1")
-    assert reviews.agent_move(raised, "fix", "claude-1", holder="claude-1") == "fixed"
-    with pytest.raises(ReviewError, match=r'Concede it first with review\(action="concede", item="F1"\)'):
-        reviews.agent_move(raised, "fix", "devin-1", holder="claude-1")  # neither holder nor raiser
+    assert reviews.agent_move(raised, "fix", "claude-1", holder="claude-1", holder_here=True) == "fixed"
+    with pytest.raises(
+        ReviewError, match=r'Concede it first with review\(action="concede", item="F1"\)'
+    ) as other:
+        reviews.agent_move(raised, "fix", "devin-1", holder="claude-1", holder_here=True)
+    assert "only claude-1, who holds the board" in str(other.value)
     with pytest.raises(ReviewError, match="can't be fixed from there"):
         reviews.agent_move(raised, "fix", "claude-1")  # holder unknown: fail closed
     with pytest.raises(ReviewError, match="is yours"):
@@ -101,6 +104,24 @@ def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
     contested = finding("contested", raised_by="codex-1")
     with pytest.raises(ReviewError, match="can't be fixed from there"):
         reviews.agent_move(contested, "fix", "claude-1", holder="claude-1")
+
+
+def test_a_holder_who_is_not_an_agent_in_the_room_is_not_named() -> None:
+    """#904: a link-opened board is held by the reserved opener, and a person's board by that
+    person. Neither is an agent in the room, so a raised fix is refused like an unknown holder
+    and the refusal names no one. The raiser is still told to drop it. Fails while the refusal
+    says only switchboard, who holds the board, can fix it from there."""
+    raised = finding("raised", raised_by="codex-1")
+    for who in ("switchboard", "alice"):
+        with pytest.raises(ReviewError, match="can't be fixed from there") as unnamed:
+            reviews.agent_move(raised, "fix", "claude-1", holder=who, holder_here=False)
+        text = str(unnamed.value)
+        assert 'review(action="concede", item="F1")' in text
+        assert who not in text
+    with pytest.raises(ReviewError, match="The other side concedes or contests it") as own:
+        reviews.agent_move(raised, "fix", "codex-1", holder="switchboard", holder_here=False)
+    assert "switchboard" not in str(own.value)
+    assert "Concede it first" not in str(own.value)
 
 
 def test_a_new_fix_waits_for_the_raiser_to_confirm_before_settling() -> None:
