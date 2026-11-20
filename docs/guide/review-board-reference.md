@@ -193,7 +193,7 @@ When a room has two or more open boards, a row of tabs sits at the top of the bo
 
 ![Two boards as tabs, with the first on show](../media/ui/guide-review-tabs.png)
 
-A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count.
+A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count toward the eight, but a room keeps at most 24 boards open in all.
 
 ### When the head commit changes
 
@@ -308,7 +308,7 @@ review(room="build", action="confirm", item="F1")
 ### Reporting, closing and starting over
 
 - **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board, and the board is kept. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` to record the merge while keeping the original close time and closer.
-- **`close`** closes the board and says how the pull request ended, with `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown` (said on purpose). A close with no outcome is refused, and the refusal names the three. The outcome is recorded as `report` records it, so **Past boards** and the Usage page read it. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
+- **`close`** closes the board and says how the pull request ended, with `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown` (said on purpose). A close with no `state` still works, as it did before: it reads **Unknown**, and its reply asks the agent to name one next time. A `state` that is given is checked: a bad value, `merged` without `commit`, or a `commit` with another state is refused. The outcome is recorded as `report` records it, so **Past boards** and the Usage page read it. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
 - **`reset`** starts a fresh board for a link that already has one, on purpose. It takes `url` and a `reason`, and only the agent that holds the board can do it. The old board stays in the database, unseen.
 
 ```text
@@ -344,7 +344,8 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 - A title is 200 characters at most. A detail is 4,000. A reason, and a proof, are 500. A follow-up ticket is 200. An option is 200, and a question has two to four, all different.
 - A finding's file is 300 characters at most, and its lines are a number or a range, such as `42` or `40-58`.
 - A card's history shows at most 12 lines.
-- `list` names at most 50 boards. The older closed ones are counted.
+- `list` names at most 50 boards: the caller's own board, then boards that have work, then settled open ones, then closed ones. What it leaves out is counted by state.
+- A room keeps at most 24 open boards in all, settled ones included, so each update stays small. Opening or reopening a 25th is refused, and the refusal names the settled boards to close. A close never needs room. Boards that have work, or no cards, are still capped at eight.
 - Only a person answers a question. Only the agent responsible for reviewing a finding (its raiser, or a replacement through `take`) confirms its fix. You can confirm any fix too.
 - Only the agent that holds a board can close it or reset it. The holder is the one that opened the board, or opened it again last. A board you open, or open again, with `/review` is held by you. An agent cannot close or reset it. It can ask you to close it.
 - After a hand off, a board takes no more moves on its cards. It takes reports and a close.
@@ -366,7 +367,7 @@ The button shows only while the room has an open board. Start one with `/review`
 - `usage: /review <url> [note]`: you gave no link. Put the link right after `/review`.
 - `url must be an http(s) link to the pull request or merge request`: the link is not an http or https link. Copy it from the browser's address bar.
 - `the note is too long`: the whole request has to fit in one message. Shorten the note.
-- `close one before opening another`: the room already has eight boards that still have work, or that have no cards yet. A settled board does not count. Close one that does, then run `/review` again.
+- `close one before opening another`: the room already has eight boards that still have work, or that have no cards yet. A settled board does not count. Close one that does, then run `/review` again. A room also refuses a board when it already has 24 open, settled ones included: close a finished one.
 - A room that is paused sends the request only after `/resume`.
 
 ### I typed `/review` and it came out as plain text
@@ -428,7 +429,7 @@ Check, in this order: `/room` says the setting is on (it is off by default); the
 
 ### An agent's close is refused for its outcome
 
-A close needs `state`: `merged` with `commit` (the merge commit), `closed` or `unknown`. The refusal says so in one line. Have the agent close again with one, or report the merge with `state="merged"`.
+A close with no `state` works and reads **Unknown**. One with a `state` is refused when the value is not `merged`, `closed` or `unknown`, when `merged` has no `commit`, or when a `commit` comes with another state. The refusal says which. Have the agent close again with a valid one, or report with `state="merged"` or `state="closed"`, which also works on a board you closed on the page.
 
 ### An agent can't close a board
 

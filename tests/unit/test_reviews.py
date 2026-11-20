@@ -1087,7 +1087,7 @@ def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_
     old = board_row(url="https://example.com/old/pull/1", closed_at=1_700_000_000.0, closed_by="")
     text = reviews.list_text([live, gone, old], default_url=live["url"])
     lines = text.splitlines()
-    assert lines[0] == "3 review boards in this room, open ones first:"
+    assert lines[0] == "3 review boards in this room, boards with work first:"
     assert lines[1] == (
         "https://github.com/example/shop/pull/7 at abc1234def56 [open]: 3 open, 5 settled,"
         " opened by claude-1 on 2027-01-15 08:00 UTC <- your calls without url go here"
@@ -1100,7 +1100,9 @@ def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_
     assert lines[3].endswith("closed on 2023-11-14 22:13 UTC") and "closed by" not in lines[3]
     assert lines[-1].startswith('review(action="show", url=...) reads any')
     many = reviews.list_text([board_row(url=f"https://example.com/p/{n}") for n in range(60)])
-    assert "... and 10 older closed boards" in many and many.count("[open]") == reviews.MAX_LISTED
+    assert (
+        "... and 10 more not listed: 10 open with work" in many and many.count("[open]") == reviews.MAX_LISTED
+    )
     assert reviews.list_text([]).startswith("This room has no review boards.")
     assert reviews.list_text([live]).startswith("1 review board in this room")
 
@@ -1354,14 +1356,16 @@ def test_stored_takeover_keeps_the_fix_age_and_each_agents_own_pick(tmp_path: Pa
 
 
 def test_a_close_names_its_outcome_and_a_merged_one_its_commit() -> None:
-    """``close`` says what became of the pull request (#886). Fails if no outcome, an outcome of
+    """``close`` says what became of the pull request (#886); one that says nothing is a 1.x close and
+    reads unknown. Fails if a missing outcome is refused, an outcome of
     another word, a merged one with no commit, or a commit with any other outcome is accepted."""
-    assert reviews.close_outcome({"state": "merged", "commit": "ABC1234"}) == ("merged", "abc1234")
-    assert reviews.close_outcome({"state": "closed"}) == ("closed", "")
-    assert reviews.close_outcome({"state": "unknown"}) == ("unknown", "")
+    assert reviews.close_outcome({"state": "merged", "commit": "ABC1234"}) == ("merged", "abc1234", True)
+    assert reviews.close_outcome({"state": "closed"}) == ("closed", "", True)
+    assert reviews.close_outcome({"state": "unknown"}) == ("unknown", "", True)
+    assert reviews.close_outcome({}) == ("unknown", "", False)  # a 1.x close: unknown, and asked to say
+    assert reviews.close_outcome({"state": ""}) == ("unknown", "", False)
     bad_closes = [
-        {},
-        {"state": ""},
+        {"commit": "abc1234"},
         {"state": "done"},
         {"state": "merged"},
         {"state": "merged", "commit": "xyz"},
@@ -1370,3 +1374,24 @@ def test_a_close_names_its_outcome_and_a_merged_one_its_commit() -> None:
     for bad in bad_closes:
         with pytest.raises(reviews.ReviewError):
             reviews.close_outcome(bad)
+
+
+def test_list_puts_the_default_board_and_boards_with_work_before_settled_and_closed_ones() -> None:
+    """``list`` shows the default board, then boards with work (or no cards), then settled open ones,
+    then closed ones, and counts what it leaves out by state (#886). Fails if 50 newer settled boards
+    push an older board with work, or the caller's default board, out of the listing."""
+    settled = {"needs_person": 0, "open": 0, "fixed": 2, "dropped": 0, "answered": 0}
+    rows = [board_row(url=f"https://example.com/p/{n}", counts=settled) for n in range(60)]
+    work = board_row(url="https://example.com/work/1")
+    empty = board_row(
+        url="https://example.com/work/2",
+        counts={"needs_person": 0, "open": 0, "fixed": 0, "dropped": 0, "answered": 0},
+    )
+    done = board_row(url="https://example.com/done/1", closed_at=1_800_000_000.0)
+    mine = board_row(url="https://example.com/mine/1", counts=settled)  # settled, but the default
+    text = reviews.list_text([*rows, work, empty, done, mine], default_url=mine["url"])
+    lines = text.splitlines()
+    assert lines[1].startswith(mine["url"]) and "<- your calls" in lines[1]
+    assert lines[2].startswith(work["url"]) and lines[3].startswith(empty["url"])
+    assert "https://example.com/done/1" not in text
+    assert "... and 14 more not listed: 13 open and settled, 1 closed" in text

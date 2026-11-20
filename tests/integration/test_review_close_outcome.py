@@ -54,22 +54,66 @@ def outcome_of(broker: InProcBroker, url: str = PR) -> str:
     return next(b["outcome"] for b in rows if b["url"] == url)
 
 
-async def test_a_close_without_an_outcome_is_refused_and_names_the_three_choices(
+async def test_a_close_with_only_a_reason_still_works_reads_unknown_and_asks_for_the_outcome(
     broker: InProcBroker,
 ) -> None:
-    """Closing with only a reason left 19 boards reading unknown on the Past boards list. Fails if a
-    close with no outcome (or an outcome that is not one of the three) closes the board, or if the
-    refusal does not name merged, closed and unknown in one line."""
+    """Plugin 1.x skills call close with a reason alone, and a minor release only adds. Fails if a
+    close with no ``state`` is refused, or reads anything but Unknown, or its reply does not ask for
+    the outcome in one line; a ``state`` that is given is still checked."""
     async with FakeAgent(broker.home, "k1") as agent:
         await agent.join("#build", "claude-1")
         assert (await tool(agent, action="open", url=PR))["ok"]
-        for args in ({}, {"reason": f"merged as {SHA}"}, {"state": "done"}):
-            refused = await tool(agent, action="close", **args)
-            assert refused["ok"] is False
-            error = refused["error"]
-            assert "\n" not in error
-            assert all(word in error for word in ('"merged"', '"closed"', '"unknown"')), error
+        refused = await tool(agent, action="close", state="done")
+        assert refused["ok"] is False and "merged, closed, unknown" in refused["error"]
         assert q(broker, "SELECT closed_at FROM reviews")[0]["closed_at"] is None
+        closed = await tool(agent, action="close", reason=f"merged as {SHA}")
+        assert closed["ok"], closed
+        note = closed["note"]
+        assert "\n" not in note
+        assert all(
+            word in note for word in ('state="merged"', "commit=", 'state="closed"', 'state="unknown"')
+        )
+        assert "report(state=...)" in note
+        assert q(broker, "SELECT closed_at, pr_state FROM reviews")[0]["pr_state"] == ""
+        assert outcome_of(broker) == "unknown"
+        assert (await tool(agent, action="report", url=PR, state="closed"))["ok"]
+        assert outcome_of(broker) == "closed"
+
+
+async def test_a_board_closed_without_an_outcome_takes_a_closed_report_and_keeps_its_closer(
+    broker: InProcBroker,
+) -> None:
+    """A person closes a board on the page, which records only the close. An agent's later
+    ``report state="closed"`` is accepted the way ``merged`` is, keeping the first closer and time, and
+    never overwrites a recorded merge. Fails if the report is refused or moves the closer, or if it
+    turns a merged board into closed."""
+    other = "https://github.com/example/shop/pull/8"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as agent:
+            await agent.join("#build", "claude-1")
+            for url in (PR, other):
+                assert (await tool(agent, action="open", url=url))["ok"]
+            assert (
+                web.post(
+                    PATH, json={"action": "close", "url": PR}, headers=broker.write_headers()
+                ).status_code
+                == 200
+            )
+            [before] = q(broker, "SELECT closed_at, closed_by FROM reviews WHERE url=?", PR)
+            assert before["closed_at"] is not None and before["closed_by"] == "alice"
+            assert (await tool(agent, action="report", url=PR, state="closed"))["ok"]
+            [after] = q(broker, "SELECT closed_at, closed_by, pr_state FROM reviews WHERE url=?", PR)
+            assert (after["closed_at"], after["closed_by"], after["pr_state"]) == (
+                before["closed_at"], "alice", "closed",
+            )  # fmt: skip
+            assert outcome_of(broker, PR) == "closed"
+            assert (await tool(agent, action="close", url=other, state="merged", commit=SHA))["ok"]
+            clash = await tool(agent, action="report", url=other, state="closed")
+            assert clash["ok"] is False and "merged" in clash["error"], clash
+            assert outcome_of(broker, other) == "merged"
+    finally:
+        web.close()
 
 
 async def test_a_merged_close_needs_the_merge_commit_and_records_what_report_records(
@@ -158,3 +202,33 @@ async def test_a_room_full_of_boards_with_work_is_freed_by_reporting_one_ended_a
         assert "merged, closed or unknown" in full["error"]
         assert (await tool(agent, action="report", url=urls[3], state="merged"))["ok"]
         assert (await tool(agent, action="open", url=extra))["ok"]
+
+
+async def test_open_boards_have_a_ceiling_settled_ones_included_and_a_close_never_needs_room(
+    broker: InProcBroker,
+) -> None:
+    """Settled boards take no slot of eight, so the room as a whole is bounded another way: at most
+    ``MAX_OPEN_BOARDS_TOTAL`` open boards, each update building only those. Fails if a settled board
+    past the ceiling can be opened, reopened or its refusal names no settled board, if a close needs
+    room, or if an update carries more boards than the ceiling."""
+    total = reviews.MAX_OPEN_BOARDS_TOTAL
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as agent:
+            await agent.join("#build", "claude-1")
+            urls = [f"https://github.com/example/shop/pull/{n}" for n in range(1, total + 1)]
+            for url in urls:
+                assert (await tool(agent, action="open", url=url))["ok"]
+                assert (await tool(agent, action="raise", url=url, title="gap"))["ok"]
+                assert (await tool(agent, action="drop", url=url, item="F1", reason="not a bug"))["ok"]
+            extra = "https://github.com/example/shop/pull/99"
+            refused = await tool(agent, action="open", url=extra)
+            assert refused["ok"] is False and urls[0] in refused["error"], refused
+            assert len(web.get(PATH).json()["boards"]) == total
+            assert (await tool(agent, action="close", url=urls[0], state="unknown"))["ok"]
+            assert (await tool(agent, action="open", url=extra))["ok"]
+            back = await tool(agent, action="open", url=urls[0])  # a reopen counts too
+            assert back["ok"] is False and urls[1] in back["error"], back
+            assert len(web.get(PATH).json()["boards"]) == total
+    finally:
+        web.close()

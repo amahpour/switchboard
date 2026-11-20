@@ -200,6 +200,34 @@ async def test_a_settled_board_does_not_count_toward_the_open_limit(broker: InPr
         assert refused["ok"] is False and "the most it holds" in refused["error"], refused
 
 
+async def test_reopening_a_confirmed_finding_on_a_settled_board_takes_a_slot_and_is_refused_at_the_cap(
+    broker: InProcBroker,
+) -> None:
+    """A raiser's ``reopen`` of a confirmed finding puts work back on a settled board, so at the cap
+    it needs a slot like a new raise. Fails if the reopen goes through with the room full (the guard
+    deleted), or if a refused reopen changes the finding: it stays confirmed."""
+    async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        first = "https://github.com/example/shop/pull/1"
+        assert (await tool(author, action="open", url=first))["ok"]
+        assert (await tool(reviewer, action="raise", url=first, title="tax order"))["ok"]
+        assert (await tool(author, action="concede", url=first, item="F1"))["ok"]
+        fix = await tool(author, action="fix", url=first, item="F1", commit="abc1234", proof="t")
+        assert fix["ok"], fix
+        assert (await tool(reviewer, action="confirm", url=first, item="F1"))["ok"]
+        for n in range(2, reviews.MAX_OPEN_BOARDS + 2):  # the settled board takes no slot: eight more fit
+            assert (await tool(author, action="open", url=f"https://github.com/example/shop/pull/{n}"))["ok"]
+        refused = await tool(reviewer, action="reopen", url=first, item="F1")
+        assert refused["ok"] is False and "the most it holds" in refused["error"], refused
+        web = broker.web_client()
+        try:
+            [board] = [b for b in boards(web) if b["url"] == first]
+        finally:
+            web.close()
+        assert board["items"][0]["state"] == "fixed" and board["items"][0]["confirmed_by"] == "codex-1"
+
+
 async def test_a_room_holds_at_most_a_handful_of_open_boards(broker: InProcBroker) -> None:
     """Open boards are capped so a member can't fill the page with tabs; closing one makes room, and
     a board brought back counts. Fails if the cap is missing or ignores a re-opened board."""
@@ -426,7 +454,7 @@ async def test_list_names_each_board_once_even_after_a_reset(broker: InProcBroke
         assert (
             "[open]" in lines[0] and "[closed]" in lines[1] and "your calls without url go here" in lines[0]
         )
-        assert text.splitlines()[0] == "2 review boards in this room, open ones first:"
+        assert text.splitlines()[0] == "2 review boards in this room, boards with work first:"
 
 
 async def test_a_merge_reported_on_one_board_closes_that_board_and_says_who(broker: InProcBroker) -> None:
