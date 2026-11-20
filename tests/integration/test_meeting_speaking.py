@@ -9,6 +9,7 @@ on a sleep: a test waits for the event it expects.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -151,6 +152,35 @@ async def test_the_bar_names_the_agent_while_the_call_makes_its_voice_and_clears
             await wait_until(lambda: any("Couldn't speak in the call" in t for t in notice_texts(broker)))
         else:
             assert joinly.spoken == ["the build is green"]
+
+
+async def test_a_name_that_cannot_be_looked_up_names_nobody_and_the_line_is_still_spoken(
+    broker: InProcBroker, joinly: FakeJoinly, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bar is a courtesy: when the bridge's lookup of the speaker's membership raises, the bar names
+    nobody, and the line still goes to ``speak_text`` with no "Couldn't speak" notice. Only the bridge's
+    own calls raise (the rest of the broker reads memberships as usual). Fails if the lookup runs outside
+    the banner's guard, where its error drops the line."""
+    store = broker.state.store
+    real = store.get_membership
+
+    def broken(membership_id: int) -> Any:
+        if sys._getframe(1).f_globals.get("__name__") == "switchboard.meeting.bridge":
+            raise RuntimeError("the database is locked")
+        return real(membership_id)
+
+    async with FakeAgent(broker.home, "k1") as agent:
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        command(broker, "/meeting voice on")
+        frames = record_frames(broker)
+        monkeypatch.setattr(store, "get_membership", broken)
+        assert (await agent.say("#build", "@call the build is green")).get("posted_id")
+        await wait_until(lambda: joinly.spoken == ["the build is green"])
+        await wait_until(lambda: speech_finished(broker))
+        assert not any("Couldn't speak" in t for t in notice_texts(broker))
+    assert spoken_names(frames) == []
+    assert "speaking" not in (call_state(broker) or {})
 
 
 async def test_a_line_waiting_its_turn_is_not_shown_as_speaking(

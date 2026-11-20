@@ -381,7 +381,7 @@ class MeetingBridge:
                     )
 
                 # the bar names the agent from here until speak_text returns, however it returns (§52.13)
-                self._set_speaking(room_id, live, self._speaker_name(line.membership_id))
+                self._set_speaking(room_id, live, line.membership_id)
                 # a sentence at a time, so the first plays early (#761); voice off drops the rest
                 said = await joinly.speak_by_sentence(one, line.text, lambda: room_id in self._voice)
                 if line.voice is not None and voices.NOT_FOUND in said and line.voice not in live.missing:
@@ -411,13 +411,15 @@ class MeetingBridge:
         member = self.state.store.get_membership(membership_id) if membership_id is not None else None
         return member.screen_name if member is not None else None
 
-    def _set_speaking(self, room_id: int, live: _Live, name: str | None) -> None:
+    def _set_speaking(self, room_id: int, live: _Live, membership_id: int | None) -> None:
         """Live state only: the room's settings frame says it, and nothing is stored. A frame goes out only
-        when it changed, so a line with no known speaker sends none."""
-        if live.speaking == name:
-            return
-        live.speaking = name
+        when it changed, so a line with no known speaker sends none. The name is looked up here, under the
+        same guard as the frame: a lookup that fails names nobody, and the line is still spoken."""
         try:
+            name = self._speaker_name(membership_id)
+            if live.speaking == name:
+                return
+            live.speaking = name
             self.state.service.publish_settings(room_id)
         except Exception:  # the bar is a courtesy: it must never stop a line or its slot being freed
             log.warning("meeting room %s: could not publish who is speaking", room_id)
