@@ -59,6 +59,9 @@ room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone
 agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
 webhook-{empty,set,failed}-{light,dark,phone-light} (Settings → Profile → Webhook, #723; ``--only webhook``),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
+past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
+merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
+``--only past_boards``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -882,6 +885,81 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
                 world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
                 expect(buttons.nth(1)).to_have_text("After tax (picked by codex-1)")
                 shot(page, out, "review-options-split-light.png")
+        finally:
+            ctx.close()
+
+
+def shoot_past_boards(browser: Any, out: Path, world: Any) -> None:
+    """#886: the outcome chip of a past board. Three closed boards in one room: a pull request merged, one
+    closed without merging, and one with no recorded outcome. The outcome is set through the store (the
+    review row's ``pr_state``), as a close with an outcome does, so the set also runs on a build without
+    the new tool field. Shots: the Past boards list, and the closed one opened read-only."""
+    from playwright.sync_api import expect
+
+    room = "#past-boards"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    call = world.agent_call
+    boards = (
+        ("https://github.com/example/shop/pull/21", "merged", "Discount is taken after tax"),
+        ("https://github.com/example/shop/pull/22", "closed", "Expired codes still apply"),
+        ("https://github.com/example/shop/pull/23", "", "Codes are case-sensitive"),
+    )
+    for url, _state, title in boards:
+        call(room, "codex-1", "review", action="open", url=url, head="4f2c9e1a7b30")
+        call(room, "codex-1", "review", action="raise", title=title, where="shop/cart.py:40",
+             detail="Found while reading the diff.")  # fmt: skip
+        call(room, "claude-1", "review", action="concede", item="F1")
+        call(room, "codex-1", "review", action="close", url=url, reason="the pull request is done")
+
+    def set_outcomes() -> None:
+        store = world.broker.state.store
+        row = store.get_room(room)
+        for url, state, _title in boards:
+            if state:
+                store.set_review(store.review_for_url(row.id, url)["id"], pr_state=state)
+
+    world.broker.on_loop(set_outcomes)
+
+    def clip_of(page: Any, *selectors: str, pad: int = 8) -> dict[str, float]:
+        """The box around every element ``selectors`` name, measured in one evaluate after the page settles."""
+        settle(page)
+        return page.evaluate(
+            "([sels, pad]) => { const r = sels.map(s => document.querySelector(s).getBoundingClientRect());"
+            " const x0 = Math.min(...r.map(b => b.left)) - pad, y0 = Math.min(...r.map(b => b.top)) - pad;"
+            " return {x: x0, y: y0, width: Math.max(...r.map(b => b.right)) + pad - x0,"
+            " height: Math.max(...r.map(b => b.bottom)) + pad - y0}; }",
+            [list(selectors), pad],
+        )
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    views = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+    for slug, ctx_args in views:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#past-boards-toggle")
+            expect(page.locator("#board .past-board-row")).to_have_count(3)
+            shot(
+                page,
+                out,
+                "past-boards-" + slug + ".png",
+                clip_of(page, ".past-boards-title", ".past-boards-list"),
+            )
+            if slug != "phone-light":
+                page.locator("#board [data-past-board]").nth(1).click()
+                expect(page.locator("#board .board-head")).to_contain_text("Read-only")
+                shot(page, out, "past-board-closed-" + slug + ".png", clip_of(page, "#board .board-head"))
         finally:
             ctx.close()
 
@@ -4625,6 +4703,7 @@ ONLY: dict[str, Any] = {
     "long_outage": lambda browser, out, world: shoot_offline(browser, out, world, long_outage=True),
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
+    "past_boards": shoot_past_boards,
     "review_edit": shoot_review_edit,
     "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
