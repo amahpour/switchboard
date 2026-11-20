@@ -16,7 +16,7 @@ Here is the life of a finding. Say codex-1 reviews a shop's pull request and cla
 1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. claude-1 opened the board, so it is woken and asked to concede or contest it. Other agents in the room are not.
 2. **Concede or contest.** Another agent answers. It is never the agent that raised the finding. To *concede* is to agree, and to name the agent that will fix it. To *contest* is to disagree, with a reason.
 3. **Drop or insist.** A contest goes back to the agent that raised the finding. It either *drops* the finding, because the contest convinced it, or *insists*, with its own reason. The other side can still concede at any point.
-4. **Fixed, with proof.** The owner fixes it. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
+4. **Fixed, with proof.** The owner fixes it. The board's holder can fix a raised finding in one move when that holder is an agent in the room: that concedes it to the holder and records the fix, and the card's history shows both. A board opened from a link, or by a person, has no such holder, and the refusal names no one. The raiser's fix is refused: the other side concedes or contests, and the raiser can drop it. Anyone else's fix is refused and tells them to concede first. A holder cannot fix a finding it raised. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
 5. **Confirmed or reopened.** The agent that raised the finding checks the proof and confirms the fix, settling the finding, or reopens it with a reason, returning it to its owner. An owner can replace an unconfirmed fix with a new commit and proof.
 
 There are two other ways out. The agent that raised a finding can *drop* it with a reason, any time before it is fixed. Or it can *defer* it to a follow-up ticket. A deferred finding is settled for this pull request, and its card reads "Deferred to" and the ticket. You can drop or defer any open finding too.
@@ -28,6 +28,7 @@ stateDiagram-v2
     [*] --> Raised: raise
     Raised --> Contested: contest
     Raised --> BeingFixed: concede
+    Raised --> Fixed: holder fixes
     Contested --> BeingFixed: concede
     Contested --> Contested: insist, then you decide
     BeingFixed --> Fixed: fix with proof
@@ -280,7 +281,7 @@ review(room="build", action="abstain", item="Q1")
 
 ### Answering a finding
 
-- **`concede`** agrees that a finding is a problem. `owner` names the agent that will fix it, and it has to be in the room. Left out, the owner is the agent that conceded. An agent cannot concede its own finding. A concession can also hand a finding over: its owner concedes again and names another agent. When the owner has left the room, for example after a restart under a new name, any agent but the raiser can take it over.
+- **`concede`** agrees that a finding is a problem. `owner` names the agent that will fix it, and it has to be in the room. Left out, the owner is the agent that conceded. An agent cannot concede its own finding. A finding that is already conceded to you, for example one its raiser reopened, is refused with "already yours to fix": the next move is `fix`. A concession can also hand a finding over: its owner concedes again and names another agent. When the owner has left the room, for example after a restart under a new name, any agent but the raiser can take it over.
 - **`contest`** disagrees, with a `reason`. An agent cannot contest its own finding.
 - **`insist`** is the raiser's answer to a contest, with a `reason`. Only the raiser can insist, only on a contested finding, and only once. Then a person decides.
 - **`drop`** withdraws a finding, with a `reason`. Only the raiser can, and only until the finding is fixed.
@@ -294,7 +295,7 @@ The finding keeps its state, owner, evidence, proof and fix age. Its history sti
 
 ### Fixing and checking
 
-- **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix, and can replace the commit and proof of an unconfirmed fix with another `fix`. Both attempts remain in the event log. A confirmed fix cannot be revised until its raiser reopens it. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
+- **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix a conceded finding, and can replace the commit and proof of an unconfirmed fix with another `fix`. Both attempts remain in the event log. The board's holder can fix a raised finding in one move when that holder is an agent in the room: that concedes it to the holder and records the fix, and the card's history shows both. A board opened from a link, or by a person, has no such holder, and the refusal names no one. The raiser's fix on a raised finding is refused: the other side concedes or contests, and the raiser can drop it. Anyone else's fix is refused and names `concede`. A holder cannot fix a finding it raised, and a contested finding is still fixed only after it is conceded. The concession and the fix are stored together, so a failed write leaves the finding raised. A confirmed fix cannot be revised until its raiser reopens it. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
 - **`reopen`** returns a fixed finding to its existing owner. It takes `item` and a required `reason` (at most 500 characters). Only the raiser can reopen, including after confirmation; confirmation clears. Closed and handed-off boards still refuse card moves.
 - **`confirm`** is the raiser's check of a fix. It takes `item`. A reviewer that took over with `take` has this check instead. The owner and everyone else are refused. Then the finding is settled.
 
@@ -381,7 +382,7 @@ Look at its refusal, which says why. These are the usual causes:
 - **The agent is not in the room.** Only a member can use the tool. Ask it to join the room.
 - **The agent's session does not have the `review` tool yet.** A running session keeps the tool list it started with. After an upgrade that adds a tool or a parameter, Claude Code sees it after `/mcp`, and Codex after a restart. If the broker itself is old, upgrade it first. [Agents over HTTPS](../USAGE.md#agents-over-https-a-preview) has the steps.
 - **A permission prompt is open.** The card's dot is an amber ring with "waiting for approval". Nothing in the room can answer the prompt. Its person has to. Devin asks before it runs each tool, including `review`, unless its tools are listed under `permissions.allow` in `.devin/config.json`.
-- **The rules forbid the move.** For example, an agent cannot concede its own finding, and only the owner can fix.
+- **The rules forbid the move.** For example, an agent cannot concede its own finding, and only the owner can fix a conceded finding. The board's holder can fix a raised finding in one move when that holder is an agent in the room. A board opened from a link, or by a person, has no such holder, and the refusal names no one. The raiser is told the other side has to act. Anyone else is told to concede first.
 - **The board is closed or handed off.** A closed board needs `open` again. The exception is `report` with `state="merged"` or `state="closed"` (`closed` never over a recorded merge). A handed-off board takes no more moves.
 
 ### A card sits in Agents working and nobody moves it

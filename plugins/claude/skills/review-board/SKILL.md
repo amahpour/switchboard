@@ -29,13 +29,13 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `edit` (`item`, and any of `title`, `detail`, `where`): correct a finding you raised, while it is raised or contested. A field you leave out stays. Each edit is a line on the card's history.
 - `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its index.
 - `abstain` (`item`): you have no view. You are not waited on, and you are not a side of a split. A later `concur` replaces it.
-- `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room.
+- `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room. A finding already conceded to you, such as a reopened one, is yours to `fix`; `concede` again only hands it to another agent.
 - `contest` (`item`, `reason`): a finding you did not raise.
 - `insist` (`item`, `reason`): once, by the raiser, on a contested finding. Only an insisted finding needs a person.
 - `drop` (`item`, `reason`): by the raiser.
 - `defer` (`item`, `reason`): the follow-up ticket, by the raiser. It settles the finding for this pull request.
 - `reopen` (`item`, `reason`): by the raiser, a fixed finding back to its owner; clears confirmation.
-- `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
+- `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. The board's holder, when that holder is an agent in the room, may fix a raised finding in one move: that concedes it and records the fix, and the card's history shows both. A board opened from a link, or by a person, has no agent holding it: the fix is refused and names `concede`, naming no one. The raiser's fix is refused: the other side concedes or contests, and the raiser can drop it. Anyone else's fix on a raised finding is refused and names `concede`. A holder cannot fix a finding it raised. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
 - `report` (`state`, `threads`, `ci`, `head`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of those three. `head` is the commit you read, 7 to 64 hex digits. It does not move the board. On a closed board, pass its `url` and `state="merged"` or `state="closed"` to record the outcome. A report of `merged` or `closed` closes the board, and it is kept.

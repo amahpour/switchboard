@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -71,7 +71,8 @@ AGENT_MOVES: dict[str, tuple[frozenset[str], str | None]] = {
     "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
     "insist": (frozenset({"contested"}), "contested"),
-    "fix": (frozenset({"conceded", "fixed"}), "fixed"),
+    # raised: only the board's holder, and the history records the concession too (#904)
+    "fix": (frozenset({"raised", "conceded", "fixed"}), "fixed"),
     "reopen": (frozenset({"fixed"}), "conceded"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
@@ -695,9 +696,41 @@ def ref(f: dict[str, Any] | None) -> str:
 
 
 def holder(review: dict[str, Any]) -> str:
-    """Who holds a board: the agent that opened it, or opened it again last (§37.14). Only the
-    holder or a person closes or resets it."""
+    """Who holds a board: who opened it, or opened it again last (§37.14). An agent, a person, or
+    the reserved opener of a link. Only the holder or a person closes or resets it."""
     return str(review.get("reopened_by") or review.get("opened_by") or "")
+
+
+def holder_in_room(name: str, agents: Collection[str]) -> bool:
+    """Whether ``name`` is an agent in the room (``agents``: its active screen names).
+
+    The holder comes off the board row (``holder``). A board opened from a posted link is held by
+    the reserved opener, and one a person opened or last reopened is held by that person. Neither
+    is a membership, so the spelling is not a kind: only a name the room's agents hold counts.
+    Empty does not. Compared case-folded, as members are."""
+    if not name:
+        return False
+    folded = name.casefold()
+    return any(isinstance(agent, str) and agent.casefold() == folded for agent in agents)
+
+
+def held_by_agent(name: str, events: Iterable[Any]) -> bool:
+    """Whether the board's own record shows its holder ``name`` opened it as an agent (#904).
+
+    ``events``: the board's ``review`` event data, oldest first. The holder is set by the last
+    open, reopen or reset (an open move whose ``how`` is not ``kept`` or ``moved``), and that move
+    records its ``opener``: ``agent``, ``person`` or ``link``. True only when it says ``agent``
+    and names ``name``. A person's open, a link's, one recorded before openers were (no
+    ``opener``), a value this code does not know, or no open at all: False. That fails closed,
+    since a display name may since belong to someone else (a person renamed, an agent joined
+    under the old name)."""
+    if not name:
+        return False
+    last: dict[str, Any] | None = None
+    for data in events:
+        if isinstance(data, dict) and "open" in data and data.get("how") not in ("kept", "moved"):
+            last = data
+    return last is not None and last.get("opener") == "agent" and last.get("by") == name
 
 
 def when(ts: float | None) -> str:
@@ -837,12 +870,23 @@ def parse_label(value: Any) -> tuple[str, int]:
 
 
 def agent_move(
-    item: Item, move: str, actor: str, owner_here: bool = True, *, raiser_here: bool = True
+    item: Item,
+    move: str,
+    actor: str,
+    owner_here: bool = True,
+    *,
+    raiser_here: bool = True,
+    holder: str = "",
+    holder_here: bool = False,
 ) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
     or contest it (that's the other side's call). Dropping, deferring and insisting belong to
-    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The owner may
+    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The board's
+    holder may fix a raised finding in one move, which is that concession to itself and the fix
+    (#904), only when ``holder_here``: that holder is an agent in the room, and the board's own
+    open or reopen records it as one (``held_by_agent``), not its name alone. A holder that is not
+    (empty, a person, or the reserved opener of a link) is refused without being named. The owner may
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
@@ -881,7 +925,27 @@ def agent_move(
         raise ReviewError(
             f"{item.label} is {item.owner}'s: {item.owner} can hand it over, or a person can reassign it"
         )
-    if move == "fix" and actor != item.owner:
+    if move == "fix" and item.state == "raised":
+        # #904: the holder concedes and fixes a raised finding in one move, when that holder is an
+        # agent in the room. The raiser is checked first: it cannot concede its own finding, so the
+        # refusal names drop and the other side. A holder that is not an agent (a person, the reserved
+        # opener of a link, or unknown) is refused without being named. Anyone else is told to concede.
+        if actor == item.raised_by:
+            raise ReviewError(
+                f"{item.label} is yours: you can drop it, not fix it from raised. "
+                "The other side concedes or contests it."
+            )
+        if not holder or not holder_here or actor != holder:
+            named = (
+                f"only {holder}, who holds the board, can fix it from there. "
+                if holder and holder_here
+                else "it can't be fixed from there. "
+            )
+            raise ReviewError(
+                f"{item.label} is raised: {named}"
+                f'Concede it first with review(action="concede", item="{item.label}"), then fix it.'
+            )
+    elif move == "fix" and actor != item.owner:
         if not owner_here:
             raise ReviewError(
                 f"{item.label} is {item.owner}'s to fix, and {item.owner} isn't in the room: take it"
