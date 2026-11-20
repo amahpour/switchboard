@@ -171,3 +171,22 @@ def test_a_stored_text_with_breaks_and_no_original_loads_but_is_refused_as_a_wri
         el,
     )
     assert load["load"][0]["text"] == "a\nb" and load["write"] is None  # type: ignore[index]
+
+
+def test_the_frame_source_reads_every_scene_in_load_mode_like_the_shipped_bundle() -> None:
+    """The shipped frame bundle bundles the older rules, which accept what the broker stored. ``frame.jsx``
+    imports the current ``board-rules.js``, so a rebuild would refuse a stored text with a line break and no
+    original at every ``rules.batch`` unless each call says ``true`` (load mode): the scene would drop, or a
+    picture come out empty. Fails if a call site in the readable source lacks it."""
+    source = (ROOT / "scripts" / "board" / "frame.jsx").read_text()
+    calls = [m.start() for m in __import__("re").finditer(r"rules\.batch\(", source)]
+    assert len(calls) >= 5
+    for start in calls:
+        depth, i = 0, source.index("(", start)
+        while True:
+            depth += source[i] == "("
+            depth -= source[i] == ")"
+            if depth == 0:
+                break
+            i += 1
+        assert source[start : i + 1].endswith(", true)"), source[start : i + 1]

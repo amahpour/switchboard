@@ -14,7 +14,7 @@ const post = (action, extra = {}) => parent.postMessage({ t: 'sb-board', action,
 function flush() {
   clearTimeout(timer);
   if (!api || applying || pointer || !session || !dirty || playing) return;
-  const cleaned = rules.batch(api.getSceneElementsIncludingDeleted());
+  const cleaned = rules.batch(api.getSceneElementsIncludingDeleted(), true);
   if (!cleaned) { post('error', { text: 'The drawing exceeds the board limits.' }); return; }
   const changed = cleaned.filter(e => known.get(e.id) !== sig(e));
   dirty = false;
@@ -31,7 +31,7 @@ function apply(elements) {
   // This preserves both arrow bindings and the existing targets' exact dimensions.
   // Only what changed since it was last sent or received is merged in: a shape that was sent, was not kept
   // and has not changed since is gone with the broker's board, while what is still being drawn stays (#893).
-  const local = dirty ? (rules.batch(api.getSceneElementsIncludingDeleted()) || []).filter(e => before.get(e.id) !== sig(e)) : null;
+  const local = dirty ? (rules.batch(api.getSceneElementsIncludingDeleted(), true) || []).filter(e => before.get(e.id) !== sig(e)) : null;
   const scene = local ? rules.merge(elements, local) : elements;
   fullScene = scene;
   const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;
@@ -45,19 +45,19 @@ window.addEventListener('message', async ev => {
   const m = ev.data;
   if (ev.source !== parent || !m || m.t !== 'sb-board' || typeof m.session !== 'string' || typeof m.room !== 'string' || !api) return;
   if (m.action === 'init') {
-    const elements = rules.batch(m.elements);
+    const elements = rules.batch(m.elements, true);
     if (!elements) return;
     session = m.session; room = m.room;
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
     apply(elements);
     if (elements.some(e => !e.isDeleted)) api.scrollToContent(undefined, { fitToContent: true });
   } else if (m.session === session && m.room === room && m.action === 'elements') {
-    const elements = rules.batch(m.elements);
+    const elements = rules.batch(m.elements, true);
     if (elements) apply(elements);
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
   } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {
-    if (!playing) { flush(); fullScene = rules.batch(api.getSceneElementsIncludingDeleted()) || fullScene; }
+    if (!playing) { flush(); fullScene = rules.batch(api.getSceneElementsIncludingDeleted(), true) || fullScene; }
     dirty = false; playing = m.id;
     api.updateScene({ appState: { viewModeEnabled: !!playing, selectedElementIds: {} } });
     apply(fullScene);
@@ -70,7 +70,7 @@ window.addEventListener('message', async ev => {
     } catch { post('converted', { request: m.request, error: 'cannot_convert' }); }
   } else if (m.session === session && m.action === 'export' && typeof m.request === 'string') {
     // The picture is of the committed scene the parent sends, never the live drawing, which may hold text the broker has not read (#893).
-    const blob = await exportToBlob({ elements: attachArrows(centerLabels(restoreElements(rules.batch(m.elements) || [], null, { repairBindings: true, refreshDimensions: true }))), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
+    const blob = await exportToBlob({ elements: attachArrows(centerLabels(restoreElements(rules.batch(m.elements, true) || [], null, { repairBindings: true, refreshDimensions: true }))), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
     if (blob.size <= 600000) post('image', { request: m.request, bytes: await blob.arrayBuffer() });
   }
 });

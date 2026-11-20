@@ -22,6 +22,7 @@ import math
 import re
 import secrets
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -157,7 +158,12 @@ def read_text(text: str) -> str:
     return out[:MAX_TEXT]
 
 
-def _display_text(raw_text: str, raw_original: Any) -> str:
+def _same(stored: dict[str, Any] | None, key: str, value: str) -> bool:
+    """True when ``value`` is the text the stored element already has: it is not new."""
+    return stored is not None and stored.get(key) == value
+
+
+def _display_text(raw_text: str, raw_original: Any, *, same: bool = False) -> str:
     """A shape's ``text``, which Excalidraw keeps as ``originalText`` wrapped to the shape's width. With an
     ``originalText`` the page's wrapped copy is ignored (#893): ``text`` is the read ``originalText``, and the
     page wraps it again when it draws (Excalidraw's own restore wraps a bound or fixed-width text from the
@@ -166,23 +172,50 @@ def _display_text(raw_text: str, raw_original: Any) -> str:
     ``originalText`` is refused: Excalidraw and the agents always send both, so only a hand-built client
     meets it."""
     if isinstance(raw_original, str):
-        return _text(raw_original)
-    if "\n" in raw_text:
+        return _text(raw_original, same=same)
+    if "\n" in raw_text and not same:  # a text already stored this way is kept; a new one is refused
         raise Reject("text with line breaks needs its originalText")
-    return _text(raw_text)
+    return _text(raw_text, same=same)
 
 
-def _text(v: Any) -> str:
-    """A string from outside, cleaned and read by ``read_text``: the one reader of every stored text."""
+def _text(v: Any, *, same: bool = False) -> str:
+    """A string from outside, cleaned and read by ``read_text``: the one reader of every stored text. A text
+    the stored element already has (``same``) is still redacted, and cut, never refused for its length."""
     if not isinstance(v, str):
         return ""
-    return read_text(clean(v)[:_SCAN_MAX])
+    text = clean(v)[:_SCAN_MAX]
+    return redact(text)[0][:MAX_TEXT] if same else read_text(text)
+
+
+# The ids and references of the stored element a write is to (``clean_element(stored=...)``): they were
+# accepted when stored, possibly by an earlier broker, and an action on that element (a move, a delete)
+# carries them again. A new element, or an id the stored one did not have, is checked as before (#893).
+_TRUSTED: ContextVar[frozenset[str]] = ContextVar("board_trusted_ids", default=frozenset())
+
+
+def _stored_ids(stored: dict[str, Any] | None) -> frozenset[str]:
+    if not stored:
+        return frozenset()
+    found: list[Any] = [
+        stored.get("id"),
+        stored.get("frameId"),
+        stored.get("containerId"),
+        stored.get("index"),
+    ]
+    found += stored.get("groupIds") or []
+    found += [b.get("id") for b in stored.get("boundElements") or [] if isinstance(b, dict)]
+    found += [
+        stored[k].get("elementId") for k in ("startBinding", "endBinding") if isinstance(stored.get(k), dict)
+    ]
+    return frozenset(v for v in found if isinstance(v, str))
 
 
 def _no_secret(v: str) -> str:
     """An id or a reference that is kept as written must hold no secret: one that does is refused, naming
     the kind and never the value (#893). The character and length check is not enough: a complete token
     (``ghp_`` and 36 letters) fits it."""
+    if v in _TRUSTED.get():  # already stored under this element: a write to it may carry it again
+        return v
     kinds = redact(v)[1]
     if kinds:
         raise Reject(f"an id holds what looks like a secret ({', '.join(kinds)}): use another id")
@@ -273,8 +306,18 @@ def _bound_list(raw: Any) -> list[dict[str, str]] | None:
     return out
 
 
-def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
-    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all."""
+def clean_element(raw: Any, *, agent: bool, stored: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all. ``stored`` is the
+    element already stored under this id, when there is one: what a write copies from it (its ids, and a
+    text it does not change) is not refused again, and a tombstone keeps no text (#893)."""
+    token = _TRUSTED.set(_stored_ids(stored))
+    try:
+        return _clean_element(raw, agent=agent, stored=stored)
+    finally:
+        _TRUSTED.reset(token)
+
+
+def _clean_element(raw: Any, *, agent: bool, stored: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise Reject("not an element")
     eid = _ident(raw.get("id"))
@@ -355,9 +398,13 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
         el["locked"] = raw["locked"]
     for key in ("originalText", "name"):
         if isinstance(raw.get(key), str):
-            el[key] = _text(raw[key])
+            el[key] = "" if deleted else _text(raw[key], same=_same(stored, key, raw[key]))
     if isinstance(raw.get("text"), str):
-        el["text"] = _display_text(raw["text"], raw.get("originalText"))
+        el["text"] = (
+            ""
+            if deleted
+            else _display_text(raw["text"], raw.get("originalText"), same=_same(stored, "text", raw["text"]))
+        )
     size = _iint(raw.get("fontSize"), 8, 48)
     if size is not None:
         el["fontSize"] = size
@@ -445,7 +492,9 @@ def merge(
             rejected.append("too many")
             break
         try:
-            el = clean_element(raw, agent=agent)
+            raw_id = raw.get("id") if isinstance(raw, dict) else None
+            stored = by_id.get(raw_id) if isinstance(raw_id, str) else None
+            el = clean_element(raw, agent=agent, stored=stored)
         except Reject as e:
             rejected.append(e.reason)
             continue
