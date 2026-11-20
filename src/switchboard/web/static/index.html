@@ -222,10 +222,10 @@
     <!-- A room filtered to what was said to you or to its files (#914, DESIGN.md §64). All is the live log;
          Mentions and Files are the broker's answer, older history included. Drawn by app.js. -->
     <div class="room-filters hidden" id="room-filters" role="group" aria-label="Show in this room">
-      <button type="button" class="room-filter" data-show="all" aria-pressed="true">All</button>
-      <button type="button" class="room-filter" data-show="mentions" aria-pressed="false"
+      <button type="button" class="room-filter" id="filter-all" data-show="all" aria-pressed="true">All</button>
+      <button type="button" class="room-filter" id="filter-mentions" data-show="mentions" aria-pressed="false"
               title="Messages addressed to you: an @mention of you, @humans, or an agent's reply to you">Mentions</button>
-      <button type="button" class="room-filter" data-show="files" aria-pressed="false"
+      <button type="button" class="room-filter" id="filter-files" data-show="files" aria-pressed="false"
               title="Messages with a file: an attachment or a call's snapshot">Files</button>
       <span class="room-filter-note" id="room-filter-note" role="status" aria-live="polite"></span>
     </div>

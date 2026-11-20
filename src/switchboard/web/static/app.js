@@ -9598,6 +9598,7 @@
   // another room or a search result, or All, goes back to the live log.
   state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
 
+  const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
   const FILTER_EMPTY = {
     mentions: 'Nothing in this room is addressed to you yet.',
     files: 'No files in this room yet.',
@@ -9633,7 +9634,7 @@
     if (state.filter && (!r || state.filter.room !== r.name)) state.filter = null;
     const f = filterOf(r);
     const show = f ? f.show : 'all';
-    for (const b of row.querySelectorAll('.room-filter')) b.setAttribute('aria-pressed', String(b.dataset.show === show));
+    for (const s of FILTER_SHOWS) $('filter-' + s).setAttribute('aria-pressed', String(s === show));
     const note = $('room-filter-note');
     const text = f ? filterNote(f) : '';
     if (note.textContent !== text) note.textContent = text;
@@ -9706,10 +9707,7 @@
     if (!state.filter) { renderFilters(); return; }
     state.filter = null;
     renderLog();
-    if (stay) {
-      const all = $('room-filters').querySelector('[data-show="all"]');
-      if (all) all.focus();
-    }
+    if (stay) $('filter-all').focus();
   }
 
   // A message that arrives while the room is filtered: drawn when the filter would have answered with it.
@@ -9726,9 +9724,7 @@
   }
 
   function bindRoomFilters() {
-    for (const b of $('room-filters').querySelectorAll('.room-filter')) {
-      b.addEventListener('click', function () { setFilter(b.dataset.show); });
-    }
+    for (const s of FILTER_SHOWS) $('filter-' + s).addEventListener('click', function () { setFilter(s); });
   }
 
   // --------------------------------------------------------------- boot
