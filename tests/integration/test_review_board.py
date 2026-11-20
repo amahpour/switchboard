@@ -285,6 +285,43 @@ async def test_a_raised_fix_on_a_board_no_agent_holds_names_no_one(
         web.close()
 
 
+async def test_a_renamed_persons_board_is_not_held_by_the_agent_that_takes_their_old_name(
+    broker: InProcBroker,
+) -> None:
+    """#904 (F4): the board row keeps the name of the person who opened it, and a rename leaves
+    it as it was. Once an agent joins under that old name, the name matches the holder, but the
+    board's own open records a person, so that agent's fix on a raised finding is refused the way
+    an unknown holder's is (concede first, naming no one) and assigns it nothing. Fails while the
+    holder is an agent by name alone: the newcomer then owns a finding it never conceded."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "renamed-reviewer") as reviewer,
+            FakeAgent(broker.home, "renamed-namesake") as namesake,
+        ):
+            await reviewer.join("#build", "codex-1")
+            opened = web_cmd(broker, web, f"/review {PR}")
+            assert opened.status_code == 200, opened.text
+            assert [row["opened_by"] for row in q(broker, "SELECT opened_by FROM reviews")] == ["alice"]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total", url=PR)
+            renamed = web.post("/api/me/name", json={"name": "erin"}, headers=broker.write_headers())
+            assert renamed.status_code == 200, renamed.text
+            assert [row["opened_by"] for row in q(broker, "SELECT opened_by FROM reviews")] == ["alice"]
+            await namesake.join("#build", "alice")
+            refused = await namesake.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total", url=PR
+            )
+            assert not refused["ok"], refused
+            assert "can't be fixed from there" in refused["error"]
+            assert 'review(action="concede", item="F1")' in refused["error"]
+            assert "alice" not in refused["error"].lower()
+            row = q(broker, "SELECT state, owner, commit_sha FROM review_items")[0]
+            assert tuple(row) == ("raised", "", "")
+            assert not {"conceded", "fixed"} & set(_finding_moves(broker, "F1"))
+    finally:
+        web.close()
+
+
 def _finding_moves(broker: InProcBroker, label: str) -> list[str]:
     """The ``to`` of each review event stored for one card."""
     out = []

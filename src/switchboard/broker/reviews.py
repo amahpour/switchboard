@@ -288,6 +288,17 @@ class Boards:
         if action == "abstain":
             return self._abstain(room, rv, item, actor, here)
         held = reviews.holder(rv)
+        # The board row names the holder; only an agent in the room that the board's own open or
+        # reopen records as an agent can be that holder. A name alone is not enough: a person who
+        # opened it may since be renamed, and an agent may join under their old name (#904).
+        holder_here = (
+            action == "fix"
+            and item.state == "raised"
+            and reviews.holder_in_room(held, here)
+            and reviews.held_by_agent(
+                held, [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+            )
+        )
         to = reviews.agent_move(
             item,
             action,
@@ -295,8 +306,7 @@ class Boards:
             owner_here=item.owner in here,
             raiser_here=item.raised_by in here,
             holder=held,
-            # the board row names the opener; only an agent in the room can be that holder (#904)
-            holder_here=reviews.holder_in_room(held, here),
+            holder_here=holder_here,
         )
         if action == "reopen":
             self._guard_slot(room, rv)
@@ -602,7 +612,7 @@ class Boards:
         self._settle(room, rv, closed=True)
         self._event(room, rv, reset=u, by=actor, reason=reason)
         fresh = self.store.open_review(room.id, u, head, actor)
-        self._event(room, fresh, open=u, head=head, by=actor)
+        self._event(room, fresh, open=u, head=head, by=actor, opener="agent")
         self._notice(
             room,
             f"{actor} reset the review board for {self._ref(rv)}: {reason}. A fresh board is open;"
@@ -738,7 +748,7 @@ class Boards:
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         url = reviews.url(params.get("url"))
         head = reviews.head(params.get("head"))
-        rv, how = self._open_board(room, actor, url, head)
+        rv, how = self._open_board(room, actor, url, head, opener="agent")
         self._remember(room, actor, rv)
         out = self._shown(room, rv)
         if how == "reopened":
@@ -784,13 +794,15 @@ class Boards:
             self._check_room(room, grows=False)
 
     def _open_board(
-        self, room: Room, by: str, url: str, head: str, *, author: str = ""
+        self, room: Room, by: str, url: str, head: str, *, opener: str, author: str = ""
     ) -> tuple[dict[str, Any], str]:
         """The room's board for ``url``, opened by ``by`` (an agent or a person) with ``head``, and
         what happened to it: ``opened`` (a new board), ``reopened`` (a closed one is back, with its
         items and history), ``moved`` (an open one now at a newer head) or ``kept`` (open already).
         Other boards of the room are left as they are (§37.14). ``author``: the agent that posted the
-        link a board is opened for (§37.16), recorded with the move: the board's author side (#884)."""
+        link a board is opened for (§37.16), recorded with the move: the board's author side (#884).
+        ``opener``: what ``by`` is, ``agent``, ``person`` or ``link``, recorded with the move: a
+        board's holder is an agent only by this record, never by its name alone (#904)."""
         rv = self.store.review_for_url(room.id, url)
         new_head = bool(head) and (rv is None or head != rv["head"])
         if rv is not None and rv["posted_at"] is not None and new_head:
@@ -820,7 +832,8 @@ class Boards:
                 self._notice(room, f"{by} moved the review board to {head[:12]}")
                 how = how if how == "reopened" else "moved"
             rv = self.store.review_for_url(room.id, url) or rv
-        self._event(room, rv, open=url, head=head, by=by, how=how, **({"author": author} if author else {}))
+        extra = {"author": author} if author else {}
+        self._event(room, rv, open=url, head=head, by=by, how=how, opener=opener, **extra)
         return rv, how
 
     def on_agent_say(self, room: Room, author: str, text: str) -> None:
@@ -858,7 +871,7 @@ class Boards:
                 )
                 continue
             try:
-                self._open_board(room, "switchboard", url, "", author=author)
+                self._open_board(room, "switchboard", url, "", opener="link", author=author)
             except ReviewError as e:
                 self._notice(room, f"not asking for a review of {url}: {e}")
                 continue
@@ -897,7 +910,7 @@ class Boards:
     def person_open(self, room: Room, name: str, url: str) -> str:
         """A person's ``/review`` (§37.8): the board opens, or comes back, or stays, for ``url``,
         and every page showing the room gets it at once. Returns what happened (``_open_board``)."""
-        rv, how = self._open_board(room, name, reviews.url(url), "")
+        rv, how = self._open_board(room, name, reviews.url(url), "", opener="person")
         self._publish(room)
         return how
 

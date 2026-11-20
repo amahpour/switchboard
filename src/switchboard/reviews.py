@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -711,6 +711,25 @@ def holder_in_room(name: str, agents: Collection[str]) -> bool:
     return any(isinstance(agent, str) and agent.casefold() == folded for agent in agents)
 
 
+def held_by_agent(name: str, events: Iterable[Any]) -> bool:
+    """Whether the board's own record shows its holder ``name`` opened it as an agent (#904).
+
+    ``events``: the board's ``review`` event data, oldest first. The holder is set by the last
+    open, reopen or reset (an open move whose ``how`` is not ``kept`` or ``moved``), and that move
+    records its ``opener``: ``agent``, ``person`` or ``link``. True only when it says ``agent``
+    and names ``name``. A person's open, a link's, one recorded before openers were (no
+    ``opener``), a value this code does not know, or no open at all: False. That fails closed,
+    since a display name may since belong to someone else (a person renamed, an agent joined
+    under the old name)."""
+    if not name:
+        return False
+    last: dict[str, Any] | None = None
+    for data in events:
+        if isinstance(data, dict) and "open" in data and data.get("how") not in ("kept", "moved"):
+            last = data
+    return last is not None and last.get("opener") == "agent" and last.get("by") == name
+
+
 def when(ts: float | None) -> str:
     """A moment as an agent reads it: UTC, to the minute, the same wherever the broker runs."""
     if ts is None:
@@ -862,7 +881,8 @@ def agent_move(
     or contest it (that's the other side's call). Dropping, deferring and insisting belong to
     its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The board's
     holder may fix a raised finding in one move, which is that concession to itself and the fix
-    (#904), only when ``holder_here``: that holder is an agent in the room. A holder that is not
+    (#904), only when ``holder_here``: that holder is an agent in the room, and the board's own
+    open or reopen records it as one (``held_by_agent``), not its name alone. A holder that is not
     (empty, a person, or the reserved opener of a link) is refused without being named. The owner may
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the

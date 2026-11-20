@@ -106,6 +106,29 @@ def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
         reviews.agent_move(contested, "fix", "claude-1", holder="claude-1")
 
 
+def test_a_board_is_held_by_an_agent_only_when_its_last_open_records_one() -> None:
+    """#904 (F4): a display name is not who opened a board. A person's open, a link's, an open
+    recorded before openers were, an unknown opener, or none: not an agent's. The holder is set by
+    the last open, reopen or reset; a later kept or moved open does not change it. Fails while the
+    holder's kind is read from its name: a person renamed away from it, and an agent joined under
+    it, would hold the board."""
+    agent = {"open": "u", "by": "claude-1", "how": "opened", "opener": "agent"}
+    assert reviews.held_by_agent("claude-1", [agent])
+    assert reviews.held_by_agent("claude-1", [agent, {"open": "u", "by": "alice", "how": "kept"}])
+    assert reviews.held_by_agent("claude-1", [agent, {"open": "u", "by": "alice", "how": "moved"}])
+    assert reviews.held_by_agent("claude-1", [{"open": "u", "by": "claude-1", "opener": "agent"}])  # reset
+    assert not reviews.held_by_agent("alice", [{**agent, "by": "alice", "opener": "person"}])
+    assert not reviews.held_by_agent("switchboard", [{**agent, "by": "switchboard", "opener": "link"}])
+    assert not reviews.held_by_agent("claude-1", [{"open": "u", "by": "claude-1", "how": "opened"}])
+    assert not reviews.held_by_agent("claude-1", [{**agent, "opener": "Agent"}])
+    assert not reviews.held_by_agent("claude-1", [{**agent, "by": "claude-2"}])
+    assert not reviews.held_by_agent("claude-1", [])
+    assert not reviews.held_by_agent("", [agent])
+    reopened = {"open": "u", "by": "alice", "how": "reopened", "opener": "person"}
+    assert not reviews.held_by_agent("alice", [agent, {"close": "u", "by": "claude-1"}, reopened])
+    assert not reviews.held_by_agent("claude-1", ["not a dict", None, {"to": "fixed", "by": "claude-1"}])
+
+
 def test_a_holder_who_is_not_an_agent_in_the_room_is_not_named() -> None:
     """#904: a link-opened board is held by the reserved opener, and a person's board by that
     person. Neither is an agent in the room, so a raised fix is refused like an unknown holder
