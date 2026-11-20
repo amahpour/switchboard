@@ -14,6 +14,8 @@
 - ``own_color_env()`` clears ``NO_COLOR``, ``FORCE_COLOR`` and ``CLICOLOR_FORCE`` and
   pins ``TERM`` for the colour tests, so a shell that disables colour does not (#650).
 - ``tmp_home``: a short /tmp home with the ``.switchboard-test`` marker.
+- ``sweep_stale_homes()``, run once per session from the controller (``pytest_sessionstart``):
+  removes the marked homes a killed run left in /tmp (#919).
 - ``broker``: an in-process broker (uvicorn in a thread, AllowAllHumans, test mode).
 - ``web``: an httpx client on http://switchboard.localhost:<port>, signed in.
 - ``SubprocBroker``: ``switchboard start --foreground`` in a child process.
@@ -27,6 +29,7 @@ import os
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -43,6 +46,7 @@ import pytest
 
 import switchboard.config
 from switchboard.config import Config
+from switchboard.paths import TEST_MARKER
 
 _STRIP_PREFIXES = ("CLAUDE", "CODEX_", "CURSOR_", "DEVIN_", "CHISEL_", "AI_AGENT")
 _REAL_PATH = os.environ.get("PATH", "/usr/bin:/bin")
@@ -257,10 +261,63 @@ def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
     )
 
 
+TMP_HOME_ROOT = Path("/tmp")
+TMP_HOME_PREFIX = "yk-"
+
+# A home is stale once it is this old. The longest run that makes homes (the whole suite, an eval of
+# 25 trials, a live run of every harness) takes well under an hour and CI's longest job is capped at
+# 30 minutes, so 6 h keeps every home of a run going on alongside, a slow machine's included, and
+# still clears a killed run's homes the same day (#919).
+STALE_HOME_AGE_S = 6 * 3600
+
+
 def make_tmp_home() -> Path:
-    d = Path(tempfile.mkdtemp(prefix="yk-", dir="/tmp"))
-    (d / ".switchboard-test").touch()
+    # short on purpose: the broker's socket inside it must fit sun_path (paths.SOCK_MAX_BYTES)
+    d = Path(tempfile.mkdtemp(prefix=TMP_HOME_PREFIX, dir=TMP_HOME_ROOT))
+    (d / TEST_MARKER).touch()
     return d
+
+
+def sweep_stale_homes(
+    root: Path = TMP_HOME_ROOT, *, now: float | None = None, max_age_s: float = STALE_HOME_AGE_S
+) -> list[Path]:
+    """Remove the test homes a killed run left behind, and return the ones removed (#919).
+
+    ``tmp_home`` and the e2e worlds remove their home in a ``finally``, which a SIGKILL, the OOM
+    killer, a timeout or a cancelled run skips. Only a directory directly under ``root`` named
+    ``yk-*``, not a symlink, owned by this user, carrying the ``.switchboard-test`` marker and last
+    changed ``max_age_s`` ago or more is removed: a home without the marker is never touched, and a
+    young one may belong to a run going on alongside. Errors are ignored, so it never fails a run.
+    """
+    now = time.time() if now is None else now
+    uid = os.getuid()
+    removed: list[Path] = []
+    try:
+        entries = list(os.scandir(root))
+    except OSError:
+        return removed
+    for entry in entries:
+        if not entry.name.startswith(TMP_HOME_PREFIX):
+            continue
+        try:
+            st = entry.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or now - st.st_mtime < max_age_s:
+                continue
+            marker = os.lstat(os.path.join(entry.path, TEST_MARKER))
+            if not stat.S_ISREG(marker.st_mode):
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(entry.path, ignore_errors=True)
+        removed.append(Path(entry.path))
+    return removed
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    # Once per session, from the controller: an xdist worker has ``workerinput`` and skips it, so N
+    # workers do not race each other through /tmp.
+    if not hasattr(session.config, "workerinput"):
+        sweep_stale_homes()
 
 
 @pytest.fixture
