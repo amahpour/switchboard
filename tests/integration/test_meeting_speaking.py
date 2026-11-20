@@ -121,6 +121,38 @@ async def test_the_bar_clears_when_the_line_is_talked_over_or_fails(
         await wait_until(lambda: spoken_names(frames) == ["claude-1", None])
 
 
+@pytest.mark.parametrize("fails", [False, True])
+async def test_the_bar_names_the_agent_while_the_call_makes_its_voice_and_clears_on_an_early_error(
+    broker: InProcBroker, joinly: FakeJoinly, fails: bool
+) -> None:
+    """joinly makes a sentence's audio before it plays any of it, and says nothing when playing starts, so
+    the bar names the agent from when its line is handed to the call (§52.13). Here joinly holds the line
+    before it plays (received, not yet spoken): the frame names claude-1 during that hold. Released, the
+    line plays and the bar clears; or it fails before any of it played, and the bar clears with the room
+    told. Fails if the bar waits for a playback signal joinly never sends, or keeps the name after an error
+    raised before playback."""
+    async with FakeAgent(broker.home, "k1") as agent:
+        joinly.hold_before_play = True
+        await agent.join("#build", "claude-1")
+        await start_call(broker, joinly)
+        command(broker, "/meeting voice on")
+        frames = record_frames(broker)
+        assert (await agent.say("#build", "@call the build is green")).get("posted_id")
+        await wait_until(lambda: joinly.received == ["the build is green"])
+        await wait_until(lambda: speaking(broker) == "claude-1")
+        assert joinly.spoken == []  # still being made: nothing has played
+        await wait_until(lambda: spoken_names(frames)[-1:] == ["claude-1"])
+        joinly.fail_speech = fails
+        joinly.release_speech()
+        await wait_until(lambda: speech_finished(broker) and speaking(broker) is None)
+        await wait_until(lambda: spoken_names(frames) == ["claude-1", None])
+        if fails:
+            assert joinly.spoken == []
+            await wait_until(lambda: any("Couldn't speak in the call" in t for t in notice_texts(broker)))
+        else:
+            assert joinly.spoken == ["the build is green"]
+
+
 async def test_a_line_waiting_its_turn_is_not_shown_as_speaking(
     broker: InProcBroker, joinly: FakeJoinly
 ) -> None:
