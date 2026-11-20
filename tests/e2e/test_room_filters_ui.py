@@ -217,3 +217,48 @@ def test_on_a_phone_the_row_fits_and_its_buttons_are_tall_enough(ui: UI) -> None
     expect(page.locator("#room-title")).to_have_text(MANY)
     expect(button(page, "all")).to_have_attribute("aria-pressed", "true")
     expect(page.locator("#app")).not_to_have_class(re.compile("search-open"))
+
+
+# ------------------------------------------------- what arrives while a filter is on (the review of #916)
+def fresh_room(world: UIWorld, room: str, mentions: int = 0, agent: str | None = None) -> list[int]:
+    """A room of this test's own: ``mentions`` planted @alice lines, oldest first, and a scripted agent named
+    ``agent`` joined to speak live. Returns the planted ids."""
+    world.create_room("#" + room)
+    ids: list[int] = []
+
+    def plant() -> None:
+        store = world.broker.state.store
+        r = store.get_room("#" + room)
+        assert r is not None
+        for i in range(mentions):
+            m = store.insert_message(
+                r.id, sender_name="claude-1", sender_kind="agent", via="mcp", text=f"@alice question {i}",
+                sender_harness="claude", mentions=["alice"],
+            )  # fmt: skip
+            ids.append(m.id)
+
+    world.broker.on_loop(plant)
+    if agent:
+        world.add_agents("#" + room, (agent,))
+    return ids
+
+
+def test_a_live_match_keeps_the_focus_on_show_older(ui: UI) -> None:
+    """Show older has the keyboard when a new mention arrives: the log is drawn again with the new line, and
+    the focus is on the new Show older, not dropped to the page. Fails if the redraw removes the focused
+    button without giving the focus back."""
+    room = "e2e-filters-focus"
+    fresh_room(ui.world, room, mentions=53, agent="scout")
+    try:
+        page = ui.open(room)
+        button(page, "mentions").click()
+        expect(page.locator("#room-filter-note")).to_have_text("The newest 50 messages addressed to you")
+        older = page.locator("#log .filter-older")
+        older.focus()
+        expect(older).to_be_focused()
+        mid = ui.world.agent_say("#" + room, "scout", "@alice one more question?")
+        expect(page.locator(f'#log .line[data-id="{mid}"]')).to_have_count(1)
+        expect(page.locator("#room-filter-note")).to_have_text("The newest 51 messages addressed to you")
+        expect(page.locator("#log .filter-older")).to_be_focused()
+    finally:
+        ui.world.close_extra_agents()

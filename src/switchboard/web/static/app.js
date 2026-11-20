@@ -9724,13 +9724,22 @@
     return added;
   }
 
-  // Draw what a filter gained while it is on screen.
+  // Draw what a filter gained while it is on screen. The log is drawn again, so whatever in it had the keyboard
+  // (Show older, a message row) gets it back on its new node: a live line never drops the focus to the page.
   function filterAdd(r, f, list) {
     if (state.filter !== f || !filterMerge(f, list)) return;
     const log = $('log');
     const stick = nearBottom(log);
+    const key = focusKey(log);
+    const had = document.activeElement;
+    const row = !key && had && had !== log && log.contains(had) && had.dataset ? had.dataset.id || null : null;
     renderFilters();
     renderRows(r);
+    if (key) refocus(log, key);
+    else if (row) {
+      const n = log.querySelector('[data-id="' + String(Number(row)) + '"]');
+      if (n) { n.tabIndex = -1; n.focus({ preventScroll: true }); }
+    }
     if (stick) log.scrollTop = log.scrollHeight;
   }
 
