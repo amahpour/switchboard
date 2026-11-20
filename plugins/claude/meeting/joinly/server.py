@@ -471,7 +471,9 @@ async def session_lifespan(server: FastMCP) -> AsyncIterator[SessionContext]:
     # switchboard patch (#764): the captions controller reaches the call's page through the provider
     _attach = getattr(meeting_session._transcription_controller, "attach", None)  # noqa: SLF001
     if _attach is not None:
-        _attach(meeting_session._meeting_provider, settings.name)  # noqa: SLF001
+        # Joinly holds this lock for the whole speak_text operation, including audio playback.
+        speech_lock = meeting_session._speech_controller._lock  # noqa: SLF001
+        _attach(meeting_session._meeting_provider, settings.name, speech_lock.locked)  # noqa: SLF001
 
     _remover: dict[AnyUrl, Callable[[], None]] = {}
 

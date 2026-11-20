@@ -14,6 +14,7 @@ import contextlib
 import logging
 import re
 import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,10 +48,18 @@ BOX = ".live-transcription-subtitle__box"
 # itself never leaves the page (FNV-1a, 64 bit, 12 hex digits: SubtleCrypto is asynchronous, and this only
 # has to tell the people on one call apart); and, only for a row with no initials, its markup (cut), for the
 # one-time diagnostic
-READ_JS = """() => {
+READ_JS = """(bot) => {
   const box = document.querySelector('.live-transcription-subtitle__box');
   if (!box) return null;
   const out = [];
+  // Joinly's active_speaker deliberately filters out the bot. Check active tiles directly.
+  const name = (s) => s.trim().toLowerCase();
+  const ownActive = bot && [
+    'div.speaker-active-container__video-frame span',
+    'div.speaker-bar-container__video-frame--active span',
+    'div.single-main-container__video-frame span',
+  ].some((sel) => [...document.querySelectorAll(sel)].some(
+    (el) => name(el.textContent) === name(bot)));
   for (const it of box.querySelectorAll('.live-transcription-subtitle__item')) {
     const row = it.parentElement;
     const icon = row ? row.querySelector('.zmu-data-selector-item__icon') : null;
@@ -75,6 +84,7 @@ READ_JS = """() => {
               c: icon ? getComputedStyle(icon).backgroundColor : '',
               n: label,
               p: pic,
+              own_active: Boolean(ownActive),
               t: it.textContent,
               h: initials ? '' : [icon, row].map((e) => (e ? e.outerHTML.slice(0, 1500) : '')).join('\\u0000')});
   }
@@ -301,13 +311,17 @@ class FinalRule:
                 sp.last_text = ""
         return out
 
-    def changing(self, now: float, within: float, ignore: Any = None) -> bool:
+    def changing(self, now: float, within: float, ignore: Callable[[str], bool] | None = None) -> bool:
         """Whether any speaker's text changed in the last ``within`` seconds. ``ignore`` is a predicate on a
         key: a row it is true for does not count (the bot's own caption, which must not stop its own voice)."""
-        return any(
-            sp.last_text and now - sp.changed_at < within and not (ignore is not None and ignore(key))
-            for key, sp in self._by_key.items()
-        )
+        return next(self.changing_rows(now, within, ignore), None) is not None
+
+    def changing_rows(
+        self, now: float, within: float, ignore: Callable[[str], bool] | None = None
+    ) -> Iterator[tuple[str, str]]:
+        for key, sp in self._by_key.items():
+            if sp.last_text and now - sp.changed_at < within and (ignore is None or not ignore(key)):
+                yield key, sp.last_text
 
     @staticmethod
     def _before_is_sent(have: list[str], k: int, before: list[str]) -> bool:
@@ -407,9 +421,7 @@ class PauseHold:
     @staticmethod
     def _merge(held: list[Final]) -> Final:
         first, last = held[0], held[-1]
-        return Final(
-            first.key, " ".join(f.text for f in held), first.t_start, last.t_end, paused=last.paused
-        )
+        return Final(first.key, " ".join(f.text for f in held), first.t_start, last.t_end, paused=last.paused)
 
 
 # --------------------------------------------------------------------------------- joinly's three parts
@@ -453,6 +465,8 @@ class CaptionsTranscriptionController:
     def __init__(self, **_: Any) -> None:
         self._provider: Any = None
         self._bot = ""
+        self._playback_active: Callable[[], bool] = lambda: False
+        self._anonymous_own: dict[str, str] = {}
         self._task: asyncio.Task[None] | None = None
         self._drain_task: asyncio.Task[None] | None = None
         self._no_speech = asyncio.Event()
@@ -475,10 +489,12 @@ class CaptionsTranscriptionController:
         self._transcript: Any = None
         self._events: Any = None
 
-    def attach(self, provider: Any, bot_name: str) -> None:
+    def attach(self, provider: Any, bot_name: str, playback_active: Callable[[], bool] | None = None) -> None:
         """Called once by the patched server with the session's meeting provider and the bot's own name."""
         self._provider = provider
         self._bot = bot_name
+        if playback_active is not None:
+            self._playback_active = playback_active
 
     @property
     def no_speech_event(self) -> asyncio.Event:
@@ -573,7 +589,7 @@ class CaptionsTranscriptionController:
                 items = None
                 if page is not None:
                     try:
-                        items = await page.evaluate(READ_JS)
+                        items = await page.evaluate(READ_JS, self._bot)
                     except Exception:
                         items = None
                 if items is None:
@@ -584,9 +600,6 @@ class CaptionsTranscriptionController:
                 else:
                     last_on = now
                     await self._take(items, now)
-                    # Zoom captions the bot's own speech: that row changing is not someone talking over it
-                    quiet = not self._rule.changing(now, 0.6, self._is_own_key)
-                    self._no_speech.set() if quiet else self._no_speech.clear()
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
             logger.info(
@@ -610,13 +623,25 @@ class CaptionsTranscriptionController:
 
     async def _take(self, items: list[dict[str, Any]], now: float) -> None:
         entries = []
+        anonymous_own = {}
         for it in items:
             if not isinstance(it, dict):
                 continue
             ini = str(it.get("i", ""))[:8]
             label = " ".join(str(it.get("n", "") if not ini else "").replace("|", " ").split())[:80]
             pic = "" if ini else re.sub(r"[^0-9a-f]", "", str(it.get("p", "")).lower())[:12]
-            entries.append((f"{ini}|{str(it.get('c', ''))[:40]}|{label}|{pic}", str(it.get("t", ""))[:4000]))
+            colour = str(it.get("c", "")).replace("|", "")[:40]
+            key = f"{ini.replace('|', '')}|{colour}|{label}|{pic}"
+            caption = str(it.get("t", ""))[:4000]
+            # A new anonymous row can precede the bot's initials. Keep an unchanged self caption
+            # suppressed even if the active speaker has since changed.
+            if not (ini or label or pic) and (
+                self._anonymous_own.get(key) == caption
+                or (it.get("own_active") is True and self._seen_text.get(key) != caption)
+            ):
+                anonymous_own[key] = caption
+                continue
+            entries.append((key, caption))
             if not ini and not self._icon_logged and it.get("h"):
                 self._icon_logged = True  # once a call: where Zoom puts the name of a speaker with a picture
                 icon, _, row = str(it["h"]).partition("\0")
@@ -625,12 +650,34 @@ class CaptionsTranscriptionController:
                     redact_markup(icon),
                     redact_markup(row),
                 )
+        self._anonymous_own = anonymous_own
         self._sample_active(entries)
         finals = self._hold.step(self._rule.feed(entries, now), entries, now)
+        self._update_no_speech(now)
         if finals:
             await self._dump_buttons()
             await self._look_up(now, {f.key for f in finals})
         self._emit(finals)
+
+    def _update_no_speech(self, now: float) -> None:
+        rows = self._rule.changing_rows(now, 0.6, self._is_own_key)
+        first = next(rows, None)
+        if first is None:
+            self._no_speech.set()
+            return
+        if self._no_speech.is_set() and self._playback_active():
+            for key, caption in (first, *rows):
+                initials, colour, label, picture = key.split("|", 3)
+                logger.info(
+                    "captions: no-speech cleared during playback; "
+                    "initials=%r colour=%r label_length=%d picture=%r words=%d",
+                    initials,
+                    colour,
+                    len(label),
+                    picture,
+                    len(words_of(caption)),
+                )
+        self._no_speech.clear()
 
     def _sample_active(self, entries: list[tuple[str, str]]) -> None:
         """While a speaker's caption changes, note who the call's own active-speaker detection names (joinly's

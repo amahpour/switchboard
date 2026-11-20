@@ -141,7 +141,7 @@ class Page:
     def is_closed(self) -> bool:
         return False
 
-    async def evaluate(self, js: str) -> Any:
+    async def evaluate(self, js: str, arg: Any = None) -> Any:
         if js is cap.ENABLE_JS:
             return self.enable
         return self.reads.pop(0) if len(self.reads) > 1 else (self.reads[0] if self.reads else None)
@@ -304,7 +304,7 @@ class Changing(Page):
         super().__init__([None])
         self.initials, self.n = initials, 0
 
-    async def evaluate(self, js: str) -> Any:
+    async def evaluate(self, js: str, arg: Any = None) -> Any:
         if js is cap.READ_JS:
             self.n += 1
             return [{"i": self.initials, "c": "rgb(2, 2, 2)", "t": "words " * self.n}]
@@ -331,6 +331,31 @@ async def test_the_bots_own_caption_never_clears_the_no_speech_signal_but_a_pers
     monkeypatch.setattr(cap, "POLL_S", 0.01)
     assert await _no_speech_after_reads("S(", 20) is True  # the bot's own row, growing
     assert await _no_speech_after_reads("AB", 20) is False  # a person's row, growing
+
+
+@pytest.mark.parametrize("initials", ["", "S("])
+async def test_self_caption_stays_quiet_as_initials_appear(initials: str) -> None:
+    """A bot caption must leave the barge-in signal quiet even on its first frame without initials."""
+    c = controller(Page([None]))
+    await c._take([{"i": "", "c": "rgb(2, 2, 2)", "t": "First", "own_active": True}], 1.0)
+    first_frame_quiet = not c._rule.changing(1.0, 0.6, c._is_own_key)
+    if initials:
+        await c._take([{"i": initials, "c": "rgb(2, 2, 2)", "t": "First words"}], 1.25)
+    assert first_frame_quiet
+    assert not c._rule.changing(1.25, 0.6, c._is_own_key)
+
+
+async def test_playback_interruption_logs_row_metadata_once(caplog: pytest.LogCaptureFixture) -> None:
+    """A human can still interrupt playback. The transition log gives row metadata without spoken words."""
+    c = controller(Page([None]))
+    c.attach(c._provider, c._bot, lambda: True)
+    with caplog.at_level("INFO"):
+        await c._take([{"i": "AB", "c": "rgb(1, 2, 3)", "t": "private phrase", "own_active": True}], 1.0)
+        await c._take([{"i": "AB", "c": "rgb(1, 2, 3)", "t": "private phrase again"}], 1.25)
+    assert not c.no_speech_event.is_set()
+    assert caplog.text.count("no-speech cleared during playback") == 1
+    assert "initials='AB' colour='rgb(1, 2, 3)' label_length=0 picture='' words=2" in caplog.text
+    assert "private phrase" not in caplog.text
 
 
 def test_a_new_sentence_that_ends_like_the_last_one_sent_is_not_dropped() -> None:
@@ -438,7 +463,7 @@ async def test_a_picture_row_key_holds_its_label_and_a_row_with_initials_does_no
     separator removed. Fails if a label is trusted next to real initials, is not cut, or can split the key."""
     c = controller(Page([None]))
     seen: list[list[tuple[str, str]]] = []
-    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing_rows=lambda *a: iter(()))
     await c._take(
         [
             {"i": "", "c": "rgb(1, 1, 1)", "n": "al|ice " + "x" * 200, "t": "hi"},
@@ -598,7 +623,7 @@ async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id
     src = "https://example.com/avatar/secret-person-123.png"
     c = controller(Page([None]))
     seen: list[list[tuple[str, str]]] = []
-    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing_rows=lambda *a: iter(()))
     row = {
         "i": "",
         "c": "x",
