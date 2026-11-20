@@ -305,3 +305,56 @@ def test_sweep_removes_nothing_when_procfs_has_no_process_list(
     home = _home(root, "yk-empty-proc", age_s=STALE_HOME_AGE_S * 2, owner=f"{_gone_pid()}\n")
     assert sweep_stale_homes(root, now=NOW) == []
     assert home.exists()
+
+
+def _pid_max() -> int:
+    return int(Path("/proc/sys/kernel/pid_max").read_text().strip())
+
+
+@pytest.mark.skipif(not Path("/proc/sys/kernel/pid_max").is_file(), reason="reads Linux's pid_max")
+@pytest.mark.parametrize("marker", ["9999999999", "pid_max+1"])
+def test_sweep_keeps_a_home_whose_marker_pid_is_beyond_the_platform_range(
+    tmp_path: Path, marker: str
+) -> None:
+    """A marker pid above the OS's range is no pid: the home is kept, and the sweep doesn't raise (F5).
+
+    ``os.kill(9999999999, 0)`` raises ``OverflowError``, not ``OSError``: on a sweep that took every
+    ten-digit decimal for a pid it escaped ``pytest_sessionstart`` and aborted the run before any test."""
+    if marker == "pid_max+1":
+        marker = str(_pid_max() + 1)
+    root = tmp_path / "tmp"
+    root.mkdir()
+    home = _home(root, "yk-huge", age_s=STALE_HOME_AGE_S * 2, owner=marker)
+    assert sweep_stale_homes(root, now=NOW) == []
+    assert home.exists()
+
+
+@pytest.mark.parametrize(
+    "error", [OverflowError("signed integer is greater than maximum"), ValueError("bad")]
+)
+def test_process_alive_counts_a_pid_kill_cannot_take_as_alive(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """``_process_alive`` treats ``OverflowError`` and ``ValueError`` from ``os.kill`` as alive, the side
+    that keeps a home, instead of letting them out of the sweep (review F5)."""
+    import conftest
+
+    def kill(pid: int, sig: int) -> None:
+        raise error
+
+    monkeypatch.setattr(os, "kill", kill)
+    assert conftest._process_alive(4242) is True
+
+
+def test_sessionstart_survives_a_sweep_that_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever the sweep raises stays inside ``pytest_sessionstart``: the run goes on (review F5)."""
+    import types
+
+    import conftest
+
+    def boom() -> list[Path]:
+        raise OverflowError("signed integer is greater than maximum")
+
+    monkeypatch.setattr(conftest, "sweep_stale_homes", boom)
+    controller = types.SimpleNamespace(config=types.SimpleNamespace())
+    conftest.pytest_sessionstart(controller)  # type: ignore[arg-type]

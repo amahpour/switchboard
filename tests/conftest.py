@@ -272,7 +272,7 @@ TMP_HOME_PREFIX = "yk-"
 # still clears a killed run's homes the same day (#919).
 STALE_HOME_AGE_S = 6 * 3600
 
-# Where the sweep reads the running processes (Linux's procfs); a test points it
+# Where the sweep reads the running processes and the pid limit (Linux's procfs); a test points it
 # elsewhere. With no procfs the sweep can't show a home unused, so it removes nothing (#919).
 PROC_ROOT = Path("/proc")
 
@@ -334,9 +334,9 @@ def sweep_stale_homes(
     1. it is a directory directly under ``root`` named ``yk-*``, not a symlink, owned by this user,
        carrying the ``.switchboard-test`` marker as a regular file, and last changed ``max_age_s`` ago
        or more (a young one may belong to a run going on alongside);
-    2. the marker holds a valid pid (a positive decimal) and that process is gone
-       (``ProcessLookupError``). An empty marker (an older checkout's), a malformed one, or any
-       other answer from ``os.kill`` keeps it;
+    2. the marker holds a valid pid (a decimal in ``1..pid_max - 1``, the limit read from
+       ``/proc/sys/kernel/pid_max``) and that process is gone (``ProcessLookupError``). An empty
+       marker (an older checkout's), a malformed one, or any other answer from ``os.kill`` keeps it;
     3. no running process has anything inside it open: its cwd, its root or any open file
        (``/proc/<pid>/cwd``, ``root`` and every ``fd/*``), or a Unix socket bound inside it
        (``/proc/net/unix``). The marker's pid is the pytest process
@@ -353,6 +353,9 @@ def sweep_stale_homes(
     proc = PROC_ROOT if proc is None else proc
     uid = os.getuid()
     removed: list[Path] = []
+    pid_max = _pid_max(proc)
+    if pid_max is None:
+        return removed
     try:
         entries = list(os.scandir(root))
     except OSError:
@@ -370,7 +373,7 @@ def sweep_stale_homes(
                 continue
         except OSError:
             continue
-        owner = _marker_pid(marker)
+        owner = _marker_pid(marker, pid_max)
         if owner is None or _process_alive(owner):
             continue
         candidates.append(entry.path)
@@ -440,10 +443,21 @@ def _used(home: str, in_use: set[str]) -> bool:
     return any(p == h or p.startswith(h + "/") or p == h + " (deleted)" for p in in_use for h in prefixes)
 
 
-def _marker_pid(marker: str) -> int | None:
+def _pid_max(proc: Path) -> int | None:
+    """The platform's pid limit (Linux's ``/proc/sys/kernel/pid_max``: every pid is below it), or None
+    when it can't be read: then no marker's pid can be shown valid, and every home is kept (#919, F5)."""
+    try:
+        text = (proc / "sys" / "kernel" / "pid_max").read_text("ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return int(text) if text.isdigit() and len(text) <= 10 else None
+
+
+def _marker_pid(marker: str, pid_max: int) -> int | None:
     """The pid a home's marker holds, or None for an empty, unreadable or malformed one (#919). Read
-    without following a symlink and cut short: the marker is a claim, and a pid of 0 or less would
-    name a process group to ``os.kill``, never one process."""
+    without following a symlink and cut short: the marker is a claim. Only a decimal in
+    ``1..pid_max - 1`` is a pid: 0 or less would name a process group to ``os.kill``, and one above the
+    platform's range is no process at all (``os.kill`` raises ``OverflowError`` for it, review F5)."""
     try:
         fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
         try:
@@ -455,17 +469,18 @@ def _marker_pid(marker: str) -> int | None:
     if not text.isdigit() or len(text) > 10:
         return None
     pid = int(text)
-    return pid if pid > 0 else None
+    return pid if 0 < pid < pid_max else None
 
 
 def _process_alive(pid: int) -> bool:
-    """Whether a process ``pid`` exists. Only ``ProcessLookupError`` says it is gone: a process of
-    another user (``PermissionError``) is alive, and a pid reused since only keeps a home, the safe side."""
+    """Whether a process ``pid`` may exist. Only ``ProcessLookupError`` says it is gone: a process of
+    another user (``PermissionError``), a pid ``os.kill`` can't take (``OverflowError``, ``ValueError``,
+    review F5) or any other error counts as alive, and a pid reused since only keeps a home, the safe side."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except OSError:
+    except Exception:
         return True
     return True
 
@@ -474,7 +489,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Once per session, from the controller: an xdist worker has ``workerinput`` and skips it, so N
     # workers do not race each other through /tmp.
     if not hasattr(session.config, "workerinput"):
-        sweep_stale_homes()
+        # Nonfatal whatever happens: a sweep that can't decide keeps homes, it never aborts the run.
+        try:
+            sweep_stale_homes()
+        except Exception:  # a backstop: each check fails closed on its own
+            pass
 
 
 @pytest.fixture
