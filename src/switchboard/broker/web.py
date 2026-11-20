@@ -66,8 +66,17 @@ from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from switchboard import __version__, board, build_info, db, notify, ref_links
-from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people, usage, webhook
-from switchboard.broker import room_filters
+from switchboard.broker import (
+    agent_icons,
+    agent_tokens,
+    home,
+    oauth,
+    oidc,
+    people,
+    room_filters,
+    usage,
+    webhook,
+)
 from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor

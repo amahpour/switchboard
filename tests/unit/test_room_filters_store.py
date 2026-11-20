@@ -1,5 +1,5 @@
-"""The two reads behind a room's filters, ``Store.room_addressed`` and ``Store.room_with_files`` (DESIGN.md §64,
-#914).
+"""The two reads behind a room's filters, ``Store.room_addressed`` and ``Store.room_with_files``
+(DESIGN.md §64, #914).
 
 What these catch: a Mentions query that finds other rows than ``home.addressed_to``, the one test of
 "addressed to me" (it would show a line the unread count does not count, or miss one it does); a query that
@@ -26,7 +26,8 @@ def st(tmp_path: Path) -> Store:
 
 def say(st: Store, room: int, name: str, sender: str, **kw: object) -> int:
     via = {"human": "web", "agent": "mcp", "meeting": "meeting", "system": "system"}[sender]
-    return st.insert_message(room, sender_name=name, sender_kind=sender, via=via, text="x", **kw).id  # type: ignore[arg-type]
+    m = st.insert_message(room, sender_name=name, sender_kind=sender, via=via, text="x", **kw)  # type: ignore[arg-type]
+    return m.id
 
 
 def plan(st: Store, sql: str, args: dict[str, object]) -> str:
@@ -82,8 +83,14 @@ def test_files_finds_each_message_with_a_stored_file_once(st: Store) -> None:
     c = say(st, r1, "alice", "human")
     d = say(st, r2, "alice", "human")
     for n, (room, mid, state) in enumerate(
-        [(r1, a, "stored"), (r1, a, "stored"), (r1, b, "stored"), (r1, c, "pending"), (r1, None, "stored"),
-         (r2, d, "stored")]
+        [
+            (r1, a, "stored"),
+            (r1, a, "stored"),
+            (r1, b, "stored"),
+            (r1, c, "pending"),
+            (r1, None, "stored"),
+            (r2, d, "stored"),
+        ]
     ):
         st.file_insert(
             file_id=f"{n:032x}", room_id=room, name="f.txt", size=1, sha256=None, content_type="",

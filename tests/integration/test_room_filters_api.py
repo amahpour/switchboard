@@ -84,7 +84,9 @@ def texts(got: dict[str, Any]) -> list[str]:
     return [m["text"] for m in got["messages"]]
 
 
-def attach(b: InProcBroker, room: str, message_id: int | None, *, state: str = "stored", by: str = "human") -> str:
+def attach(
+    b: InProcBroker, room: str, message_id: int | None, *, state: str = "stored", by: str = "human"
+) -> str:
     """A file row bound to ``message_id``, as an upload (or a call's snapshot, ``by="meeting"``) leaves it."""
 
     def run() -> str:
@@ -137,7 +139,12 @@ def test_mentions_are_the_messages_the_home_page_calls_addressed_to_me(
     post(b, "#build", f"@{me} a notice", name="switchboard", kind="system", mentions=[me])
     got = page(admin, show="mentions")
     assert got["show"] == "mentions" and got["room"] == "#build" and got["next"] is None
-    assert texts(got) == [f"@{me} the lockfile", "@humans please review", f"@{me} have a look", "it was the cache"]
+    assert texts(got) == [
+        f"@{me} the lockfile",
+        "@humans please review",
+        f"@{me} have a look",
+        "it was the cache",
+    ]
 
 
 def test_files_are_the_messages_with_a_stored_file_and_a_call_snapshot_counts(

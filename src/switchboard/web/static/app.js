@@ -1323,7 +1323,8 @@
     if (typeof log.querySelectorAll !== 'function') return;
     const cards = Array.from(log.querySelectorAll('.call-card'));
     if (!cards.length) return;
-    const windowed = !!(state.around && r && state.around.room === r.name);  // a window around a search hit
+    // a window around a search hit, or a filtered room (#914): not the room's latest, so no live call
+    const windowed = !!(state.around && r && state.around.room === r.name) || !!filterOf(r);
     const cur = r && !windowed ? callOf(r) : null;
     const known = !!(r && r.settings) && !windowed;
     const seen = r && r.callSeen;
@@ -1473,8 +1474,11 @@
     let prev = null;
     let open = null;  // the call card the last row went into, until a message of any other kind
     const frag = document.createDocumentFragment();
-    // a room opened at a search result shows the window around it, not its latest (#724, §58.5)
-    for (const m of (state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
+    // a room opened at a search result shows the window around it, not its latest (#724, §58.5);
+    // a room filtered to its Mentions or Files shows the broker's answer (#914, §64)
+    const f = filterOf(r);
+    if (f) frag.append(filterHead(f));
+    for (const m of (f ? f.msgs : state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
       const k = dayKey(m.ts);
       if (k !== lastDay) {
         frag.append(dayRow(m.ts));
@@ -1516,6 +1520,7 @@
     $('attach-btn').disabled = noRooms;
     composerPlaceholder();
     updateRoomEmpty();
+    renderFilters();
     renderRows(r);
     renderPins();
     renderClaimBoard();
@@ -1562,6 +1567,7 @@
       return;
     }
     if (state.around && state.around.room === r.name) return;  // a window around a search result stays as it is
+    if (filterOf(r)) { filterTake(r, m); return; }  // a filtered room draws only what its filter takes
     const log = $('log');
     const stick = nearBottom(log);
     const newDay = !prev || dayKey(prev.ts) !== dayKey(m.ts);
@@ -2396,6 +2402,7 @@
     if (state.searchOn) closeSearch(false);
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
+    state.filter = null;  // a room opens on All (#914)
     if (state.home) leaveHome();
     if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
@@ -6718,6 +6725,7 @@
       return false;
     }
     if (state.around) exitAround(false);  // what is posted belongs to the live log
+    if (state.filter) leaveFilter(false);  // so does the room under a filter (#914)
     // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
         !await confirmDialog('Close ' + r.name + '?',
@@ -9583,6 +9591,146 @@
     });
   }
 
+  // ----------------------------------------------- a room's filters (#914, DESIGN.md §64)
+  // All is the live log. Mentions (what is addressed to this person) and Files (messages with a stored file)
+  // are the broker's answer, GET /api/rooms/{slug}/filter, so a message older than the loaded history is
+  // found too; "Show older" asks for the page before. The room stays open under a filter: posting, opening
+  // another room or a search result, or All, goes back to the live log.
+  state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
+
+  const FILTER_EMPTY = {
+    mentions: 'Nothing in this room is addressed to you yet.',
+    files: 'No files in this room yet.',
+  };
+
+  function filterOf(r) {
+    const f = state.filter;
+    return f && r && f.room === r.name ? f : null;
+  }
+
+  // The test of the unread count (#109, #418), which is the broker's home.addressed_to too: an @mention of this
+  // person, @humans, or an agent's reply to something they said, and never their own message.
+  function forMe(r, m) {
+    return m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m)) && addressedToMe(r, m);
+  }
+
+  function filterNote(f) {
+    if (f.busy && !f.msgs.length) return 'Loading…';
+    if (f.failed) return 'Could not load this filter. Choose it again to retry.';
+    const n = f.msgs.length;
+    if (!n) return FILTER_EMPTY[f.show];
+    const what = f.show === 'mentions'
+      ? (n === 1 ? ' message addressed to you' : ' messages addressed to you')
+      : (n === 1 ? ' message with a file' : ' messages with files');
+    return (f.next ? 'The newest ' : '') + n + what;
+  }
+
+  // The row above the log: which button is pressed, and what the filter shows.
+  function renderFilters() {
+    const r = activeRoom();
+    const row = $('room-filters');
+    row.classList.toggle('hidden', !r || state.rooms.size === 0);
+    if (state.filter && (!r || state.filter.room !== r.name)) state.filter = null;
+    const f = filterOf(r);
+    const show = f ? f.show : 'all';
+    for (const b of row.querySelectorAll('.room-filter')) b.setAttribute('aria-pressed', String(b.dataset.show === show));
+    const note = $('room-filter-note');
+    const text = f ? filterNote(f) : '';
+    if (note.textContent !== text) note.textContent = text;
+  }
+
+  // The log's first row under a filter: "Show older" while the broker has more, or what an empty one means.
+  function filterHead(f) {
+    if (f.next) {
+      const box = el('div', 'filter-more');
+      const b = el('button', 'btn filter-older', f.busy ? 'Loading…' : 'Show older');
+      b.type = 'button';
+      b.dataset.focus = 'filter-older';
+      b.disabled = f.busy;
+      b.addEventListener('click', function () { loadFilter(f, true); });
+      box.append(b);
+      return box;
+    }
+    if (!f.msgs.length && !f.busy && !f.failed) return el('div', 'filter-empty', FILTER_EMPTY[f.show]);
+    return document.createDocumentFragment();
+  }
+
+  async function loadFilter(f, older) {
+    const r = state.rooms.get(f.room);
+    if (!r || f.busy && older) return;
+    f.busy = true;
+    f.failed = false;
+    const log = $('log');
+    const fromBottom = log.scrollHeight - log.scrollTop;
+    if (older) renderRows(r);
+    let data;
+    try {
+      const q = '?show=' + f.show + (older && f.next ? '&before=' + String(Number(f.next)) : '');
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/filter' + q);
+    } catch (e) {
+      data = null;
+    }
+    if (state.filter !== f) return;  // the person moved on meanwhile
+    f.busy = false;
+    if (!data) f.failed = true;
+    else {
+      const have = new Set(f.msgs.map(function (m) { return m.id; }));
+      f.msgs = data.messages.filter(function (m) { return !have.has(m.id); }).concat(f.msgs);
+      f.next = data.next;
+    }
+    renderFilters();
+    renderRows(r);
+    // older lines go above: what the person was reading stays where it was; a first page opens at its newest
+    log.scrollTop = older ? log.scrollHeight - fromBottom : log.scrollHeight;
+    if (older && !refocus(log, 'filter-older')) {
+      const first = log.querySelector('[data-id]');
+      if (first) { first.tabIndex = -1; first.focus({ preventScroll: true }); }
+    }
+  }
+
+  function setFilter(show) {
+    const r = activeRoom();
+    if (!r) return;
+    if (show === 'all' || !FILTER_EMPTY[show]) { leaveFilter(true); return; }
+    const was = filterOf(r);
+    if (was && was.show === show && !was.failed) return;
+    if (state.around) { state.around = null; resetSearch(); }  // a filter replaces a window around a result
+    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false };
+    state.filter = f;
+    renderLog();
+    loadFilter(f, false);
+  }
+
+  // Back to the live log (All). `stay`: the person chose All, so the keyboard stays on the row.
+  function leaveFilter(stay) {
+    if (!state.filter) { renderFilters(); return; }
+    state.filter = null;
+    renderLog();
+    if (stay) {
+      const all = $('room-filters').querySelector('[data-show="all"]');
+      if (all) all.focus();
+    }
+  }
+
+  // A message that arrives while the room is filtered: drawn when the filter would have answered with it.
+  function filterTake(r, m) {
+    const f = filterOf(r);
+    const takes = f.show === 'mentions' ? forMe(r, m) : Array.isArray(m.files) && m.files.length > 0;
+    if (!takes || f.msgs.some(function (x) { return x.id === m.id; })) return;
+    const log = $('log');
+    const stick = nearBottom(log);
+    f.msgs.push(m);
+    renderFilters();
+    renderRows(r);
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+
+  function bindRoomFilters() {
+    for (const b of $('room-filters').querySelectorAll('.room-filter')) {
+      b.addEventListener('click', function () { setFilter(b.dataset.show); });
+    }
+  }
+
   // --------------------------------------------------------------- boot
   // The open rooms, from the broker. A room whose room is gone, or was replaced under the same
   // name (another id, or the same id reused after a delete: another created_at), is dropped;
@@ -9601,6 +9749,7 @@
       for (const [old, r] of state.rooms) {
         if (r.id !== l.id || r.createdAt !== l.created_at) continue;
         state.rooms.delete(old);
+        if (state.filter && state.filter.room === old) state.filter.room = l.name;
         r.name = l.name;
         r.slug = l.slug;
         state.rooms.set(l.name, r);
@@ -9948,6 +10097,7 @@
   async function boot() {
     bindInput();
     bindSearch();
+    bindRoomFilters();
     $('pins-toggle').addEventListener('click', function () {
       state.pinsOpen = !state.pinsOpen;
       renderPins();

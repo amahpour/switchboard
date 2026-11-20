@@ -134,7 +134,6 @@ CREATE TABLE messages(
 CREATE INDEX messages_room_id ON messages(room_id, id);
 CREATE INDEX messages_meeting ON messages(meeting_id) WHERE meeting_id IS NOT NULL;
 CREATE INDEX messages_agent_ts ON messages(room_id, ts) WHERE kind='chat' AND sender_kind='agent';
-CREATE INDEX messages_addressed ON messages(room_id, id) WHERE kind='chat' AND (mentions!='[]' OR reply_to IS NOT NULL);
 
 CREATE TABLE batches(
   id INTEGER PRIMARY KEY AUTOINCREMENT, membership_id INTEGER NOT NULL REFERENCES memberships(id),
@@ -1177,11 +1176,12 @@ V57_TO_V58 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='58' WHERE key='schema_v
 # newest first. Only a line that names someone or replies to one can be, so this partial index is that
 # filter's walk; without it the read walks every message of the room when few are for the person. The
 # predicate in Store.room_addressed repeats the index's condition, which is what lets SQLite use it.
-V58_TO_V59 = (
+# Both fresh databases and the migration use it.
+ADDRESSED_DDL = (
     "CREATE INDEX messages_addressed ON messages(room_id, id)"
     " WHERE kind='chat' AND (mentions!='[]' OR reply_to IS NOT NULL)",
-    "UPDATE meta SET value='59' WHERE key='schema_version'",
 )
+V58_TO_V59 = (*ADDRESSED_DDL, "UPDATE meta SET value='59' WHERE key='schema_version'")
 
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
@@ -1541,7 +1541,7 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL, *MCP_SESSIONS_DDL]
+SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL, *MCP_SESSIONS_DDL, *ADDRESSED_DDL]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:

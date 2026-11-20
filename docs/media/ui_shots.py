@@ -64,6 +64,8 @@ merged, a closed-without-merging and an unknown outcome chip, and the closed one
 ``--only past_boards``),
 board-header-commit-{light,dark,phone-light} (the header names the newest commit the board was told, #906;
 ``--only header_commit``),
+room-filters-{all,mentions}-{light,dark,phone-light}, guide-room-filters-light (a room's All, Mentions and Files,
+#914; ``--only room_filters``),
 report-conflict-{before,after}-{light,dark,phone-light} (the board's header for a pull request that
 conflicts with its base: only "CI none", then "conflicts with its base", #907; ``--only report_conflict``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
@@ -4777,6 +4779,95 @@ def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
         page.context.close()
 
 
+def shoot_room_filters(browser: Any, out: Path, world: Any) -> None:
+    """#914 (DESIGN.md §64): a busy room, #release, where two agents talk among themselves and now and then
+    address alice. ``room-filters-all-*`` is the room as it opens (All); ``room-filters-mentions-*`` the same
+    room with Mentions chosen: only what is addressed to her. Light, dark and the phone, which must not scroll
+    sideways; ``guide-room-filters-light`` is the guide's picture. Run on a branch without #914, the same
+    setup makes the "before" pictures (``room-filters-all-*``: no row) and no Mentions ones."""
+    from playwright.sync_api import expect
+
+    room = "#release"
+    world.create_room(room)
+    names = ("claude-1", "codex-1")
+    world.add_agents(room, names)
+    lines = [
+        ("claude-1", "Starting on the changelog for 2.4: I'll group it by area."),
+        ("codex-1", "@claude-1 the migration notes are in docs/UPGRADING.md if you need them."),
+        ("claude-1", "@alice should the 2.4 notes call out the new schema step, or keep it to Upgrading?"),
+        ("codex-1", "Running the full suite on the release branch now."),
+        ("claude-1", "@codex-1 thanks, I'll link them from the Upgrading section."),
+        ("codex-1", "Suite is green: 3,412 passed. The image build is next."),
+        ("codex-1", "@humans the release branch is ready for a last look before tagging."),
+        ("claude-1", "Changelog drafted; two entries still need a sentence on what a person sees."),
+        ("codex-1", "Image built and scanned: no new findings."),
+        ("claude-1", "@alice the draft is up: can you check the wording of the two Fixed entries?"),
+        ("codex-1", "@claude-1 one typo in the second Fixed entry: 'recieve'."),
+        ("claude-1", "Fixed the typo; waiting on the last review."),
+    ]
+    for name, text in lines:
+        world.agent_call(room, name, "say", text=text)
+    for name in names:  # after the posts: a scripted agent makes no more calls once its harness is rewritten
+        world.set_member_harness(room, name, name.split("-")[0])
+    world.set_approval_modes(room, {name: "prompting" for name in names})
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def open_room(ctx_args: dict[str, Any]) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        tab = page.locator(f'#tabs .room[data-room="{room}"]')
+        if not tab.is_visible():
+            page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+        tab.click()
+        expect(page.locator("#room-title")).to_have_text("release")
+        if page.locator("#app.nav-open").count():
+            page.keyboard.press("Escape")
+        expect(page.locator("#log .line.k-chat")).to_have_count(len(lines))
+        return page
+
+    def still(page: Any) -> None:
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+
+    def mentions(page: Any) -> bool:
+        """Choose Mentions, if this page has the row; False on a branch without it."""
+        if not page.locator("#room-filters").count():
+            return False
+        page.locator('#room-filters .room-filter[data-show="mentions"]').click()
+        expect(page.locator("#room-filter-note")).to_have_text("3 messages addressed to you")
+        expect(page.locator("#log .line.k-chat")).to_have_count(3)
+        return True
+
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        page = open_room(ctx_args)
+        try:
+            still(page)
+            shot(page, out, f"room-filters-all-{theme}.png")
+            if mentions(page):
+                if theme.startswith("phone"):
+                    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                still(page)
+                shot(page, out, f"room-filters-mentions-{theme}.png")
+        finally:
+            page.context.close()
+    # the guide's picture (docs/guide/rooms.md): the room with Mentions chosen
+    page = open_room(
+        {"viewport": {"width": 1200, "height": 760}, "device_scale_factor": 1.5, "color_scheme": "light"}
+    )
+    try:
+        if mentions(page):
+            still(page)
+            shot(page, out, "guide-room-filters-light.png")
+    finally:
+        page.context.close()
+
+
 ONLY: dict[str, Any] = {
     "agents": shoot_agents,
     "redact": shoot_redact,
@@ -4810,6 +4901,7 @@ ONLY: dict[str, Any] = {
     "attachments": shoot_attachments_guide,
     "room_members": shoot_room_members,
     "header_commit": shoot_header_commit,
+    "room_filters": shoot_room_filters,
 }
 
 

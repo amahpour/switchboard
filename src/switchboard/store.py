@@ -869,9 +869,7 @@ class Store:
         ).fetchall()
         return [Message.from_row(r) for r in rows]
 
-    def room_addressed(
-        self, room_id: int, me: str, before: int, limit: int
-    ) -> list[tuple[Message, bool]]:
+    def room_addressed(self, room_id: int, me: str, before: int, limit: int) -> list[tuple[Message, bool]]:
         """A room's chat messages addressed to the person ``me``, newest first, ``id < before``: the
         Mentions filter (DESIGN.md §64). Each comes as ``(message, replies_to_me)`` for ``home.addressed_to``,
         the one test of "addressed to me", which the caller applies; the SQL here finds the same rows (a
