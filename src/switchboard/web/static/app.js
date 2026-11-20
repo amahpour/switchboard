@@ -9648,7 +9648,12 @@
     const what = f.show === 'mentions'
       ? (n === 1 ? ' message addressed to you' : ' messages addressed to you')
       : (n === 1 ? ' message with a file' : ' messages with files');
-    return (f.next ? 'The newest ' : '') + n + what;
+    if (!f.next) return n + what;
+    // a stored file can bring in a message older than the pages loaded (before the cursor): what is shown is then
+    // not the newest n, so it is only counted
+    const cut = Number(f.next);
+    if (f.msgs.some(function (m) { return m.id < cut; })) return n + what + ' shown';
+    return 'The newest ' + n + what;
   }
 
   // The row above the log: which button is pressed, and what the filter shows.

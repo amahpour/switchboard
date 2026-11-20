@@ -909,3 +909,13 @@ def test_a_filter_row_keeps_a_file_stored_after_the_page_read_it() -> None:
     ]
     assert out["ids"] == ["700"]
     assert out["downloads"] == ["/api/files/" + "a" * 32, "/api/files/" + "b" * 32]
+
+
+def test_a_filter_note_does_not_call_an_older_admitted_row_the_newest() -> None:
+    """#914 F7: Files shows its newest two messages with more before them; then a file is stored for a much
+    older message and its row is taken. The note says "3 messages with files shown", since what is shown is
+    not the newest three. Fails if the note still says "The newest 3"."""
+    out = run("filter_old_file_note")
+    assert out["before"] == "The newest 2 messages with files"
+    assert out["ids"] == ["300", "800", "801"]
+    assert out["note"] == "3 messages with files shown"

@@ -1993,6 +1993,24 @@ const SCENARIOS = {
     return { ids: logIds(w), downloads: links.map(function (a) { return a.href; }).sort(),
              asked: w.server.filterGets };
   },
+
+  // #914 F7: Files shows its newest page (more before it); an upload is stored for a much older message, and the
+  // broker's row for it comes in. The note counts what is shown without calling it the newest.
+  async filter_old_file_note() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const file = function (c) { return { id: c.repeat(32), name: c + '.txt', state: 'stored', size: 3 }; };
+    const page = [chat(800, 'claude-1', 'one', { files: [file('a')] }), chat(801, 'claude-1', 'two', { files: [file('b')] })];
+    const old = chat(300, 'claude-1', 'old', { files: [file('c')] });
+    w.server.onFilter = function (_slug, p) {
+      return p.limit === '1' ? { messages: [old], next: 299 } : { messages: page, next: 800 };
+    };
+    click(w.$('filter-files'));
+    await settle();
+    const before = w.$('room-filter-note').textContent;
+    ws.deliver({ t: 'file', room: '#build', message_id: 300, file: file('c') });
+    await settle();
+    return { before: before, ids: logIds(w), note: w.$('room-filter-note').textContent };
+  },
 };
 
 function logIds(w) {
