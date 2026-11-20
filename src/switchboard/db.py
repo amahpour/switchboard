@@ -50,6 +50,7 @@ from typing import NamedTuple
 
 from switchboard import reviews
 from switchboard.models import Room, room_slug
+from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
@@ -1138,7 +1139,6 @@ V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
 _ITEM_TEXT = {
     "title": 200,
     "detail": 4000,
-    "file": 300,
     "reason": 500,
     "answer": 500,
     "deferred_to": 200,
@@ -1158,29 +1158,83 @@ def _clean_json(value: object) -> object:
     return value
 
 
+_PLACEHOLDER = (
+    "https://invalid.example/{what}-{id}"  # a link that is clearly no real one, and one ``url`` takes
+)
+
+
+def _link_ok(url: str) -> bool:
+    """Whether ``reviews.url`` takes ``url`` as it is."""
+    try:
+        return reviews.url(url) == url
+    except reviews.ReviewError:
+        return False
+
+
+def _free_url(base: str, rid: int, taken: set[str]) -> str:
+    """``base``, if it is a link ``url`` takes, fits the column and is not ``taken`` in the room; else it with
+    ``#board-<id>`` on the end (``-1``, ``-2``... after that until nothing in the room has it), cut so the
+    whole fits; and if that is no link either, the placeholder with the same ending. A board's key is its URL,
+    so two rows of a room with one URL would hide a board: every one is checked against ``taken``."""
+    for root in (base, _PLACEHOLDER.format(what="board", id=rid)):
+        if len(root) <= _URL_MAX and root not in taken and _link_ok(root):
+            return root
+        n = 0
+        while True:
+            tail = f"#board-{rid}" + (f"-{n}" if n else "")
+            cand = root[: _URL_MAX - len(tail)] + tail
+            if cand not in taken and _link_ok(cand):
+                return cand
+            n += 1
+            if n > 1000:  # nothing so crowded exists; the placeholder is next
+                break
+    raise sqlite3.IntegrityError(f"no free URL for board {rid}")
+
+
 def _clean_board_urls(con: sqlite3.Connection) -> int:
-    """Each board's URL without credentials or secret, still a link. A room's boards are its distinct URLs
-    (a reset adds a row under the same one), and two that clean to the same string must stay two: a URL
-    already clean keeps it; of the others the board opened last (its newest row has the higher id) keeps it,
-    and each older one gets ``#board-<its newest row's id>`` on the end, so its key is unique and it still
-    opens the same pull request. A cleaned URL over 500 characters is cut to fit the column before that
-    ending. Returns how many boards changed."""
+    """Each board's URL without credentials or secret, and still a link ``reviews.url`` takes. A room's boards
+    are its distinct URLs (a reset adds a row under the same one), and each must stay one: a URL that is
+    already clean and valid keeps it; of the others the board whose newest row is last gets the cleaned URL
+    first, and a board whose cleaned URL is taken in the room, too long, or no link (a marker in a host name
+    is not one) gets ``#board-<id of its newest row>`` on the end, and failing that a fixed placeholder
+    (``https://invalid.example/board-<id>``), each checked unused in the room. Returns how many changed."""
     changed = 0
     by_room: dict[int, dict[str, int]] = {}
     for rid, room_id, url in con.execute("SELECT id, room_id, url FROM reviews ORDER BY id"):
         by_room.setdefault(room_id, {})[url] = rid  # the last row of a URL is its newest
     for room_id, newest in by_room.items():
         cleaned = {url: reviews.clean_url(url) for url in newest}
-        taken = {url for url, new in cleaned.items() if new == url}
-        for url in sorted((u for u in newest if cleaned[u] != u), key=lambda u: -newest[u]):
-            new = cleaned[url]
-            if new in taken or len(new) > _URL_MAX:
-                tail = f"#board-{newest[url]}"
-                new = new[: _URL_MAX - len(tail)] + tail
+        keep = {u for u in newest if cleaned[u] == u and len(u) <= _URL_MAX and _link_ok(u)}
+        taken = set(keep)
+        for url in sorted((u for u in newest if u not in keep), key=lambda u: -newest[u]):
+            new = _free_url(cleaned[url], newest[url], taken)
             taken.add(new)
             con.execute("UPDATE reviews SET url=? WHERE room_id=? AND url=?", (new, room_id, url))
             changed += 1
     return changed
+
+
+def _clean_proof(proof: str, item_id: int) -> str:
+    """A proof as the upgrade keeps it: a link stays a link ``reviews.proof`` takes, else (it grew past its
+    column, say, or is no link once cut) a fixed placeholder; anything else is text cut to its column."""
+    if not proof.startswith(("http://", "https://")):
+        return reviews.clean_text(proof, 500)
+    new = reviews.clean_url(proof)
+    try:
+        if len(new) <= 500 and reviews.proof(new) == new:
+            return new
+    except reviews.ReviewError:
+        pass
+    return _PLACEHOLDER.format(what="proof", id=item_id)
+
+
+def _clean_location(file: str, lines: str) -> tuple[str, str]:
+    """A card's place as the upgrade keeps it. ``reviews.where`` searches a compact location whole, since a
+    match can reach across the colon between file and lines, and every move's reply joins them again: a pair
+    whose joined form redacts differently from its parts is kept as one cleaned file, with no lines."""
+    if lines and redact(f"{file}:{lines}")[0] != redact(file)[0] + ":" + redact(lines)[0]:
+        return reviews.clean_text(f"{file}:{lines}", 300), ""
+    return reviews.clean_text(file, 300), reviews.clean_text(lines, 40)
 
 
 def clean_review_rows(con: sqlite3.Connection) -> int:
@@ -1192,10 +1246,8 @@ def clean_review_rows(con: sqlite3.Connection) -> int:
     changed = _clean_board_urls(con)
     for row in con.execute("SELECT * FROM review_items").fetchall():
         new: dict[str, object] = {c: reviews.clean_text(row[c], n) for c, n in _ITEM_TEXT.items()}
-        proof = row["proof"]
-        new["proof"] = reviews.clean_url(proof) if proof.startswith(("http://", "https://")) else None
-        if new["proof"] is None:
-            new["proof"] = reviews.clean_text(proof, 500)
+        new["file"], new["lines"] = _clean_location(row["file"], row["lines"])
+        new["proof"] = _clean_proof(row["proof"], row["id"])
         try:
             options = json.loads(row["options"])
         except ValueError:
@@ -1584,6 +1636,10 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
+        if SCHEMA_VERSION >= 55 and frm < 55 and con.execute("SELECT 1 FROM reviews LIMIT 1").fetchone():
+            # a rewrite can't zero what earlier edits left in free pages: a VACUUM after the commit does,
+            # and this row (written with it, after the counts above) says it is still owed
+            con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (CLEAN_PENDING,))
     except BaseException as e:
         if con.in_transaction:  # SQLite may already have rolled back (a full disk, an I/O error)
             con.execute("ROLLBACK")
@@ -1599,10 +1655,41 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         raise
     con.execute("COMMIT")
     con.execute(f"PRAGMA secure_delete={int(secure)}")
-    # the WAL holds the pages as they were before the rewrite: fold it into the database and empty it
-    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
+    finish_review_clean(con)
     return dest
+
+
+CLEAN_PENDING = "review_clean_pending"
+
+
+def finish_review_clean(con: sqlite3.Connection) -> bool:
+    """After the upgrade that cleaned a review board's stored text (schema 55, #890): rebuild the database
+    file (``VACUUM``: the free pages earlier releases left, which a rewrite can't zero, go too) and fold the
+    WAL into it and empty it (``wal_checkpoint(TRUNCATE)``, whose answer is read: a reader holding an old
+    snapshot makes it report busy). Only then is the ``meta`` row that says it is owed removed. A failure or a
+    busy checkpoint is logged and leaves the row, and the next start tries again (``migrate``). True when
+    nothing is owed or it is done."""
+    if con.execute("SELECT 1 FROM meta WHERE key=?", (CLEAN_PENDING,)).fetchone() is None:
+        return True
+    secure = con.execute("PRAGMA secure_delete").fetchone()[0]
+    con.execute("PRAGMA secure_delete=ON")
+    try:
+        con.execute("VACUUM")
+        busy = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        if busy:
+            log.warning(
+                "cleaning stored review boards: the WAL could not be emptied (busy); retrying at start"
+            )
+            return False
+        con.execute("DELETE FROM meta WHERE key=?", (CLEAN_PENDING,))
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # the row's own page: nothing secret, but leave no log
+    except sqlite3.Error as e:
+        log.warning("cleaning stored review boards: %s; retrying at start", e)
+        return False
+    finally:
+        con.execute(f"PRAGMA secure_delete={int(secure)}")
+    return True
 
 
 def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None) -> int:
@@ -1623,6 +1710,7 @@ def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None)
         v = schema_version(con)
     if v != SCHEMA_VERSION:
         raise SchemaError(f"database schema version {v} is not supported (expected {SCHEMA_VERSION})")
+    finish_review_clean(con)  # owed by an upgrade whose checkpoint was busy or whose VACUUM failed
     return v
 
 

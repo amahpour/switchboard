@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from switchboard import db
+from switchboard import db, reviews
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 TOKEN = "ghp" + "_" + "aB3" * 12
@@ -34,6 +34,7 @@ KEY = "-----BEGIN PRIVATE " + "KEY-----\n" + KEY_BODY + "-----END PRIVATE " + "K
 PR = "https://example.com/shop/pull/7"
 LONG = "https://example.com/p?" + "&".join(["token=abcdefgh1"] * 29)  # 500 or less; a marker lengthens it
 assert len(LONG) <= 500 < len(LONG.replace("abcdefgh1", "[redacted]"))
+LONG_PROOF = LONG.replace("example.com/p", "ci.example.com/run")
 
 
 def at_54(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -61,6 +62,9 @@ def at_54(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                 ),  # a reset of board 103's URL: its newest row, so this board is the newest
                 (106, 2, f"https://{USERINFO}@example.com/shop/pull/7"),  # another room: no collision
                 (107, 1, LONG),  # over 500 once cut
+                (108, 1, f"{PR}#board-101"),  # clean, and has the ending board 101 is about to be given
+                (109, 1, "https://[" + "redacted-host" + "]x/shop/pull/9"),  # no host a parser takes
+                (110, 1, "https://[abc/shop/pull/10"),  # malformed, accepted once, left alone by a cleaner
             ]
             for rid, room, url in boards:
                 con.execute(
@@ -84,6 +88,20 @@ def at_54(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                     f"it prints {TOKEN}",
                 ),
             )
+            con.execute(
+                "INSERT INTO review_items(id, review_id, kind, n, state, title, file, lines, raised_by,"
+                " proof,"
+                " created_at, updated_at) VALUES(103, 102, 'finding', 3, 'fixed', 'spans', '\"token\"',"
+                " '12345678', 'codex-1', ?, 1.0, 1.0)",
+                (LONG_PROOF,),
+            )
+            con.execute(  # what an earlier edit or delete left in a free page: a secret on a deleted card
+                "INSERT INTO review_items(id, review_id, kind, n, state, title, detail, raised_by,"
+                " created_at, updated_at)"
+                " VALUES(150, 102, 'finding', 9, 'raised', 'gone', ?, 'codex-1', 1.0, 1.0)",
+                (KEY,),
+            )
+            con.execute("DELETE FROM review_items WHERE id=150")
             con.execute(
                 "INSERT INTO review_items(id, review_id, kind, n, state, title, raised_by, proof,"
                 " created_at, updated_at) VALUES(102, 102, 'finding', 2, 'fixed', 'plain', 'codex-1',"
@@ -171,6 +189,10 @@ def test_the_upgrade_cleans_what_a_board_stored_and_nothing_else(
         }
         assert TOKEN in con.execute("SELECT data FROM events WHERE kind='say'").fetchone()[0]
         assert TOKEN in con.execute("SELECT text FROM messages WHERE text LIKE 'chat keeps%'").fetchone()[0]
+        spans = con.execute("SELECT file, lines, proof FROM review_items WHERE id=103").fetchone()
+        assert (spans["file"], spans["lines"]) == ('"token":[redacted: password or token]', "")
+        assert spans["proof"] == "https://invalid.example/proof-103"  # grew past its column: a placeholder
+        assert not con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
         assert db.clean_review_rows(con) == 0  # run again: nothing left to change
     finally:
         con.close()
@@ -189,20 +211,17 @@ def test_boards_whose_urls_clean_to_the_same_string_stay_two(
     try:
         got = urls(con)
         assert got[102] == PR  # clean already: kept
-        assert got[101] == "https://example.com/shop/pull/7#board-101"  # cleans to board 2's
         assert got[106] == "https://example.com/shop/pull/7"  # room 2: nobody else has it
         eight = "https://example.com/shop/pull/8?access_token=[redacted]"
         assert got[103] == got[105] == eight and got[104] == eight + "#board-104"  # ids 103, 105: one board
         assert len(got[107]) <= 500 and got[107].endswith("#board-107") and "abcdefgh1" not in got[107]
-        assert (
-            len(
-                {
-                    (r["room_id"], r["url"])
-                    for r in con.execute("SELECT room_id, url FROM reviews WHERE id > 100")
-                }
-            )
-            == 6
-        )
+        assert got[108] == PR + "#board-101"  # clean: kept, so 101's ending is taken and it gets the next
+        assert got[101] == "https://example.com/shop/pull/7#board-101-1"
+        for rid in (109, 110):  # no link ``reviews.url`` takes: a fixed placeholder
+            assert got[rid] == f"https://invalid.example/board-{rid}"
+        assert all(reviews.url(u) == u for u in got.values())  # every key is a link a lookup takes
+        rows = con.execute("SELECT room_id, url FROM reviews WHERE id > 100").fetchall()
+        assert len({(r["room_id"], r["url"]) for r in rows}) == 9
     finally:
         con.close()
 
@@ -239,4 +258,28 @@ def test_a_fresh_database_has_nothing_to_clean(tmp_path: Path) -> None:
         assert db.schema_version(con) == 55
         assert db.clean_review_rows(con) == 0
     finally:
+        con.close()
+
+
+def test_a_busy_checkpoint_leaves_the_cleaning_owed_and_the_next_start_finishes_it(tmp_path: Path) -> None:
+    """A reader holding an old snapshot makes ``wal_checkpoint(TRUNCATE)`` report busy; that is read, and the
+    owed flag stays, and the next call (every start runs it) finishes: the WAL is empty and the flag gone.
+    Fails if a busy checkpoint is taken for done."""
+    path = tmp_path / "x.db"
+    con = db.open_db(path)
+    reader = db.connect(path)
+    con.execute("PRAGMA busy_timeout=0")
+    try:
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (db.CLEAN_PENDING,))
+        reader.execute("BEGIN")
+        reader.execute("SELECT COUNT(*) FROM meta").fetchone()
+        con.execute("INSERT INTO meta(key, value) VALUES('x', '1')")  # the log moves past the reader
+        assert db.finish_review_clean(con) is False
+        assert con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
+        reader.execute("ROLLBACK")
+        assert db.finish_review_clean(con) is True
+        assert not con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
+        assert db.finish_review_clean(con) is True  # nothing owed: a no-op
+    finally:
+        reader.close()
         con.close()
