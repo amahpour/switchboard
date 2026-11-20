@@ -288,7 +288,12 @@ class Boards:
         if action == "abstain":
             return self._abstain(room, rv, item, actor, here)
         to = reviews.agent_move(
-            item, action, actor, owner_here=item.owner in here, raiser_here=item.raised_by in here
+            item,
+            action,
+            actor,
+            owner_here=item.owner in here,
+            raiser_here=item.raised_by in here,
+            holder=reviews.holder(rv),
         )
         if action == "reopen":
             self._guard_slot(room, rv)
@@ -321,6 +326,9 @@ class Boards:
             fields["commit_sha"] = commit
             fields["proof"] = reviews.proof(params.get("proof"))
             fields["reason"] = ""  # a conceded contest's reason no longer describes the fix
+            if item.state == "raised":
+                # the holder conceded and fixed in one move: the owner is the holder (#904)
+                fields["owner"] = actor
         elif action == "reopen":
             fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
             fields["confirmed_by"] = ""
@@ -361,6 +369,9 @@ class Boards:
                 evidence.update(previous_commit=item.commit, previous_proof=item.proof)
         elif action == "reopen":
             evidence = {"reason": fields["reason"], "commit": item.commit, "proof": item.proof}
+        if action == "fix" and item.state == "raised":
+            # the concession this fix stood in for, so the card's history does not skip it (#904)
+            self._event(room, rv, item=item.label, to="conceded", by=actor)
         self._event(room, rv, item=item.label, to=shown, by=actor, **evidence)
         moved = self.store.review_item(rv["id"], kind, n)
         assert moved is not None

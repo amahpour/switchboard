@@ -136,6 +136,73 @@ async def test_fix_requires_proof_and_the_raiser_confirms_it(broker: InProcBroke
     assert tuple(row) == ("tests/test_cart.py::test_total", "codex-1", "")
 
 
+async def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes_in_one_move(
+    broker: InProcBroker,
+) -> None:
+    """#904: the author's agent fixes a finding as soon as it is raised. One fix by the board's
+    holder concedes it and records the fix, the card stays unconfirmed, and its history shows
+    both steps. Anyone else's fix on a raised card is refused and names concede, and nothing is
+    stored. A contested finding still cannot be fixed from there, and the holder cannot fix a
+    finding it raised. Fails if the holder is told to concede first, or a bystander's fix lands."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "holder-author") as author,
+            FakeAgent(broker.home, "holder-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await author.call("review", room="#build", action="open", url=PR, head="abc1234")
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            refused = await reviewer.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total"
+            )
+            assert not refused["ok"]
+            assert 'review(action="concede", item="F1")' in refused["error"]
+            assert "Concede it first" in refused["error"]
+            waiting = page_board(web.get("/api/rooms/build/review"))["items"][0]
+            assert waiting["state"] == "raised" and waiting["owner"] == ""
+            assert [h["did"] for h in waiting["history"]] == ["raised it"]
+            missing = await author.call("review", room="#build", action="fix", item="F1", commit="abc1234")
+            assert not missing["ok"] and "proof" in missing["error"]
+            assert page_board(web.get("/api/rooms/build/review"))["items"][0]["state"] == "raised"
+            fixed = await author.call(
+                "review",
+                room="#build",
+                action="fix",
+                item="F1",
+                commit="abc1234",
+                proof="tests/test_cart.py::test_total",
+            )
+            assert fixed["ok"] and not fixed["settled"]
+            board = page_board(web.get("/api/rooms/build/review"))
+            item = board["items"][0]
+            assert item["state"] == "fixed" and item["owner"] == "claude-1"
+            assert item["commit"] == "abc1234" and item["confirmed_by"] == ""
+            assert item["proof"] == "tests/test_cart.py::test_total"
+            assert not board["settled"]
+            assert [(h["by"], h["did"]) for h in item["history"]] == [
+                ("codex-1", "raised it"),
+                ("claude-1", "conceded it"),
+                ("claude-1", "fixed it"),
+            ]
+            await reviewer.call("review", room="#build", action="raise", title="rounding")
+            await author.call("review", room="#build", action="contest", item="F2", reason="the spec says so")
+            contested = await author.call(
+                "review", room="#build", action="fix", item="F2", commit="abc1234", proof="test_round"
+            )
+            assert not contested["ok"] and "can't be fixed from there" in contested["error"]
+            assert page_board(web.get("/api/rooms/build/review"))["items"][1]["state"] == "contested"
+            await author.call("review", room="#build", action="raise", title="my own note")
+            own = await author.call(
+                "review", room="#build", action="fix", item="F3", commit="abc1234", proof="test_own"
+            )
+            assert not own["ok"] and "is yours" in own["error"]
+            assert page_board(web.get("/api/rooms/build/review"))["items"][2]["state"] == "raised"
+    finally:
+        web.close()
+
+
 async def test_a_person_confirms_any_fix_and_the_board_still_flags_the_ones_that_need_them(
     broker: InProcBroker,
 ) -> None:

@@ -79,6 +79,25 @@ def test_only_the_owner_marks_a_conceded_finding_fixed() -> None:
         reviews.agent_move(finding("raised"), "fix", "codex-1")
 
 
+def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
+    """#904: the author usually fixes a finding the moment it is raised. The board's holder may
+    fix that raised finding in one move, which is the concession and the fix. Anyone else is
+    refused and told to concede first. With no holder known, the move stays refused. The holder
+    cannot fix a finding it raised, which would concede its own finding. A contested finding is
+    still not fixed from there. Fails if a bystander is allowed, or if the holder is refused."""
+    raised = finding("raised", raised_by="codex-1")
+    assert reviews.agent_move(raised, "fix", "claude-1", holder="claude-1") == "fixed"
+    with pytest.raises(ReviewError, match=r'Concede it first with review\(action="concede", item="F1"\)'):
+        reviews.agent_move(raised, "fix", "devin-1", holder="claude-1")
+    with pytest.raises(ReviewError, match="can't be fixed from there"):
+        reviews.agent_move(raised, "fix", "claude-1")  # holder unknown: fail closed
+    with pytest.raises(ReviewError, match="is yours"):
+        reviews.agent_move(raised, "fix", "codex-1", holder="codex-1")
+    contested = finding("contested", raised_by="codex-1")
+    with pytest.raises(ReviewError, match="can't be fixed from there"):
+        reviews.agent_move(contested, "fix", "claude-1", holder="claude-1")
+
+
 def test_a_new_fix_waits_for_the_raiser_to_confirm_before_settling() -> None:
     """A fix is recorded, but the board stays open until its independent raiser checks it."""
     fixed = replace(
@@ -1250,9 +1269,10 @@ def test_only_the_raiser_reopens_a_fixed_finding(confirmed_by: str) -> None:
 
 
 def test_an_owner_can_replace_only_an_unconfirmed_fix() -> None:
-    """The move table permits revision; confirmation still protects an accepted fix."""
+    """The move table permits revision; confirmation still protects an accepted fix.
+    ``raised`` is the holder's one move (#904), checked on its own; it does not loosen a revision."""
     item = replace(finding("fixed", owner="claude-1"), confirmed_by="")
-    assert reviews.AGENT_MOVES["fix"] == (frozenset({"conceded", "fixed"}), "fixed")
+    assert reviews.AGENT_MOVES["fix"] == (frozenset({"raised", "conceded", "fixed"}), "fixed")
     assert reviews.agent_move(item, "fix", "claude-1") == "fixed"
     with pytest.raises(ReviewError, match="claude-1's to fix"):
         reviews.agent_move(item, "fix", "codex-1")

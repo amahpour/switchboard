@@ -68,7 +68,8 @@ AGENT_MOVES: dict[str, tuple[frozenset[str], str | None]] = {
     "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
     "insist": (frozenset({"contested"}), "contested"),
-    "fix": (frozenset({"conceded", "fixed"}), "fixed"),
+    # raised: only the board's holder, and the history records the concession too (#904)
+    "fix": (frozenset({"raised", "conceded", "fixed"}), "fixed"),
     "reopen": (frozenset({"fixed"}), "conceded"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
@@ -834,12 +835,20 @@ def parse_label(value: Any) -> tuple[str, int]:
 
 
 def agent_move(
-    item: Item, move: str, actor: str, owner_here: bool = True, *, raiser_here: bool = True
+    item: Item,
+    move: str,
+    actor: str,
+    owner_here: bool = True,
+    *,
+    raiser_here: bool = True,
+    holder: str = "",
 ) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
     or contest it (that's the other side's call). Dropping, deferring and insisting belong to
-    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The owner may
+    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The board's
+    holder may fix a raised finding in one move, which is that concession to itself and the fix
+    (#904); ``holder`` empty means the holder is unknown, and that fix is refused. The owner may
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
@@ -878,7 +887,25 @@ def agent_move(
         raise ReviewError(
             f"{item.label} is {item.owner}'s: {item.owner} can hand it over, or a person can reassign it"
         )
-    if move == "fix" and actor != item.owner:
+    if move == "fix" and item.state == "raised":
+        # #904: the holder concedes and fixes a raised finding in one move. Anyone else is told to
+        # concede first. An unknown holder fails closed, and the raiser still cannot concede its own.
+        if not holder or actor != holder:
+            named = (
+                f"only {holder}, who holds the board, can fix it from there. "
+                if holder
+                else "it can't be fixed from there. "
+            )
+            raise ReviewError(
+                f"{item.label} is raised: {named}"
+                f'Concede it first with review(action="concede", item="{item.label}"), then fix it.'
+            )
+        if actor == item.raised_by:
+            raise ReviewError(
+                f"{item.label} is yours: you can drop it, not fix it from raised. "
+                f'The other side concedes it with review(action="concede", item="{item.label}").'
+            )
+    elif move == "fix" and actor != item.owner:
         if not owner_here:
             raise ReviewError(
                 f"{item.label} is {item.owner}'s to fix, and {item.owner} isn't in the room: take it"

@@ -35,7 +35,7 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `drop` (`item`, `reason`): by the raiser.
 - `defer` (`item`, `reason`): the follow-up ticket, by the raiser. It settles the finding for this pull request.
 - `reopen` (`item`, `reason`): by the raiser, a fixed finding back to its owner; clears confirmation.
-- `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
+- `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. The board's holder may fix a raised finding in one move: that concedes it and records the fix, and the card's history shows both. Anyone else's fix on a raised finding is refused and names `concede`. A holder cannot fix a finding it raised. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
 - `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` or `state="closed"` to record the outcome. A report of `merged` or `closed` closes the board, and it is kept.
