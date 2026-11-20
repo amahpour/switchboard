@@ -19,7 +19,8 @@
  *     (style-src 'unsafe-inline', auth.app_csp); scripts stay 'self' only.
  *   - Links in a drawing lose their href: md.js's mdLink stays the one link path.
  *   - Event-handler attributes in tag-like text are dropped from the source before Mermaid sees
- *     it (withoutHandlers), so a newer Chromium has nothing to report to the CSP (#917).
+ *     it (withoutHandlers), so a newer Chromium has nothing to report to the CSP (#917). Only
+ *     text that is surely a tag is touched: anything else, a valid diagram included, is left as is.
  *   - Nothing comes back from Mermaid but the drawing, and errors are shown as text.
  */
 'use strict';
@@ -92,67 +93,86 @@
     return loading;
   }
 
-  // `source` without the event-handler attributes (on…) of any complete, one-line HTML tag in it
-  // (issue #917). Mermaid's DOMPurify parses each label in this page's documents, and Chromium
-  // from 157 reports a handler attribute to the CSP as soon as it is parsed, though nothing runs
-  // and DOMPurify then drops it. Dropping it first leaves the same drawing and no report. This
-  // is not what keeps a diagram safe (the CSP and DOMPurify are), so it may miss an odd tag; it
-  // never touches text outside a tag that closes on its own line, or a tag with no on… attribute.
-  // The states follow the HTML tokenizer's tag states.
+  // `source` without the event-handler attributes (on…) of the HTML tags in it (issue #917).
+  // Mermaid's DOMPurify parses each label in this page's documents, and Chromium from 157 reports
+  // a handler attribute to the CSP as soon as it is parsed, though nothing runs and DOMPurify then
+  // drops it. Dropping it first leaves the same drawing and no report. This is not what keeps a
+  // diagram safe (the CSP and DOMPurify are), so it leaves alone anything it can't read for sure:
+  // a valid diagram must come out byte for byte as it went in, since a strip that breaks one is
+  // worse than the report it avoids. A candidate tag starts only at '<' and an ASCII letter (the
+  // HTML tokenizer's own rule), stays on its line, holds no other '<', and ends at the first '>'
+  // outside a quoted value it opened; its tag name and every attribute name must be plain, each
+  // quoted value must be followed by a space, '/' or '>', and an unquoted one may not hold a quote,
+  // a backtick or Mermaid's closing brackets. Anything else (a comparison in a label that runs into
+  // an edge's '-->', say) is not a tag here, and the whole candidate is left as written. Only whole
+  // attributes named on… go, each with its value.
+  const TAG_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
+  const ATTR_NAME = /^[A-Za-z_:][A-Za-z0-9_:.-]*$/;
+  const BAD_UNQUOTED = /["'`<\]}|]/;
+
+  function space(c) { return c === ' ' || c === '\t' || c === '\f' || c === '\r'; }
+
+  // The candidate tag at source[lt] ('<' and a letter): {end, drop} with `end` just past its '>'
+  // and `drop` the [start, end) of each on… attribute, or {stop} where it stopped being one.
+  function readTag(source, lt) {
+    const n = source.length;
+    const bad = function (c) { return c === '\n' || c === '<'; };
+    let j = lt + 1;
+    while (j < n && !space(source[j]) && '/>\n<'.indexOf(source[j]) < 0) j++;
+    if (!TAG_NAME.test(source.slice(lt + 1, j))) return { stop: j };
+    const drop = [];
+    for (;;) {
+      if (j >= n || bad(source[j])) return { stop: j };
+      const c = source[j];
+      if (c === '>') {
+        if ('-='.indexOf(source[j - 1]) >= 0) return { stop: j };  // an edge's arrow, not a tag's end
+        return { end: j + 1, drop: drop };
+      }
+      if (space(c) || c === '/') { j++; continue; }
+      const start = j;
+      while (j < n && !space(source[j]) && '/>=\n<'.indexOf(source[j]) < 0) j++;
+      const name = source.slice(start, j);
+      if (!ATTR_NAME.test(name)) return { stop: j };
+      let k = j;
+      while (k < n && space(source[k])) k++;
+      if (source[k] === '=') {
+        k++;
+        while (k < n && space(source[k])) k++;
+        const q = source[k];
+        if (q === '"' || q === "'") {
+          k++;
+          while (k < n && source[k] !== q) {
+            if (bad(source[k])) return { stop: k };
+            k++;
+          }
+          if (k >= n) return { stop: k };
+          k++;
+          if (k < n && !space(source[k]) && '/>'.indexOf(source[k]) < 0) return { stop: k };
+        } else {
+          const v = k;
+          while (k < n && !space(source[k]) && '>\n'.indexOf(source[k]) < 0) k++;
+          if (k === v || BAD_UNQUOTED.test(source.slice(v, k))) return { stop: k };
+        }
+        j = k;
+      }
+      if (/^on/i.test(name)) drop.push([start, j]);
+    }
+  }
+
   function withoutHandlers(source) {
-    const space = function (c) { return c === ' ' || c === '\t' || c === '\f' || c === '\r'; };
     let out = '';
+    let at = 0;  // source[at..] is not yet in out
     let i = 0;
-    while (i < source.length) {
+    for (;;) {
       const lt = source.indexOf('<', i);
       if (lt < 0) break;
-      const after = source[lt + 1] === '/' ? lt + 2 : lt + 1;
-      if (!/[A-Za-z]/.test(source[after] || '')) {
-        out += source.slice(i, lt + 1);
-        i = lt + 1;
-        continue;
-      }
-      const drop = [];  // [start, end) of each on… attribute
-      let j = after;
-      while (j < source.length && !space(source[j]) && '/>\n'.indexOf(source[j]) < 0) j++;  // the name
-      let closed = false;
-      while (j < source.length && source[j] !== '\n') {
-        const c = source[j];
-        if (c === '>') { closed = true; break; }
-        if (space(c) || c === '/') { j++; continue; }
-        const start = j;
-        j++;  // an attribute name's first character may be '='
-        while (j < source.length && !space(source[j]) && '/>=\n'.indexOf(source[j]) < 0) j++;
-        const name = source.slice(start, j).toLowerCase();
-        let k = j;
-        while (k < source.length && space(source[k])) k++;
-        if (source[k] === '=') {
-          k++;
-          while (k < source.length && space(source[k])) k++;
-          const q = source[k];
-          if (q === '"' || q === "'") {
-            const end = source.indexOf(q, k + 1);
-            const nl = source.indexOf('\n', k + 1);
-            if (end < 0 || (nl >= 0 && nl < end)) { j = nl < 0 ? source.length : nl; break; }
-            k = end + 1;
-          } else {
-            while (k < source.length && !space(source[k]) && '>\n'.indexOf(source[k]) < 0) k++;
-          }
-          j = k;
-        }
-        if (name.startsWith('on')) drop.push([start, j]);
-      }
-      if (!closed) {  // not a tag that ends on its line: left as it is
-        out += source.slice(i, lt + 1);
-        i = lt + 1;
-        continue;
-      }
-      let at = i;
-      for (const [s, e] of drop) { out += source.slice(at, s); at = e; }
-      out += source.slice(at, j + 1);
-      i = j + 1;
+      if (!/[A-Za-z]/.test(source[lt + 1] || '')) { i = lt + 1; continue; }
+      const tag = readTag(source, lt);
+      if (tag.end === undefined) { i = lt + 1; continue; }  // not a tag here: left as written
+      for (const [s, e] of tag.drop) { out += source.slice(at, s); at = e; }
+      i = tag.end;
     }
-    return out + source.slice(i);
+    return out + source.slice(at);
   }
 
   // Mermaid's drawing of `source` as a detached <svg>, or a rejection with its message.

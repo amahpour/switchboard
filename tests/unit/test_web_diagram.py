@@ -10,6 +10,7 @@ SWITCHBOARD_REQUIRE_NODE=1 (CI), where that fails."""
 from __future__ import annotations
 
 import json
+import random
 import subprocess
 from pathlib import Path
 
@@ -70,3 +71,97 @@ def test_any_attribute_named_on_something_goes_its_value_with_it() -> None:
     """The rule is by name, as the browser's is: an attribute whose name starts with "on" is
     dropped with its value (DOMPurify would drop a name it doesn't know, such as `one`, anyway)."""
     assert clean("A[\"<img one=1 title='x'>\"]") == ["A[\"<img  title='x'>\"]"]
+
+
+def test_a_comparison_in_a_label_that_runs_into_an_arrow_is_left_as_written() -> None:
+    """The review's case on #918: `a<b only` in a quoted label read as a tag `<b` with an
+    attribute `only"]`, closed by the edge's `-->`, and the strip took the label's closing quote
+    and bracket with it, so Mermaid refused a valid flowchart. It isn't a tag: nothing changes."""
+    keep = (
+        'flowchart TD\n  A["if a<b only"] --> B["done"]',
+        "flowchart TD\n  A[x<y one] --> B",
+        "flowchart TD\n  A(a<b on=1) --> B",
+        "flowchart TD\n  A[a<b onx=1]-->B",
+        'flowchart TD\n  A["n<m onwards"] -- on hold --> B["n>m"]',
+        "sequenceDiagram\n  alice->>bob: i<j only, and onward -->> back",
+    )
+    assert clean(*keep) == list(keep)
+
+
+# Pieces of the labels of ordinary diagrams: comparisons, quotes, arrows, entities, <br> and <b>
+# tags, and words that start with "on". OPEN leaves a '<' and a letter unclosed; a label that has
+# one gets no later piece with a '>' or a '=', so no piece list can spell a real tag with an on…
+# attribute (that would be a hostile diagram, which the tests above cover).
+WORDS = ("one", "only", "on", "onward", "x", "total", "it's", "a = b", "(b)", "n:1", "#quot;")
+SIGNS = (" < ", " > ", "<=", ">=", "&lt;", "&gt;", "&amp;", "#lt;", "-->", "->>", "<br>", "<br/>")
+TAGS = ("<b>bold</b>", "<i>it</i>", "<<interface>>")
+OPEN = ("a<b", "x<y", "n<m")
+
+
+def label(rng: random.Random) -> str:
+    out: list[str] = []
+    opened = False
+    for _ in range(rng.randint(1, 6)):
+        pool = WORDS + SIGNS + TAGS + OPEN
+        piece = rng.choice(pool)
+        if opened and ("=" in piece or ">" in piece):
+            piece = rng.choice(WORDS[:5])
+        opened = opened or piece in OPEN
+        out.append(piece)
+    return rng.choice(("", " ")).join(out)
+
+
+def flowchart(rng: random.Random) -> str:
+    lines = [rng.choice(("flowchart TD", "flowchart LR", "graph LR"))]
+    for n in range(rng.randint(1, 8)):
+        a, b = f"N{n}", f"N{n + 1}"
+        lines.append(
+            "  "
+            + rng.choice(
+                (
+                    f'{a}["{label(rng)}"] --> {b}["{label(rng)}"]',
+                    f'{a}["{label(rng)}"]-->{b}',
+                    f"{a} -->|{label(rng)}| {b}",
+                    f"{a} -- {label(rng)} --> {b}",
+                    f'{a}("{label(rng)}") ==> {b}{{"{label(rng)}"}}',
+                    f"{a} -.-> {b}",
+                )
+            )
+        )
+    return "\n".join(lines)
+
+
+def sequence(rng: random.Random) -> str:
+    lines = ["sequenceDiagram"]
+    for _ in range(rng.randint(1, 8)):
+        lines.append(
+            "  "
+            + rng.choice(
+                (
+                    f"alice->>bob: {label(rng)}",
+                    f"bob-->>alice: {label(rng)}",
+                    f"Note over alice,bob: {label(rng)}",
+                )
+            )
+        )
+    return "\n".join(lines)
+
+
+def test_any_ordinary_diagram_comes_out_byte_for_byte() -> None:
+    """Over many generated flowcharts and sequence diagrams with no hostile tag in them, the
+    output is the input, byte for byte: a strip that changes a valid diagram can break it (#918)."""
+    rng = random.Random(918)
+    sources = [rng.choice((flowchart, sequence))(rng) for _ in range(3000)]
+    got = clean(*sources)
+    changed = [(s, g) for s, g in zip(sources, got, strict=True) if s != g]
+    assert not changed, changed[:3]
+
+
+def test_a_handler_in_an_ordinary_diagram_still_goes_and_nothing_else_does() -> None:
+    """The same diagrams with a hostile tag in a label lose just its handler attribute."""
+    rng = random.Random(917)
+    hostile = "<img src=x onerror=alert(1)>"
+    sources = [f'{flowchart(rng)}\n  H["{label(rng)} {hostile}"] --> N0' for _ in range(300)]
+    sources += [f"{sequence(rng)}\n  alice->>bob: {hostile} {label(rng)}" for _ in range(300)]
+    want = [s.replace(hostile, "<img src=x >") for s in sources]
+    assert clean(*sources) == want

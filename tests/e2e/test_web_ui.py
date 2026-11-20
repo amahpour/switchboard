@@ -2614,6 +2614,22 @@ def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
     expect(page.locator("#log")).to_be_visible()
 
 
+def test_a_comparison_in_a_label_before_an_arrow_still_draws(ui: UI) -> None:
+    """The review's case on #918: a quoted label holding `a<b only` on the line of an edge's
+    `-->` lost its closing quote and bracket to the handler strip, and Mermaid refused it. It
+    draws, with no error, and both nodes are there."""
+    source = 'flowchart TD\n  A["if a<b only"] --> B["done"]'
+    page = diagram_room(ui, "e2e-diagram-comparison", f"{FENCE}mermaid\n{source}\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box.locator(".md-diagram-error")).to_have_text("")
+    text = box.evaluate(
+        "(b) => [...b.querySelector('.md-diagram').shadowRoot.querySelectorAll('text')]"
+        ".map(t => t.textContent).join(' ')"
+    )
+    assert "if a" in text and "done" in text, text
+
+
 def test_a_broken_diagram_says_why_and_keeps_its_code(ui: UI) -> None:
     page = diagram_room(ui, "e2e-diagram-broken", f"{FENCE}mermaid\nflowchart LR\n  A -->\n{FENCE}")
     box = show(page)
