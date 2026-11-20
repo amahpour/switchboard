@@ -295,7 +295,8 @@ def _listener_harness(raw: bytes) -> str:
 def _opening(raw: bytes) -> tuple[str, str, str] | None:
     """The client's name and version, and the protocol it asks for, from an ``initialize`` (2025-era MCP) of a
     bounded size: what the broker needs to open the same session again after a restart (#823). Each is the
-    client's own claim, made printable and cut (``_client_text``); anything else is None."""
+    client's own claim, made printable and cut (``_client_text``); anything else is None, and so is a name
+    whose cleaned form is classified otherwise than the raw one (a reopened session is classified from it)."""
     if len(raw) > LISTENER_META_MAX:
         return None
     try:
@@ -311,11 +312,21 @@ def _opening(raw: bytes) -> tuple[str, str, str] | None:
     name = _client_text(info["name"])
     if not name:  # nothing printable: nothing to open again as
         return None
+    if _classified(name) != _classified(info["name"][:80]):
+        # the session was classified from the raw name (``prime``, ``InputIdentity``): one whose cleaned
+        # form reads as another client would reopen as someone else, so it is not kept at all (#903, F12)
+        return None
     protocol = params.get("protocolVersion") if isinstance(params, dict) else None
     if not isinstance(protocol, str) or not PROTOCOL_RE.fullmatch(protocol):
         return None
     version = info.get("version")
     return name, _client_text(version) if isinstance(version, str) else "", protocol
+
+
+def _classified(name: str) -> str | None:
+    """What a session's client name decides (``prime``'s harness and ``InputIdentity``'s Cursor tools, from
+    the name as ``client_info`` cuts it): the name itself when it is one the broker knows, else None."""
+    return name if name in CLIENTS or name == TEST_CLIENT else None
 
 
 def _client_text(text: str) -> str:
@@ -1202,9 +1213,9 @@ class AgentAuth:
         if sid is None or method != "DELETE" or session is None:
             await self.app(scope, receive_claim if inspect_client else receive, send_binding)
             return
-        # The client's DELETE of a session this token owns ends it for the broker whatever the library answers:
-        # the library expires idle sessions on its own, and its 404 then must not leave a record that a later
-        # restart would open again (#903, F10).
+        # The client's DELETE of a session this token owns ends it for the broker whatever the library
+        # answers: the library expires idle sessions on its own, and its 404 then must not leave a record
+        # that a later restart would open again (#903, F10).
         # A resumed thread can use a newer MCP session before this old DELETE arrives: only the session that
         # served a thread most recently may take it offline, as it was when the DELETE was answered.
         try:

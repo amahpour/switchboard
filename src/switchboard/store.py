@@ -2191,8 +2191,8 @@ class Store:
         """The broker opened this session again after a restart, with the protocol the MCP library
         answered: its month starts again from now, so a session in use through several restarts is not
         swept while its client still holds the ID. False when the record is gone (the client deleted the
-        session, or its token was revoked, while it was being opened), or when the token isn't live (checked in
-        the same transaction, should a row ever outlive its token): it must not be opened then."""
+        session, or its token was revoked, while it was being opened), or when the token isn't live (checked
+        in the same transaction, should a row ever outlive its token): it must not be opened then."""
         with db.tx(self.con):
             return (
                 self.con.execute(

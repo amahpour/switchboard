@@ -609,7 +609,8 @@ def test_a_reopen_uses_the_protocol_the_library_negotiated(broker: InProcBroker)
 @pytest.mark.parametrize(
     ("name", "kept"),
     [
-        ("\x00Cursor", "Cursor"),  # SQLite's length() stops at the NUL: the CHECK failed in the response
+        ("\x00my-client", "my-client"),  # SQLite's length() stops at the NUL: the CHECK failed
+        ("\x00Cursor", None),  # cleaned it would reopen as Cursor, which it wasn't: no record (F12)
         ("\x01\x02\x1b​", None),  # nothing printable: no record
         ("A\x00" + "b" * 200, "A" + "b" * 79),  # cut after the controls go, not before
     ],
@@ -869,3 +870,36 @@ def test_a_revoke_during_an_initialize_leaves_no_record(broker: InProcBroker) ->
         ).fetchone()[0]
     )
     assert count == 0
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "\x00Cursor",  # control character
+        "Cursor\u200b",  # zero-width space, a format character
+        "\uff23ursor",  # a fullwidth C, which NFKC folds
+        " Cursor ",  # whitespace a cleaned name loses
+        "codex-mcp-client\x1b",  # Codex's name with an ESC
+        "claude-\u200dcode",  # Claude Code's name with a zero-width joiner
+    ],
+)
+def test_a_name_that_cleans_into_another_client_is_not_reopened(broker: InProcBroker, name: str) -> None:
+    """A session is classified from the raw, cut name (``prime``, and the Cursor tools of ``InputIdentity``),
+    a reopened one from what was kept, and the kept name is cleaned. A raw name whose cleaned form is another
+    client's must not come back as that client: it keeps no record, and after a restart its ID is unknown
+    (404), never a session with Cursor's tools. Fails on 143172dc, which reopened it as the cleaned name
+    (#903, F12)."""
+    token = make_token(broker, "laptop")
+    _, sid = opener(broker, token, name)
+    c = Codex(broker, token)
+    c.sid = sid
+    first = c.tools()
+    assert not any(t.startswith("switchboard_") for t in first)  # not Cursor's tools: it wasn't Cursor
+    row = token_row(broker, token)
+    key = hashlib.sha256(sid.encode()).hexdigest()
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S) is None
+    broker.restart()
+    body = {"jsonrpc": "2.0", "id": 5, "method": "tools/list", "params": {}}
+    r = c.c.post("/mcp", json=body, headers=c.headers({"accept": "application/json, text/event-stream"}))
+    assert r.status_code == 404, (r.status_code, r.text)
+    assert library_sessions(broker) == set()
