@@ -966,7 +966,9 @@ class AgentAuth:
         Another token's ID, one the client deleted, one past its month, or one the broker never opened stays
         unknown (404). The library may answer with another protocol than the one asked for: the session uses
         the one it answered. A reopen that fails, or whose record went while it ran (the client's DELETE, a
-        revoked token), ends the library session it started, so none is left that nothing can reach."""
+        revoked token), ends the library session it started, so none is left that nothing can reach: whatever
+        way it leaves after the library named that session (a refusal, an error, a cancellation, a database
+        error), only the bind keeps it."""
         if not SESSION_ID_RE.fullmatch(sid):
             return None
         async with self._reopening:
@@ -985,29 +987,44 @@ class AgentAuth:
             }
             initialize = {"jsonrpc": "2.0", "id": REOPEN_ID, "method": "initialize", "params": params}
             status, inner, body = await self._inner(scope, initialize, None, None)
-            negotiated = _negotiated(body) if status == 200 else None
-            if inner is None or negotiated is None:
+            if inner is None:
                 log.warning("could not open an MCP session again after a restart (status %s)", status)
-                if inner is not None:
-                    await self._end(scope, inner, None)
                 return None
-            done = {"jsonrpc": "2.0", "method": "notifications/initialized"}
-            status, _, _ = await self._inner(scope, done, inner, negotiated)
-            if status != 202:
-                log.warning("could not open an MCP session again after a restart (status %s)", status)
-                await self._end(scope, inner, negotiated)
-                return None
-            # read again, with no await before the bind: a DELETE or a revoke while the handshake ran wins
-            if not self.state.store.mcp_session_reopened(row.id, opened.sid_hash, negotiated):
-                log.info("an MCP session was ended while it was being opened again")
-                await self._end(scope, inner, negotiated)
-                return None
-            log.info("opened an MCP session again after a restart")
-            return self.bind(sid, row.id, inner)
+            # From here the library holds a session nothing else can reach: every way out but the bind ends
+            # it, an exception or a cancellation included (#903, F9)
+            negotiated: str | None = None
+            bound: McpSession | None = None
+            try:
+                negotiated = _negotiated(body) if status == 200 else None
+                if negotiated is None:
+                    log.warning("could not open an MCP session again after a restart (status %s)", status)
+                    return None
+                done = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                status, _, _ = await self._inner(scope, done, inner, negotiated)
+                if status != 202:
+                    log.warning("could not open an MCP session again after a restart (status %s)", status)
+                    return None
+                # read again, with no await before the bind: a DELETE or a revoke while the handshake ran wins
+                if not self.state.store.mcp_session_reopened(row.id, opened.sid_hash, negotiated):
+                    log.info("an MCP session was ended while it was being opened again")
+                    return None
+                log.info("opened an MCP session again after a restart")
+                bound = self.bind(sid, row.id, inner)
+                return bound
+            finally:
+                if bound is None:
+                    # on its own task, so a cancellation of this request can't stop it half way; the
+                    # cancellation goes on to the caller once the DELETE is done
+                    await asyncio.shield(self._end(scope, inner, negotiated))
 
     async def _end(self, scope: Scope, inner: str, protocol: str | None) -> None:
-        """End a library session the broker opened and won't use (an MCP DELETE): nothing could reach it."""
-        status, _, _ = await self._inner(scope, None, inner, protocol)
+        """End a library session the broker opened and won't use (an MCP DELETE): nothing could reach it. It
+        never raises: an error ending it is logged by its type, and never hides the one the request had."""
+        try:
+            status, _, _ = await self._inner(scope, None, inner, protocol)
+        except Exception as e:
+            log.warning("could not end an MCP session the broker opened (%s)", type(e).__name__)
+            return
         if status not in (200, 202, 204, 404):
             log.warning("could not end an MCP session the broker opened (status %s)", status)
 

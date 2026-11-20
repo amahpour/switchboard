@@ -663,3 +663,106 @@ def test_the_reopen_log_line_holds_no_client_name(
     lines = [r.getMessage() for r in caplog.records if r.name.startswith("switchboard")]
     assert any("opened an MCP session again" in line for line in lines), lines
     assert not any("Cursor-name-from-the-client" in line for line in lines)
+
+
+def restarted_codex(b: InProcBroker) -> tuple[Codex, str]:
+    """A Codex session that joined #build, after a restart: its next call is what opens it again."""
+    b.call("room.create", {"name": "#build"})
+    token = make_token(b, "laptop")
+    mine = Codex(b, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    b.restart()
+    assert library_sessions(b) == set()
+    return mine, token
+
+
+def initialized_then(b: InProcBroker, after: Any) -> None:
+    """Make the broker's notifications/initialized reach the library, then run ``after`` (a coroutine
+    function) in its place: the library holds the reopened session, and AgentAuth hasn't bound it."""
+    auth = b.state.agent_auth
+    real = auth._inner
+
+    async def patched(scope: Any, message: Any, session_id: Any, protocol: Any) -> Any:
+        answer = await real(scope, message, session_id, protocol)
+        if isinstance(message, dict) and message.get("method") == "notifications/initialized":
+            assert answer[0] == 202
+            return await after()
+        return answer
+
+    auth._inner = patched
+
+
+def test_an_error_in_the_reopens_handshake_leaves_no_library_session(broker: InProcBroker) -> None:
+    """Once the broker's own initialize returned the library's ID, an exception in the rest of the handshake
+    must still end that library session: AgentAuth never binds it, so nothing else could reach it. Fails if
+    only a returned status ends it (#903, F9)."""
+    mine, _ = restarted_codex(broker)
+
+    async def broken() -> Any:
+        raise RuntimeError("the handshake broke")
+
+    initialized_then(broker, broken)
+    assert mine.raw("who", THREAD_A, room="#build").status_code == 500
+    until(lambda: library_sessions(broker) == set())
+    assert mine.sid not in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+
+
+def test_a_cancelled_reopen_leaves_no_library_session_and_stays_cancelled(broker: InProcBroker) -> None:
+    """A request cancelled while the reopen's second library call runs (its client gone, a shutdown) must
+    still end the library session its initialize opened, and the cancellation must still reach the caller:
+    the cleanup can't swallow it. The moment is an event the test controls. Fails if the cancellation skips
+    the cleanup, or the cleanup eats the cancellation (#903, F9)."""
+    mine, _ = restarted_codex(broker)
+    auth = broker.state.agent_auth
+    parked = threading.Event()
+    held: dict[str, Any] = {}
+
+    async def park() -> Any:
+        held["task"] = asyncio.current_task()
+        parked.set()
+        await asyncio.Event().wait()  # until the test cancels it
+
+    initialized_then(broker, park)
+    real_reopen = auth.reopen
+    cancelled = threading.Event()
+
+    async def watched(*args: Any) -> Any:
+        try:
+            return await real_reopen(*args)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    auth.reopen = watched
+    with ThreadPoolExecutor(1) as pool:
+        call = pool.submit(mine.raw, "who", THREAD_A, room="#build")
+        assert parked.wait(30)
+        assert library_sessions(broker) != set()  # the library holds it, unbound
+        broker.on_loop(lambda: held["task"].cancel())
+        assert cancelled.wait(30)
+        try:
+            call.result(30)
+        except httpx.HTTPError:
+            pass  # the request was cancelled: how its client hears that is the server's business
+    until(lambda: library_sessions(broker) == set())
+    assert mine.sid not in broker.on_loop(lambda: set(auth.sessions))
+
+
+def test_a_database_error_finishing_a_reopen_leaves_no_library_session(broker: InProcBroker) -> None:
+    """The reopen's last step writes its record again. A database error there must end the library session
+    the handshake made, as a missing record does. Fails if the error skips the cleanup (#903, F9)."""
+    import sqlite3
+
+    mine, _ = restarted_codex(broker)
+    store = broker.state.store
+
+    def broken(*_: Any) -> bool:
+        raise sqlite3.OperationalError("database is locked")
+
+    store.mcp_session_reopened = broken
+    assert mine.raw("who", THREAD_A, room="#build").status_code == 500
+    until(lambda: library_sessions(broker) == set())
+    assert mine.sid not in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+    del store.mcp_session_reopened
+    assert mine.call("who", THREAD_A, room="#build")["ok"]  # the record stayed: it opens now
