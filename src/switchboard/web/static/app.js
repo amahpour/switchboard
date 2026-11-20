@@ -9776,22 +9776,48 @@
   }
 
   // Draw what a filter gained while it is on screen. The log is drawn again, so whatever in it had the keyboard
-  // (Show older, a message row) gets it back on its new node: a live line never drops the focus to the page.
+  // (Show older, a message row, or a control inside a row: a download link, a Message button) gets it back on
+  // its new node: a live line never drops the focus to the page.
   function filterAdd(r, f, list) {
     if (state.filter !== f || !filterMerge(f, list)) return;
     const log = $('log');
     const stick = nearBottom(log);
     const key = focusKey(log);
-    const had = document.activeElement;
-    const row = !key && had && had !== log && log.contains(had) && had.dataset ? had.dataset.id || null : null;
+    const spot = key ? null : rowFocusSpot(log);
     renderFilters();
     renderRows(r);
     if (key) refocus(log, key);
-    else if (row) {
-      const n = log.querySelector('[data-id="' + String(Number(row)) + '"]');
-      if (n) { n.tabIndex = -1; n.focus({ preventScroll: true }); }
-    }
+    else if (spot) rowFocusBack(log, spot);
     if (stick) log.scrollTop = log.scrollHeight;
+  }
+
+  // What can take the keyboard inside a log row, in document order: the same row drawn again gives the same list.
+  const ROW_FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]';
+
+  // Where the keyboard is in the log, by row: { id, at }, the message row holding the focused element and that
+  // element's place among the row's focusable controls (-1: the row itself). Null when the focus is not in a row.
+  function rowFocusSpot(log) {
+    const had = document.activeElement;
+    if (!had || had === log || !log.contains(had) || typeof had.closest !== 'function') return null;
+    const row = had.closest('[data-id]');
+    if (!row || !log.contains(row)) return null;
+    const at = row === had ? -1 : Array.from(row.querySelectorAll(ROW_FOCUSABLE)).indexOf(had);
+    return { id: String(Number(row.dataset.id)), at: at };
+  }
+
+  // Focus the control at `spot` in its row as drawn now, else the row itself.
+  function rowFocusBack(log, spot) {
+    const n = log.querySelector('[data-id="' + spot.id + '"]');
+    if (!n) return;
+    const t = spot.at >= 0 ? n.querySelectorAll(ROW_FOCUSABLE)[spot.at] : null;
+    if (t && tryFocusQuiet(t)) return;
+    n.tabIndex = -1;
+    n.focus({ preventScroll: true });
+  }
+
+  function tryFocusQuiet(n) {
+    n.focus({ preventScroll: true });
+    return document.activeElement === n;
   }
 
   // A message that arrives while the room is filtered: drawn when the filter would have answered with it. A reply

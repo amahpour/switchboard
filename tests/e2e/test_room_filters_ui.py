@@ -428,3 +428,22 @@ def test_a_mention_that_came_under_files_still_waits_after_search(ui: UI) -> Non
         expect(card).to_contain_text("which tag should ship?")
     finally:
         ui.world.close_extra_agents()
+
+
+def test_a_live_match_keeps_the_focus_on_a_download_link_in_a_row(ui: UI) -> None:
+    """A Files row's download link has the keyboard (tabbed to) when another message with a file arrives: the
+    log is drawn again, and the focus is on the same row's download link in the new log, not dropped to the
+    page. Fails if focus is given back only to an element that carries data-focus or data-id itself."""
+    room = "e2e-filters-focus-link"
+    fresh_room(ui.world, room)
+    first = live_file(ui.world, room, "first.txt")
+    page = ui.open(room)
+    button(page, "files").click()
+    expect(page.locator("#room-filter-note")).to_have_text("1 message with a file")
+    link = page.locator(f'#log .line[data-id="{first}"] a.md-file')
+    link.focus()
+    expect(link).to_be_focused()
+    second = live_file(ui.world, room, "second.txt")
+    expect(page.locator(f'#log .line[data-id="{second}"]')).to_have_count(1)
+    expect(page.locator("#room-filter-note")).to_have_text("2 messages with files")
+    expect(page.locator(f'#log .line[data-id="{first}"] a.md-file')).to_be_focused()
