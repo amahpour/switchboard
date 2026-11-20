@@ -9675,8 +9675,7 @@
     f.busy = false;
     if (!data) f.failed = true;
     else {
-      const have = new Set(f.msgs.map(function (m) { return m.id; }));
-      f.msgs = data.messages.filter(function (m) { return !have.has(m.id); }).concat(f.msgs);
+      filterMerge(f, data.messages);
       f.next = data.next;
     }
     renderFilters();
@@ -9710,17 +9709,36 @@
     if (stay) $('filter-all').focus();
   }
 
+  // What the broker answered and what the socket brought, as one list in id order: a message is kept once, as
+  // it first arrived, whichever source that was, so a live line that came before the page holding it is neither
+  // moved after newer ones nor lost. True when something was added.
+  function filterMerge(f, list) {
+    const byId = new Map(f.msgs.map(function (m) { return [m.id, m]; }));
+    let added = false;
+    for (const m of list) {
+      if (byId.has(m.id)) continue;
+      byId.set(m.id, m);
+      added = true;
+    }
+    if (added) f.msgs = Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
+    return added;
+  }
+
+  // Draw what a filter gained while it is on screen.
+  function filterAdd(r, f, list) {
+    if (state.filter !== f || !filterMerge(f, list)) return;
+    const log = $('log');
+    const stick = nearBottom(log);
+    renderFilters();
+    renderRows(r);
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+
   // A message that arrives while the room is filtered: drawn when the filter would have answered with it.
   function filterTake(r, m) {
     const f = filterOf(r);
     const takes = f.show === 'mentions' ? forMe(r, m) : Array.isArray(m.files) && m.files.length > 0;
-    if (!takes || f.msgs.some(function (x) { return x.id === m.id; })) return;
-    const log = $('log');
-    const stick = nearBottom(log);
-    f.msgs.push(m);
-    renderFilters();
-    renderRows(r);
-    if (stick) log.scrollTop = log.scrollHeight;
+    if (takes) filterAdd(r, f, [m]);
   }
 
   function bindRoomFilters() {

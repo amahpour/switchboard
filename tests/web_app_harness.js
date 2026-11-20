@@ -226,6 +226,16 @@ function makeWorld(rooms) {
         return d ? [200, d] : [404, { error: 'not_found', message: key + ' is not in the room' }];
       };
     }
+    // a room's Mentions or Files (§64): onFilter(slug, params) answers, an empty page when a scenario sets none
+    const mf = /^\/api\/rooms\/([^/]+)\/filter\?(.*)$/.exec(url);
+    if (method === 'GET' && mf) {
+      server.filterGets = (server.filterGets || []).concat([url]);
+      const slug = decodeURIComponent(mf[1]);
+      const params = Object.fromEntries(new URLSearchParams(mf[2]));
+      return function () {
+        return [200, server.onFilter ? server.onFilter(slug, params) : { messages: [], next: null }];
+      };
+    }
     const mc = /^\/api\/rooms\/([^/]+)\/call$/.exec(url);
     if (method === 'GET' && mc) {
       const slug = decodeURIComponent(mc[1]);
@@ -310,6 +320,7 @@ function makeWorld(rooms) {
     },
     setInterval: function () { return 0; }, clearInterval: function () {},  // the ping and refresh timers
     encodeURIComponent: encodeURIComponent, decodeURIComponent: decodeURIComponent, URL: URL,
+    URLSearchParams: URLSearchParams,
   };
   ctx.window = ctx;
   ctx.window.alert = function (m) { throw new Error('alert: ' + m); };
@@ -1932,7 +1943,31 @@ const SCENARIOS = {
       saveDisabled: !!save.disabled,
     };
   },
+
+  // #914 F3: the socket brings A while the first page is on its way, and the page holds A and a later B; then the
+  // socket brings B. The log is A, B in id order, each once.
+  async filter_overlap() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const a = chat(600, 'claude-1', '@alice which branch?', { mentions: ['alice'] });
+    const b = chat(601, 'codex-1', '@alice and the tests?', { mentions: ['alice'] });
+    w.server.onFilter = function () { return { messages: [a, b], next: null }; };
+    w.server.holdNext.add('GET /api/rooms/build/filter?show=mentions');
+    click(w.$('filter-mentions'));
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: a });
+    await settle();
+    w.server.release('GET /api/rooms/build/filter?show=mentions');
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: b });
+    await settle();
+    return { ids: logIds(w), note: w.$('room-filter-note').textContent };
+  },
 };
+
+function logIds(w) {
+  return w.$('log').children.filter(function (c) { return c.dataset && c.dataset.id; })
+    .map(function (c) { return c.dataset.id; });
+}
 
 async function closeScenario(twoRooms, frameLate) {
   const rooms = [{ id: 1, name: '#build', created_at: 100 }];

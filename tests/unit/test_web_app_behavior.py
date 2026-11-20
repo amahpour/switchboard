@@ -887,3 +887,12 @@ def test_the_sidebar_lists_your_rooms_and_folds_the_others_and_join_and_leave_mo
     assert out["left"]["calls"] == [{"room": "ops", "action": "remove", "name": "alice"}]
     assert (out["left"]["composer"], out["left"]["bar"], out["left"]["menu"]) == (False, True, False)
     assert out["left"]["tabs"][-1] == ["#ops|ops2 people", "#random|random1 person"]
+
+
+def test_a_filter_merges_the_brokers_page_and_live_lines_by_id() -> None:
+    """#914: while the first Mentions page is on its way, the socket brings A; the page holds A and a later
+    B, and then the socket brings B. The log shows A then B, each once, and counts two. Fails if the live A
+    is put after B (merged by arrival, not by id), or B is dropped as a duplicate."""
+    out = run("filter_overlap")
+    assert out["ids"] == ["600", "601"]
+    assert out["note"] == "2 messages addressed to you"
