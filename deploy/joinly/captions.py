@@ -35,6 +35,11 @@ MIN_MATCH_WORDS = 3  # a shorter overlap must start the box's text to count
 # 3 and 80% leave room for a stray sample and still refuse a split or a thin count (never a guess).
 PIC_MIN_SAMPLES = 3
 PIC_MIN_SHARE = 0.8
+SPEECH_WITHIN_S = 0.6  # a row that changed this recently is someone speaking: joinly stops a line it is playing
+# A row with no initials and no name to go by (#852): Zoom may draw a speaker's row before its avatar, and the
+# bot's own row seen that way stopped its own line a second in. Such a row gets this long (two reads) to be
+# told apart; still unnamed after it, it counts as a person, as any row that is not the bot's does.
+TELL_APART_S = 0.5
 
 _SENTENCE = re.compile(r".+?(?:[.?!…。？！]+[\"'”’)\]]*)(?=\s|$)|.+$", re.S)
 _QUOTES = "\"'“”‘’"
@@ -252,6 +257,7 @@ class _Speaker:
     last_text: str = ""
     changed_at: float = 0.0
     first_at: float = 0.0
+    shown_at: float = 0.0  # when the row last appeared in the box with text (#852)
     history: list[str] = field(default_factory=list)  # the words already sent, most recent last
 
 
@@ -276,6 +282,8 @@ class FinalRule:
             sp = self._by_key.setdefault(key, _Speaker())
             text = " ".join(text.split())
             if text != sp.last_text:
+                if not sp.last_text:
+                    sp.shown_at = now
                 if not sp.last_text or not self._pending(sp, sp.last_text):
                     sp.first_at = now
                 sp.last_text, sp.changed_at = text, now
@@ -301,13 +309,35 @@ class FinalRule:
                 sp.last_text = ""
         return out
 
-    def changing(self, now: float, within: float, ignore: Any = None) -> bool:
-        """Whether any speaker's text changed in the last ``within`` seconds. ``ignore`` is a predicate on a
-        key: a row it is true for does not count (the bot's own caption, which must not stop its own voice)."""
-        return any(
-            sp.last_text and now - sp.changed_at < within and not (ignore is not None and ignore(key))
-            for key, sp in self._by_key.items()
-        )
+    def changing(
+        self, now: float, within: float, ignore: Any = None, untold: Any = None, untold_s: float = 0.0
+    ) -> bool:
+        """Whether any speaker's text changed in the last ``within`` seconds (see ``changed``)."""
+        return bool(self.changed(now, within, ignore, untold, untold_s))
+
+    def changed(
+        self, now: float, within: float, ignore: Any = None, untold: Any = None, untold_s: float = 0.0
+    ) -> list[str]:
+        """The keys whose text changed in the last ``within`` seconds. ``ignore`` is a predicate on a key: a row
+        it is true for does not count (the bot's own caption, which must not stop its own voice). ``untold`` is
+        one too (#852): a row it is true for (one that cannot be told apart from the bot yet) counts only once
+        it has been in the box for ``untold_s``, so the bot's row seen before its initials does not count, and
+        a row still not told apart after that does, as a person."""
+        out = []
+        for key, sp in self._by_key.items():
+            if not sp.last_text or now - sp.changed_at >= within:
+                continue
+            if ignore is not None and ignore(key):
+                continue
+            if untold is not None and now - sp.shown_at < untold_s and untold(key):
+                continue
+            out.append(key)
+        return out
+
+    def shown(self, key: str, now: float) -> tuple[int, float]:
+        """How many words a row shows and how long it has been in the box: for a log, never the words."""
+        sp = self._by_key.get(key)
+        return (len(words_of(sp.last_text)), max(0.0, now - sp.shown_at)) if sp else (0, 0.0)
 
     @staticmethod
     def _before_is_sent(have: list[str], k: int, before: list[str]) -> bool:
@@ -584,9 +614,12 @@ class CaptionsTranscriptionController:
                 else:
                     last_on = now
                     await self._take(items, now)
-                    # Zoom captions the bot's own speech: that row changing is not someone talking over it
-                    quiet = not self._rule.changing(now, 0.6, self._is_own_key)
-                    self._no_speech.set() if quiet else self._no_speech.clear()
+                    # Zoom captions the bot's own speech: that row changing is not someone talking over it,
+                    # nor is a row not yet told apart from it, for its first TELL_APART_S (#852)
+                    rows = self._rule.changed(now, SPEECH_WITHIN_S, self._is_own_key, self._untold, TELL_APART_S)
+                    if rows and self._no_speech.is_set():
+                        self._log_speech(rows, now)
+                    self._no_speech.clear() if rows else self._no_speech.set()
                 await asyncio.sleep(POLL_S)
         except asyncio.CancelledError:
             logger.info(
@@ -604,6 +637,29 @@ class CaptionsTranscriptionController:
 
     def _is_own_key(self, key: str) -> bool:
         return self._name_of(key) == SELF
+
+    def _untold(self, key: str) -> bool:
+        """Whether a row cannot be told apart from the bot's own yet (#852): no initials, and no label or picture
+        that names anyone. A row with initials that are not the bot's is told apart: it is a person."""
+        return not key_parts(key)[0].strip() and self._name_of(key) is None
+
+    def _log_speech(self, rows: list[str], now: float) -> None:
+        """Which rows cleared the no-speech signal, which stops a line joinly is playing (#852): each key's parts
+        and how many words it showed, never its text (what someone said) or a name."""
+        for key in rows[:4]:
+            initials, label = key_parts(key)
+            colour = key.split("|", 3)[1] if key.count("|") else ""
+            words, shown_s = self._rule.shown(key, now)
+            logger.info(
+                "captions: speech, no-speech cleared (a playing line stops): row initials %r colour %r%s, "
+                "%d words, in the box %.1f s, %s",
+                initials,
+                colour,
+                " with a name label" if label else (" with a picture" if key_pic(key) else ""),
+                words,
+                shown_s,
+                "not told apart, so a person" if self._untold(key) else "a person",
+            )
 
     def _name_of(self, key: str) -> str | None:
         return self._name_for(*key_parts(key), key_pic(key))

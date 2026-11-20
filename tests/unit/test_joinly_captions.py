@@ -297,27 +297,75 @@ def test_a_row_the_caller_ignores_does_not_count_as_changing() -> None:
     assert rule.changing(1.1, 0.6, own) is False  # only the bot's row changed: quiet
 
 
+BOT = "switchboard (transcribing)"
+
+
+def test_the_bots_row_in_its_first_frame_does_not_count_as_changing_but_a_persons_row_does() -> None:
+    """#852: Zoom may draw the bot's caption row before its initials, so its first frame is a row with no
+    initials, label or picture. That frame must not count as someone speaking (joinly stops the bot's line
+    when it does: a live call cut 20 lines a second or so in). A person's row still counts at once, and a row
+    that is still not told apart after `TELL_APART_S` counts as a person. Fails without the change: the first
+    frame is not the bot's by its initials, so `changing` says speech."""
+    c = cap.CaptionsTranscriptionController()
+    c.attach(None, BOT)
+    own, untold, grace = c._is_own_key, c._untold, cap.TELL_APART_S
+    rule = cap.FinalRule()
+    blank, bot, person = "|rgb(2, 2, 2)||", "S(|rgb(2, 2, 2)||", "AB|rgb(1, 1, 1)||"
+
+    rule.feed([(blank, "Sure")], 0.0)  # the bot's row, its first frame: no initials yet
+    assert rule.changing(0.0, cap.SPEECH_WITHIN_S, own, untold, grace) is False
+    rule.feed([(bot, "Sure, running")], 0.25)  # the next read: its initials are there
+    assert rule.changing(0.25, cap.SPEECH_WITHIN_S, own, untold, grace) is False
+    assert rule.changing(0.25, cap.SPEECH_WITHIN_S, own) is False
+
+    rule.feed([(bot, "Sure, running them"), (person, "Wait")], 0.5)  # a person speaks over it
+    assert rule.changed(0.5, cap.SPEECH_WITHIN_S, own, untold, grace) == [person]
+
+
+def test_a_row_still_not_told_apart_after_the_grace_counts_as_a_person() -> None:
+    """Fail closed (#852): a row with no initials and no name that stays so (a person with a picture the call
+    has not named) counts as speech once it has been in the box `TELL_APART_S`, and again from its first
+    frame each time it comes back. Fails if the grace lets such a row talk over the bot for good."""
+    c = cap.CaptionsTranscriptionController()
+    c.attach(None, BOT)
+    own, untold, grace = c._is_own_key, c._untold, cap.TELL_APART_S
+    rule = cap.FinalRule()
+    blank = "|rgb(1, 1, 1)||"
+    rule.feed([(blank, "Hmm")], 0.0)
+    assert rule.changing(0.25, cap.SPEECH_WITHIN_S, own, untold, grace) is False
+    rule.feed([(blank, "Hmm, hold on")], grace)
+    assert rule.changed(grace, cap.SPEECH_WITHIN_S, own, untold, grace) == [blank]
+    assert c._untold(blank) and not c._untold("AB|rgb(1, 1, 1)||") and not c._is_own_key(blank)
+
+
 class Changing(Page):
     """A box whose one row grows on every read, as a caption does while someone speaks."""
 
-    def __init__(self, initials: str) -> None:
+    def __init__(self, initials: str, first: str | None = None) -> None:
         super().__init__([None])
         self.initials, self.n = initials, 0
+        self.first = initials if first is None else first  # the initials of the row's first read (#852)
 
     async def evaluate(self, js: str) -> Any:
         if js is cap.READ_JS:
             self.n += 1
-            return [{"i": self.initials, "c": "rgb(2, 2, 2)", "t": "words " * self.n}]
+            initials = self.first if self.n == 1 else self.initials
+            return [{"i": initials, "c": "rgb(2, 2, 2)", "t": "words " * self.n}]
         return await super().evaluate(js)
 
 
-async def _no_speech_after_reads(initials: str, reads: int) -> bool:
-    c = controller(Changing(initials))
+async def _no_speech_after_reads(initials: str, reads: int, first: str | None = None) -> bool:
+    """Whether the no-speech event stayed set through every read of a growing row, not only at the end."""
+    c = controller(Changing(initials, first))
     await c.start(Clock(), Transcript(), Bus())
     await c.wait_decided(5)
+    held, seen = True, 0
     while c._page().n < reads:
-        await asyncio.sleep(0.005)
-    held = c.no_speech_event.is_set()
+        if c._page().n != seen:
+            seen = c._page().n
+            held = held and c.no_speech_event.is_set()
+        await asyncio.sleep(0.001)
+    held = held and c.no_speech_event.is_set()
     await c.stop()
     return held
 
@@ -615,3 +663,64 @@ async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id
     c._clock, c._transcript, c._events = Clock(), Transcript(), Bus()
     c._emit([cap.Final(seen[0][0][0], "hi", 0.0, 1.0)])
     assert "secret-person" not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+class Cleared(asyncio.Event):
+    """An event that remembers whether it was ever cleared after it was first set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.ever_cleared = False
+
+    def clear(self) -> None:
+        if self.is_set():
+            self.ever_cleared = True
+        super().clear()
+
+
+async def _ever_cleared(page: Page, reads: int = 20) -> bool:
+    c = controller(page)
+    c._no_speech = Cleared()
+    await c.start(Clock(), Transcript(), Bus())
+    await c.wait_decided(5)
+    while c._page().n < reads:
+        await asyncio.sleep(0.002)
+    cleared = c._no_speech.ever_cleared  # before stop(), which clears it
+    await c.stop()
+    return cleared
+
+
+async def test_the_bots_row_drawn_before_its_initials_never_clears_the_no_speech_signal(
+    joinly_types: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#852, through the controller: the bot's row shows no initials on its first read and "S(" after, and the
+    no-speech event is never cleared, so joinly does not stop the bot's line. A person's row ("AB") still
+    clears it, and so does a row that never gets initials or a name (fail closed). Fails without the change:
+    the first read clears the event."""
+    monkeypatch.setattr(cap, "POLL_S", 0.01)
+    monkeypatch.setattr(cap, "TELL_APART_S", 5.0)  # long, so a slow machine between two reads cannot fail it
+    assert await _ever_cleared(Changing("S(", first="")) is False
+    assert await _ever_cleared(Changing("AB", first="")) is True
+    monkeypatch.setattr(cap, "TELL_APART_S", 0.05)
+    assert await _ever_cleared(Changing("", first="")) is True
+
+
+async def test_the_row_that_cleared_the_no_speech_signal_is_logged_by_its_key_and_word_count_never_its_text(
+    joinly_types: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#852: when the no-speech event clears (which stops a line joinly is playing) the log says which row did
+    it: its initials, colour, whether it had a label or picture, how many words, and whether it was told
+    apart. Never the words. Fails if nothing is logged, or if the caption's text reaches the log."""
+    monkeypatch.setattr(cap, "POLL_S", 0.01)
+    caplog.set_level("INFO", logger=cap.logger.name)
+    c = controller(Changing("AB"))
+    await c.start(Clock(), Transcript(), Bus())
+    await c.wait_decided(5)
+    while c._page().n < 5:
+        await asyncio.sleep(0.002)
+    await c.stop()
+    lines = [r.getMessage() for r in caplog.records if "no-speech cleared" in r.getMessage()]
+    assert len(lines) == 1, lines  # once, when it cleared: not on every read while it stays clear
+    assert "initials 'AB' colour 'rgb(2, 2, 2)'" in lines[0] and "1 words" in lines[0]
+    assert "a person" in lines[0]
+    assert "words words" not in "\n".join(r.getMessage() for r in caplog.records)
