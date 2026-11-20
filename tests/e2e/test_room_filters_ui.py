@@ -399,3 +399,32 @@ def test_opening_search_returns_the_room_to_all(ui: UI) -> None:
     expect(button(page, "all")).to_have_attribute("aria-pressed", "true")
     expect(page.locator("#room-filter-note")).to_have_text("")
     expect(page.locator(f'#log .line[data-id="{ids["last"]}"]')).to_have_count(1)
+
+
+def test_a_mention_that_came_under_files_still_waits_after_search(ui: UI) -> None:
+    """With Files on, an agent's @mention of alice arrives and is not shown. Opening Search returns the room
+    to All, but Search hides the log, so All is never on screen; Home is chosen from Search. The mention is
+    still waiting on Home. Fails if leaving the filter for Search lets the seen mark go to the newest line
+    held."""
+    room = "e2e-filters-search-seen"
+    fresh_room(ui.world, room, agent="asker")
+    try:
+        page = ui.open(room)
+        button(page, "files").click()
+        expect(page.locator("#room-filter-note")).to_have_text("No files in this room yet.")
+        asked = ui.world.agent_say("#" + room, "asker", "@alice which tag should ship?")
+        fid = live_file(ui.world, room, "notes.txt")  # after the mention on the same socket
+        expect(page.locator(f'#log .line[data-id="{fid}"]')).to_have_count(1)
+        assert asked not in shown(page)
+        page.locator("#log").click(position={"x": 5, "y": 5})
+        page.keyboard.press("/")
+        expect(page.locator("#search-input")).to_be_focused()
+        page.keyboard.type("release notes")
+        expect(page.locator("#app")).to_have_class(re.compile("search-open"))
+        page.locator("#home-nav").click()
+        expect(page.locator("#room-title")).to_have_text("Home")
+        card = page.locator("#home .home-card", has_text="#" + room)
+        expect(card).to_have_count(1)
+        expect(card).to_contain_text("which tag should ship?")
+    finally:
+        ui.world.close_extra_agents()

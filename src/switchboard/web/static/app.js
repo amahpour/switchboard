@@ -2403,6 +2403,7 @@
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
     state.filter = null;  // a room opens on All (#914)
+    state.seenCap = null;  // and is seen as it opens; a window around a result is not marked at all
     if (state.home) leaveHome();
     if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
@@ -7899,6 +7900,7 @@
     if (state.inspect) closeInspector(false);
     closePop();
     if (state.active) markRoomSeen(state.rooms.get(state.active), false);  // what came while it was open was seen
+    state.seenCap = null;
     state.home = true;
     closeWhiteboard();
     state.active = null;
@@ -7930,8 +7932,8 @@
     // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
     const note = !!(r && r.joinedWith);
     // under a filter the person saw the log up to where All left it, not what arrived since and was left out (#914)
-    const f = filterOf(r);
-    const upto = f ? Math.min(r.lastId || 0, f.allId) : (r && r.lastId) || 0;
+    const cap = seenCapOf(r);
+    const upto = cap !== null ? Math.min(r.lastId || 0, cap) : (r && r.lastId) || 0;
     if (!r || (!note && (!upto || (r.seenSent || 0) >= upto))) return;
     r.seenSent = Math.max(r.seenSent || 0, upto);
     r.joinedWith = '';
@@ -8757,6 +8759,7 @@
     if ($('app-dialog').open || $('confirm-dialog').open) return;
     if (state.searchOn) {  // Esc clears the box and goes back to the page under it
       closeSearch(false);
+      if (state.active) state.seenCap = null;  // the room's All is on screen now (#914)
       updateTitle();
       searchFocusBack();
       return;
@@ -9122,7 +9125,12 @@
     if (state.searchOn) return;
     closePop();
     if (state.inspect) closeInspector(false);
-    if (state.filter) leaveFilter(false);  // Search returns to All, not to a filtered log (#914, §64.4)
+    if (state.filter) {  // Search returns to All, not to a filtered log (#914, §64.4)
+      // Search hides the log, so All is not on screen yet: the seen mark stays where the filter held it until
+      // it is (Escape back to the room), and leaving for Home or Usage from here marks no further
+      state.seenCap = { room: state.filter.room, id: state.filter.allId };
+      leaveFilter(false);
+    }
     state.searchOn = true;
     $('app').classList.add('search-open');
     $('app').classList.remove('sheet-open');
@@ -9602,6 +9610,18 @@
   // found too; "Show older" asks for the page before. The room stays open under a filter: posting, opening
   // another room or a search result, or All, goes back to the live log.
   state.filter = null;  // { room, show, msgs, next, busy, failed, allId }: the active room under a filter
+  // { room, id }: a filter Search replaced. Search hides the log, so All has not been seen yet: the room's seen
+  // mark goes no further than the filter's allId until All is on screen
+  state.seenCap = null;
+
+  // How far the seen mark of r may go: what All had shown when a filter was chosen, while the filter is on or
+  // Search hides the All that replaced it; null when nothing holds it back.
+  function seenCapOf(r) {
+    const f = filterOf(r);
+    if (f) return f.allId || 0;
+    const c = state.seenCap;
+    return c && r && c.room === r.name ? c.id || 0 : null;
+  }
 
   const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
   const FILTER_EMPTY = {
@@ -9842,6 +9862,7 @@
         if (r.id !== l.id || r.createdAt !== l.created_at) continue;
         state.rooms.delete(old);
         if (state.filter && state.filter.room === old) state.filter.room = l.name;
+        if (state.seenCap && state.seenCap.room === old) state.seenCap.room = l.name;
         r.name = l.name;
         r.slug = l.slug;
         state.rooms.set(l.name, r);
@@ -10145,6 +10166,7 @@
     closePop();
     if (state.home) leaveHome();
     if (state.active) markRoomSeen(state.rooms.get(state.active), false);
+    state.seenCap = null;
     state.usage = true;
     closeWhiteboard();
     state.active = null;
