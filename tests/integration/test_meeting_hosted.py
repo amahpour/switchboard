@@ -365,6 +365,27 @@ async def test_with_voice_on_an_agents_at_call_line_is_given_to_the_relays_poll(
         await codex.close()
 
 
+async def test_a_hosted_calls_bar_never_says_who_is_speaking(world: World) -> None:
+    """The broker learns when it hands a hosted call's line to the relay and, from a newer relay, when the
+    relay says it ended; not when the speech starts, and an older relay never says it ended. So the bar
+    of a hosted call names nobody, before, while and after a line is out with the relay (§52.13). Fails if
+    a hosted call's frame says ``speaking``, which could be stale for the 90 seconds the slot is kept."""
+    w = world
+    claude, codex = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        await claude.say("#build", "@call the build is green")
+        got = w.relay.post(SPEECH, {"wait": 0, "turns": True}).json()
+        assert got["lines"] == ["the build is green"] and type(got["speech_id"]) is int
+        assert w.b.on_loop(lambda: any(c.turns.active for c in w.b.state.hosted_calls._calls.values()))
+        assert "speaking" not in w.settings()["meeting"]
+        w.relay.post(SPEECH, {"wait": 0, "turns": True, "done": got["speech_id"]})
+        assert "speaking" not in w.settings()["meeting"]
+    finally:
+        await claude.close()
+        await codex.close()
+
+
 async def test_a_waiting_poll_is_answered_the_moment_an_agent_speaks(world: World) -> None:
     """The relay's poll is a long poll: it waits on the broker, and an ``@call`` line answers it at once.
     Fails if the line waits for the round to run out (the test would time out) or is lost."""

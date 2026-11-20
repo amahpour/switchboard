@@ -595,3 +595,92 @@ def test_members_shows_each_agents_voice_while_a_call_is_open_and_a_pin_changes_
     assert phone.evaluate(
         "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
     )
+
+
+def test_the_call_bar_names_the_agent_while_its_line_is_spoken(
+    ui: UI, voice_call: tuple[InProcBroker, FakeJoinly]
+) -> None:
+    """With voice on, claude-1's ``@call`` line goes to the scripted joinly, which holds it mid-speech: the
+    bar says "claude-1 is speaking" in light, in dark and on a phone (nothing cut off), and once joinly is
+    done the words go, without a reload (#913, §52.13). Fails if the page never shows the speaker, or still
+    shows it after the line ends."""
+    broker, joinly = voice_call
+    for room in ("voice", "picshare"):  # this broker follows one call at once: end an earlier test's call
+        _post(broker, f"/api/rooms/{room}/command", {"text": "/meeting leave"})
+    wait_for_calls_to_end(broker)
+    assert _post(broker, "/api/rooms", {"name": "#speaking"}).status_code == 200
+    _plant_agents(broker, "#speaking", {"claude-1": "prompting"})
+    started = _post(
+        broker, "/api/rooms/speaking/command", {"text": "/meeting https://meet.google.com/abc-defg-hij"}
+    )
+    assert started.status_code == 200, started.text
+    page = _open(ui, broker, room="speaking")
+    bar = page.locator("#banner-meeting-text")
+    expect(bar).to_contain_text("Transcribing a call (Meet)")
+    assert _post(broker, "/api/rooms/speaking/command", {"text": "/meeting voice on"}).status_code == 200
+    expect(bar).to_contain_text("agents can speak")
+    expect(bar).not_to_contain_text("is speaking")
+
+    joinly.hold_speech = True
+    spoken = len(joinly.spoken)
+
+    def speak() -> None:
+        room = broker.state.store.get_room("#speaking")
+        member = broker.state.store.active_membership_by_name(room.id, "claude-1")
+        broker.state.meetings.speak(room.id, "@call the build is green", membership_id=member.id)
+
+    try:
+        broker.on_loop(speak)
+        expect(bar).to_contain_text("claude-1 is speaking")
+        assert joinly.spoken[spoken:] == ["the build is green"]
+        page.emulate_media(color_scheme="dark")
+        expect(bar).to_contain_text("claude-1 is speaking")
+        phone = _open(ui, broker, room="speaking", **PHONE)
+        expect(phone.locator("#banner-meeting-text")).to_contain_text("claude-1 is speaking")
+        assert phone.evaluate(
+            "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
+        )
+    finally:
+        joinly.release_speech()
+    expect(bar).not_to_contain_text("is speaking")
+    expect(bar).to_contain_text("agents can speak")
+    expect(phone.locator("#banner-meeting-text")).not_to_contain_text("is speaking")
+
+
+@pytest.mark.parametrize(
+    ("extra", "room"),
+    [
+        ({"speaking": 42}, "#odd-number"),
+        ({"speaking": {"name": "claude-1"}}, "#odd-object"),
+        ({"speaking": "   "}, "#odd-blank"),
+        ({"speaking": "claude-1", "source": "hosted", "host": "alice-laptop"}, "#odd-hosted"),
+    ],
+)
+def test_the_call_bar_shows_no_speaker_it_does_not_recognize(
+    ui: UI, calls: InProcBroker, extra: dict[str, Any], room: str
+) -> None:
+    """A frame whose ``speaking`` is not a name, or that is a hosted call's (which never says it, §52.13),
+    shows no one speaking: the bar is drawn as if the field were absent. Fails if the page prints whatever
+    the field holds, or believes a hosted call's frame."""
+    broker = calls
+    assert _post(broker, "/api/rooms", {"name": room}).status_code == 200
+
+    def plant() -> None:
+        r = broker.state.store.get_room(room)
+        row = broker.state.store.insert_meeting(r.id, started_by="alice", platform="meet")
+        broker.state.store.set_meeting_live(row.id)
+
+    broker.on_loop(plant)
+    page = _open(ui, broker, room=room[1:])
+    bar = page.locator("#banner-meeting-text")
+    expect(bar).to_contain_text("Transcribing a call")
+
+    def send() -> None:
+        r = broker.state.store.get_room(room)
+        settings = broker.state.service.settings(r)
+        settings["meeting"] = {**settings["meeting"], "voice": True, **extra}
+        broker.state.hub.room_settings(room, settings)
+
+    broker.on_loop(send)
+    expect(bar).to_contain_text("agents can speak")  # the frame arrived
+    expect(bar).not_to_contain_text("is speaking")

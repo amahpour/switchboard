@@ -5,7 +5,8 @@ pushes segments the way the real server does: the resource is the whole transcri
 and a subscriber is told it changed. ``speak_text`` records what it was asked to say and,
 like the real one, returns only when the speech is over: ``hold_speech`` keeps it in the
 middle of a line until ``release_speech``, and ``interrupt_next`` makes the next reply the
-one joinly gives when someone talks over it. ``synth_s_per_char`` models the time joinly takes to make speech
+one joinly gives when someone talks over it; ``fail_speech`` makes it fail, after any hold.
+``synth_s_per_char`` models the time joinly takes to make speech
 before any of it plays. ``get_video_snapshot`` returns ``frame`` as an
 image, claiming ``frame_type``. ``share_image`` (the patch of deploy/joinly, §52.9) records the picture's
 decoded bytes in ``shared`` and ``stop_share_image`` counts in ``share_stops``; ``share_error`` is the
@@ -172,10 +173,10 @@ class FakeJoinly:
                 await fake._synthesize(text)
                 if voice is not None and voice in fake.unknown_voices:
                     return "Finished speaking. The voice was not found, so the session's voice was used."
-                if fake.fail_speech:
-                    raise RuntimeError("could not speak")
                 if fake.hold_speech:
                     await fake._gate.wait()
+                if fake.fail_speech:  # after the hold: a line can fail midway, as it can be interrupted
+                    raise RuntimeError("could not speak")
                 if fake.interrupt_next:
                     fake.interrupt_next = False
                     return INTERRUPTED
@@ -188,10 +189,10 @@ class FakeJoinly:
                 fake.spoken.append(text)
                 fake.voices.append(None)
                 await fake._synthesize(text)
-                if fake.fail_speech:
-                    raise RuntimeError("could not speak")
                 if fake.hold_speech:
                     await fake._gate.wait()
+                if fake.fail_speech:  # after the hold: a line can fail midway, as it can be interrupted
+                    raise RuntimeError("could not speak")
                 if fake.interrupt_next:
                     fake.interrupt_next = False
                     return INTERRUPTED
