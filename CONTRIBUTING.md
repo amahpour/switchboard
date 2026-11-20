@@ -101,14 +101,14 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
 - **How the shards are balanced:** [pytest-split](https://github.com/jerry-git/pytest-split) balances them by the per-test durations recorded in `tests/.test_durations` (`--splits 3 --group N --splitting-algorithm least_duration`). A test that isn't in the file counts as the average one.
 - **Keeping the file current:** when tests are added or their times change a lot, regenerate it and commit it:
 
-  ```sh
+  ```bash
   uv run pytest -n auto --store-durations
   ```
 
 - **Locally, nothing changes:** run the suite whole with `-n auto` (pytest-split does nothing without `--splits`). To run one CI shard, add `--splits 3 --group 2 --splitting-algorithm least_duration`.
 - **Sharing a machine:** when several agents (or people) work on one machine, the suites run one at a time. `-n auto` starts a worker on every core, and every worker starts brokers and scripted agents; the e2e tests add a Chromium each. Three such runs at once pushed a 30 GB machine into swap until it froze (2026-10-12). Take a lock and cap the workers:
 
-  ```sh
+  ```bash
   PYTEST_XDIST_AUTO_NUM_WORKERS=8 flock "${XDG_RUNTIME_DIR:-/tmp}/switchboard-suite.lock" uv run pytest -q -n auto
   ```
 
@@ -116,7 +116,7 @@ On Linux, the fixture waits for the Docker bridge and both container links to fi
 
   A run that is killed (SIGKILL, the OOM killer, a timeout, a frozen machine) skips the cleanup that removes its temp homes, so it still leaves them in `/tmp`, and a tmpfs `/tmp` fills with them (#919). Sweeping them automatically is #922. Until then, remove them by hand when no suite is running on the machine. This removes only your own `yk-*` directories directly under `/tmp` that hold the `.switchboard-test` marker and are more than 6 hours old. A `yk-*` symlink is skipped, not followed, and a directory without the marker is never touched:
 
-  ```sh
+  ```bash
   find /tmp -maxdepth 1 -type d -name 'yk-*' -user "$(id -un)" -mmin +360 \
     -exec test -f '{}/.switchboard-test' ';' -exec rm -rf '{}' +
   ```
