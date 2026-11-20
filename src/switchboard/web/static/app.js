@@ -934,7 +934,11 @@
     const log = $('log');
     const stick = nearBottom(log);
     const top = log.scrollTop;
+    // a control in the text (a download link) that had the keyboard gets it back on its new node, found by
+    // what it is (a link by its file id), not by its place: a file stored above it adds a link before it
+    const spot = hasFocusIn(old) ? rowFocusSpot(log) : null;
     old.replaceWith(mdBody(m.text, m.mentions, m.files));
+    if (spot) rowFocusBack(log, spot);
     if (stick) log.scrollTop = log.scrollHeight;
     else log.scrollTop = top;
   }
@@ -9711,8 +9715,14 @@
       filterMerge(f, data.messages);
       f.next = data.next;
     }
+    // a row drawn while the page was on its way (a live line) may have the keyboard: it gets it back, as in
+    // filterAdd, on the same control
+    const key = older ? null : focusKey(log);
+    const spot = older || key ? null : rowFocusSpot(log);
     renderFilters();
     renderRows(r);
+    if (key) refocus(log, key);
+    else if (spot) rowFocusBack(log, spot);
     // older lines go above: what the person was reading stays where it was; a first page opens at its newest
     log.scrollTop = older ? log.scrollHeight - fromBottom : log.scrollHeight;
     if (older && !refocus(log, 'filter-older')) {
@@ -9799,22 +9809,44 @@
   // What can take the keyboard inside a log row, in document order: the same row drawn again gives the same list.
   const ROW_FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]';
 
-  // Where the keyboard is in the log, by row: { id, at }, the message row holding the focused element and that
-  // element's place among the row's focusable controls (-1: the row itself). Null when the focus is not in a row.
+  const FILE_HREF = /^\/api\/files\/([0-9a-f]{32})$/;  // md.js's fileLink: the only href a download link has
+
+  // What a control in a row is, the same however often the row is drawn: a download link by its file id, then
+  // its data-focus, its href, or its kind, class and label. Never its place: a file stored above a focused link
+  // adds a link before it, and the place would then name the wrong file.
+  function controlKey(c) {
+    const href = typeof c.getAttribute === 'function' ? c.getAttribute('href') : null;
+    const file = href ? FILE_HREF.exec(href) : null;
+    if (file) return 'file:' + file[1];
+    if (c.dataset && c.dataset.focus) return 'focus:' + c.dataset.focus;
+    if (href) return 'href:' + href;
+    const name = (typeof c.getAttribute === 'function' && c.getAttribute('aria-label')) || c.textContent || '';
+    return String(c.tagName) + '|' + String(c.className || '') + '|' + name;
+  }
+
+  // Where the keyboard is in the log, by row: { id, key, nth }, the message row holding the focused element, the
+  // element's identity (controlKey; null: the row itself) and which of the row's controls with that identity it
+  // is. Null when the focus is not in a row.
   function rowFocusSpot(log) {
     const had = document.activeElement;
     if (!had || had === log || !log.contains(had) || typeof had.closest !== 'function') return null;
     const row = had.closest('[data-id]');
     if (!row || !log.contains(row)) return null;
-    const at = row === had ? -1 : Array.from(row.querySelectorAll(ROW_FOCUSABLE)).indexOf(had);
-    return { id: String(Number(row.dataset.id)), at: at };
+    const id = String(Number(row.dataset.id));
+    if (row === had) return { id: id, key: null, nth: 0 };
+    const key = controlKey(had);
+    const same = Array.from(row.querySelectorAll(ROW_FOCUSABLE))
+      .filter(function (c) { return controlKey(c) === key; });
+    return { id: id, key: key, nth: Math.max(0, same.indexOf(had)) };
   }
 
-  // Focus the control at `spot` in its row as drawn now, else the row itself.
+  // Focus the control `spot` names in its row as drawn now, else the row itself.
   function rowFocusBack(log, spot) {
     const n = log.querySelector('[data-id="' + spot.id + '"]');
     if (!n) return;
-    const t = spot.at >= 0 ? n.querySelectorAll(ROW_FOCUSABLE)[spot.at] : null;
+    const same = spot.key === null ? [] :
+      Array.from(n.querySelectorAll(ROW_FOCUSABLE)).filter(function (c) { return controlKey(c) === spot.key; });
+    const t = same[Math.min(spot.nth, same.length - 1)] || null;
     if (t && tryFocusQuiet(t)) return;
     n.tabIndex = -1;
     n.focus({ preventScroll: true });

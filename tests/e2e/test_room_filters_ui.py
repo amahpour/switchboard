@@ -501,3 +501,94 @@ def test_a_live_match_keeps_the_focus_on_a_download_link_in_a_row(ui: UI) -> Non
     expect(page.locator(f'#log .line[data-id="{second}"]')).to_have_count(1)
     expect(page.locator("#room-filter-note")).to_have_text("2 messages with files")
     expect(page.locator(f'#log .line[data-id="{first}"] a.md-file')).to_be_focused()
+
+
+FILE_NAMES = ("first.txt", "second.txt")
+
+
+def two_files(world: UIWorld, room: str) -> tuple[int, str, str]:
+    """bob's message with two artifact lines, sent to the open pages: first.txt still pending, then second.txt
+    stored, so only the second has a download link. Returns the message id and both file ids."""
+
+    def run() -> tuple[int, str, str]:
+        state = world.broker.state
+        r = state.store.get_room("#" + room)
+        assert r is not None
+        ids = (secrets.token_hex(16), secrets.token_hex(16))
+        text = "\n".join(f"artifact: {n} | 3 | sha256:{'0' * 64} | /Users/someone/{n}" for n in FILE_NAMES)
+        m = state.store.insert_message(r.id, sender_name="bob", sender_kind="human", via="web", text=text)
+        for fid, name, st in zip(ids, FILE_NAMES, ("pending", "stored"), strict=True):
+            state.store.file_insert(
+                file_id=fid, room_id=r.id, name=name, size=3, sha256="0" * 64, content_type="text/plain",
+                uploader_name="bob", uploader_kind="human", state=st, created_at=1.0,
+                stored_at=1.0 if st == "stored" else None, message_id=m.id,
+            )  # fmt: skip
+        state.service.hub.message(r.name, state.service.message_frame(m))
+        return m.id, ids[0], ids[1]
+
+    return world.broker.on_loop(run)  # type: ignore[no-any-return]
+
+
+def store_file(world: UIWorld, room: str, mid: int, fid: str, *, tell: bool) -> None:
+    """The pending file is stored, and with ``tell`` the pages get the broker's file frame (§53)."""
+
+    def run() -> None:
+        state = world.broker.state
+        sha = "0" * 64
+        got = state.store.file_mark_stored(fid, size=3, sha256=sha, content_type="text/plain", stored_at=2.0)
+        assert got is not None and got.state == "stored"
+        if tell:
+            data = {"message_id": mid, "file": {"id": fid, "name": FILE_NAMES[0], "state": "stored"}}
+            state.service.hub.file_stored("#" + room, data)
+
+    world.broker.on_loop(run)
+
+
+def file_link(page: Page, mid: int, fid: str) -> Any:
+    return page.locator(f'#log .line[data-id="{mid}"] a.md-file[href="/api/files/{fid}"]')
+
+
+@pytest.mark.parametrize("show", ["all", "files"])
+def test_a_file_stored_above_a_focused_link_keeps_the_focus_on_its_file(ui: UI, show: str) -> None:
+    """A row's second download link has the keyboard when the first file of the same message is stored: the
+    file frame redraws the message's text, which now has a link before the focused one, and the focus is on
+    the second file's new link, on All and under Files. Fails if the redraw drops the focus (the node it was
+    on is replaced), or if it is given back by place, which lands on the first file's link."""
+    room = f"e2e-filters-focus-stored-{show}"
+    fresh_room(ui.world, room)
+    page = ui.open(room)
+    if show == "files":
+        button(page, "files").click()
+        expect(page.locator("#room-filter-note")).to_have_text("No files in this room yet.")
+    mid, first, second = two_files(ui.world, room)
+    expect(file_link(page, mid, second)).to_have_count(1)
+    expect(file_link(page, mid, first)).to_have_count(0)
+    file_link(page, mid, second).focus()
+    expect(file_link(page, mid, second)).to_be_focused()
+    store_file(ui.world, room, mid, first, tell=True)
+    expect(file_link(page, mid, first)).to_have_count(1)
+    expect(file_link(page, mid, second)).to_be_focused()
+
+
+def test_a_files_page_that_adds_a_link_above_the_focus_keeps_it_on_its_file(ui: UI) -> None:
+    """Files is chosen and its first page is held back; meanwhile a message arrives with first.txt pending and
+    second.txt stored, is drawn, and second.txt's link takes the keyboard. first.txt is stored before the page
+    is answered, so the answer's copy of the row has a link above the focused one. Once it is drawn, the focus
+    is on second.txt's link. Fails if the redraw drops the focus, or gives it back by its place in the row,
+    which is now first.txt's link."""
+    room = "e2e-filters-focus-page"
+    fresh_room(ui.world, room)
+    page = ui.open(room)
+    held: list[Any] = []
+    page.route(re.compile(r"/api/rooms/[^/]+/filter\?show=files$"), lambda route: held.append(route))
+    with page.expect_request(re.compile(r"/api/rooms/[^/]+/filter\?show=files$")):
+        button(page, "files").click()
+    mid, first, second = two_files(ui.world, room)
+    expect(file_link(page, mid, second)).to_have_count(1)
+    file_link(page, mid, second).focus()
+    expect(file_link(page, mid, second)).to_be_focused()
+    store_file(ui.world, room, mid, first, tell=False)
+    assert len(held) == 1
+    held[0].continue_()
+    expect(file_link(page, mid, first)).to_have_count(1)
+    expect(file_link(page, mid, second)).to_be_focused()
