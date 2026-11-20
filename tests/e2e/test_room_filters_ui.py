@@ -498,6 +498,25 @@ def test_a_mention_under_files_still_waits_after_a_review_board_and_search(ui: U
         ui.world.close_extra_agents()
 
 
+def seen_covering(room: str, upto: int) -> Any:
+    """A response predicate: an ok POST of ``room``'s seen mark at ``upto`` or later. One action can post
+    more than one mark (one capped at what was already on screen, then the full one once the painted-frame
+    check sees the log), and the mark only moves forward, so a test waits for the one that covers ``upto``,
+    not whichever comes first. A body that isn't a JSON object with an integer id doesn't match."""
+
+    def match(r: Any) -> bool:
+        if not (r.url.endswith(f"/api/rooms/{room}/seen") and r.ok):
+            return False
+        try:
+            body = r.request.post_data_json
+        except Exception:  # not JSON: not the mark this waits for
+            return False
+        mark = body.get("id") if isinstance(body, dict) else None
+        return isinstance(mark, int) and not isinstance(mark, bool) and mark >= upto
+
+    return match
+
+
 def test_a_mention_under_a_review_board_is_seen_once_back_to_the_conversation_shows_it(ui: UI) -> None:
     """F4: Review is opened from All, so the board covers the log, and an agent's @mention of alice arrives:
     the log holds it but it is not on screen. Back to the conversation uncovers the log without drawing it
@@ -527,7 +546,7 @@ def test_a_mention_under_a_review_board_is_seen_once_back_to_the_conversation_sh
         toggle.click()
         expect(page.locator(f'#log .line[data-id="{asked}"]')).to_be_visible()
         page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
-        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+        with page.expect_response(seen_covering(room, asked)) as seen:
             page.locator("#home-nav").click()
         assert seen.value.request.post_data_json["id"] >= asked
         expect(page.locator("#room-title")).to_have_text("Home")
@@ -560,7 +579,7 @@ def test_a_mention_under_the_rename_dialog_is_seen_once_cancel_closes_it(ui: UI)
         expect(dialog).not_to_have_attribute("open", "")
         expect(page.locator(f'#log .line[data-id="{asked}"]')).to_be_visible()
         page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
-        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+        with page.expect_response(seen_covering(room, asked)) as seen:
             page.locator("#home-nav").click()
         assert seen.value.request.post_data_json["id"] >= asked
         expect(page.locator("#room-title")).to_have_text("Home")
@@ -619,7 +638,7 @@ def test_jump_to_latest_marks_the_mention_it_shows(ui: UI) -> None:
     room = "e2e-filters-latest-seen"
     try:
         page, asked = around_with_a_hidden_mention(ui, room, "wombat")
-        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+        with page.expect_response(seen_covering(room, asked)) as seen:
             page.click("#around-latest")
         assert seen.value.request.post_data_json["id"] >= asked
         expect(page.locator(f'#log .line[data-id="{asked}"]')).to_have_count(1)
@@ -642,7 +661,7 @@ def test_a_mention_that_came_on_all_is_seen_when_leaving_for_home(ui: UI) -> Non
         expect(button(page, "all")).to_have_attribute("aria-pressed", "true")
         asked = ui.world.agent_say("#" + room, "asker", "@alice which branch is green?")
         expect(page.locator(f'#log .line[data-id="{asked}"]')).to_have_count(1)
-        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+        with page.expect_response(seen_covering(room, asked)) as seen:
             page.locator("#home-nav").click()
         assert seen.value.request.post_data_json["id"] >= asked
         expect(page.locator("#room-title")).to_have_text("Home")
