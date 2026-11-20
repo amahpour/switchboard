@@ -26,6 +26,7 @@ SECRET_ID = "sk-" + "a1b2c3d4e5f6" * 3
 GROUP = "AKIA" + "ABCDEFGHIJKLMNOP"
 BIND = "xoxb-" + "1234567890" + "-abcdef"
 BODY = "a1b2c3d4e5f6" * 4
+TEN = "\n".join(f"line {i}" for i in range(10))  # an ordinary ten-line label: more than eight breaks
 CANARIES = (TOKEN, TOKEN.split("_", 1)[1], PASSWORD, SECRET_ID, GROUP, BIND, BODY)
 
 
@@ -44,6 +45,8 @@ def stored_scene() -> list[dict[str, Any]]:
     return [
         el("clean1", text="a note", originalText="a note", name="frame one"),
         el("wrapped", type="text", text="two\nlines", originalText="two lines"),  # a normal wrapped label
+        el("ten_equal", type="text", text=TEN, originalText=TEN),  # nine breaks, text equal to its original
+        el("ten_wrapped", type="text", text=TEN, originalText=TEN.replace("\n", " ")),  # a wrapped copy
         el("secret_text", text=f"uses {TOKEN}", originalText="uses it"),
         el("secret_original", text="uses it", originalText=f"uses {TOKEN}"),
         el("secret_name", type="frame", name=f"frame password={PASSWORD}x"),
@@ -113,11 +116,19 @@ def test_the_upgrade_removes_every_shape_that_held_a_secret_and_what_pointed_at_
     assert dropped == {
         "secret_text", "secret_original", "secret_name", "legacy", "split", "gone", SECRET_ID, "grp", "bound",
     }  # fmt: skip
-    assert set(got) == {"clean1", "wrapped", "arrow1", "label", "holder"}
-    assert got["clean1"] == scene[0] and got["wrapped"] == scene[1]  # nothing to change: as stored
+    assert set(got) == {"clean1", "wrapped", "ten_equal", "ten_wrapped", "arrow1", "label", "holder"}
+    assert all(
+        got[k] == e
+        for e in scene
+        for k in [e["id"]]
+        if k in got and k in {"clean1", "wrapped", "ten_equal", "ten_wrapped"}
+    )
+    assert {"ten_equal", "ten_wrapped"} <= set(
+        got
+    )  # clean multi-line labels are kept, whatever their line count
     assert got["arrow1"]["startBinding"] is None and got["arrow1"]["endBinding"]["elementId"] == "clean1"
-    assert got["label"]["containerId"] is None
-    assert got["holder"]["frameId"] is None and got["holder"]["groupIds"] == ["g3"]
+    assert "containerId" not in got["label"]  # deleted, not null: "null" can be longer than the id
+    assert "frameId" not in got["holder"] and got["holder"]["groupIds"] == ["g3"]
     assert got["holder"]["boundElements"] == [{"id": "clean1", "type": "arrow"}]
     blob = json.dumps(kept)
     for canary in CANARIES:
@@ -136,7 +147,7 @@ def test_the_upgrade_cleans_the_stored_whiteboard_and_its_change_records(
         assert db.schema_version(con) == db.SCHEMA_VERSION == 56
         raw = con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0]
         got = {e["id"]: e for e in json.loads(raw)}
-        assert set(got) == {"clean1", "wrapped", "arrow1", "label", "holder"}
+        assert set(got) == {"clean1", "wrapped", "ten_equal", "ten_wrapped", "arrow1", "label", "holder"}
         stored = {e["id"]: e for e in stored_scene()}
         assert got["clean1"] == stored["clean1"] and got["wrapped"] == stored["wrapped"]
         changes = [json.loads(r[0]) for r in con.execute("SELECT ids FROM room_board_changes ORDER BY seq")]
@@ -339,3 +350,31 @@ def test_the_upgrade_always_cleans_the_files_even_when_every_whiteboard_and_revi
     for f in tmp_path.rglob("*"):
         if f.is_file() and f != backup:
             assert TOKEN.encode() not in f.read_bytes(), f.name
+
+
+@pytest.mark.parametrize("key", ["frameId", "containerId"])
+def test_removing_a_reference_never_grows_a_shape_that_is_at_its_limit(key: str) -> None:
+    """A survivor that held a reference to a removed shape loses the reference. Setting it to ``null``
+    would grow a one-character id (``"x"``, 3 bytes) to ``null`` (4), and a shape already at 32,000 bytes
+    would then be over the live cap and refuse every edit; the key is deleted instead. Fails if the
+    survivor grows (or still has the key)."""
+
+    def build(points: int, pad: int, **extra: Any) -> dict[str, Any]:
+        return el(
+            "stroke", type="freedraw", points=[[-19999.123456789012, -19999.123456789012]] * points,
+            pressures=[0.12345678901234568] * 500, index="a" * pad, **extra,
+        )  # fmt: skip
+
+    def size(shape: dict[str, Any]) -> int:
+        return len(json.dumps(shape, separators=(",", ":")).encode())
+
+    points = 500
+    while size(build(points, 1, **{key: "x"})) > 31_900:
+        points -= 1
+    pad = 1 + 32_000 - size(build(points, 1, **{key: "x"}))
+    survivor = build(points, pad, **{key: "x"})
+    assert size(survivor) == board.MAX_SHAPE_BYTES  # exactly at the live cap
+    assert size({**survivor, key: None}) > board.MAX_SHAPE_BYTES  # the problem is real
+    kept, dropped = board.clean_stored([el("x", text=f"uses {TOKEN}"), survivor])
+    assert dropped == {"x"} and len(kept) == 1
+    assert key not in kept[0] and size(kept[0]) <= board.MAX_SHAPE_BYTES

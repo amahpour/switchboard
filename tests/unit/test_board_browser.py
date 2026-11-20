@@ -129,7 +129,8 @@ def test_the_browser_sends_whole_text_so_a_secret_across_character_200_reaches_t
         "process.stdout.write(JSON.stringify(r.batch(JSON.parse(require('fs').readFileSync(0,'utf8')))))",
         [el],
     )  # type: ignore[misc]
-    assert sent["text"] == text and sent["originalText"] == text and sent["name"] == text  # type: ignore[index]
+    assert sent["text"] == text and sent["name"] == text  # type: ignore[index]
+    assert sent["originalText"] == text  # type: ignore[index]
     (stored,) = board.merge([], [sent], agent=False).elements
     assert "ghp_" not in json.dumps(stored) and "aB3aB3" not in json.dumps(stored)
 
@@ -146,7 +147,8 @@ def test_a_broker_copy_replaces_the_tabs_when_its_version_is_the_same_or_higher(
 process.stdout.write(JSON.stringify(r.adopt(cur, inc)));"""
     assert node(code, [[mine], [echo]])[0]["text"] == "[redacted: github token]"  # type: ignore[index]
     assert node(code, [[mine], [{**echo, "version": 3}]])[0]["version"] == 3  # type: ignore[index]
-    assert node(code, [[mine], [{**echo, "version": 1, "text": "old"}]])[0]["text"] == TOKEN  # type: ignore[index]
+    older = node(code, [[mine], [{**echo, "version": 1, "text": "old"}]])
+    assert older[0]["text"] == TOKEN  # type: ignore[index]
     assert len(node(code, [[mine], [{**echo, "id": "b"}]])) == 2  # type: ignore[arg-type]
 
 
@@ -190,3 +192,24 @@ def test_the_frame_source_reads_every_scene_in_load_mode_like_the_shipped_bundle
                 break
             i += 1
         assert source[start : i + 1].endswith(", true)"), source[start : i + 1]
+
+
+def test_a_board_an_earlier_broker_stored_loads_with_both_strings_as_stored() -> None:
+    """The old broker and browser sized ``text`` and ``originalText`` independently, so a board could
+    hold a short ``text`` beside a longer clean ``originalText`` and sit just under the limits. Loading
+    keeps both strings exactly as stored: expanding the short one from the original (what a write does)
+    would take the scene over the byte limit before it opens, and the whole board would open empty. Fails
+    if a load expands or rewrites either string, or returns nothing."""
+    base = dict(type="text", x=0, y=0, width=10, height=10, version=1, versionNonce=1)
+    scene = [
+        dict(base, id=f"t{i:04d}", text="ab", originalText="o" * 200, name="n" * 160) for i in range(1_500)
+    ]
+    stored = len(json.dumps(scene, separators=(",", ":")).encode())
+    grown = len(json.dumps([dict(e, text=e["originalText"]) for e in scene], separators=(",", ":")).encode())
+    assert stored <= 1_000_000 < grown  # valid before, over the limit if the short text is expanded
+    code = """const e = JSON.parse(require('fs').readFileSync(0,'utf8'));
+const out = r.batch(e, true);
+process.stdout.write(JSON.stringify(out === null ? null : out.map(x => [x.text, x.originalText.length])));"""
+    got = node(code, scene)
+    assert got is not None and len(got) == 1_500  # type: ignore[arg-type]
+    assert all(t == "ab" and n == 200 for t, n in got)  # type: ignore[union-attr,misc]

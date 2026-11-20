@@ -1261,10 +1261,6 @@ def _normal_text(v: Any) -> str:
     return redact(clean(v)[:_SCAN_MAX])[0][:MAX_TEXT] if isinstance(v, str) else ""
 
 
-_WRAP_BREAKS_MAX = 8  # a stored wrapped text with more breaks is ambiguous (read once, at the upgrade)
-_WRAP_SCAN_MAX = 2000
-
-
 def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
     """``el`` without what points at a dropped id: its entry in a bound list or group list, a binding,
     ``frameId`` or ``containerId`` set to ``None``. ``el`` itself when nothing in it names a dropped id;
@@ -1283,44 +1279,17 @@ def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
             new[key] = None
     for key in ("frameId", "containerId"):
         if new.get(key) in dropped and new.get(key) is not None:
-            new[key] = None
+            # deleted, not ``None``: "null" is longer than a one-character id, and a shape at its limit
+            # must not grow
+            del new[key]
     return new if new != el else el
-
-
-def _wrap_hides(text: str) -> list[str] | None:
-    """For a stored text with line breaks and no ``originalText`` (so nothing says what it was before the
-    wrap): the kinds a flattened reading finds that the as-written redaction did not fully remove, or
-    ``["wrapped text"]`` when it cannot be read every way (more than ``_WRAP_BREAKS_MAX`` breaks, or long).
-    A wrap can break a token, or the space before it, where no pattern matches. Each break is tried as nothing
-    and as a space in every combination; every reading must redact to the as-written redaction with its breaks
-    read the same way. None when they all do (#893, schema 56)."""
-    n = text.count("\n")
-    if n > _WRAP_BREAKS_MAX or len(text) > _WRAP_SCAN_MAX:
-        return ["wrapped text"]
-    out, kinds = redact(text)
-    parts = text.split("\n")
-    outs = out.split("\n") if out.count("\n") == n else None
-    found: list[str] = []
-    for mask in range(2**n):
-        seps = [" " if mask >> i & 1 else "" for i in range(n)]
-        flat = parts[0] + "".join(sep + part for sep, part in zip(seps, parts[1:], strict=True))
-        flat_out, flat_kinds = redact(flat)
-        if outs is not None:
-            ref = outs[0] + "".join(sep + part for sep, part in zip(seps, outs[1:], strict=True))
-        else:  # a match swallowed a break: compare with the as-written result, breaks read alike
-            ref = out.replace("\n", seps[0] if seps else "")
-        if flat_out != ref:
-            found += [k for k in (*flat_kinds, *kinds) if k not in found]
-            if not found:
-                return ["wrapped text"]
-    return found or None
 
 
 def _needs_cleaning(el: dict[str, Any]) -> bool:
     """True when a stored shape is one the cleaning of a write would change in any way (#893, schema 56):
     an id or an id-like string that holds a secret; a tombstone with text; a text, ``originalText`` or
     ``name`` that redaction or the cut would change; a ``text`` with line breaks and no ``originalText``,
-    or one whose wrap hides a secret."""
+    or one that is not a wrapped copy of its ``originalText``."""
     if not isinstance(el.get("id"), str) or any(redact(v)[1] for v in _id_strings(el)):
         return True
     fields = [el.get(k) for k in ("text", "originalText", "name") if isinstance(el.get(k), str)]
@@ -1328,9 +1297,14 @@ def _needs_cleaning(el: dict[str, Any]) -> bool:
         return any(fields)
     if any(_normal_text(v) != v for v in fields):
         return True
-    text = el.get("text")
+    text, original = el.get("text"), el.get("originalText")
     if isinstance(text, str) and "\n" in text:
-        return not isinstance(el.get("originalText"), str) or bool(_wrap_hides(text))
+        if not isinstance(original, str):
+            return True  # only ever stored wrapped: nothing verifies what the wrap did to a token
+        # a wrapped copy of the original words (the same characters, spaces and breaks aside, or a cut
+        # of them) shows nothing the original, which is clean, does not: kept, whatever its line count
+        a, b = "".join(text.split()), "".join(original.split())
+        return not (a.startswith(b) or b.startswith(a))  # a cut copy is a prefix of the other
     return False
 
 

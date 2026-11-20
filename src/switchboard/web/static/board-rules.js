@@ -40,8 +40,10 @@
     for (const k of ['originalText', 'name']) if (typeof raw[k] === 'string') e[k] = text(raw[k]);
     // as the broker: the wrapped `text` is the page's copy of `originalText`, and the broker keeps only the words
     if (typeof raw.text === 'string') {
-      if (typeof raw.originalText === 'string') e.text = e.originalText;
-      else if (raw.text.includes('\n') && !load) return null;
+      // a write sends the words once; a load keeps both strings as stored (an earlier broker kept them apart)
+      if (load) e.text = text(raw.text);
+      else if (typeof raw.originalText === 'string') e.text = e.originalText;
+      else if (raw.text.includes('\n')) return null;
       else e.text = text(raw.text);
     }
     for (const k of ['locked', 'autoResize', 'simulatePressure', 'elbowed']) if (typeof raw[k] === 'boolean') e[k] = raw[k];
