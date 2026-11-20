@@ -881,6 +881,7 @@ class AgentAuth:
         self.latest: dict[tuple[int, str], str] = {}  # token and thread -> latest serving MCP session
         self.touched: dict[int, float] = {}  # token id -> when its last use was written
         self._reopening = asyncio.Lock()  # one session is opened again at a time: the same ID, once
+        self._ending: set[asyncio.Future[None]] = set()  # SessionEnds of a DELETE that stopped unanswered
 
     def token(self, scope: Scope) -> AgentTokenRow | None:
         """The live agent token this request carries: ``Authorization: Bearer sbat_…`` (a hand-made server,
@@ -1217,27 +1218,56 @@ class AgentAuth:
         if sid is None or method != "DELETE" or session is None:
             await self.app(scope, receive_claim if inspect_client else receive, send_binding)
             return
-        # The client's DELETE of a session this token owns ends it for the broker only when the library's
-        # answer says the session is gone: it ended it, or no longer has it (its idle expiry, #903 F10). Any
-        # other answer (a 405 from its stateless handler for a non-handshake protocol, a 400, 406, 5xx, an
-        # exception, no answer at all) left the live transport alone, so the ID and its record are kept.
-        # A resumed thread can use a newer MCP session before this old DELETE arrives: only the session that
-        # served a thread most recently may take it offline, as it was when the DELETE was answered.
+        # The client's DELETE of a session this token owns ends it for the broker only when the library says
+        # the session is gone. When the library answered, its status says so: it ended it, or no longer has
+        # it (its idle expiry, #903 F10); any other answer (a 405 from its stateless handler for a
+        # non-handshake protocol, a 400, 406, 5xx) left the live transport alone. When it sent no status (an
+        # exception, a cancellation), its own state says so: the pinned SDK marks the transport terminated
+        # before it awaits the streams' cleanup and only then sends its 200, so a DELETE stopped in between
+        # has already ended the session. Anything else, or a state that can't be read, keeps the ID and its
+        # record. A resumed thread can use a newer MCP session before this old DELETE arrives: only the
+        # session that served a thread most recently may take it offline, as it was when the DELETE ended.
         gone, newest = False, list[str]()
         try:
             await self.app(scope, receive_claim if inspect_client else receive, send_binding)
         finally:
-            gone = response_status in DELETE_GONE
+            if response_status is None:
+                gone = self._library_ended(inner if inner is not None else sid)
+            else:
+                gone = response_status in DELETE_GONE
             if gone:
                 newest = [t for t in sorted(session.threads) if self.latest.get((row.id, t)) == sid]
                 self.forget(sid)
                 self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
+                if response_status is None and newest:
+                    # the request is unwinding (it may be cancelled): its SessionEnd runs on its own task
+                    task = asyncio.ensure_future(self._end_threads(row, newest))
+                    self._ending.add(task)
+                    task.add_done_callback(self._ending.discard)
+                    newest = []
         if gone:
-            for thread in newest:
-                conn = self.tools.conn_for(row, "codex")
-                await self.state.agents.http_hook(
-                    conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
-                )
+            await self._end_threads(row, newest)
+
+    def _library_ended(self, library_id: str) -> bool:
+        """Whether the MCP library ended this session (§49.2): its manager no longer holds the ID, or holds a
+        transport it marked terminated. Read from the library's own state, private to the pinned SDK, so a
+        shape it doesn't have (another app in front, a newer SDK) is unknown and answers no: the session is
+        kept, never forgotten on a guess."""
+        manager = getattr(self.app, "session_manager", None)
+        held = getattr(manager, "_server_instances", None)
+        if not isinstance(held, dict):
+            return False
+        transport = held.get(library_id)
+        if transport is None:
+            return True
+        return getattr(transport, "is_terminated", None) is True
+
+    async def _end_threads(self, row: AgentTokenRow, threads: list[str]) -> None:
+        for thread in threads:
+            conn = self.tools.conn_for(row, "codex")
+            await self.state.agents.http_hook(
+                conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
+            )
 
 
 class SessionHook:

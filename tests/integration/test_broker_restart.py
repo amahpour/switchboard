@@ -852,6 +852,88 @@ def test_a_delete_the_library_refuses_keeps_the_session_and_its_record(broker: I
     assert mine.call("who", THREAD_A, room="#build")["ok"]  # its record still reopens it
 
 
+class CleanupStopped(Exception):
+    """The streams' cleanup failing inside the library's ``terminate()``."""
+
+
+@pytest.mark.parametrize("stop", ["raise", "cancel"])
+def test_a_delete_stopped_after_the_library_ended_it_forgets_the_session(
+    broker: InProcBroker, stop: str
+) -> None:
+    """The pinned SDK's DELETE marks its transport terminated, then awaits the streams' cleanup, and only
+    then sends its 200. A DELETE stopped in between (the cleanup raises, or the request is cancelled there)
+    sends no status, yet the session is already ended in the library. The broker must read that from the
+    library's own state and forget the ID and its record, and end the thread it served last, so a restart
+    never opens a dead session again (404). The stop is the patched cleanup step, raising at once: no
+    timing. Fails if a DELETE that sent no status keeps the session (#903, F10 reopened again)."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    assert mine.call("hook", THREAD_A, event="Stop", session_id=THREAD_A) == {}
+    manager = broker.state.agent_auth.app.session_manager
+    transport = broker.on_loop(lambda: manager._server_instances[mine.sid])
+    real = transport.terminate
+
+    async def terminate() -> None:
+        transport._terminated = True  # what the SDK's own terminate() does first
+        await real()
+        raise CleanupStopped() if stop == "raise" else asyncio.CancelledError()
+
+    broker.on_loop(setattr, transport, "terminate", terminate)
+    try:
+        answer = mine.delete(recorded)
+    except httpx.HTTPError:
+        answer = None  # a cancelled request may send nothing at all
+    assert answer is None or answer.status_code == 500  # no 200 from the library: it never got that far
+    assert broker.on_loop(lambda: transport.is_terminated)
+    assert mine.sid not in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+    key = hashlib.sha256(mine.sid.encode()).hexdigest()
+    row = token_row(broker, token)
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S) is None
+    until(lambda: status(broker, "codex-1") == "offline")  # SessionEnd, on its own task
+    broker.restart()
+    assert mine.raw("who", THREAD_A, room="#build").status_code == 404
+    assert library_sessions(broker) == set()
+
+
+def test_a_delete_stopped_before_the_library_ended_it_keeps_the_session(broker: InProcBroker) -> None:
+    """The other side of the same rule: a DELETE that stops inside the library before it terminates anything
+    (here its header check raises) sends no status and leaves the transport live, so the broker keeps the ID,
+    its record and its thread, and the client's next call is served. Fails if every DELETE without a status
+    forgets its session, instead of asking the library (#903, F10)."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    assert mine.call("hook", THREAD_A, event="Stop", session_id=THREAD_A) == {}
+    manager = broker.state.agent_auth.app.session_manager
+    transport = broker.on_loop(lambda: manager._server_instances[mine.sid])
+    real = transport._validate_request_headers
+
+    async def refuse(*_: Any) -> bool:
+        raise CleanupStopped()
+
+    broker.on_loop(setattr, transport, "_validate_request_headers", refuse)
+    try:
+        assert mine.delete(recorded).status_code == 500
+    finally:
+        broker.on_loop(setattr, transport, "_validate_request_headers", real)
+    assert not broker.on_loop(lambda: transport.is_terminated)
+    assert mine.sid in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+    key = hashlib.sha256(mine.sid.encode()).hexdigest()
+    row = token_row(broker, token)
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S) is not None
+    assert status(broker, "codex-1") == "idle"
+    assert mine.call("who", THREAD_A, room="#build")["ok"]
+    broker.restart()
+    assert mine.call("who", THREAD_A, room="#build")["ok"]  # its record still reopens it
+
+
 def test_a_revoke_during_an_initialize_leaves_no_record(broker: InProcBroker) -> None:
     """A fresh initialize is let in with a live token, then awaits the library's answer. A revoke that commits
     in between deletes the token's rows; the record written after the answer must not bring one back, so a
