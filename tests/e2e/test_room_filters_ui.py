@@ -6,12 +6,14 @@ from the API. Any console error, page error or CSP violation fails the test. Mar
 
 from __future__ import annotations
 
+import hashlib
 import re
 import secrets
 import shutil
 from collections.abc import Iterator
 from typing import Any
 
+import httpx
 import pytest
 from conftest import PHASE_REPORTS, sanitize_env
 from playwright.sync_api import Browser, Page, expect
@@ -300,5 +302,36 @@ def test_a_live_reply_to_an_older_message_of_mine_shows_under_mentions(ui: UI) -
         button(page, "mentions").click()
         expect(page.locator("#room-filter-note")).to_have_text("1 message addressed to you")
         assert shown(page) == [mid]
+    finally:
+        ui.world.close_extra_agents()
+
+
+UPLOAD = re.compile(r"(https?://\S+/api/upload/[A-Za-z0-9_-]+)")
+
+
+def test_an_agents_upload_shows_under_files_once_it_is_stored(ui: UI) -> None:
+    """An agent's artifact line arrives while its upload is pending, so Files leaves it out; when the upload
+    is stored, the message is in Files at once, with its download card, without choosing Files again. Fails
+    if the stored-file event only updates a row the full log holds."""
+    room = "e2e-filters-upload"
+    fresh_room(ui.world, room, agent="uploader")
+    agent = ui.world._extra_named[("#" + room, "uploader")]
+    body = b"notes"
+    sha = hashlib.sha256(body).hexdigest()
+    line = f"artifact: report.txt | {len(body)} | sha256:{sha} | /Users/someone/report.txt"
+    try:
+        page = ui.open(room)
+        button(page, "files").click()
+        expect(page.locator("#room-filter-note")).to_have_text("No files in this room yet.")
+        said = ui.world._scripted(agent.say("#" + room, line))
+        assert said["ok"] and said.get("share"), said
+        found = UPLOAD.search(said["share"])
+        assert found, said["share"]
+        assert shown(page) == []
+        put = httpx.put(found.group(1), content=body, timeout=10.0, trust_env=False)
+        assert put.status_code == 201, put.text
+        expect(page.locator(f'#log .line[data-id="{said["posted_id"]}"]')).to_have_count(1)
+        expect(page.locator("#log .md-artifact-name")).to_have_text("report.txt")
+        expect(page.locator("#room-filter-note")).to_have_text("1 message with a file")
     finally:
         ui.world.close_extra_agents()

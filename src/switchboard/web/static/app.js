@@ -3878,10 +3878,12 @@
     } else if (f.t === 'file') {
       if (!r || !f.file || !f.file.id) return;
       const m = r.msgs.find(function (x) { return x.id === f.message_id; });
-      if (!m) return;
-      m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
-      m.files.push(f.file);
-      if (r.name === state.active) refreshMsgText(m);
+      if (m) {
+        m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
+        m.files.push(f.file);
+        if (r.name === state.active) refreshMsgText(m);
+      }
+      filterFile(r, f.message_id, f.file, m);  // a filtered log holds its own rows (#914)
     } else if (f.t === 'board') {
       if (r && whiteboard) {
         if (f.task) whiteboard.task(f.room, f.task);
@@ -9755,6 +9757,26 @@
     if (forMe(r, m)) filterAdd(r, f, [m]);
     else if (m.kind === 'chat' && m.reply_to && !r.msgs.some(function (x) { return x.id === m.reply_to; })) {
       filterAsk(r, f, m.id);
+    }
+  }
+
+  // A file of message `id` was stored (an agent's upload ends after its message arrived, §53). A filtered log
+  // holds the broker's copies of its rows, so the row there is brought up to date; under Files, a message that
+  // came while its upload was pending now has a stored file and is taken (or, when this page does not hold it,
+  // asked for). `m` is the page's own copy, if it has one.
+  function filterFile(r, id, file, m) {
+    const f = filterOf(r);
+    if (!f) return;
+    const had = f.msgs.find(function (x) { return x.id === id; });
+    if (had) {
+      if (had !== m) {
+        had.files = (had.files || []).filter(function (x) { return x.id !== file.id; });
+        had.files.push(file);
+        refreshMsgText(had);
+      }
+    } else if (f.show === 'files') {
+      if (m) filterAdd(r, f, [m]);
+      else filterAsk(r, f, id);
     }
   }
 
