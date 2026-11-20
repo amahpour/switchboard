@@ -805,7 +805,7 @@ def test_a_delete_of_a_session_the_library_expired_is_never_reopened(broker: InP
 
 
 def test_a_delete_the_library_answers_404_ends_only_the_threads_it_served_last(broker: InProcBroker) -> None:
-    """The client's DELETE ends its session whatever the library answers, and the rule of #449 still holds
+    """The client's DELETE ends its session on the library's 404 too, and the rule of #449 still holds
     for a 404: it takes offline only the threads no newer session has served since. Fails if a 404 ends a
     thread a newer session serves, or leaves the still-old one online (#903, F10)."""
     recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
@@ -823,6 +823,33 @@ def test_a_delete_the_library_answers_404_ends_only_the_threads_it_served_last(b
     assert old.delete(recorded).status_code == 404
     assert status(broker, "codex-1") == "idle"
     assert status(broker, "codex-2") == "offline"
+
+
+def test_a_delete_the_library_refuses_keeps_the_session_and_its_record(broker: InProcBroker) -> None:
+    """A DELETE the library rejects before it ends anything leaves its session alive: one whose
+    Mcp-Protocol-Version is no handshake version goes to the library's stateless handler, which answers 405
+    and never touches the live transport. The broker must keep the ID, its record and its threads, so the
+    client's next valid call is served (200, not 404) and a restart still reopens it. Fails if every answer
+    to a DELETE forgets the session (#903, F10 reopened)."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    mine = Codex(broker, token)
+    assert mine.start().status_code == 200
+    assert mine.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    assert mine.call("hook", THREAD_A, event="Stop", session_id=THREAD_A) == {}
+    last = [e for e in recorded["server_events"] if e.get("method") == "DELETE"][0]
+    headers = mine.headers({**last["headers"], "mcp-protocol-version": "2099-01-01"})
+    assert mine.c.delete("/mcp", headers=headers).status_code == 405  # the library ended nothing
+    assert mine.sid in broker.on_loop(lambda: set(broker.state.agent_auth.sessions))
+    key = hashlib.sha256(mine.sid.encode()).hexdigest()
+    row = token_row(broker, token)
+    assert broker.on_loop(broker.state.store.mcp_session, row.id, key, REOPEN_IDLE_S) is not None
+    assert status(broker, "codex-1") == "idle"  # no SessionEnd
+    after = mine.raw("who", THREAD_A, room="#build")
+    assert after.status_code == 200 and tool_json(after)["ok"]
+    broker.restart()
+    assert mine.call("who", THREAD_A, room="#build")["ok"]  # its record still reopens it
 
 
 def test_a_revoke_during_an_initialize_leaves_no_record(broker: InProcBroker) -> None:

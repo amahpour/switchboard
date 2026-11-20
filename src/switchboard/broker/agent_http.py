@@ -193,6 +193,10 @@ SESSIONS_MAX = 4096  # MCP sessions remembered, each with the token that opened 
 # opened or last opened again; a revoked token's go at once.
 REOPEN_KEEP = 100
 REOPEN_IDLE_S = 30 * 86400.0
+# The library's answers to a DELETE that mean its session is gone (§49.2): 200, it ended it
+# (`_handle_delete_request`); 404, it no longer has it (unknown, expired or already terminated). 202 and 204
+# are a session ended in other words. Every other status left the session alive, and the broker keeps it.
+DELETE_GONE = frozenset({200, 202, 204, 404})
 REOPEN_ID = "switchboard-reopen"  # the JSON-RPC id of the initialize the broker sends for the client
 SESSION_ID_RE = re.compile(r"[\x21-\x7e]{1,128}")  # an MCP session ID: visible ASCII, cut here
 PROTOCOL_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -1213,18 +1217,22 @@ class AgentAuth:
         if sid is None or method != "DELETE" or session is None:
             await self.app(scope, receive_claim if inspect_client else receive, send_binding)
             return
-        # The client's DELETE of a session this token owns ends it for the broker whatever the library
-        # answers: the library expires idle sessions on its own, and its 404 then must not leave a record
-        # that a later restart would open again (#903, F10).
+        # The client's DELETE of a session this token owns ends it for the broker only when the library's
+        # answer says the session is gone: it ended it, or no longer has it (its idle expiry, #903 F10). Any
+        # other answer (a 405 from its stateless handler for a non-handshake protocol, a 400, 406, 5xx, an
+        # exception, no answer at all) left the live transport alone, so the ID and its record are kept.
         # A resumed thread can use a newer MCP session before this old DELETE arrives: only the session that
         # served a thread most recently may take it offline, as it was when the DELETE was answered.
+        gone, newest = False, list[str]()
         try:
             await self.app(scope, receive_claim if inspect_client else receive, send_binding)
         finally:
-            newest = [t for t in sorted(session.threads) if self.latest.get((row.id, t)) == sid]
-            self.forget(sid)
-            self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
-        if response_status in (200, 202, 204, 404):  # 404: the library had already expired it
+            gone = response_status in DELETE_GONE
+            if gone:
+                newest = [t for t in sorted(session.threads) if self.latest.get((row.id, t)) == sid]
+                self.forget(sid)
+                self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
+        if gone:
             for thread in newest:
                 conn = self.tools.conn_for(row, "codex")
                 await self.state.agents.http_hook(
