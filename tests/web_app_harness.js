@@ -16,14 +16,23 @@ const STATIC = path.join(__dirname, '..', 'src', 'switchboard', 'web', 'static')
 const MD = path.join(STATIC, 'md.js');
 const APP = path.join(STATIC, 'app.js');
 
+// A class change tells its element's MutationObservers (the stand-in in makeWorld), as the class attribute's
+// change would in a browser.
 class ClassList {
-  constructor() { this.s = new Set(); }
-  add(...c) { for (const x of c) this.s.add(x); }
-  remove(...c) { for (const x of c) this.s.delete(x); }
+  constructor(owner) { this.s = new Set(); this.owner = owner || null; }
+  changed(before) {
+    const s = this.s;
+    if (s.size !== before.size || [...before].some(function (c) { return !s.has(c); })) this.mutated();
+  }
+  mutated() { if (this.owner && this.owner.mutated) this.owner.mutated('class'); }
+  add(...c) { const b = new Set(this.s); for (const x of c) this.s.add(x); this.changed(b); }
+  remove(...c) { const b = new Set(this.s); for (const x of c) this.s.delete(x); this.changed(b); }
   contains(c) { return this.s.has(c); }
   toggle(c, force) {
+    const b = new Set(this.s);
     const on = force === undefined ? !this.s.has(c) : !!force;
     if (on) this.s.add(c); else this.s.delete(c);
+    this.changed(b);
     return on;
   }
 }
@@ -32,7 +41,7 @@ class El {
   constructor(tag) {
     this.tag = tag;
     this.children = [];
-    this.classList = new ClassList();
+    this.classList = new ClassList(this);
     this.dataset = {};
     this.attrs = {};
     this.listeners = {};
@@ -48,8 +57,20 @@ class El {
   get firstChild() { return this.children.length ? this.children[0] : null; }
   get lastChild() { return this.children.length ? this.children[this.children.length - 1] : null; }
   set className(v) {
-    this.classList = new ClassList();
-    for (const c of String(v).split(/\s+/)) if (c) this.classList.add(c);
+    const list = new ClassList();
+    for (const c of String(v).split(/\s+/)) if (c) list.add(c);
+    list.owner = this;
+    this.classList = list;
+    list.mutated();
+  }
+  // What a MutationObserver watching this element's attributes hears (makeWorld's stand-in): a record a microtask
+  // later, as in a browser.
+  mutated(attr) {
+    for (const o of this.observers || []) {
+      if (o.filter && o.filter.indexOf(attr) < 0) continue;
+      o.obs.records.push({ type: 'attributes', target: this, attributeName: attr });
+      if (o.obs.records.length === 1) queueMicrotask(function () { o.obs.flush(); });
+    }
   }
   get className() { return Array.from(this.classList.s).join(' '); }
   set textContent(v) { this.children = []; this.own = String(v); }
@@ -349,6 +370,15 @@ function makeWorld(rooms) {
     URLSearchParams: URLSearchParams,
     // a painted frame: the next setImmediate turn, which settle() runs
     requestAnimationFrame: function (f) { return setImmediate(function () { f(0); }); },
+    // the attribute half of a MutationObserver: class changes on the elements it observes (ClassList tells them)
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; this.records = []; }
+      observe(el, opts) {
+        (el.observers = el.observers || []).push({ obs: this, filter: (opts && opts.attributeFilter) || null });
+      }
+      flush() { const r = this.records; this.records = []; if (r.length) this.cb(r, this); }
+      disconnect() {}
+    },
     innerWidth: 1000, innerHeight: 800,
   };
   ctx.window = ctx;
@@ -1748,6 +1778,29 @@ const SCENARIOS = {
       out[how + 'Back'] = w.server.roomSeen.map(function (b) { return b.id; });
     }
     return out;
+  },
+
+  // #914 F4: a cover goes without a draw (Back to the conversation from a review board takes board-open off
+  // #main). The log is on screen again in the next frame, so a mention that came under the cover is seen.
+  async seen_when_a_cover_goes_without_a_draw() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'first', { mentions: ['alice'] }) });
+    await settle();
+    click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    await settle();
+    w.$('main').classList.add('board-open');  // a review board over the log
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'under the board', { mentions: ['alice'] }) });
+    await settle();
+    const covered = w.$('log').children.length;
+    w.$('main').classList.remove('board-open');  // uncovered, nothing drawn
+    await settle();
+    const drawn = w.$('log').children.length === covered;
+    click(w.$('home-nav'));
+    await settle();
+    return { seen: w.server.roomSeen.map(function (b) { return b.id; }), noRedraw: drawn };
   },
 
   // Not now on a board card posts the board's address to the room's route, and the card is gone once Home asks

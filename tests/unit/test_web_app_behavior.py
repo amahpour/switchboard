@@ -840,6 +840,15 @@ def test_the_seen_mark_moves_only_while_the_log_is_on_screen() -> None:
     assert out["backgroundBack"] == [7, 11, 13]
 
 
+def test_the_seen_mark_moves_when_a_cover_goes_without_a_draw() -> None:
+    """#914 F4: a mention comes while a review board covers the log; the board's class comes off #main with
+    nothing drawn (Back to the conversation), and the person goes Home. The mark reaches the mention, since a
+    painted frame showed it. Fails if only a draw schedules the check: the mark then stops at 7."""
+    out = run("seen_when_a_cover_goes_without_a_draw")
+    assert out["noRedraw"] is True
+    assert out["seen"] == [7, 11]
+
+
 def test_not_now_on_a_board_card_posts_the_board_and_the_card_goes_when_home_asks_again() -> None:
     """#663: Not now sends the board's address to its room's route and, when the broker answers, Home asks
     again and the card is gone; a refusal keeps the card and says why in the status line. Fails if the button

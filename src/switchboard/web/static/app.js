@@ -9680,6 +9680,23 @@
     });
   }
 
+  // The general trigger of that check (§64.4): a view that covers or reveals the log without drawing it (Back to
+  // the conversation from a review board, a sheet or a dialog closing, the tab coming back) changes a class, the
+  // hidden or inert attribute of #log, one of its ancestors, #app or #main, or the document's visibility. Each
+  // such change asks for the same painted-frame check; noteShown coalesces them to one frame. Without a
+  // MutationObserver nothing is watched, and the mark waits for a draw: closed, never open.
+  function watchLogCover() {
+    document.addEventListener('visibilitychange', noteShown);
+    if (typeof window.MutationObserver !== 'function') return;
+    const watched = new Set();
+    for (let n = $('log'); n && n.nodeType === 1; n = n.parentElement) watched.add(n);
+    for (const id of ['app', 'main']) if ($(id)) watched.add($(id));
+    const obs = new window.MutationObserver(noteShown);
+    watched.forEach(function (n) {
+      obs.observe(n, { attributes: true, attributeFilter: ['class', 'hidden', 'inert'] });
+    });
+  }
+
   const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
   const FILTER_EMPTY = {
     mentions: 'Nothing in this room is addressed to you yet.',
@@ -10346,6 +10363,7 @@
       $('usage').focus();
     });
     keepLogPinned();
+    watchLogCover();
     try {
       state.me = await api('GET', '/api/me');
     } catch (e) {
