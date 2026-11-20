@@ -204,7 +204,7 @@ def main():
         text = out if isinstance(out, str) else json.dumps(out)
         body["tool_response"] = " ".join(list(dict.fromkeys(TOKEN.findall(text)))[:MAX_TOKENS])
     if kind == "stop":
-        body["wait_s"] = 630
+        body["wait_s"] = 3630
         reply = park(body)
     else:
         reply = send("/mcp/event", body, 5)

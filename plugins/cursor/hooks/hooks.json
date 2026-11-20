@@ -41,7 +41,7 @@
     "stop": [
       {
         "command": "\"${CURSOR_PLUGIN_ROOT}/bin/hook\" stop",
-        "timeout": 660,
+        "timeout": 3660,
         "loop_limit": null
       }
     ],
