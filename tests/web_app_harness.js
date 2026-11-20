@@ -1803,6 +1803,30 @@ const SCENARIOS = {
     return { seen: w.server.roomSeen.map(function (b) { return b.id; }), noRedraw: drawn };
   },
 
+  // #914 F4, reopened: a modal dialog over the log (Rename room) blocks hit-testing, so a mention that comes
+  // meanwhile is not seen; closing the dialog changes none of the watched nodes, only fires its close event
+  // (captured on the document). That event alone asks for the check, and the next frame shows the mention.
+  async seen_when_a_dialog_closes() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'first', { mentions: ['alice'] }) });
+    await settle();
+    click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    await settle();
+    w.layout.cover = w.document.createElement('dialog');  // a modal dialog over the log's middle
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'under the dialog', { mentions: ['alice'] }) });
+    await settle();
+    const covered = w.$('log').children.length;
+    w.layout.cover = null;  // the dialog closes: no watched node changes
+    for (const f of w.document.listeners.close || []) f({ type: 'close' });
+    await settle();
+    const noRedraw = w.$('log').children.length === covered;
+    click(w.$('home-nav'));
+    await settle();
+    return { seen: w.server.roomSeen.map(function (b) { return b.id; }), noRedraw: noRedraw };
+  },
+
   // Not now on a board card posts the board's address to the room's route, and the card is gone once Home asks
   // again; a refusal leaves the card and says so.
   async home_not_now() {

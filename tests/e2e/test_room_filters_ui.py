@@ -537,6 +537,39 @@ def test_a_mention_under_a_review_board_is_seen_once_back_to_the_conversation_sh
         ui.world.close_extra_agents()
 
 
+def test_a_mention_under_the_rename_dialog_is_seen_once_cancel_closes_it(ui: UI) -> None:
+    """F4, reopened: Rename room is opened from All, a modal <dialog> over the page, and an agent's @mention
+    of alice arrives: the log holds it, but the modal blocks hit-testing, so the painted-frame check fails.
+    Cancel closes the dialog, which changes only the dialog's open state, none of the nodes the
+    MutationObserver watches; the mention is then on screen and Home is chosen with no further message.
+    Nothing waits on Home. Fails if nothing but a draw or a watched class change schedules the check: the
+    mark then stops short of the mention."""
+    room = "e2e-filters-rename-cancel"
+    fresh_room(ui.world, room, agent="asker")
+    try:
+        page = ui.open(room)
+        expect(button(page, "all")).to_have_attribute("aria-pressed", "true")
+        page.locator("#room-title-button").click()
+        dialog = page.locator("#app-dialog")
+        expect(dialog).to_have_attribute("open", "")
+        assert page.evaluate("() => document.querySelector('#app-dialog').matches(':modal')")
+        asked = ui.world.agent_say("#" + room, "asker", "@alice which runner should ship?")
+        expect(page.locator(f'#log .line[data-id="{asked}"]')).to_have_count(1)  # held, under the modal
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        dialog.get_by_role("button", name="Cancel").click()
+        expect(dialog).not_to_have_attribute("open", "")
+        expect(page.locator(f'#log .line[data-id="{asked}"]')).to_be_visible()
+        page.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+            page.locator("#home-nav").click()
+        assert seen.value.request.post_data_json["id"] >= asked
+        expect(page.locator("#room-title")).to_have_text("Home")
+        expect(page.locator("#home")).not_to_contain_text("Loading…")
+        expect(page.locator("#home .home-card", has_text="#" + room)).to_have_count(0)
+    finally:
+        ui.world.close_extra_agents()
+
+
 def around_with_a_hidden_mention(ui: UI, room: str, word: str) -> tuple[Page, int]:
     """``room`` open and seen, then a search for ``word`` opens it around its one hit; an agent's @mention of
     alice arrives while the window is shown (so it is not drawn). Waits until the page has it: a later mention

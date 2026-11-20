@@ -9685,8 +9685,15 @@
   // hidden or inert attribute of #log, one of its ancestors, #app or #main, or the document's visibility. Each
   // such change asks for the same painted-frame check; noteShown coalesces them to one frame. Without a
   // MutationObserver nothing is watched, and the mark waits for a draw: closed, never open.
+  // A cover can also go with none of those nodes changing: a modal <dialog> (Rename room) closing changes only
+  // the dialog's own open state. So the events that end something drawn over the page ask too, caught on the
+  // document in the capture phase since close and toggle do not bubble: close and cancel (dialogs), toggle
+  // (popovers, details), and, as a backstop for any cover not named here, focusin, pointerup and keyup. Each
+  // only schedules the one coalesced check, which still fails closed.
+  const COVER_ENDS = ['close', 'cancel', 'toggle', 'focusin', 'pointerup', 'keyup'];
   function watchLogCover() {
     document.addEventListener('visibilitychange', noteShown);
+    for (const t of COVER_ENDS) document.addEventListener(t, function () { noteShown(); }, true);
     if (typeof window.MutationObserver !== 'function') return;
     const watched = new Set();
     for (let n = $('log'); n && n.nodeType === 1; n = n.parentElement) watched.add(n);
