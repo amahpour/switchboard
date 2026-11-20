@@ -18,6 +18,8 @@
  *     it paints inside its box. Its styles are inline, so the app page's CSP allows inline styles
  *     (style-src 'unsafe-inline', auth.app_csp); scripts stay 'self' only.
  *   - Links in a drawing lose their href: md.js's mdLink stays the one link path.
+ *   - Event-handler attributes in tag-like text are dropped from the source before Mermaid sees
+ *     it (withoutHandlers), so a newer Chromium has nothing to report to the CSP (#917).
  *   - Nothing comes back from Mermaid but the drawing, and errors are shown as text.
  */
 'use strict';
@@ -90,8 +92,72 @@
     return loading;
   }
 
+  // `source` without the event-handler attributes (on…) of any complete, one-line HTML tag in it
+  // (issue #917). Mermaid's DOMPurify parses each label in this page's documents, and Chromium
+  // from 157 reports a handler attribute to the CSP as soon as it is parsed, though nothing runs
+  // and DOMPurify then drops it. Dropping it first leaves the same drawing and no report. This
+  // is not what keeps a diagram safe (the CSP and DOMPurify are), so it may miss an odd tag; it
+  // never touches text outside a tag that closes on its own line, or a tag with no on… attribute.
+  // The states follow the HTML tokenizer's tag states.
+  function withoutHandlers(source) {
+    const space = function (c) { return c === ' ' || c === '\t' || c === '\f' || c === '\r'; };
+    let out = '';
+    let i = 0;
+    while (i < source.length) {
+      const lt = source.indexOf('<', i);
+      if (lt < 0) break;
+      const after = source[lt + 1] === '/' ? lt + 2 : lt + 1;
+      if (!/[A-Za-z]/.test(source[after] || '')) {
+        out += source.slice(i, lt + 1);
+        i = lt + 1;
+        continue;
+      }
+      const drop = [];  // [start, end) of each on… attribute
+      let j = after;
+      while (j < source.length && !space(source[j]) && '/>\n'.indexOf(source[j]) < 0) j++;  // the name
+      let closed = false;
+      while (j < source.length && source[j] !== '\n') {
+        const c = source[j];
+        if (c === '>') { closed = true; break; }
+        if (space(c) || c === '/') { j++; continue; }
+        const start = j;
+        j++;  // an attribute name's first character may be '='
+        while (j < source.length && !space(source[j]) && '/>=\n'.indexOf(source[j]) < 0) j++;
+        const name = source.slice(start, j).toLowerCase();
+        let k = j;
+        while (k < source.length && space(source[k])) k++;
+        if (source[k] === '=') {
+          k++;
+          while (k < source.length && space(source[k])) k++;
+          const q = source[k];
+          if (q === '"' || q === "'") {
+            const end = source.indexOf(q, k + 1);
+            const nl = source.indexOf('\n', k + 1);
+            if (end < 0 || (nl >= 0 && nl < end)) { j = nl < 0 ? source.length : nl; break; }
+            k = end + 1;
+          } else {
+            while (k < source.length && !space(source[k]) && '>\n'.indexOf(source[k]) < 0) k++;
+          }
+          j = k;
+        }
+        if (name.startsWith('on')) drop.push([start, j]);
+      }
+      if (!closed) {  // not a tag that ends on its line: left as it is
+        out += source.slice(i, lt + 1);
+        i = lt + 1;
+        continue;
+      }
+      let at = i;
+      for (const [s, e] of drop) { out += source.slice(at, s); at = e; }
+      out += source.slice(at, j + 1);
+      i = j + 1;
+    }
+    return out + source.slice(i);
+  }
+
   // Mermaid's drawing of `source` as a detached <svg>, or a rejection with its message.
   function draw(source) {
+    source = withoutHandlers(source);
     const job = queue.then(function () {
       return load().then(function (mermaid) {
         mermaid.initialize(config());
@@ -213,5 +279,5 @@
   } catch (e) { /* no matchMedia: the theme is the one at draw time */ }
   window.addEventListener('switchboard-theme-change', redrawShown);
 
-  window.SBDiagram = Object.freeze({ toggle: toggle });
+  window.SBDiagram = Object.freeze({ toggle: toggle, withoutHandlers: withoutHandlers });
 })();
