@@ -9719,17 +9719,40 @@
 
   // What the broker answered and what the socket brought, as one list in id order: a message is kept once, as
   // it first arrived, whichever source that was, so a live line that came before the page holding it is neither
-  // moved after newer ones nor lost. True when something was added.
+  // moved after newer ones nor lost. Its files are the exception: a file is stored after its message, so two
+  // copies of one message can each hold files the other lacks (an answer read before a second upload ended, and
+  // the one asked for after it), and the row keeps every file of both, the later copy's winning by file id.
+  // True when something was added or a held row gained a file.
   function filterMerge(f, list) {
     const byId = new Map(f.msgs.map(function (m) { return [m.id, m]; }));
     let added = false;
+    let grew = false;
     for (const m of list) {
-      if (byId.has(m.id)) continue;
+      const had = byId.get(m.id);
+      if (had) {
+        if (filterFilesInto(had, m.files)) grew = true;
+        continue;
+      }
       byId.set(m.id, m);
       added = true;
     }
     if (added) f.msgs = Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
-    return added;
+    return added || grew;
+  }
+
+  // Put `files` into the held row `had`, each replacing the one of its id. True when the row changed.
+  function filterFilesInto(had, files) {
+    if (!Array.isArray(files) || !files.length) return false;
+    const mine = Array.isArray(had.files) ? had.files : [];
+    const ids = new Set(files.map(function (x) { return x && x.id; }));
+    const next = mine.filter(function (x) { return !ids.has(x && x.id); }).concat(files);
+    const same = next.length === mine.length && next.every(function (x) {
+      const old = mine.find(function (y) { return y && x && y.id === x.id; });
+      return old && JSON.stringify(old) === JSON.stringify(x);
+    });
+    if (same) return false;
+    had.files = next;
+    return true;
   }
 
   // Draw what a filter gained while it is on screen. The log is drawn again, so whatever in it had the keyboard
@@ -9775,11 +9798,7 @@
     if (!f) return;
     const had = f.msgs.find(function (x) { return x.id === id; });
     if (had) {
-      if (had !== m) {
-        had.files = (had.files || []).filter(function (x) { return x.id !== file.id; });
-        had.files.push(file);
-        refreshMsgText(had);
-      }
+      if (had !== m && filterFilesInto(had, [file])) refreshMsgText(had);
     } else if (f.show === 'files') {
       if (m) filterAdd(r, f, [m]);
       else filterAsk(r, f, id);

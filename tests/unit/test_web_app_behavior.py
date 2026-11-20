@@ -896,3 +896,16 @@ def test_a_filter_merges_the_brokers_page_and_live_lines_by_id() -> None:
     out = run("filter_overlap")
     assert out["ids"] == ["600", "601"]
     assert out["note"] == "2 messages addressed to you"
+
+
+def test_a_filter_row_keeps_a_file_stored_after_the_page_read_it() -> None:
+    """#914 F2: under Files, a message outside the page's history is read with one file; a second upload ends
+    before that answer arrives, and its file frame asks for the fresh row with both. The first answer lands
+    first. The row offers both downloads. Fails if the later copy is dropped because its id is held."""
+    out = run("filter_file_after_page")
+    assert out["asked"] == [
+        "/api/rooms/build/filter?show=files",
+        "/api/rooms/build/filter?show=files&before=701&limit=1",
+    ]
+    assert out["ids"] == ["700"]
+    assert out["downloads"] == ["/api/files/" + "a" * 32, "/api/files/" + "b" * 32]

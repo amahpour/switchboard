@@ -1962,6 +1962,37 @@ const SCENARIOS = {
     await settle();
     return { ids: logIds(w), note: w.$('room-filter-note').textContent };
   },
+
+  // #914 F2: a message outside the page's history has one stored file when Files first asks; a second upload ends
+  // before that answer comes, and its file frame asks the broker for a fresh row. The first answer lands first,
+  // then the fresh row with both files. The row shows a download for each.
+  async filter_file_after_page() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const sha = 'sha256:' + '0'.repeat(64);
+    const one = { id: 'a'.repeat(32), name: 'one.txt', state: 'stored', size: 3 };
+    const two = { id: 'b'.repeat(32), name: 'two.txt', state: 'stored', size: 3 };
+    const text = 'artifact: one.txt | 3 | ' + sha + ' | /Users/someone/one.txt\n' +
+      'artifact: two.txt | 3 | ' + sha + ' | /Users/someone/two.txt';
+    const early = chat(700, 'claude-1', text, { files: [one] });
+    const late = chat(700, 'claude-1', text, { files: [one, two] });
+    w.server.onFilter = function (_slug, p) {
+      return p.limit === '1' ? { messages: [late], next: null } : { messages: [early], next: null };
+    };
+    w.server.holdNext.add('GET /api/rooms/build/filter?show=files');
+    w.server.holdNext.add('GET /api/rooms/build/filter?show=files&before=701&limit=1');
+    click(w.$('filter-files'));
+    await settle();
+    ws.deliver({ t: 'file', room: '#build', message_id: 700, file: two });
+    await settle();
+    w.server.release('GET /api/rooms/build/filter?show=files');
+    await settle();
+    w.server.release('GET /api/rooms/build/filter?show=files&before=701&limit=1');
+    await settle();
+    const row = w.$('log').children.find(function (c) { return c.dataset && c.dataset.id === '700'; });
+    const links = row ? findAll(row, function (n) { return n.tag === 'a' && n.classList.contains('md-file'); }) : [];
+    return { ids: logIds(w), downloads: links.map(function (a) { return a.href; }).sort(),
+             asked: w.server.filterGets };
+  },
 };
 
 function logIds(w) {
