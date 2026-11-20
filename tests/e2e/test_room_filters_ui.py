@@ -463,6 +463,102 @@ def test_a_mention_under_files_still_waits_after_the_whiteboard_and_search(ui: U
         ui.world.close_extra_agents()
 
 
+def test_a_mention_under_files_still_waits_after_a_review_board_and_search(ui: UI) -> None:
+    """With Files on, an agent's @mention of alice arrives and is not shown. The room's past review boards
+    are opened (#main.board-open hides the log), then Search over them; Escape closes Search and leaves the
+    boards, which still cover the log, so All is never on screen; Home is chosen. The mention is still
+    waiting on Home. Fails if the seen mark is decided from a list of app states that misses a view covering
+    the log: here, if Escape from Search lets it reach the newest line."""
+    room = "e2e-filters-review-seen"
+    fresh_room(ui.world, room, agent="asker")
+    try:
+        page = ui.open(room)
+        button(page, "files").click()
+        expect(page.locator("#room-filter-note")).to_have_text("No files in this room yet.")
+        asked = ui.world.agent_say("#" + room, "asker", "@alice which image should ship?")
+        fid = live_file(ui.world, room, "image.txt")  # after the mention on the same socket
+        expect(page.locator(f'#log .line[data-id="{fid}"]')).to_have_count(1)
+        assert asked not in shown(page)
+        page.locator("#past-boards-toggle").click()
+        expect(page.locator("#main")).to_have_class(re.compile("board-open"))
+        expect(page.locator("#log")).to_be_hidden()
+        page.locator("#search-input").click()
+        page.keyboard.type("release notes")
+        expect(page.locator("#app")).to_have_class(re.compile("search-open"))
+        page.keyboard.press("Escape")
+        expect(page.locator("#app")).not_to_have_class(re.compile("search-open"))
+        expect(page.locator("#main")).to_have_class(re.compile("board-open"))
+        expect(page.locator("#log")).to_be_hidden()
+        page.locator("#home-nav").click()
+        expect(page.locator("#room-title")).to_have_text("Home")
+        card = page.locator("#home .home-card", has_text="#" + room)
+        expect(card).to_have_count(1)
+        expect(card).to_contain_text("which image should ship?")
+    finally:
+        ui.world.close_extra_agents()
+
+
+def around_with_a_hidden_mention(ui: UI, room: str, word: str) -> tuple[Page, int]:
+    """``room`` open and seen, then a search for ``word`` opens it around its one hit; an agent's @mention of
+    alice arrives while the window is shown (so it is not drawn). Waits until the page has it: a later mention
+    in a second room, on the same socket, shows that room's badge."""
+    ping = "e2e-ping-" + word
+    fresh_room(ui.world, room, agent="asker")
+    fresh_room(ui.world, ping, agent="pinger")
+    hit = ui.world.agent_say("#" + room, "asker", f"the {word} plan is drafted")
+    page = ui.open(room)
+    expect(page.locator(f'#log .line[data-id="{hit}"]')).to_have_count(1)
+    page.locator("#search-input").click()
+    page.keyboard.type(word)
+    expect(page.locator("#search-results .search-hit")).to_have_count(1)
+    page.locator("#search-results .search-hit").first.click()
+    expect(page.locator("#banner-around")).to_be_visible()
+    asked = ui.world.agent_say("#" + room, "asker", "@alice which tag should ship?")
+    ui.world.agent_say("#" + ping, "pinger", "@alice ping")
+    expect(page.locator(f'#tabs .room[data-room="#{ping}"] .badge')).to_have_text("1")
+    assert asked not in shown(page)
+    return page, asked
+
+
+def test_back_to_results_does_not_mark_a_mention_the_window_kept_off_screen(ui: UI) -> None:
+    """F9: in a window around a search result, an @mention of alice arrives and is not drawn. Back to results
+    draws the live log and opens Search over it in the same click, so the mention is never on screen; Home is
+    chosen from Search and the mention still waits there. Fails if the mark is taken when the log is drawn,
+    before the click's own Search covers it."""
+    room = "e2e-filters-back-seen"
+    try:
+        page, _asked = around_with_a_hidden_mention(ui, room, "quokka")
+        page.click("#around-back")
+        expect(page.locator("#app")).to_have_class(re.compile("search-open"))
+        expect(page.locator("#search-results .search-hit")).to_have_count(1)
+        page.locator("#home-nav").click()
+        expect(page.locator("#room-title")).to_have_text("Home")
+        card = page.locator("#home .home-card", has_text="#" + room)
+        expect(card).to_have_count(1)
+        expect(card).to_contain_text("which tag should ship?")
+    finally:
+        ui.world.close_extra_agents()
+
+
+def test_jump_to_latest_marks_the_mention_it_shows(ui: UI) -> None:
+    """F9's other half: the same hidden mention, but Jump to latest draws the live log and leaves it on
+    screen, so the mention is seen: the page posts a mark that covers it and no card waits on Home. Fails if
+    the painted-frame check never sends the mark (the room would stay waiting though alice read it)."""
+    room = "e2e-filters-latest-seen"
+    try:
+        page, asked = around_with_a_hidden_mention(ui, room, "wombat")
+        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+            page.click("#around-latest")
+        assert seen.value.request.post_data_json["id"] >= asked
+        expect(page.locator(f'#log .line[data-id="{asked}"]')).to_have_count(1)
+        page.locator("#home-nav").click()
+        expect(page.locator("#room-title")).to_have_text("Home")
+        expect(page.locator("#home")).not_to_contain_text("Loading…")
+        expect(page.locator("#home .home-card", has_text="#" + room)).to_have_count(0)
+    finally:
+        ui.world.close_extra_agents()
+
+
 def test_a_mention_that_came_on_all_is_seen_when_leaving_for_home(ui: UI) -> None:
     """The ordinary case: the room is open on All when an agent's @mention of alice arrives, so it is drawn
     where alice can see it, and leaving for Home marks it seen: no card waits for it. Fails if the seen mark

@@ -1534,7 +1534,7 @@
     renderClaimBoard();
     log.scrollTop = log.scrollHeight;
     syncAround();
-    noteShown(r);
+    noteShown();
   }
 
   // Focus mode (#99): collapse agent chat not addressed to you to one line, so what needs you
@@ -1592,7 +1592,7 @@
     if (part) syncCallCards(r);
     if (m.kind === 'chat') updateRoomEmpty();
     if (stick) log.scrollTop = log.scrollHeight;
-    noteShown(r);
+    noteShown();
   }
 
   // mark the inspected agent's chat rows (.sel) without redrawing the log
@@ -7942,8 +7942,12 @@
   function markRoomSeen(r, refresh) {
     // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
     const note = !!(r && r.joinedWith);
-    const upto = r ? Math.min(r.lastId || 0, r.shownId || 0) : 0;
-    if (!r || (!note && (!upto || (r.seenSent || 0) >= upto))) return;
+    if (!r) return;
+    const upto = Math.min(r.lastId || 0, r.shownId || 0);
+    // capped short of the newest: noteShown sends the rest once a painted frame shows the log on screen
+    if ((r.shownId || 0) < (r.lastId || 0)) r.seenWanted = !!(refresh || r.seenWanted);
+    else r.seenWanted = undefined;
+    if (!note && (!upto || (r.seenSent || 0) >= upto)) return;
     r.seenSent = Math.max(r.seenSent || 0, upto);
     r.joinedWith = '';
     const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
@@ -9617,17 +9621,60 @@
   state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
 
   // The one rule of the seen mark (§64.4, §55.8): it goes only as far as the person could have seen the room's
-  // live log. r.shownId is the newest line All held while it was drawn, or uncovered, with nothing over it;
-  // markRoomSeen goes no further. A filter, Search, a window around a search result, the whiteboard, a phone
-  // sheet (the members or the Inspector), Home or Usage each keep it off screen, so what arrives then waits.
-  function allOnScreen(r) {
-    return !!r && state.active === r.name && !state.home && !state.usage && !state.searchOn && !state.around &&
-      !filterOf(r) && !whiteboardOpen && !(phone() && $('app').classList.contains('sheet-open'));
+  // live log. r.shownId is the newest line All held in a painted frame where the log was on screen; markRoomSeen
+  // goes no further. Which views cover the log is read from the page itself (logOnScreen), not from a list of app
+  // states: every list so far missed one (a review board, a phone sheet, Search over a click that drew the log).
+  // The check runs in the next animation frame, so a view a click opens after drawing the log (Back to results
+  // opens Search) has already covered it. What the log holds is still the app's to say: a filter or the window
+  // around a search result draws into the same #log, but neither is the live log.
+  function liveLogOf(r) {
+    return !!r && state.active === r.name && !state.around && !filterOf(r);
   }
 
-  function noteShown(r) {
-    const room = r || activeRoom();
-    if (allOnScreen(room)) room.shownId = Math.max(room.shownId || 0, room.lastId || 0);
+  // Is #log rendered, visible, uncovered at its middle, in a visible document? Any check that can't run fails
+  // closed (false): the mark then waits for a frame that can show it was seen.
+  function logOnScreen() {
+    const log = $('log');
+    if (!log || document.visibilityState !== 'visible') return false;
+    if (typeof log.getBoundingClientRect !== 'function' || typeof document.elementFromPoint !== 'function' ||
+        typeof log.contains !== 'function') return false;
+    if (typeof log.checkVisibility === 'function') {
+      if (!log.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true,
+                                 visibilityProperty: true })) return false;
+    } else if (typeof window.getComputedStyle === 'function') {
+      for (let n = log; n && n.nodeType === 1; n = n.parentElement) {
+        const cs = window.getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse' ||
+            Number(cs.opacity) === 0) return false;
+      }
+    } else {
+      return false;
+    }
+    for (let n = log; n && n.nodeType === 1; n = n.parentElement) if (n.hidden || n.inert) return false;
+    const b = log.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (!(vw > 0) || !(vh > 0)) return false;
+    const left = Math.max(b.left, 0), right = Math.min(b.right, vw);
+    const top = Math.max(b.top, 0), bottom = Math.min(b.bottom, vh);
+    if (!(right > left) || !(bottom > top)) return false;
+    const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+    return !!hit && (hit === log || log.contains(hit));
+  }
+
+  // Called wherever the live log was drawn or uncovered. In the next painted frame, if the active room's live log
+  // is on screen, what it holds was seen; a mark asked for meanwhile (markRoomSeen, capped then) is sent on.
+  let shownFrame = false;
+  function noteShown() {
+    if (shownFrame) return;
+    if (typeof window.requestAnimationFrame !== 'function') return;  // no frames to check: fail closed
+    shownFrame = true;
+    window.requestAnimationFrame(function () {
+      shownFrame = false;
+      const room = activeRoom();
+      if (!liveLogOf(room) || !logOnScreen()) return;
+      room.shownId = Math.max(room.shownId || 0, room.lastId || 0);
+      if (room.seenWanted !== undefined) markRoomSeen(room, room.seenWanted);
+    });
   }
 
   const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>

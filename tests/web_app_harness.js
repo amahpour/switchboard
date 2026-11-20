@@ -67,6 +67,14 @@ class El {
   addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
   dispatch(t, ev) { for (const f of this.listeners[t] || []) f(ev || { preventDefault() {} }); }
   focus() {}
+  contains(n) {
+    if (n === this) return true;
+    return this.children.some(function (c) { return c instanceof El && c.contains(n); });
+  }
+  // No layout here (see layout in makeWorld): a node is visible unless it, or the log under a view that the
+  // stylesheet hides it behind, is hidden; its box is the whole window.
+  checkVisibility() { return !this.classList.contains('hidden') && !(this.layout && this.layout.logCovered(this)); }
+  getBoundingClientRect() { return { left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800 }; }
   showModal() { this.open = true; }
   close(value) { this.returnValue = value || ''; this.open = false; if (this.onclose) this.onclose(); }
   requestSubmit() { this.dispatch('submit', { preventDefault() {} }); }
@@ -75,8 +83,25 @@ class El {
 // ------------------------------------------------------------------ fakes
 function makeWorld(rooms) {
   const byId = new Map();
+  // The page's layout, made explicit (#914, §64.4): app.js reads from the page whether the log is on screen
+  // (checkVisibility, elementFromPoint, a painted frame). This stands in for style.css's rules that hide #log
+  // under a view (Search, Home, Usage, the whiteboard, a review board), and `cover` puts a node over the log's
+  // middle, as an overlay would. A scenario may set `hidden` to say the tab is in the background.
+  const layout = {
+    cover: null,
+    hidden: false,
+    logCovered(el) {
+      if (el.id !== 'log') return false;
+      const app = byId.get('app'), main = byId.get('main');
+      const on = function (n, c) { return !!n && n.classList.contains(c); };
+      return on(app, 'search-open') || on(app, 'home-open') || on(app, 'usage-open') ||
+        on(app, 'whiteboard-open') || on(main, 'board-open') || !!(main && main.inert);
+    },
+  };
   const document = {
     title: '',
+    get visibilityState() { return layout.hidden ? 'hidden' : 'visible'; },
+    elementFromPoint() { return layout.cover || byId.get('log') || null; },
     documentElement: new El('html'),
     activeElement: null,
     listeners: {},
@@ -85,6 +110,7 @@ function makeWorld(rooms) {
         const e = new El(id === 'app-dialog' ? 'dialog' : 'div');
         e.id = id;
         e.ownerDocument = document;
+        e.layout = layout;
         // as index.html starts them
         if (['empty', 'closed-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
              'catchup-menu', 'insp-queue', 'passkeys-panel', 'home', 'usage', 'preview-bar', 'room-preview',
@@ -321,6 +347,9 @@ function makeWorld(rooms) {
     setInterval: function () { return 0; }, clearInterval: function () {},  // the ping and refresh timers
     encodeURIComponent: encodeURIComponent, decodeURIComponent: decodeURIComponent, URL: URL,
     URLSearchParams: URLSearchParams,
+    // a painted frame: the next setImmediate turn, which settle() runs
+    requestAnimationFrame: function (f) { return setImmediate(function () { f(0); }); },
+    innerWidth: 1000, innerHeight: 800,
   };
   ctx.window = ctx;
   ctx.window.alert = function (m) { throw new Error('alert: ' + m); };
@@ -331,7 +360,7 @@ function makeWorld(rooms) {
   if (fs.existsSync(MD)) vm.runInContext(fs.readFileSync(MD, 'utf8'), ctx, { filename: 'md.js' });
   vm.runInContext(fs.readFileSync(APP, 'utf8'), ctx, { filename: 'app.js' });
 
-  return { document: document, server: server, sockets: sockets, location: location, window: ctx,
+  return { document: document, server: server, sockets: sockets, location: location, window: ctx, layout: layout,
            $: document.getElementById.bind(document) };
 }
 
@@ -1682,10 +1711,43 @@ const SCENARIOS = {
     click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
     await settle();
     ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'a later one', { mentions: ['alice'] }) });
+    await settle();  // a frame is painted with it on screen
     w.server.trail.length = 0;
     click(w.$('home-nav'));
     await settle();
     return { afterGo: afterGo, afterHome: afterHome, all: w.server.roomSeen, trail: w.server.trail };
+  },
+
+  // The seen mark reads the page (#914, §64.4): a message that arrives while something covers the log's middle,
+  // or while the tab is in the background, is not marked seen when the person leaves for Home.
+  async seen_needs_the_log_on_screen() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'first', { mentions: ['alice'] }) });
+    await settle();
+    const openBuild = function () {
+      click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    };
+    openBuild();  // the room on screen: 7 is seen
+    await settle();
+    const out = {};
+    for (const how of ['covered', 'background']) {
+      if (how === 'covered') w.layout.cover = w.document.createElement('div');
+      else w.layout.hidden = true;
+      const id = how === 'covered' ? 11 : 13;
+      ws.deliver({ t: 'msg', room: '#build', msg: chat(id, 'codex-1', 'while ' + how, { mentions: ['alice'] }) });
+      await settle();
+      click(w.$('home-nav'));
+      await settle();
+      out[how] = w.server.roomSeen.map(function (b) { return b.id; });
+      w.layout.cover = null;
+      w.layout.hidden = false;
+      openBuild();
+      await settle();
+      out[how + 'Back'] = w.server.roomSeen.map(function (b) { return b.id; });
+    }
+    return out;
   },
 
   // Not now on a board card posts the board's address to the room's route, and the card is gone once Home asks

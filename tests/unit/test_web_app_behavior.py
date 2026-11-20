@@ -828,6 +828,18 @@ def test_opening_a_room_tells_the_broker_how_far_it_was_read_and_home_waits_for_
     assert out["trail"] == ["seen:build:11", "home"]
 
 
+def test_the_seen_mark_moves_only_while_the_log_is_on_screen() -> None:
+    """#914, §64.4: whether the log was seen is read from the page, not from a list of views. A message that
+    came while something covered the log's middle, or while the tab was in the background, is not marked when
+    the person goes to Home; opening the room again, with the log on screen, marks it. Fails if the mark moves
+    on the app's state alone (the log is the active room's live log, so a state list says it is on screen)."""
+    out = run("seen_needs_the_log_on_screen")
+    assert out["covered"] == [7]
+    assert out["coveredBack"] == [7, 11]
+    assert out["background"] == [7, 11]
+    assert out["backgroundBack"] == [7, 11, 13]
+
+
 def test_not_now_on_a_board_card_posts_the_board_and_the_card_goes_when_home_asks_again() -> None:
     """#663: Not now sends the board's address to its room's route and, when the broker answers, Home asks
     again and the card is gone; a refusal keeps the card and says why in the status line. Fails if the button
