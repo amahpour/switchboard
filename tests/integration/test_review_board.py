@@ -1984,6 +1984,37 @@ async def test_show_and_the_page_name_the_newest_commit_the_board_was_told(broke
         web.close()
 
 
+async def test_a_holders_one_move_fix_at_a_new_commit_names_that_commit(broker: InProcBroker) -> None:
+    """#909 and #906 together: the holder's fix on a raised finding writes a concession and a fix
+    event in one move, and its open event records ``opener``. The header must read that fix's
+    commit as an agent fix and name it with (last fix); the opener on the open event must not
+    change the commit the board was opened at. Fails if the combined move's fix event is skipped,
+    or the open event's opener makes the header lose the opened head."""
+    opened, fix = "4f2c9e1a7b30", "9a1b2c3d4e5f"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            board = await author.call("review", room="#build", action="open", url=PR, head=opened)
+            assert board["board"].splitlines()[0] == f"Review of {PR} at {opened}: settled"
+            assert q(broker, "SELECT count(*) FROM events WHERE kind='review' AND data LIKE '%opener%'")[0][0]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            raised = await author.call("review", room="#build", action="show", url=PR)
+            assert raised["board"].splitlines()[0] == f"Review of {PR} at {opened}: open"
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=fix, proof="test_total"
+            )
+            assert fixed["ok"], fixed
+            assert fixed["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+            page = page_board(web.get("/api/rooms/build/review"))
+            assert page is not None
+            assert page["head"] == opened and page["head_sha"] == fix and page["head_note"] == "last fix"
+            assert [h["did"] for h in page["items"][0]["history"]] == ["raised it", "conceded it", "fixed it"]
+    finally:
+        web.close()
+
+
 async def test_a_repeated_report_after_a_reopen_records_the_head_again(broker: InProcBroker) -> None:
     """A closed outcome reported at B, a reopen at C, then a close with no outcome, keeps
     ``pr_state``. Reporting B again used to see B on the old report and return without
