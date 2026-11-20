@@ -430,6 +430,60 @@ def test_a_mention_that_came_under_files_still_waits_after_search(ui: UI) -> Non
         ui.world.close_extra_agents()
 
 
+def test_a_mention_under_files_still_waits_after_the_whiteboard_and_search(ui: UI) -> None:
+    """With Files on, an agent's @mention of alice arrives and is not shown. The whiteboard is opened, then
+    Search over it; Escape closes Search and leaves the whiteboard, which still covers the log, so All is
+    never on screen; Home is chosen. The mention is still waiting on Home. Fails if the seen mark follows any
+    state rather than what the room's live log showed: here, if Escape from Search lets it reach the newest
+    line."""
+    room = "e2e-filters-board-seen"
+    fresh_room(ui.world, room, agent="asker")
+    try:
+        page = ui.open(room)
+        button(page, "files").click()
+        expect(page.locator("#room-filter-note")).to_have_text("No files in this room yet.")
+        asked = ui.world.agent_say("#" + room, "asker", "@alice which build should ship?")
+        fid = live_file(ui.world, room, "build.txt")  # after the mention on the same socket
+        expect(page.locator(f'#log .line[data-id="{fid}"]')).to_have_count(1)
+        assert asked not in shown(page)
+        page.get_by_role("button", name="Whiteboard", exact=True).click()
+        expect(page.locator("#app")).to_have_class(re.compile("whiteboard-open"))
+        page.locator("#search-input").click()
+        page.keyboard.type("release notes")
+        expect(page.locator("#app")).to_have_class(re.compile("search-open"))
+        page.keyboard.press("Escape")
+        expect(page.locator("#app")).not_to_have_class(re.compile("search-open"))
+        expect(page.locator("#app")).to_have_class(re.compile("whiteboard-open"))
+        page.locator("#home-nav").click()
+        expect(page.locator("#room-title")).to_have_text("Home")
+        card = page.locator("#home .home-card", has_text="#" + room)
+        expect(card).to_have_count(1)
+        expect(card).to_contain_text("which build should ship?")
+    finally:
+        ui.world.close_extra_agents()
+
+
+def test_a_mention_that_came_on_all_is_seen_when_leaving_for_home(ui: UI) -> None:
+    """The ordinary case: the room is open on All when an agent's @mention of alice arrives, so it is drawn
+    where alice can see it, and leaving for Home marks it seen: no card waits for it. Fails if the seen mark
+    stops short of what the live log showed (a mark taken only when a room is opened, say)."""
+    room = "e2e-filters-all-seen"
+    fresh_room(ui.world, room, agent="asker")
+    try:
+        page = ui.open(room)
+        expect(button(page, "all")).to_have_attribute("aria-pressed", "true")
+        asked = ui.world.agent_say("#" + room, "asker", "@alice which branch is green?")
+        expect(page.locator(f'#log .line[data-id="{asked}"]')).to_have_count(1)
+        with page.expect_response(lambda r: r.url.endswith(f"/api/rooms/{room}/seen") and r.ok) as seen:
+            page.locator("#home-nav").click()
+        assert seen.value.request.post_data_json["id"] >= asked
+        expect(page.locator("#room-title")).to_have_text("Home")
+        expect(page.locator("#home")).not_to_contain_text("Loading…")
+        expect(page.locator("#home .home-card", has_text="#" + room)).to_have_count(0)
+    finally:
+        ui.world.close_extra_agents()
+
+
 def test_a_live_match_keeps_the_focus_on_a_download_link_in_a_row(ui: UI) -> None:
     """A Files row's download link has the keyboard (tabbed to) when another message with a file arrives: the
     log is drawn again, and the focus is on the same row's download link in the new log, not dropped to the

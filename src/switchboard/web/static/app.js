@@ -42,7 +42,7 @@
       return true;
     } });
     $('whiteboard-toggle').addEventListener('click', function () {
-      if (whiteboardOpen) { closeWhiteboard(); return; }
+      if (whiteboardOpen) { closeWhiteboard(); noteShown(); return; }
       if (!state.active) return;
       state.pastBoards = null;
       state.boardOpen = false; renderBoard();
@@ -52,7 +52,11 @@
       $('whiteboard-toggle').setAttribute('aria-pressed', 'true');
       whiteboard.open(state.active);
     });
-    $('whiteboard-close').addEventListener('click', function () { closeWhiteboard(); $('whiteboard-toggle').focus(); });
+    $('whiteboard-close').addEventListener('click', function () {
+      closeWhiteboard();
+      noteShown();  // the log is back on screen
+      $('whiteboard-toggle').focus();
+    });
   }
   const MAX_LINES = 2000;
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
@@ -1526,6 +1530,7 @@
     renderClaimBoard();
     log.scrollTop = log.scrollHeight;
     syncAround();
+    noteShown(r);
   }
 
   // Focus mode (#99): collapse agent chat not addressed to you to one line, so what needs you
@@ -1583,6 +1588,7 @@
     if (part) syncCallCards(r);
     if (m.kind === 'chat') updateRoomEmpty();
     if (stick) log.scrollTop = log.scrollHeight;
+    noteShown(r);
   }
 
   // mark the inspected agent's chat rows (.sel) without redrawing the log
@@ -2403,7 +2409,6 @@
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
     state.filter = null;  // a room opens on All (#914)
-    state.seenCap = null;  // and is seen as it opens; a window around a result is not marked at all
     if (state.home) leaveHome();
     if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
@@ -2418,7 +2423,6 @@
     const activeR = state.rooms.get(name);
     if (!isMember(activeR)) state.otherOpen = true;  // its row stays in view, under Other rooms (§63)
     if (!state.around) {  // a window around a search result has not shown the room's latest
-      markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
       activeR.unread = 0;
       activeR.quiet = false;
     }
@@ -2429,6 +2433,8 @@
     $('mentions').setAttribute('aria-label', 'Agents in ' + name);
     renderTabs();
     renderLog();
+    // opening a room is seeing what it holds (#663, §55.8): as far as the log just drawn is on screen (§64.4)
+    if (!state.around) markRoomSeen(activeR, true);
     renderBuddies();
     renderStatus();
     renderBoard();
@@ -2472,6 +2478,7 @@
     // the phone sheet is open, the page behind the scrim takes no focus (Esc and the scrim close it)
     $('main').inert = modal;
     $('sidebar').inert = modal;
+    noteShown();  // a phone sheet that closed uncovers the log
   }
 
   // Is keyboard focus somewhere inside `box`? (activeElement is null in the node harness.)
@@ -7900,7 +7907,6 @@
     if (state.inspect) closeInspector(false);
     closePop();
     if (state.active) markRoomSeen(state.rooms.get(state.active), false);  // what came while it was open was seen
-    state.seenCap = null;
     state.home = true;
     closeWhiteboard();
     state.active = null;
@@ -7924,16 +7930,15 @@
     homeAgeTimer = setInterval(tickHomeAges, HOME_AGE_MS);
   }
 
-  // Tell the broker how far this person has read a room: the newest message this page holds (#663, §55.8). The
-  // broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
+  // Tell the broker how far this person has read a room: the newest message its live log has shown them
+  // (r.shownId, noteShown; #663, §55.8, §64.4), never one a filter, Search or the whiteboard kept off screen.
+  // The broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
   // has, so a stale or repeated post does nothing. A question card counts only messages after it. `refresh`: ask
   // for Home again once it is stored, so the sidebar's count drops (Home itself waits for it in loadHome).
   function markRoomSeen(r, refresh) {
     // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
     const note = !!(r && r.joinedWith);
-    // under a filter the person saw the log up to where All left it, not what arrived since and was left out (#914)
-    const cap = seenCapOf(r);
-    const upto = cap !== null ? Math.min(r.lastId || 0, cap) : (r && r.lastId) || 0;
+    const upto = r ? Math.min(r.lastId || 0, r.shownId || 0) : 0;
     if (!r || (!note && (!upto || (r.seenSent || 0) >= upto))) return;
     r.seenSent = Math.max(r.seenSent || 0, upto);
     r.joinedWith = '';
@@ -8759,7 +8764,7 @@
     if ($('app-dialog').open || $('confirm-dialog').open) return;
     if (state.searchOn) {  // Esc clears the box and goes back to the page under it
       closeSearch(false);
-      if (state.active) state.seenCap = null;  // the room's All is on screen now (#914)
+      noteShown();  // the page under it is on screen again: the room's log, unless the whiteboard covers it
       updateTitle();
       searchFocusBack();
       return;
@@ -9125,13 +9130,9 @@
     if (state.searchOn) return;
     closePop();
     if (state.inspect) closeInspector(false);
-    if (state.filter) {  // Search returns to All, not to a filtered log (#914, §64.4)
-      // Search hides the log, so All is not on screen yet: the seen mark stays where the filter held it until
-      // it is (Escape back to the room), and leaving for Home or Usage from here marks no further
-      state.seenCap = { room: state.filter.room, id: state.filter.allId };
-      leaveFilter(false);
-    }
+    // Search lies over the log first, so the All drawn under it is not on screen (§64.4)
     state.searchOn = true;
+    if (state.filter) leaveFilter(false);  // Search returns to All, not to a filtered log (#914, §64.4)
     $('app').classList.add('search-open');
     $('app').classList.remove('sheet-open');
     $('search').classList.remove('hidden');
@@ -9609,18 +9610,20 @@
   // are the broker's answer, GET /api/rooms/{slug}/filter, so a message older than the loaded history is
   // found too; "Show older" asks for the page before. The room stays open under a filter: posting, opening
   // another room or a search result, or All, goes back to the live log.
-  state.filter = null;  // { room, show, msgs, next, busy, failed, allId }: the active room under a filter
-  // { room, id }: a filter Search replaced. Search hides the log, so All has not been seen yet: the room's seen
-  // mark goes no further than the filter's allId until All is on screen
-  state.seenCap = null;
+  state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
 
-  // How far the seen mark of r may go: what All had shown when a filter was chosen, while the filter is on or
-  // Search hides the All that replaced it; null when nothing holds it back.
-  function seenCapOf(r) {
-    const f = filterOf(r);
-    if (f) return f.allId || 0;
-    const c = state.seenCap;
-    return c && r && c.room === r.name ? c.id || 0 : null;
+  // The one rule of the seen mark (§64.4, §55.8): it goes only as far as the person could have seen the room's
+  // live log. r.shownId is the newest line All held while it was drawn, or uncovered, with nothing over it;
+  // markRoomSeen goes no further. A filter, Search, a window around a search result, the whiteboard, a phone
+  // sheet (the members or the Inspector), Home or Usage each keep it off screen, so what arrives then waits.
+  function allOnScreen(r) {
+    return !!r && state.active === r.name && !state.home && !state.usage && !state.searchOn && !state.around &&
+      !filterOf(r) && !whiteboardOpen && !(phone() && $('app').classList.contains('sheet-open'));
+  }
+
+  function noteShown(r) {
+    const room = r || activeRoom();
+    if (allOnScreen(room)) room.shownId = Math.max(room.shownId || 0, room.lastId || 0);
   }
 
   const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
@@ -9724,11 +9727,8 @@
     if (show === 'all' || !FILTER_EMPTY[show]) { leaveFilter(true); return; }
     const was = filterOf(r);
     if (was && was.show === show && !was.failed) return;
-    // what All had shown when the person left it: the seen mark goes no further while a filter is on. A window
-    // around a search result did not show the latest, and another filter adds nothing to what All showed.
-    const allId = was ? was.allId : state.around ? (r.seenSent || 0) : r.lastId;
     if (state.around) { state.around = null; resetSearch(); }  // a filter replaces a window around a result
-    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false, allId: allId };
+    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false };
     state.filter = f;
     renderLog();
     loadFilter(f, false);
@@ -9893,7 +9893,6 @@
         if (r.id !== l.id || r.createdAt !== l.created_at) continue;
         state.rooms.delete(old);
         if (state.filter && state.filter.room === old) state.filter.room = l.name;
-        if (state.seenCap && state.seenCap.room === old) state.seenCap.room = l.name;
         r.name = l.name;
         r.slug = l.slug;
         state.rooms.set(l.name, r);
@@ -10197,7 +10196,6 @@
     closePop();
     if (state.home) leaveHome();
     if (state.active) markRoomSeen(state.rooms.get(state.active), false);
-    state.seenCap = null;
     state.usage = true;
     closeWhiteboard();
     state.active = null;
