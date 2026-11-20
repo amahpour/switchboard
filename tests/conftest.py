@@ -327,7 +327,8 @@ def sweep_stale_homes(
     that made it (``make_tmp_home``) is removed only once that process is gone: a broker writes to
     files that already exist, so a paused or long run's home can look old while it is still in use.
     A marker with no pid (a home made by an older checkout, or by a helper that only touches it) leaves
-    the age alone to decide. Errors are ignored, so it never fails a run.
+    the age alone to decide. Errors are ignored, so it never fails a run, and only the homes that are
+    gone are returned.
     """
     now = time.time() if now is None else now
     uid = os.getuid()
@@ -352,7 +353,9 @@ def sweep_stale_homes(
         if owner is not None and _process_alive(owner):
             continue
         shutil.rmtree(entry.path, ignore_errors=True)
-        removed.append(Path(entry.path))
+        # ignore_errors can leave some or all of it: only a home that is gone counts as removed
+        if not os.path.lexists(entry.path):
+            removed.append(Path(entry.path))
     return removed
 
 

@@ -184,3 +184,15 @@ def test_sweep_counts_a_maker_of_another_user_as_alive(
     monkeypatch.setattr(os, "kill", refused)
     assert sweep_stale_homes(root, now=NOW) == []
     assert home.exists()
+
+
+def test_sweep_returns_only_the_homes_it_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A home ``rmtree`` could not remove (errors ignored) is not reported as removed (review F4).
+
+    Fails on a sweep that appends every home it tried, gone or not."""
+    root = tmp_path / "tmp"
+    root.mkdir()
+    home = _home(root, "yk-stuck", age_s=STALE_HOME_AGE_S + 60)
+    monkeypatch.setattr(shutil, "rmtree", lambda *a, **k: None)
+    assert sweep_stale_homes(root, now=NOW) == []
+    assert home.exists()
