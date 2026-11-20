@@ -128,11 +128,13 @@ def test_a_release_pr_fails_unless_every_plugin_manifest_carries_its_version(
     problem = scope_mod.release_problem("release: v0.7.0", root)
     assert problem and "plugins/devin/plugin.json" in problem and "plugins/opencode/package.json" in problem
     assert "plugins/claude" not in problem  # a stamped one is not named
-    # only the top-level version counts: a nested one, or a file that isn't a JSON object, is stale
+    # only the top-level version counts. Each of these holds a matching "version": "0.7.0" that a text
+    # search finds first (c31bd418's regex passed all three): one nested before a stale top-level one,
+    # one inside a JSON array, one in truncated JSON
     (root / "plugins/claude/.claude-plugin/plugin.json").write_text(
-        '{"version": "0.6.0", "engines": {"version": "0.7.0"}}\n'
+        '{"engines": {"version": "0.7.0"}, "version": "0.6.0"}\n'
     )
-    (root / "plugins/codex/.codex-plugin/plugin.json").write_text('["version", "0.7.0"]\n')
+    (root / "plugins/codex/.codex-plugin/plugin.json").write_text('[{"version": "0.7.0"}]\n')
     (root / "plugins/cursor/.cursor-plugin/plugin.json").write_text('{"version": "0.7.0",\n')
     problem = scope_mod.release_problem("release: v0.7.0", root)
     assert problem and all(
