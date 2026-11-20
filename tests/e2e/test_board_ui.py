@@ -341,3 +341,74 @@ def test_a_secret_a_person_types_is_cut_out_and_the_drawing_tab_shows_the_commit
     assert "[redacted: github token]" in stored()
     scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElementsIncludingDeleted())")
     assert token not in scene and "aB3aB3" not in scene
+
+
+def test_a_picture_for_an_agent_shows_only_the_committed_board_and_a_refused_shape_does_not_come_back(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """The image read is made from the scene the broker has committed, never the live drawing (#893). A shape
+    with a secret is put on the frame's canvas and not yet flushed: the picture must be byte for byte the
+    one taken before, and the export message must hold no token. Then a shape the broker will refuse (a
+    marker that makes its text too long) is flushed: the board the broker sends back must replace the
+    frame's copy, not be merged with it. Fails if the picture changes, the export carries the secret, or the
+    refused shape is still in the frame's scene afterwards."""
+    room = "board-export"
+    world.create_room(room)
+    world.add_agents("#" + room, ("drawer",))
+    made = world.agent_call("#" + room, "drawer", "board", action="note", text="committed")
+    assert made["ok"], made
+    page = ui.open(room)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(board_frame, "() => window.sbBoard.api.getSceneElements().length >= 2")
+    board_frame.evaluate("""() => {
+      window.exported = [];
+      window.addEventListener('message', ev => {
+        if (ev.data && ev.data.action === 'export') window.exported.push(JSON.stringify(ev.data));
+      });
+    }""")
+    agent = world._extra_named[("#" + room, "drawer")]
+
+    def picture() -> str:
+        got = world._scripted(agent.raw("board", {"room": "#" + room, "action": "read", "text": "image"}))
+        assert not got.is_error and got.content[0].type == "image"
+        return str(got.content[0].data)
+
+    before = picture()
+    token = "ghp" + "_" + "aB3" * 12
+
+    def put(eid: str, text: str) -> None:
+        board_frame.evaluate(
+            """([eid, text]) => {
+          const a = window.sbBoard.api;
+          a.updateScene({ elements: [...a.getSceneElementsIncludingDeleted(), {
+            id: eid, type: 'rectangle', x: 40, y: 300, width: 160, height: 90, version: 1, versionNonce: 7,
+            isDeleted: false, seed: 1, angle: 0, strokeColor: '#000000', backgroundColor: '#ff0000',
+            fillStyle: 'solid', strokeWidth: 2, roughness: 1, opacity: 100, groupIds: [], frameId: null,
+            roundness: null, boundElements: null, updated: 1, link: null, locked: false, text }] });
+        }""",
+            [eid, text],
+        )
+
+    put("unsent1", token)  # on the canvas, never flushed: dirty is not set, so the frame does not send it
+    assert token in board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElements())")
+    assert picture() == before, "the picture drew the live drawing"
+    exported = board_frame.evaluate("window.exported")
+    assert exported and all(token not in e for e in exported)
+    # a shape the broker refuses: its text fits, and its marker would push it past the limit
+    refused = "x" * 170 + " password=" + "hunter2" * 2
+    put("refused1", refused)
+    assert board_frame.evaluate(
+        "window.sbBoard.api.getSceneElementsIncludingDeleted().some(e => e.id === 'refused1')"
+    )
+    # as drawing does: dirty, then a flush, and the pointer goes down again, so the frame is dirty (and
+    # does not flush) when the broker answers. Without `reset` it would merge its refused copy back in.
+    board_frame.evaluate(
+        "() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })); window.sbBoard.flush();"
+        " document.dispatchEvent(new PointerEvent('pointerdown')); }"
+    )
+    wait_js(
+        board_frame,
+        "() => !window.sbBoard.api.getSceneElementsIncludingDeleted().some(e => e.id === 'refused1')",
+    )

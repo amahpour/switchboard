@@ -434,14 +434,14 @@ def _register(flow: _Flow, stack: list[str], ref: _Ref) -> None:
     node = flow.nodes.get(ref.id)
     here = stack[-1] if stack else None
     if node is None:
-        node = flow.nodes[ref.id] = _Node(ref.id, ref.id, "rect", here, flow.order())
+        node = flow.nodes[ref.id] = _Node(ref.id, _label(ref.id), "rect", here, flow.order())
     elif here is not None and node.group is None:
         node.group = here  # listed inside a subgraph: it belongs there
     if ref.kind:
         node.kind = ref.kind
         node.named = True
     if ref.label is not None:
-        node.label = _label(ref.label) or node.id
+        node.label = _label(ref.label) or _label(node.id)
         node.named = True
     if ref.klass:
         node.classes.append(ref.klass)

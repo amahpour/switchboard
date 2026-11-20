@@ -113,19 +113,40 @@ def test_a_page_shape_is_redacted_in_every_text_field_and_customdata_is_dropped(
     assert s["link"] is None and "customData" not in t
 
 
-def test_a_label_wrapped_across_lines_cannot_hide_a_secret_in_its_text() -> None:
+def refused(text: str) -> board.MergeResult:
+    el = shape(type="text", text=text, originalText=text.replace("\n", ""))
+    return board.merge([], [el], agent=False)
+
+
+def test_a_wrapped_text_that_hides_a_secret_in_its_line_breaks_is_refused_whole() -> None:
     """Excalidraw keeps ``text`` as ``originalText`` wrapped to the shape's width, and a wrap breaks a long
-    token or a ``Bearer`` and its token across lines, where no pattern matches. ``text`` is read unwrapped as
-    well. Fails if the wrapped copy keeps the secret while ``originalText`` is clean."""
-    token = "sk-" + "a1b2c3d4e5f6" * 3
-    broken = token[:14] + "\n" + token[14:]
-    bearer = "Bearer\n" + "a1b2c3d4e5f6" * 3
-    for wrapped in (broken, bearer, f"see {PASSWORD[:12]}\n{PASSWORD[12:]}"):
-        el = shape(type="text", text=wrapped, originalText=wrapped.replace("\n", ""))
-        (out,) = board.merge([], [el], agent=False).elements
-        assert "a1b2c3d4e5f6" not in out["text"] and "hunter2" not in out["text"], out["text"]
+    token, or a ``Bearer`` and its token, across lines, where no pattern matches. Two different strings are
+    never reconciled: a text whose flattened reading finds what the as-written one did not replace the same
+    way is refused, naming the kind and never the value, so no part of the secret is stored. Fails if the
+    element is stored (the unwrapped copy or the rest of the token would be in it)."""
+    body = "a1b2c3d4e5f6" * 4
+    for wrapped in (
+        f"sk-{body[:14]}\n{body[14:]}",  # a break in the middle of a token
+        "Bearer\n" + body,  # a Bearer match that needs its space
+        f"see {PASSWORD[:12]}\n{PASSWORD[12:]}",
+        f"sk-{body[:24]}\n{body[24:]}",  # the first fragment matches alone: the rest must not be kept
+    ):
+        got = refused(wrapped)
+        assert got.elements == () and "line breaks hide" in got.rejected[0], wrapped
+        assert body not in got.rejected[0] and "hunter2" not in got.rejected[0]
     plain = shape(type="text", text="two\nlines", originalText="two lines")
     assert board.merge([], [plain], agent=False).elements[0]["text"] == "two\nlines"
+
+
+def test_a_wrapped_text_with_a_split_token_and_a_separate_token_stores_neither() -> None:
+    """The case the first fix got wrong: a token split across a wrap plus a second, whole token in the same
+    text. The first reading to find anything must not decide the stored string, or the second secret (or the
+    rest of the first) is kept. The whole text is refused. Fails if either token is stored in any part."""
+    body = "a1b2c3d4e5f6" * 4
+    got = refused(f"sk-{body[:24]}\n{body[24:]} and {TOKEN}")
+    assert got.elements == ()
+    assert "api key" in got.rejected[0] or "github token" in got.rejected[0]
+    assert TOKEN not in got.rejected[0] and body not in got.rejected[0]
 
 
 def test_mermaid_labels_edges_and_subgraph_titles_are_redacted() -> None:
@@ -190,18 +211,6 @@ def test_a_mermaid_label_is_redacted_before_it_is_cut_so_a_token_across_the_cut_
     els = board.mermaid_elements([], board_flow.convert(source).elements, now=10)
     blob = stored_text(els)
     assert "ghp_" not in blob and "aB3aB3" not in blob and "[redacted" in blob
-
-
-def test_a_wrapped_text_whose_first_fragment_matches_alone_is_read_whole_and_unmutated() -> None:
-    """``text`` is read before it is changed or cut. A break inside a long ``sk-`` token leaves a first
-    fragment that matches by itself, and a line-by-line reading replaces only that and keeps the rest;
-    the unwrapped reading sees the whole token. Fails if the rest of the token is stored."""
-    body = "a1b2c3d4e5f6" * 4
-    wrapped = f"sk-{body[:24]}\n{body[24:]}"
-    el = shape(type="text", text=wrapped, originalText=wrapped.replace("\n", ""))
-    (out,) = board.merge([], [el], agent=False).elements
-    assert out["text"] == "[redacted: api key]" == out["originalText"]
-    assert body[24:] not in stored_text([out])
 
 
 def test_a_wrapped_text_that_expands_past_the_cap_is_refused_like_any_other() -> None:

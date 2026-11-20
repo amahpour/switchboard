@@ -143,20 +143,28 @@ _SCAN_MAX = 100_000  # the most of one string that is read for secrets: text is 
 
 def read_text(text: str) -> str:
     """``text`` (already ``clean``) with obvious secrets cut out (``redact``, §11, #893), then cut to
-    ``MAX_TEXT``. The whole string is read first, then cut, so half a secret is never left at the cut. A
-    wrapped label's line breaks can split a token, so a text with a break is also read with the breaks
-    removed (``""`` and a space), and the first reading that finds a secret is the one kept: it sees the
-    whole value, where the line-by-line reading might replace only the fragment that matches alone. A value
-    that fit and that its marker would push past the limit is refused (``Reject``), naming the kind and
-    never the value: a cut there would leave half a marker, and a silent one would hide the redaction."""
+    ``MAX_TEXT``. The whole string is read first, then cut, so half a secret is never left at the cut.
+
+    A wrapped label's line breaks can hide a secret from ``redact`` (a break in the middle of a token, or
+    where a ``Bearer`` match needs its space). So a text with a break is read three ways: as written, with
+    the breaks removed and with each turned into a space. Two different strings are never reconciled: the
+    value is stored as written-and-redacted only when each flattened reading redacts to exactly that
+    string with the same breaks flattened. If any reading finds something the as-written one did not
+    replace the same way, the value is refused, naming the kinds and never the value. Every match of every
+    reading is then either replaced or the whole value is refused, so no part of a secret is stored.
+    A value that fit and that its marker would push past the limit is refused too: a cut would leave half
+    a marker, and a silent one would hide that it was redacted."""
     text = text[:_SCAN_MAX]
     out, kinds = redact(text)
     if "\n" in text:
         for sep in ("", " "):
             flat, found = redact(text.replace("\n", sep))
-            if found:
-                out, kinds = flat, [*kinds, *(k for k in found if k not in kinds)]
-                break
+            if flat != out.replace("\n", sep):
+                names = ", ".join([*kinds, *(k for k in found if k not in kinds)])
+                raise Reject(
+                    f"text holds what looks like a secret ({names}) that its line breaks hide: "
+                    "leave the secret out"
+                )
     if kinds and len(text) <= MAX_TEXT < len(out):
         raise Reject(
             f"text is too long once what looks like a secret ({', '.join(kinds)}) is cut out: "

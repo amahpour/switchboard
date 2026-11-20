@@ -4,6 +4,9 @@
   const rules = window.SBBoardRules;
   let frame = null, current = null, options = null, serial = 0, session = '', ready = false;
   const cache = new Map();
+  const committed = new Map(); // room -> what the broker has told this tab: the only scene an export may show
+  const seqs = new Map(); // room -> the board's seq in the last frame from the broker
+  const waiting = new Map(); // room -> an image task that came before the broker's frames caught up to it
   const pendings = new Map(); // room -> Map(id -> 'version:nonce' this page sent and has not heard back)
   const pendingImages = new Set();
   let playing = false, selected = null;
@@ -115,6 +118,9 @@
       options.status.textContent = 'The drawing exceeds the board limits.';
     }
   });
+  function exportCommitted(room, request) {
+    post('export', { request, elements: committed.get(room) || [] });
+  }
   window.SBWhiteboard = {
     configure(value) { options = value; },
     open(room) {
@@ -132,26 +138,35 @@
       options.host.classList.remove('hidden');
     },
     close,
-    receive(room, raw, full) {
+    receive(room, raw, full, seq) {
       const elements = rules.batch(raw);
       if (!elements || typeof room !== 'string') return;
       // The broker's copy is the committed one: an echo of what this tab sent replaces the optimistic copy (the
       // broker may have cut a secret out of it), and a full board replaces everything and forgets what was pending.
+      // A full board while something this tab sent was never answered means the broker did not keep it as drawn (it
+      // was refused, or the connection dropped): the frame is told to let the committed board replace its own copy.
+      const reset = full && pendings.has(room) && pendings.get(room).size > 0;
       if (full) pendings.delete(room);
+      committed.set(room, rules.batch(full ? elements : rules.merge(committed.get(room) || [], elements)) || []);
+      if (typeof seq === 'number') seqs.set(room, seq);
+      const held = waiting.get(room);
+      if (held && (seqs.get(room) || 0) >= held.seq) { waiting.delete(room); if (pendingImages.has(held.id)) exportCommitted(room, held.id); }
       const merged = rules.batch(full ? elements : rules.settle(cache.get(room) || [], elements, pendings.get(room) || new Map()));
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {
-        post('elements', { elements: merged });
+        post('elements', reset ? { elements: merged, reset: true } : { elements: merged });
         el('play').disabled = !frames().length;
         if (playing) showFrame(Math.max(0, frames().findIndex(f => f.id === selected)));
       }
     },
     task(room, task) {
-      if (room === current && ready && task && task.kind === 'image' && typeof task.id === 'string' && /^[0-9a-f]{32}$/.test(task.id) && pendingImages.size < 16) {
+      if (room === current && ready && task && task.kind === 'image' && Number.isInteger(task.seq) && typeof task.id === 'string' && /^[0-9a-f]{32}$/.test(task.id) && pendingImages.size < 16) {
         pendingImages.add(task.id);
-        post('export', { request: task.id });
         setTimeout(() => pendingImages.delete(task.id), 4000);
+        // The picture is made from the committed scene the broker has sent this tab, at the board's seq the agent
+        // asked about, never from the live drawing: that holds text the broker has not read yet, or has refused.
+        if ((seqs.get(room) || 0) >= task.seq) exportCommitted(room, task.id); else waiting.set(room, task);
       }
     },
     theme() { post('theme', { dark: dark() }); },

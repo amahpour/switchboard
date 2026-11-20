@@ -50,7 +50,8 @@ window.addEventListener('message', async ev => {
     if (elements.some(e => !e.isDeleted)) api.scrollToContent(undefined, { fitToContent: true });
   } else if (m.session === session && m.room === room && m.action === 'elements') {
     const elements = rules.batch(m.elements);
-    if (elements) apply(elements);
+    // `reset`: the broker did not keep something this tab sent, so its board replaces the tab's own unsent copy (#893)
+    if (elements) { if (m.reset === true) dirty = false; apply(elements); }
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
   } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {
@@ -66,7 +67,8 @@ window.addEventListener('message', async ev => {
       post('converted', { request: m.request, elements });
     } catch { post('converted', { request: m.request, error: 'cannot_convert' }); }
   } else if (m.session === session && m.action === 'export' && typeof m.request === 'string') {
-    const blob = await exportToBlob({ elements: playing ? attachArrows(centerLabels(restoreElements(fullScene, null, { repairBindings: true, refreshDimensions: true }))) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
+    // The picture is of the committed scene the parent sends, never the live drawing, which may hold text the broker has not read (#893).
+    const blob = await exportToBlob({ elements: attachArrows(centerLabels(restoreElements(rules.batch(m.elements) || [], null, { repairBindings: true, refreshDimensions: true }))), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
     if (blob.size <= 600000) post('image', { request: m.request, bytes: await blob.arrayBuffer() });
   }
 });
