@@ -18,6 +18,7 @@ import secrets
 import shutil
 import socket
 import sqlite3
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -106,12 +107,25 @@ class World:
         self.relay = Relay(self.b)
 
     def stop(self) -> None:
-        try:
-            self.relay.close()
-            self.web.close()
-            self.b.stop()
-        finally:
+        """Close the relay and the web client and stop the broker, each even if one before it raised, then
+        remove the home, but only once the broker's thread has ended: a broker still running under a removed
+        home fails with errors that hide why it would not stop (#832). A home kept is raised about, and
+        ``no_homes_left_behind`` names it too (#919)."""
+        errors: list[Exception] = []
+        for close in (self.relay.close, self.web.close, self.b.stop):
+            try:
+                close()
+            except Exception as e:
+                errors.append(e)
+        thread = self.b.thread
+        if thread is not None and thread.is_alive():
+            errors.append(RuntimeError(f"the broker did not stop, so its home {self.home} is kept"))
+        else:
             shutil.rmtree(self.home, ignore_errors=True)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("stopping a meeting World", errors)
 
     # ---- what a person sees and does
     def command(self, text: str, room: str = "build", *, expect: int = 200) -> dict[str, Any]:
@@ -163,6 +177,74 @@ def world() -> Iterator[World]:
         yield w
     finally:
         w.stop()
+
+
+class _Closer:
+    """A stand-in for the relay or the web client: records that it was closed, and may raise."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail, self.closed = fail, False
+
+    def close(self) -> None:
+        self.closed = True
+        if self.fail:
+            raise OSError("close failed")
+
+
+class _Broker:
+    """A stand-in broker: its ``stop()`` is recorded, and its thread is a real one, ended or running."""
+
+    def __init__(self, thread: Any = None) -> None:
+        self.thread, self.stopped = thread, False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _stand_in_world(home: Path, relay: _Closer, web: _Closer, b: _Broker) -> World:
+    w = World.__new__(World)
+    w.home, w.relay, w.web, w.b = home, relay, web, b  # type: ignore[assignment]
+    return w
+
+
+def test_world_stop_stops_the_broker_even_when_a_close_raises(tmp_path: Path) -> None:
+    """An error from the relay's or the web client's close still closes the other and stops the broker, and
+    the home goes once the broker's thread has ended; the error is raised after (#919, review F2).
+
+    Fails on a ``stop()`` that runs its closes in one ``try``: the relay's error skipped the web client and
+    ``b.stop()``, and the home was removed under a broker that was never told to stop."""
+    home = tmp_path / "home"
+    home.mkdir()
+    done = threading.Thread(target=lambda: None)
+    done.start()
+    done.join()
+    relay, web, b = _Closer(fail=True), _Closer(fail=True), _Broker(done)
+    with pytest.raises(ExceptionGroup) as raised:
+        _stand_in_world(home, relay, web, b).stop()
+    assert [str(e) for e in raised.value.exceptions] == ["close failed", "close failed"]
+    assert relay.closed and web.closed and b.stopped
+    assert not home.exists()
+
+
+def test_world_stop_keeps_the_home_of_a_broker_that_would_not_stop(tmp_path: Path) -> None:
+    """``InProcBroker.stop()`` joins its thread for 10 s and may return with it alive: then the home is kept
+    and ``stop()`` raises, naming it, rather than removing it from under the running broker (review F2).
+
+    Fails on a ``stop()`` that removes the home whatever the thread is doing."""
+    home = tmp_path / "home"
+    home.mkdir()
+    release = threading.Event()
+    running = threading.Thread(target=release.wait, daemon=True)
+    running.start()
+    try:
+        b = _Broker(running)
+        with pytest.raises(RuntimeError, match="did not stop") as raised:
+            _stand_in_world(home, _Closer(), _Closer(), b).stop()
+        assert str(home) in str(raised.value)
+        assert b.stopped and home.exists()
+    finally:
+        release.set()
+        running.join()
 
 
 def poll_waiting(w: World) -> bool:
