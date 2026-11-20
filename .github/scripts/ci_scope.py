@@ -21,6 +21,7 @@ fix the notes of a release that's out. Standard library only.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path, PurePosixPath
@@ -63,6 +64,17 @@ def changelog_problem(files: list[str], title: str) -> str | None:
     )
 
 
+def _top_level_version(path: Path) -> str | None:
+    """A manifest's own top-level ``version``, or None when the file is missing, isn't JSON, isn't an
+    object, or has no string version there. A ``version`` nested deeper never counts."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    found = data.get("version") if isinstance(data, dict) else None
+    return found if isinstance(found, str) else None
+
+
 def release_problem(title: str, root: Path) -> str | None:
     """Why a release PR's plugin manifests don't carry its version, or None (#901). A release PR skips
     the suite, so this is the check that still runs: v1.11.0 was cut by an older release.py, which
@@ -73,9 +85,7 @@ def release_problem(title: str, root: Path) -> str | None:
     version = m["version"]
     stale = []
     for manifest in release.PLUGIN_MANIFESTS.values():
-        path = root / manifest
-        found = release.PLUGIN_VERSION_RE.search(path.read_text()) if path.is_file() else None
-        if not found or ".".join(found.group(2, 3, 4)) != version:
+        if _top_level_version(root / manifest) != version:
             stale.append(manifest)
     if not stale:
         return None

@@ -128,6 +128,22 @@ def test_a_release_pr_fails_unless_every_plugin_manifest_carries_its_version(
     problem = scope_mod.release_problem("release: v0.7.0", root)
     assert problem and "plugins/devin/plugin.json" in problem and "plugins/opencode/package.json" in problem
     assert "plugins/claude" not in problem  # a stamped one is not named
+    # only the top-level version counts: a nested one, or a file that isn't a JSON object, is stale
+    (root / "plugins/claude/.claude-plugin/plugin.json").write_text(
+        '{"version": "0.6.0", "engines": {"version": "0.7.0"}}\n'
+    )
+    (root / "plugins/codex/.codex-plugin/plugin.json").write_text('["version", "0.7.0"]\n')
+    (root / "plugins/cursor/.cursor-plugin/plugin.json").write_text('{"version": "0.7.0",\n')
+    problem = scope_mod.release_problem("release: v0.7.0", root)
+    assert problem and all(
+        f in problem
+        for f in (
+            "plugins/claude/.claude-plugin/plugin.json",
+            "plugins/codex/.codex-plugin/plugin.json",
+            "plugins/cursor/.cursor-plugin/plugin.json",
+        )
+    )
     monkeypatch.setattr(sys, "stdin", io.StringIO("pyproject.toml\n"))
     assert scope_mod.main(["--title", "release: v0.7.0", "--root", str(root)]) == 1
-    assert "::error::release v0.7.0: plugins/devin/plugin.json" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.startswith("::error::release v0.7.0: ") and "plugins/devin/plugin.json" in out
