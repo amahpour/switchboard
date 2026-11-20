@@ -204,6 +204,45 @@ async def test_a_line_waiting_its_turn_is_not_shown_as_speaking(
     assert spoken_names(frames) == ["claude-1", None, "codex-1", None]
 
 
+async def test_an_agent_that_left_while_its_line_waited_is_never_named(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """codex-1's line waits behind claude-1's, and codex-1 leaves the room before it is said: the line may
+    still play, but no frame names codex-1, since it is no longer in Members (left_at set). Fails if the
+    name is looked up from a membership without checking it is still active."""
+    async with FakeAgent(broker.home, "k1") as claude, FakeAgent(broker.home, "k2") as codex:
+        await codex.join("#build", "codex-1")
+        frames = await speak_held_line(broker, joinly, claude)
+        assert (await codex.say("#build", "@call and the deploy is next")).get("posted_id")
+        room_id = broker.state.store.get_room("#build").id
+        await wait_until(
+            lambda: broker.on_loop(lambda: broker.state.meetings._live[room_id].turns.pending is not None)
+        )
+        await codex.leave("#build")
+        joinly.release_speech()
+        await wait_until(lambda: len(joinly.spoken) == 2)
+        await wait_until(lambda: speech_finished(broker) and speaking(broker) is None)
+    assert "codex-1" not in spoken_names(frames)
+
+
+async def test_an_agent_that_leaves_while_its_line_plays_is_named_no_more(
+    broker: InProcBroker, joinly: FakeJoinly
+) -> None:
+    """claude-1 leaves the room while joinly holds its line: a frame goes out at once that names nobody,
+    and the room's state says no one, though the line is still with the call. Fails if the bar keeps
+    naming an agent that has left Members until its line ends."""
+    async with FakeAgent(broker.home, "k1") as agent:
+        frames = await speak_held_line(broker, joinly, agent)
+        await wait_until(lambda: spoken_names(frames)[-1:] == ["claude-1"])
+        await agent.leave("#build")
+        await wait_until(lambda: spoken_names(frames) == ["claude-1", None])
+        assert speaking(broker) is None
+        assert not speech_finished(broker)  # the line is still with the call: only the name went
+        joinly.release_speech()
+        await wait_until(lambda: speech_finished(broker))
+    assert spoken_names(frames) == ["claude-1", None]
+
+
 async def test_leaving_the_call_mid_line_leaves_no_speaking_behind(
     broker: InProcBroker, joinly: FakeJoinly
 ) -> None:

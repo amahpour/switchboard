@@ -80,7 +80,7 @@ class _Live:
     mute_told: bool = False  # the room has been told this call that the bot is muted (§52.12)
     reads_mute: bool | None = None  # this joinly has mute_status; None until asked once
     unmute_busy: bool = False  # an unmute is under way: the command calls the tool once
-    speaking: str | None = None  # the agent whose line speak_text is saying now, for the bar (§52.13)
+    speaker: int | None = None  # the membership whose line is with speak_text now, for the bar (§52.13)
 
 
 class MeetingBridge:
@@ -403,23 +403,38 @@ class MeetingBridge:
                 self._set_speaking(room_id, live, None)
 
     def speaking(self, room_id: int) -> str | None:
-        """The screen name of the agent whose line is being spoken in this room's call, or None (§52.13)."""
+        """The screen name of the agent whose line is with the call in this room, or None (§52.13). Looked
+        up for each frame, so a member that has left (``left_at`` set) names nobody, however long its line
+        waited or plays; a lookup that fails names nobody too."""
         live = self._live.get(room_id)
-        return live.speaking if live is not None else None
+        if live is None or live.speaker is None:
+            return None
+        try:
+            member = self.state.store.get_membership(live.speaker)
+        except Exception:  # the bar is a courtesy: a failed lookup names nobody, and never stops a frame
+            log.warning("meeting room %s: could not look up who is speaking", room_id)
+            return None
+        return member.screen_name if member is not None and member.active else None
 
-    def _speaker_name(self, membership_id: int | None) -> str | None:
-        member = self.state.store.get_membership(membership_id) if membership_id is not None else None
-        return member.screen_name if member is not None else None
+    def member_left(self, membership_id: int) -> None:
+        """A membership ended (leave, kick, a session gone): if its line is with the call, the bar is sent
+        again, now naming nobody (§52.13). The line itself goes on; only the name goes."""
+        for room_id, live in list(self._live.items()):
+            if live.speaker == membership_id:
+                self._publish_speaking(room_id)
 
     def _set_speaking(self, room_id: int, live: _Live, membership_id: int | None) -> None:
         """Live state only: the room's settings frame says it, and nothing is stored. A frame goes out only
-        when it changed, so a line with no known speaker sends none. The name is looked up here, under the
-        same guard as the frame: a lookup that fails names nobody, and the line is still spoken."""
+        when it changed, so a line with no known speaker sends none. The name is looked up as the frame is
+        made (``speaking``), under the frame's guard: a lookup that fails names nobody, and the line is still
+        spoken."""
+        if live.speaker == membership_id:
+            return
+        live.speaker = membership_id
+        self._publish_speaking(room_id)
+
+    def _publish_speaking(self, room_id: int) -> None:
         try:
-            name = self._speaker_name(membership_id)
-            if live.speaking == name:
-                return
-            live.speaking = name
             self.state.service.publish_settings(room_id)
         except Exception:  # the bar is a courtesy: it must never stop a line or its slot being freed
             log.warning("meeting room %s: could not publish who is speaking", room_id)
