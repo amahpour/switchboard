@@ -31,8 +31,9 @@ new pull request link asks for a review (§37.16); 52 (#818) indexes the usage p
 agent chat and wake batches (§61);
 53 (#823) adds say retry receipts (§8.4); 54 (#843) says which agent made a person a member of a public room,
 whose members are in ``room_people`` too (§63); 55 (#890) and 56 (#893) clean what a review board and
-a room's whiteboard stored before their text was checked (§37.2, §56.5); 57 (#823) remembers which client
-opened each MCP session, so a session survives a restart (§49.2).
+a room's whiteboard stored before their text was checked (§37.2, §56.5); 57 (#907) lets a review board's
+reported CI be ``blocked`` (§37.11); 58 (#903) remembers which client opened each MCP session, so a session
+survives a restart (§49.2).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -56,7 +57,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 57
+SCHEMA_VERSION = 58
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -207,7 +208,7 @@ CREATE TABLE reviews(
   opened_by TEXT NOT NULL, opened_at REAL NOT NULL, closed_at REAL, posted_at REAL, posted_by TEXT,
   pr_state TEXT NOT NULL DEFAULT '' CHECK(pr_state IN ('', 'open', 'merged', 'closed')),
   pr_threads INTEGER CHECK(pr_threads IS NULL OR pr_threads BETWEEN 0 AND 999),
-  pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none')),
+  pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none', 'blocked')),
   reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
   closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
   reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
@@ -393,7 +394,7 @@ V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
 V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before home_seen (v45)
 V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard (v46)
 V50_TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
-V55_TABLES = (*V50_TABLES, "say_keys")  # schemas 53 through 56, before mcp_sessions (v57)
+V55_TABLES = (*V50_TABLES, "say_keys")  # schemas 53 through 57, before mcp_sessions (v58)
 TABLES = (*V55_TABLES, "mcp_sessions")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
@@ -1140,6 +1141,19 @@ V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
 # ``clean_whiteboard_rows``, as for v55: no schema change, and the same finish (``finish_review_clean``).
 V55_TO_V56 = ("UPDATE meta SET value='56' WHERE key='schema_version'",)
 
+# v56 -> v57 (#907, DESIGN.md §37.11): the reported CI can be ``blocked``, a pull request that conflicts with
+# its base and so runs no CI. Only the ``pr_ci`` CHECK gains a value: the same schema-text edit as v33 -> v34
+# (_migrate brackets the step with schema editing, checks the new CHECK is in the table's text or fails
+# closed and rolls back, and checks integrity), so no row or foreign key moves. The needle ends at the
+# closing parenthesis, so it matches only the CHECK on ``pr_ci``.
+V56_TO_V57 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''failing'', ''running'', ''none''))',"
+    " '''failing'', ''running'', ''none'', ''blocked''))')"
+    " WHERE type='table' AND name='reviews'",
+    "UPDATE meta SET value='57' WHERE key='schema_version'",
+)
+
 # Both fresh databases and the migration use these statements (#823, DESIGN.md §49.2): which client opened
 # each MCP session of a token, by the sha256 of the session's ID, so the broker can open it again after a
 # restart for a client that keeps its ID. The client's own claim, cut as ``client_info`` cuts it.
@@ -1154,8 +1168,8 @@ MCP_SESSIONS_DDL = (
     " PRIMARY KEY(token_id, sid_hash)) WITHOUT ROWID",
     "CREATE INDEX mcp_sessions_opened ON mcp_sessions(token_id, opened_at)",
 )
-# v56 -> v57 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens.
-V56_TO_V57 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='57' WHERE key='schema_version'")
+# v57 -> v58 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens.
+V57_TO_V58 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='58' WHERE key='schema_version'")
 
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
@@ -1428,7 +1442,8 @@ def _steps(frm: int) -> list[MigrationStep]:
         53: MigrationStep(54, V53_TO_V54, ()),
         54: MigrationStep(55, V54_TO_V55, ()),
         55: MigrationStep(56, V55_TO_V56, ()),
-        56: MigrationStep(57, V56_TO_V57, ("mcp_sessions",)),
+        56: MigrationStep(57, V56_TO_V57, (), (("reviews", "'none', 'blocked'"),)),
+        57: MigrationStep(58, V57_TO_V58, ("mcp_sessions",)),
     }
     out = []
     v = frm
@@ -1479,8 +1494,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V45_TABLES
     if version <= 52:
         return V50_TABLES  # 51 added a column and 52 indexes, no table
-    if version <= 56:
-        return V55_TABLES  # 54 added a column, 55 and 56 clean text: no table
+    if version <= 57:
+        return V55_TABLES  # 54 added a column, 55 and 56 clean text, 57 edits a CHECK: no table
     return TABLES
 
 

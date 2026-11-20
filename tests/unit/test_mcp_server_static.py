@@ -6,6 +6,7 @@ tests build the server over a stub backend, so what is checked is the tools them
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -193,6 +194,21 @@ async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
     assert "shop/cart.py:40-58" in text and "switchboard_review" in text
     for action in ACTIONS:
         assert action in text, action
+
+
+def test_the_review_board_skill_reads_each_forges_own_conflict_signal() -> None:
+    """#907, #910: a conflicting pull request is reported as ``ci="blocked"``. GitHub's signal is
+    ``mergeable`` CONFLICTING from ``gh pr view --json mergeable``; GitLab's is the boolean
+    ``has_conflicts``, which ``glab mr view`` prints only with ``--output json`` (its default is text, so
+    an agent told just "glab mr view" has no field to read). Fails if the skill drops the JSON flag, ties
+    GitLab to CONFLICTING, or says every forge runs no CI on a conflict."""
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "plugins" / "claude" / "skills" / "review-board" / "SKILL.md").read_text()
+    line = next(x for x in text.splitlines() if x.startswith("- `report`"))
+    assert "`gh pr view <n> --json mergeable`" in line and "`mergeable` is CONFLICTING" in line
+    assert "`glab mr view <iid> --output json`" in line and "`has_conflicts` is true" in line
+    assert "On GitHub a pull request that conflicts with its base runs no CI" in line
+    assert re.search(r"glab[^.]*CONFLICTING", line) is None
 
 
 async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:

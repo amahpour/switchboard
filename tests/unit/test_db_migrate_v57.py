@@ -1,126 +1,148 @@
-"""Schema 57 keeps which client opened each MCP session, so a restart can open it again (DESIGN.md §49.2,
-#823). The step is from 56 (#893's whiteboard cleaning, #896), so a schema 55 database goes through that
-cleaning first, and a schema 56 one only gains the table."""
+"""Schema 57 (#907, DESIGN.md §37.11) lets a review board's reported CI be ``blocked``.
+
+A pull request that conflicts with its base runs no CI. Only the ``pr_ci`` CHECK gains the value, by the
+schema-text edit of v33 -> v34, so no board, item or foreign key moves. The boards a schema 56 database
+holds are seeded at 56, so a step that dropped or rewrote them would be seen.
+"""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 
 import pytest
-from test_db_migrate_v56 import CANARIES, at_55, el
 
 from switchboard import db
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
-QUERY = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='mcp_sessions' ORDER BY name"
-TOKEN = CANARIES[0]
+INSERT = "INSERT INTO reviews(room_id, url, opened_by, opened_at, pr_ci) VALUES (1, ?, 'alice', 1.0, ?)"
+BOARD = (
+    "SELECT id, room_id, url, head, opened_by, pr_state, pr_threads, pr_ci, reported_by FROM reviews"
+    " WHERE id = 7"
+)
+ITEMS = (
+    "SELECT id, review_id, kind, n, state, title, raised_by, options FROM review_items"
+    " WHERE review_id = 7 ORDER BY id"
+)
+PICKS = (
+    "SELECT item_id, agent, choice, picked_at FROM review_picks WHERE item_id IN (11, 12) ORDER BY item_id"
+)
+SEEDED_BOARDS = [(7, 1, "https://example.com/a/pull/9", "abc123", "alice", "open", 2, "none", "bob")]
+SEEDED_ITEMS = [
+    (11, 7, "finding", 1, "raised", "a leak", "bob", "[]"),
+    (12, 7, "question", 1, "open", "which way", "bob", '["a", "b"]'),
+]
+SEEDED_PICKS = [(12, "carol", 1, 3.0)]
 
 
-def same_table_as_fresh(con: sqlite3.Connection, tmp_path: Path) -> None:
-    fresh = db.open_db(tmp_path / "fresh.db")
-    try:
-        got = [tuple(r) for r in con.execute(QUERY)]
-        assert got == [tuple(r) for r in fresh.execute(QUERY)]
-        assert len(got) >= 2  # the table and its index
-    finally:
-        fresh.close()
-
-
-def test_a_schema_55_database_is_cleaned_by_56_and_gains_mcp_sessions_at_57(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A real schema 55 database goes through both steps in one upgrade: 56's whiteboard cleaning runs (no
-    canary is left in the stored board) and 57 adds an empty table the same as a fresh database's, every
-    other row kept. Fails if 57 skips 56 (as the step from 55 to 57 did) or the table differs."""
-    path = at_55(tmp_path, monkeypatch)
-    with monkeypatch.context() as mp:
-        mp.setattr(db, "SCHEMA_VERSION", 55)
-        before = db.open_db(path)
-        counts = db.row_counts(before, db.tables_of(55))
-        before.close()
-    con = db.open_db(path)
-    backup = db.connect(db.backup_path_for(path, 55), readonly=True)
-    try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 57
-        assert db.schema_version(backup) == 55
-        assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0}
-        same_table_as_fresh(con, tmp_path)
-        assert not backup.execute(QUERY).fetchall()
-        raw = con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0]
-        assert {e["id"] for e in json.loads(raw)} == {
-            "clean1", "wrapped", "ten_equal", "ten_wrapped", "arrow1", "label", "holder",
-        }  # fmt: skip
-        for canary in CANARIES:
-            assert canary not in raw, canary
-        assert not con.execute("SELECT 1 FROM meta WHERE key=?", (db.CLEAN_PENDING,)).fetchone()
-        assert db.integrity_ok(con) is None
-    finally:
-        backup.close()
-        con.close()
-
-
-def test_a_schema_56_database_only_gains_mcp_sessions(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A database already at 56 takes only 57's step: the table is added, and nothing is cleaned again (a
-    board stored at 56 is byte for byte as it was, since 56's cleaning is not 57's). Fails if the step is
-    missing, starts from another version, or rewrites rows."""
-    path = tmp_path / "old.db"
-    old = sqlite3.connect(path)
-    try:
+def at_56(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fixture (which holds a board of its own) upgraded to schema 56, with another board whose CI
+    is a legacy value, a finding, a question and a pick on it: the rows the step must keep."""
+    with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
-    finally:
-        old.close()
-    stored = json.dumps([el("kept", text="a note", originalText="a note")], separators=(",", ":"))
     with monkeypatch.context() as mp:
         mp.setattr(db, "SCHEMA_VERSION", 56)
-        at56 = db.open_db(path)
-        assert db.schema_version(at56) == 56
-        with db.tx(at56):
-            at56.execute(
-                "INSERT INTO room_boards(room_id, seq, elements, updated_at) VALUES(1, 2, ?, 1.0)", (stored,)
-            )
-        counts = db.row_counts(at56, db.tables_of(56))
-        at56.close()
+        db.open_db(path).close()
+    with sqlite3.connect(path) as seed:
+        seed.execute(
+            "INSERT INTO reviews(id, room_id, url, head, opened_by, opened_at, pr_state, pr_threads, pr_ci,"
+            " reported_by, reported_at) VALUES (7, 1, 'https://example.com/a/pull/9', 'abc123', 'alice', 1.0,"
+            " 'open', 2, 'none', 'bob', 2.0)"
+        )
+        seed.execute(
+            "INSERT INTO review_items(id, review_id, kind, n, state, title, raised_by, created_at,"
+            " updated_at) VALUES (11, 7, 'finding', 1, 'raised', 'a leak', 'bob', 1.0, 1.0)"
+        )
+        seed.execute(
+            "INSERT INTO review_items(id, review_id, kind, n, state, title, raised_by, options, created_at,"
+            " updated_at) VALUES (12, 7, 'question', 1, 'open', 'which way', 'bob', '[\"a\", \"b\"]',"
+            " 1.0, 1.0)"
+        )
+        seed.execute(
+            "INSERT INTO review_picks(item_id, agent, choice, picked_at) VALUES (12, 'carol', 1, 3.0)"
+        )
+
+
+def assert_seeded(con: sqlite3.Connection) -> None:
+    """The seeded board, its items and the pick, by id and value, and each still points at its parent."""
+    assert [tuple(r) for r in con.execute(BOARD)] == SEEDED_BOARDS
+    assert [tuple(r) for r in con.execute(ITEMS)] == SEEDED_ITEMS
+    assert [tuple(r) for r in con.execute(PICKS)] == SEEDED_PICKS
+    joined = (
+        "SELECT p.agent, i.kind, r.url FROM review_picks p JOIN review_items i ON i.id = p.item_id"
+        " JOIN reviews r ON r.id = i.review_id WHERE r.id = 7"
+    )
+    assert [tuple(r) for r in con.execute(joined)] == [("carol", "question", "https://example.com/a/pull/9")]
+
+
+def test_pr_ci_admits_blocked_and_keeps_every_board(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A schema 56 database refuses ci "blocked". After the step the seeded board (ci "none"), its finding,
+    question and pick are all there with their ids, values and links, the reviews table's SQL matches a
+    fresh database's, "blocked" stores, an unknown value is still refused by the CHECK, and the backup is
+    still schema 56, holds the same rows and refuses "blocked". Fails if the step is missing, drops or
+    rewrites a row, the edit matches nothing, or the CHECK is dropped instead of widened."""
+    path = tmp_path / "old.db"
+    at_56(path, monkeypatch)
+    with sqlite3.connect(path) as before:
+        assert db.schema_version(before) == 56
+        with pytest.raises(sqlite3.IntegrityError):
+            before.execute(INSERT, ("https://example.com/a/pull/1", "blocked"))
+        assert_seeded(before)
+        counts = db.row_counts(before, db.kept_tables(56))
     con = db.open_db(path)
-    backup = db.connect(db.backup_path_for(path, 56), readonly=True)
-    try:
-        assert db.schema_version(con) == 57
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 58
+    assert db.row_counts(con, db.kept_tables(56)) == counts
+    assert_seeded(con)
+    assert list(con.execute("PRAGMA foreign_key_check")) == []
+    assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
+    fresh = db.open_db(tmp_path / "fresh.db")
+    q = "SELECT sql FROM sqlite_master WHERE name='reviews'"
+    assert con.execute(q).fetchone()[0] == fresh.execute(q).fetchone()[0]
+    con.execute(INSERT, ("https://example.com/a/pull/1", "blocked"))
+    for bad in ("conflicting", "Blocked"):
+        with pytest.raises(sqlite3.IntegrityError):
+            con.execute(INSERT, ("https://example.com/a/pull/2", bad))
+    assert db.integrity_ok(con) is None
+    with sqlite3.connect(path.with_name("old.db.v56.bak")) as backup:
         assert db.schema_version(backup) == 56
-        assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0}
-        same_table_as_fresh(con, tmp_path)
-        assert con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0] == stored
-        assert db.integrity_ok(con) is None
-    finally:
-        backup.close()
-        con.close()
-
-
-def test_a_schema_57_database_opens_unchanged(tmp_path: Path) -> None:
-    """A database at the current version is opened as it is: no step, no backup, its rows (an MCP session's
-    record included) kept. Fails if opening a 57 database migrates or backs it up again."""
-    path = tmp_path / "now.db"
-    con = db.open_db(path)
-    with db.tx(con):
-        con.execute(
-            "INSERT INTO agent_tokens(person_id, device, token_hash, created_at)"
-            " VALUES(NULL, 'laptop', ?, 1.0)",
-            ("a" * 64,),
-        )
-        con.execute(
-            "INSERT INTO mcp_sessions(token_id, sid_hash, client_name, client_version, protocol, opened_at)"
-            " VALUES(1, ?, 'Cursor', '1', '2025-06-18', 1.0)",
-            ("b" * 64,),
-        )
-    schema = sorted(tuple(r) for r in con.execute("SELECT type, name, sql FROM sqlite_master"))
+        assert_seeded(backup)
+        with pytest.raises(sqlite3.IntegrityError):
+            backup.execute(INSERT, ("https://example.com/a/pull/3", "blocked"))
+    fresh.close()
     con.close()
-    again = db.open_db(path)
-    try:
-        assert db.schema_version(again) == 57
-        assert sorted(tuple(r) for r in again.execute("SELECT type, name, sql FROM sqlite_master")) == schema
-        assert [tuple(r) for r in again.execute("SELECT client_name FROM mcp_sessions")] == [("Cursor",)]
-        assert not list(tmp_path.glob("now.db.v*.bak*"))
-    finally:
-        again.close()
+
+
+def test_an_unmatched_check_fails_closed_at_56_with_its_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The v56 CHECK spelled differently (equally strict, so the needle can't match) must not let the step
+    skip the edit: the upgrade refuses, and the database and its backup stay schema 56 with the CHECK text,
+    the board and its items as they were. Fails if the step's check is skipped (the database would be
+    marked 57 with a CHECK that still refuses "blocked")."""
+    path = tmp_path / "old.db"
+    at_56(path, monkeypatch)
+    with sqlite3.connect(path) as edit:
+        edit.execute("PRAGMA writable_schema=ON")
+        edit.execute(
+            "UPDATE sqlite_master SET sql=replace(sql, '''running'', ''none'')', '''running'',''none'')')"
+            " WHERE type='table' AND name='reviews'"
+        )
+        edit.execute("PRAGMA writable_schema=RESET")
+    q = "SELECT sql FROM sqlite_master WHERE name='reviews'"
+    with sqlite3.connect(path) as before:
+        before_sql = before.execute(q).fetchone()[0]
+        counts = db.row_counts(before, db.kept_tables(56))
+    assert "'running','none')" in before_sql
+    with pytest.raises(db.SchemaError, match="unchanged, still schema version 56"):
+        db.open_db(path)
+    with sqlite3.connect(path) as after:
+        assert db.schema_version(after) == 56
+        assert after.execute(q).fetchone()[0] == before_sql
+        assert after.execute("PRAGMA writable_schema").fetchone()[0] == 0
+        assert db.row_counts(after, db.kept_tables(56)) == counts
+        assert_seeded(after)
+        assert db.integrity_ok(after) is None
+    with sqlite3.connect(path.with_name("old.db.v56.bak")) as backup:
+        assert db.schema_version(backup) == 56
+        assert backup.execute(q).fetchone()[0] == before_sql
+        assert_seeded(backup)

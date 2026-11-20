@@ -179,7 +179,8 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     per_step += [1]  # 53: say_keys, the retry receipts (#823)
     per_step += [1]  # 54: who made a person a member of a public room (#843)
     per_step += [0, 0]  # 55 and 56: cleanings, no ALTER (#890, #893)
-    per_step += [1]  # 57: mcp_sessions (#823)
+    per_step += [0]  # 57: the pr_ci CHECK edit (#907) counts as none
+    per_step += [1]  # 58: mcp_sessions (#823)
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)

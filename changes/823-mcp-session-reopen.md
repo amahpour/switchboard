@@ -1,6 +1,6 @@
 ### Fixed
 
-- **An agent's MCP session survives a broker restart.** The broker now remembers which client opened each MCP session (the session id's hash, never the id) and opens it again for the same token when that client comes back with its old id. Before, every old `Mcp-Session-Id` got a 404 after a restart, and a client that keeps its id, as Cursor does, failed every switchboard tool with "Tool execution error" until it was restarted. Sessions are kept a month, at most 100 per agent token, and a revoked token's (or a removed person's) go at once. The database moves to schema 57; the upgrade adds one empty table after the usual backup.
+- **An agent's MCP session survives a broker restart.** The broker now remembers which client opened each MCP session (the session id's hash, never the id) and opens it again for the same token when that client comes back with its old id. Before, every old `Mcp-Session-Id` got a 404 after a restart, and a client that keeps its id, as Cursor does, failed every switchboard tool with "Tool execution error" until it was restarted. Sessions are kept a month, at most 100 per agent token, and a revoked token's (or a removed person's) go at once. The database moves to schema 58; the upgrade adds one empty table after the usual backup.
 
 ### Known limitations
 

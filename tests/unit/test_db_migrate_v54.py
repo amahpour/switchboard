@@ -70,7 +70,7 @@ def test_the_step_adds_only_the_column(tmp_path: Path, monkeypatch: pytest.Monke
     fresh = db.open_db(tmp_path / "fresh.db")
     backup = db.connect(path.with_name("old.db.v53.bak"), readonly=True)
     try:
-        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 57
+        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 58
         assert db.schema_version(backup) == 53
         assert db.row_counts(upgraded, db.TABLES) == {**counts, "mcp_sessions": 0}  # 57's table, empty
         assert columns(upgraded) == columns(fresh)

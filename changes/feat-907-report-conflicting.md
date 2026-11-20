@@ -1,0 +1,3 @@
+### Added
+
+- **A review board says when the pull request conflicts with its base.** A pull request that conflicts runs no CI on GitHub, so a reviewer saw no checks, reported CI "none", and the board read "CI none", as if the pull request had no CI. `report` now takes `ci="blocked"` for it. The board's header and `show` say "CI blocked: conflicts with its base" (in red on the page), and one line in the room says it once. The review-board skills of Claude Code, Codex and Cursor tell a reviewer to report it when `gh pr view <n> --json mergeable` says CONFLICTING, or when `glab mr view <iid> --output json` has `has_conflicts` true. A value the board doesn't know is still refused. The database moves to schema 57 at the next start, with the usual backup.
