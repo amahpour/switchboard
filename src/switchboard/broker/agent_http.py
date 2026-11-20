@@ -951,9 +951,11 @@ class AgentAuth:
             self.forget(next(iter(self.sessions)))
         return session
 
-    def forget(self, session_id: str) -> McpSession | None:
+    def forget(self, session_id: str, *, ending: bool = False) -> McpSession | None:
+        """Forget a session. ``ending`` (its client's DELETE) leaves the threads it served last pointing at it
+        in ``latest`` until ``_end_served`` decides, thread by thread, whether it is still the newest."""
         session = self.sessions.pop(session_id, None)
-        if session is not None:
+        if session is not None and not ending:
             for thread in session.threads:
                 key = (session.token_id, thread)
                 if self.latest.get(key) == session_id:
@@ -1225,9 +1227,10 @@ class AgentAuth:
         # exception, a cancellation), its own state says so: the pinned SDK marks the transport terminated
         # before it awaits the streams' cleanup and only then sends its 200, so a DELETE stopped in between
         # has already ended the session. Anything else, or a state that can't be read, keeps the ID and its
-        # record. A resumed thread can use a newer MCP session before this old DELETE arrives: only the
-        # session that served a thread most recently may take it offline, as it was when the DELETE ended.
-        gone, newest = False, list[str]()
+        # record. A resumed thread can use a newer MCP session before this old DELETE arrives, or while its
+        # SessionEnds wait their turn: only the session that served a thread most recently may take it
+        # offline, checked for each thread as its SessionEnd runs (``_end_served``).
+        ending: asyncio.Future[None] | None = None
         try:
             await self.app(scope, receive_claim if inspect_client else receive, send_binding)
         finally:
@@ -1236,17 +1239,14 @@ class AgentAuth:
             else:
                 gone = response_status in DELETE_GONE
             if gone:
-                newest = [t for t in sorted(session.threads) if self.latest.get((row.id, t)) == sid]
-                self.forget(sid)
+                self.forget(sid, ending=True)
                 self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
-                if response_status is None and newest:
-                    # the request is unwinding (it may be cancelled): its SessionEnd runs on its own task
-                    task = asyncio.ensure_future(self._end_threads(row, newest))
-                    self._ending.add(task)
-                    task.add_done_callback(self._ending.discard)
-                    newest = []
-        if gone:
-            await self._end_threads(row, newest)
+                # the SessionEnds run on a task of their own: the request may be unwinding (cancelled)
+                ending = asyncio.ensure_future(self._end_served(row, sid, sorted(session.threads)))
+                self._ending.add(ending)
+                ending.add_done_callback(self._ending.discard)
+        if ending is not None:
+            await asyncio.shield(ending)
 
     def _library_ended(self, library_id: str) -> bool:
         """Whether the MCP library ended this session (§49.2): its manager no longer holds the ID, or holds a
@@ -1262,12 +1262,27 @@ class AgentAuth:
             return True
         return getattr(transport, "is_terminated", None) is True
 
-    async def _end_threads(self, row: AgentTokenRow, threads: list[str]) -> None:
-        for thread in threads:
-            conn = self.tools.conn_for(row, "codex")
-            await self.state.agents.http_hook(
-                conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
-            )
+    async def _end_served(self, row: AgentTokenRow, sid: str, threads: list[str]) -> None:
+        """Report SessionEnd for each thread the deleted session ``sid`` still served last (§49.2, #903 F10).
+        Which threads is decided as each one's turn comes, not when the DELETE ended: a newer session that
+        served the thread in between owns it, and it stays online. The check and the engine's taking it
+        offline have no await between them (``http_hook`` reaches the engine before its first)."""
+        pending = list(threads)
+        try:
+            while pending:
+                thread = pending.pop(0)
+                key = (row.id, thread)
+                if self.latest.get(key) != sid:
+                    continue  # a newer session served it since, or another DELETE ended it
+                del self.latest[key]
+                conn = self.tools.conn_for(row, "codex")
+                await self.state.agents.http_hook(
+                    conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
+                )
+        finally:
+            for thread in pending:  # stopped part way: leave no thread pointing at a forgotten session
+                if self.latest.get((row.id, thread)) == sid:
+                    del self.latest[(row.id, thread)]
 
 
 class SessionHook:

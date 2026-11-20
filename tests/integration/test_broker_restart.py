@@ -934,6 +934,65 @@ def test_a_delete_stopped_before_the_library_ended_it_keeps_the_session(broker: 
     assert mine.call("who", THREAD_A, room="#build")["ok"]  # its record still reopens it
 
 
+@pytest.mark.parametrize("stop", ["answered", "raise"])
+def test_a_deletes_queued_session_end_spares_a_thread_a_newer_session_took(
+    broker: InProcBroker, stop: str
+) -> None:
+    """A DELETE's SessionEnds wait their turn: on a task of their own when the DELETE sent no status, after
+    the library's answer when it did. A resumed thread can move to a newer MCP session in between, and that
+    session owns it: the old DELETE must decide which threads to end as each SessionEnd runs, not from a
+    snapshot taken when it was queued. The test holds the first SessionEnd (THREAD_A, only the old session
+    served it) on an event it controls, a newer session serves THREAD_B, then it lets the cleanup go on.
+    Fails if THREAD_B is taken offline, or THREAD_A is not (#903, F10 reopened)."""
+    recorded = json.loads((EXIT_FIX / "mcp_exit_quit.json").read_text())
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker, "laptop")
+    old = Codex(broker, token)
+    assert old.start().status_code == 200
+    for thread, name in ((THREAD_A, "codex-1"), (THREAD_B, "codex-2")):
+        assert old.call("join", thread, room="#build", screen_name=name)["ok"]
+        assert old.call("hook", thread, event="Stop", session_id=thread) == {}
+    agents = broker.state.agents
+    real_hook = agents.http_hook
+    entered = threading.Event()
+    release = broker.on_loop(asyncio.Event)
+
+    async def held(conn: Any, harness: str, event: str, params: dict[str, Any]) -> dict[str, Any]:
+        if event == "SessionEnd" and params.get("sid") == THREAD_A:
+            entered.set()
+            await release.wait()
+        return await real_hook(conn, harness, event, params)
+
+    broker.on_loop(setattr, agents, "http_hook", held)
+    if stop == "raise":
+        manager = broker.state.agent_auth.app.session_manager
+        transport = broker.on_loop(lambda: manager._server_instances[old.sid])
+        real_terminate = transport.terminate
+
+        async def terminate() -> None:
+            transport._terminated = True  # what the SDK's own terminate() does first
+            await real_terminate()
+            raise CleanupStopped()
+
+        broker.on_loop(setattr, transport, "terminate", terminate)
+    with ThreadPoolExecutor(1) as pool:
+        deleting = pool.submit(old.delete, recorded)
+        try:
+            assert entered.wait(10), "the first SessionEnd never ran"
+            resumed = Codex(broker, token)
+            assert resumed.start().status_code == 200
+            assert resumed.call("who", THREAD_B, room="#build")["ok"]  # the handoff, while cleanup is queued
+        finally:
+            broker.on_loop(release.set)
+        answer = deleting.result(10)
+    broker.on_loop(setattr, agents, "http_hook", real_hook)
+    assert answer.status_code == (200 if stop == "answered" else 500)
+    until(lambda: status(broker, "codex-1") == "offline")
+    until(lambda: not broker.on_loop(lambda: set(broker.state.agent_auth._ending)))
+    assert status(broker, "codex-2") == "idle"
+    assert resumed.call("who", THREAD_B, room="#build")["ok"]
+
+
 def test_a_revoke_during_an_initialize_leaves_no_record(broker: InProcBroker) -> None:
     """A fresh initialize is let in with a live token, then awaits the library's answer. A revoke that commits
     in between deletes the token's rows; the record written after the answer must not bring one back, so a
