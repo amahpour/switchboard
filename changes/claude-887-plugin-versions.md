@@ -1,4 +1,0 @@
-### Changed
-
-- **Every plugin now reports its version, so a stale Cursor, Devin or OpenCode V2 plugin is flagged too.** Cursor's and Devin's hooks and OpenCode's listener send `X-Switchboard-Plugin-Version`, as Claude Code's and Codex's plugins already did, and `/who`, the Inspector and `join` say when a plugin is from another major version than the server, with the steps to update it. Before, only Claude Code and Codex were checked, so a copy left at an old version on a machine went unnoticed. A plugin that sends no version (one from before this release) is left unsaid, as now. A different minor or patch still says nothing.
-- **A release sets OpenCode's and Devin's plugin versions too.** OpenCode's `package.json` no longer stays at `0.1.0`, and Devin's plugin has a small `plugin.json` for its version. Every plugin under `plugins/` is now the release's version, and a test fails when a new plugin is not stamped.
