@@ -597,6 +597,15 @@ def test_members_shows_each_agents_voice_while_a_call_is_open_and_a_pin_changes_
     )
 
 
+def _until(check: Any, what: str, timeout: float = 5.0) -> None:
+    """Wait, as ``expect`` does, until ``check()`` is true: for state outside the page (a stand-in server's
+    record), which ``expect`` cannot poll. It returns as soon as the check holds and fails at the deadline."""
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, f"timed out waiting for {what}"
+        time.sleep(0.02)
+
+
 def test_the_call_bar_names_the_agent_while_its_line_is_spoken(
     ui: UI, voice_call: tuple[InProcBroker, FakeJoinly]
 ) -> None:
@@ -632,7 +641,8 @@ def test_the_call_bar_names_the_agent_while_its_line_is_spoken(
     try:
         broker.on_loop(speak)
         expect(bar).to_contain_text("claude-1 is speaking")
-        assert joinly.spoken[spoken:] == ["the build is green"]
+        # the bar is published before the request reaches joinly: wait for the fake's record on its own
+        _until(lambda: joinly.spoken[spoken:] == ["the build is green"], "joinly to hold the line")
         page.emulate_media(color_scheme="dark")
         expect(bar).to_contain_text("claude-1 is speaking")
         phone = _open(ui, broker, room="speaking", **PHONE)
