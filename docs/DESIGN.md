@@ -1223,6 +1223,8 @@ Each of these was an item or a residual risk above until 0.38.0, with its tests;
 conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVIN_*, CHISEL_*, AI_AGENT from os.environ and
                      builds every child env from an allowlist {PATH, HOME=<tmp>, LANG, TMPDIR, SWITCHBOARD_TEST=1}
                    tmp_home (short /tmp path with .switchboard-test marker), FakeClock, cfg_fast (quiet_s=0, max_hold_s=0),
+                   no_homes_left_behind: session autouse; fails the run, naming each, if a home make_tmp_home() made in
+                     this process (each xdist worker) is still there after every fixture's teardown
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),
                    web_client (httpx, base_url http://switchboard.localhost:<p>, logged in via the test token)
 engine_world.py    a store, an engine and a FakeClock with no broker; engine_agents.py builds the sessions over HTTPS

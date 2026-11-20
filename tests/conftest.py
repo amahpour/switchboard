@@ -14,6 +14,8 @@
 - ``own_color_env()`` clears ``NO_COLOR``, ``FORCE_COLOR`` and ``CLICOLOR_FORCE`` and
   pins ``TERM`` for the colour tests, so a shell that disables colour does not (#650).
 - ``tmp_home``: a short /tmp home with the ``.switchboard-test`` marker.
+- ``no_homes_left_behind`` (session, autouse): fails the run, naming them, if any home
+  ``make_tmp_home()`` made in this process is still there once every fixture is torn down (#919).
 - ``broker``: an in-process broker (uvicorn in a thread, AllowAllHumans, test mode).
 - ``web``: an httpx client on http://switchboard.localhost:<port>, signed in.
 - ``SubprocBroker``: ``switchboard start --foreground`` in a child process.
@@ -43,6 +45,7 @@ import pytest
 
 import switchboard.config
 from switchboard.config import Config
+from switchboard.paths import TEST_MARKER
 
 _STRIP_PREFIXES = ("CLAUDE", "CODEX_", "CURSOR_", "DEVIN_", "CHISEL_", "AI_AGENT")
 _REAL_PATH = os.environ.get("PATH", "/usr/bin:/bin")
@@ -257,10 +260,46 @@ def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
     )
 
 
+TMP_HOME_ROOT = Path("/tmp")
+TMP_HOME_PREFIX = "yk-"
+
+# Every home make_tmp_home() made in this process (an xdist worker is a process of its own), for
+# no_homes_left_behind: only these are ever counted, so a home another run made never is (#919). Each
+# keeps the test that was running when it was made (pytest's PYTEST_CURRENT_TEST), so a leak names it.
+MADE_HOMES: dict[Path, str] = {}
+
+
 def make_tmp_home() -> Path:
-    d = Path(tempfile.mkdtemp(prefix="yk-", dir="/tmp"))
-    (d / ".switchboard-test").touch()
+    # short on purpose: the broker's socket inside it must fit sun_path (paths.SOCK_MAX_BYTES)
+    d = Path(tempfile.mkdtemp(prefix=TMP_HOME_PREFIX, dir=TMP_HOME_ROOT))
+    (d / TEST_MARKER).touch()
+    MADE_HOMES[d] = os.environ.get("PYTEST_CURRENT_TEST", "outside a test").rsplit(" (", 1)[0]
     return d
+
+
+def homes_left_behind(made: dict[Path, str]) -> dict[Path, str]:
+    """The homes of ``made`` that are still there, each with the test that made it (#919). A symlink
+    or file in a home's place counts too: something the test made is still in /tmp."""
+    return {d: test for d, test in made.items() if os.path.lexists(d)}
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_homes_left_behind() -> Iterator[None]:
+    """Fail the run if a test or fixture left a home it made in /tmp (#919).
+
+    Session-scoped and autouse in the root conftest, so it is set up before every other fixture and
+    torn down after all of them, module- and session-scoped worlds included: a home still present
+    then is one nothing will remove. An error in this teardown fails the run, under xdist too, and
+    names each home. Only this process's homes are checked (``MADE_HOMES``)."""
+    yield
+    left = homes_left_behind(MADE_HOMES)
+    if left:
+        names = "\n  ".join(f"{d}  made by {test}" for d, test in left.items())
+        pytest.fail(
+            f"{len(left)} temp home(s) made by make_tmp_home() were not removed by the test or "
+            f"fixture that made them (#919):\n  {names}",
+            pytrace=False,
+        )
 
 
 @pytest.fixture

@@ -5,6 +5,7 @@ Applies to `tests/`. The root [REVIEW.md](../REVIEW.md) applies too.
 ## Flag
 
 - **A test that touches a real home.** It owns a temp home (`tmp_home`), never `~/.switchboard` or a harness's real config. Child processes get an allowlisted environment (`child_env`).
+- **A temp home made and not removed.** Whatever calls `make_tmp_home()` (a fixture, or a helper like the meeting tests' `World`) removes it when it ends; `no_homes_left_behind` fails the run otherwise. A meeting `World` that only stopped its broker left 109 homes a run (#919).
 - **A harness payload written from memory.** What a harness sends is recorded: a sanitized payload in `tests/fixtures/payloads/<harness>/` with its `_source` (CLI and version), and `test_fixtures_scan.py` checks it for personal data.
 - **A test with no stated reason.** Its name or a docstring says the behavior and the bug that would fail it. A new test is seen to fail without the change.
 - **A sleep, or a fixed wait for a process or socket.** Wait for the event (the ready line, the socket) with a bound that holds under load (#857). A test with timing, processes or sockets runs 20 times alone and once under `-n auto`.
