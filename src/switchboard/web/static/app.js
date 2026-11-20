@@ -7010,7 +7010,8 @@
       });
       if (focusedId === String(b.id)) restore = open;
       const merged = b.outcome === 'merged';
-      const outcome = el('span', 'chip' + (merged ? ' chip-ok' : ''), merged ? 'Merged' : 'Unknown');
+      const outcome = el('span', 'chip' + (merged ? ' chip-ok' : ''),
+        merged ? 'Merged' : b.outcome === 'closed' ? 'Closed' : 'Unknown');
       const dates = el('dl', 'past-board-dates');
       for (const [label, ts] of [['Opened', b.opened_at], ['Settled', b.settled_at], ['Closed', b.closed_at]]) {
         const value = el('dd');
@@ -7150,7 +7151,8 @@
     if (tabbed) head.append(boardTabs(r));
     if (past) {
       head.append(pastBoardsBack(past), title, el('span', 'chip', 'Read-only'),
-        el('span', 'chip' + (b.pr_state === 'merged' ? ' chip-ok' : ''), b.pr_state === 'merged' ? 'Merged' : 'Unknown'));
+        el('span', 'chip' + (b.pr_state === 'merged' ? ' chip-ok' : ''),
+          b.pr_state === 'merged' ? 'Merged' : b.pr_state === 'closed' ? 'Closed' : 'Unknown'));
     } else {
       head.append(title, status, boardHandoff(r, b), close);
     }

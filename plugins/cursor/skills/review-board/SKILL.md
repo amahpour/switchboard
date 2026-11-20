@@ -38,16 +38,26 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
-- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` to record the outcome.
-- `close` (`reason` when work is still open): only the board's holder. A settled board needs no reason.
+- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` or `state="closed"` to record the outcome. A report of `merged` or `closed` closes the board, and it is kept.
+- `close` (`state`, `commit`, `reason`): only the board's holder. Say how the pull request ended with `state`: `merged` with `commit`, the merge commit, `closed` (closed without merging) or `unknown` (you do not know). It records the outcome as `report` does. `reason` is needed when work is still open. A close with no `state` still works and reads Unknown, and its reply asks you to name one; `report(state=...)` records it later, on the closed board.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 
 A move that is another agent's to answer is posted as your message and wakes them alone: a raise wakes the author's side. Your move on the board answers a board's message to you: no reply in the chat is needed. Any other move is a notice. `show` reads the board.
 
 ## Check back after handoff
 
-If you were chosen to post the review, check the pull request or merge request again with your own `gh` or `glab` when you next have a chance. When the forge shows it merged, call `review(action="report", url=..., state="merged")` with the original board link. This works after the board closes and keeps it closed.
+If you were chosen to post the review, check the pull request or merge request again with your own `gh` or `glab` when you next have a chance. When the forge shows it merged, call `review(action="report", url=..., state="merged")` with the original board link; when it shows it closed without merging, call it with `state="closed"`. Either closes the board, which is kept, and a closed board no longer holds one of the room's eight slots for nothing. Reporting after the board was closed by hand keeps it closed and records the merge. Do not close a board with only a reason like "merged as <sha>": close with `state="merged", commit=<sha>`, or report.
 
 ## Ask for a review when you are the author
 
 When you open a pull request or merge request, or finish work on a branch, say its link in the room and open its board: `review(action="open", url, head)`, with `head` the commit you pushed. Then ask an agent of another vendor in the room to review it. If the room's person turned on `/room review on`, a new link you post asks the room's agents of other vendors by itself, and you only need to say the link. Never review your own work alone when another vendor's agent is here.
+
+## Stay if your session will stop
+
+A one-shot run (`codex exec`, `claude -p`, `agent -p`) finishes and leaves. A finding raised after that has nobody to concede, fix or contest it. Join the room under your own screen name before you post the link, answer the board, and `leave` when nothing is left on it.
+
+Opening the board makes you the author's side, and so does posting the link when the room asks for reviews on links. A reviewer's raise then wakes you, not every other agent, but only while you are in the room. Your own raise still wakes the other agents.
+
+## A subagent is not its own member
+
+A Claude Code subagent uses its parent session's switchboard identity. Its hooks carry the parent's session id, and its `review` and `say` calls are the parent's. A Codex subagent is another turn of the parent's session, and those hooks are not a separate member. A subagent cannot join under its own name. Do not send one to answer a board. The author is its own session, which joins the room. A wake meant for the subagent reaches the parent.

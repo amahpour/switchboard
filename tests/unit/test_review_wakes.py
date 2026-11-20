@@ -436,6 +436,6 @@ def test_closing_the_board_answers_every_line_on_it(w: World, clock: FakeClock) 
     r, _dispatch_park, _g = review_room(w, clock)
     r.move("codex-review", action="raise", title="off by one")
     [line] = r.lines()
-    r.move("dispatch", action="close", reason="superseded by #867")
+    r.move("dispatch", action="close", state="unknown", reason="superseded by #867")
     assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
     assert rules.redeliver_ids(w.store.in_context_items(r.agents["dispatch"][1].id)) == []

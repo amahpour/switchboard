@@ -104,7 +104,7 @@ class Boards:
                 "opened_at": rv["opened_at"],
                 "settled_at": self._settled_at(room, rv),
                 "closed_at": rv["closed_at"],
-                "outcome": "merged" if rv["pr_state"] == "merged" else "unknown",
+                "outcome": rv["pr_state"] if rv["pr_state"] in ("merged", "closed") else "unknown",
             }
             for rv in sorted(rows, key=lambda rv: (rv["closed_at"], rv["id"]), reverse=True)
         ]
@@ -270,6 +270,7 @@ class Boards:
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
+            self._guard_slot(room, rv)
             item = self._add(rv, actor, action, params)
             verb = "raised" if item.kind == "finding" else "asked"
             return self._told(
@@ -289,6 +290,8 @@ class Boards:
         to = reviews.agent_move(
             item, action, actor, owner_here=item.owner in here, raiser_here=item.raised_by in here
         )
+        if action == "reopen":
+            self._guard_slot(room, rv)
         if action == "take":
             self.store.take_review_item(item.id, actor)
             self._event(room, rv, item=item.label, to="taken", by=actor, previous_raiser=item.raised_by)
@@ -482,8 +485,10 @@ class Boards:
         url = rv["url"]
         was_closed = rv["closed_at"] is not None
         state = fields.get("pr_state")
-        if was_closed and state != "merged":
-            raise ReviewError('a closed board only accepts a report with state="merged"')
+        if was_closed and state not in ("merged", "closed"):
+            raise ReviewError('a closed board only accepts a report with state="merged" or state="closed"')
+        if state == "closed" and rv["pr_state"] == "merged":  # open (reopened) or closed alike
+            raise ReviewError(f"{url} is recorded as merged already: a closed report would overwrite it")
         ended = state in ("merged", "closed")
         result = {"ok": True, "closed": True, "board": f"{url} is {state}: the board is closed."}
         if was_closed and all(rv[key] == value for key, value in fields.items()):
@@ -508,6 +513,12 @@ class Boards:
         board's holder closes it: anyone else's close asks a person, in the room, and changes nothing."""
         if rv["closed_at"] is not None:
             raise ReviewError(f"the board for {rv['url']} is closed already")
+        outcome, merge_commit, given = reviews.close_outcome(params)
+        if outcome == "closed" and rv["pr_state"] == "merged":
+            raise ReviewError(
+                f"the pull request for {rv['url']} is recorded as merged: a close with state=closed would"
+                ' overwrite it. Close with state="merged", or with no state.'
+            )
         items = self.store.review_items(rv["id"])
         open_items = reviews.open_items(items)
         holder = reviews.holder(rv)
@@ -530,15 +541,28 @@ class Boards:
             )
         labels = [item.label for item in open_items]
         line = f"Review board for {ref} closed by {actor}"
+        if outcome != "unknown":  # the pull request's outcome, a claim in the closer's name (#886)
+            line += f", the pull request {outcome}" + (f" as {merge_commit}" if merge_commit else "")
         line += f": {reason}" if reason else "."
         if labels:
             line += f". Open items: {', '.join(labels)}."
-        self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
-        self._event(room, rv, close=rv["url"], by=actor, reason=reason, open=labels)
+        now = self.state.clock.now()
+        if outcome == "unknown":
+            self.store.set_review(rv["id"], closed_at=now, closed_by=actor)
+        else:  # recorded as report records it, so Past boards, the Usage page and the stats read it
+            fields = {"pr_state": outcome}
+            self.store.set_review(
+                rv["id"], **fields, closed_at=now, closed_by=actor, reported_by=actor, reported_at=now
+            )
+            self._event(
+                room, rv, report={**fields, **({"commit": merge_commit} if merge_commit else {})}, by=actor
+            )
+        self._event(room, rv, close=rv["url"], by=actor, reason=reason, open=labels, outcome=outcome)
         self.state.service.post_notice(room, line, level="info")
         self._settle(room, rv, closed=True)
         self._publish(room)
-        return {"ok": True, "closed": True, "board": None, "note": KEPT}
+        note = KEPT if given else f"{KEPT} Next time, {reviews.CLOSE_OUTCOME_HELP}."
+        return {"ok": True, "closed": True, "board": None, "note": note}
 
     def _reset(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """A fresh board for a URL that has one, on purpose (§37.14): the earlier board stays in the
@@ -553,7 +577,8 @@ class Boards:
         holder = reviews.holder(rv)
         if actor != holder:
             raise ReviewError(f"{self._ref(rv)} was opened by {holder}: only {holder} can reset it")
-        self._check_room(room, closing=rv["closed_at"] is None)
+        freeing = rv["closed_at"] is None and reviews.fills_open_slot(self.store.review_items(rv["id"]))
+        self._check_room(room, freeing=freeing, grows=rv["closed_at"] is not None)
         if rv["closed_at"] is None:
             self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
         self._settle(room, rv, closed=True)
@@ -702,14 +727,43 @@ class Boards:
             out["note"] = "The board was closed: it is open again, with its items and history."
         return out
 
-    def _check_room(self, room: Room, *, closing: bool = False) -> None:
-        """A room holds at most ``MAX_OPEN_BOARDS`` open boards (§37.14). ``closing``: the move also
-        closes one, so the count doesn't grow."""
-        open_ = len(self.store.open_reviews(room.id))
-        if open_ - (1 if closing else 0) >= reviews.MAX_OPEN_BOARDS:
+    def _filling(self, room: Room) -> list[dict[str, Any]]:
+        """Open boards that take a slot: empty ones, and any that still have work (§37.14)."""
+        return [
+            rv
+            for rv in self.store.open_reviews(room.id)
+            if reviews.fills_open_slot(self.store.review_items(rv["id"]))
+        ]
+
+    def _check_room(
+        self, room: Room, *, freeing: bool = False, adding: bool = True, grows: bool = True
+    ) -> None:
+        """A room holds at most ``MAX_OPEN_BOARDS`` boards that fill a slot (§37.14, #886). A settled
+        board with cards does not. ``freeing``: this move closes one that fills a slot. ``adding``: the
+        board being opened fills one (a settled reopen does not). ``grows``: the move adds an open
+        board, which the ceiling ``MAX_OPEN_BOARDS_TOTAL`` on all open boards counts (#886). A refusal
+        names the boards to close, so a full room can always make room."""
+        filling = self._filling(room)
+        open_ = self.store.open_reviews(room.id)
+        if len(open_) + (1 if grows else 0) > reviews.MAX_OPEN_BOARDS_TOTAL:
+            settled = [rv["url"] for rv in open_ if rv not in filling]
             raise ReviewError(
-                f"{room.name} has {open_} open boards, the most it holds: close one before opening another"
+                f"{room.name} has {len(open_)} open boards, the most it keeps open at all"
+                f" ({reviews.MAX_OPEN_BOARDS_TOTAL}), settled ones included: close a finished one with"
+                f" state merged, closed or unknown ({', '.join(settled) or 'none are settled'})"
             )
+        if len(filling) - (1 if freeing else 0) + (1 if adding else 0) > reviews.MAX_OPEN_BOARDS:
+            urls = ", ".join(rv["url"] for rv in filling)
+            raise ReviewError(
+                f"{room.name} has {len(filling)} open boards, the most it holds: close one before opening"
+                f" another ({urls}). A finished one is closed with state merged, closed or unknown"
+            )
+
+    def _guard_slot(self, room: Room, rv: dict[str, Any]) -> None:
+        """A move that puts work back on a settled board takes a slot. At the cap it is refused,
+        the same way opening another board is."""
+        if not reviews.fills_open_slot(self.store.review_items(rv["id"])):
+            self._check_room(room, grows=False)
 
     def _open_board(
         self, room: Room, by: str, url: str, head: str, *, author: str = ""
@@ -734,7 +788,8 @@ class Boards:
             how = "opened"
         else:
             if rv["closed_at"] is not None:
-                self._check_room(room)
+                adding = reviews.fills_open_slot(self.store.review_items(rv["id"]))
+                self._check_room(room, adding=adding)
                 self.store.reopen_review(rv["id"], by)
                 self._notice(
                     room, f"{by} opened the review board for {url} again: its items and history are back"
