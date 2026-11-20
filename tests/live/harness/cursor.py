@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -31,6 +32,10 @@ from pathlib import Path
 from . import screens
 from .run import Run
 from .tmuxdrv import REAL_HOME, clean_env
+
+WORKER_SERVER = re.compile(
+    r"/cursor-agent/versions/([\w.-]+)/node \S*/cursor-agent/versions/\1/index\.js worker-server$"
+)
 
 REPO = Path(__file__).resolve().parents[3]
 MODEL = "auto"
@@ -113,7 +118,14 @@ class CursorRun(Run):
     # plugin's postToolUse hooks cover every tool. Before that they matched switchboard's own tools only and a
     # shell command ran none, so the message waited for the next switchboard call (path ``say``, seen live on
     # 2026-10-22, #394). ``Run.mid_paths`` is ``{"hook_ctx"}``; a unit test holds it to what the hooks do.
-    helpers = ("typescript",)  # Cursor's own language-server helper (an npx node process) outlives it
+    helpers = (
+        "typescript",  # Cursor's own language-server helper (an npx node process) outlives it
+        # Cursor's own worker, its bundled node running its own entry point, which Cursor Agent 2026.11.19
+        # starts on a resume after a long idle (seen live: `test_6` after #885's 12-minute park). Matched to
+        # one install, node and index.js in the same versions folder, so a server of the user's that is
+        # merely named worker-server is still flagged.
+        WORKER_SERVER,
+    )
 
     def prepare(self) -> None:
         self.cursor_home = self.base / "cursor-home"
