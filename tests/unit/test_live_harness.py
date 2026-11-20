@@ -173,6 +173,7 @@ def test_cursors_own_worker_server_is_its_helper_and_a_look_alike_is_not() -> No
     version, or the same version in another folder), a script elsewhere named the same, a command that only
     ends in the worker's shape, or the worker with arguments added."""
     v = "/tmp/h/.local/share/cursor-agent/versions"
+    ver = "2026.11.19-f005e9d"
     ps = "\n".join(
         [
             "100 1 tmux",
@@ -182,8 +183,8 @@ def test_cursors_own_worker_server_is_its_helper_and_a_look_alike_is_not() -> No
             "104 101 node /tmp/evil/index.js worker-server",
             f"105 101 {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js worker-server --mcp x",
             "106 101 node /tmp/h/.npm/_npx/9/node_modules/.bin/typescript-language-server",
-            f"107 101 {v}/2026.11.19-f005e9d/node /tmp/cursor-agent/versions/2026.11.19-f005e9d/index.js worker-server",
-            f"108 101 node /tmp/server.js {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js worker-server",
+            f"107 101 {v}/{ver}/node /tmp/cursor-agent/versions/{ver}/index.js worker-server",
+            f"108 101 node /tmp/server.js {v}/{ver}/node {v}/{ver}/index.js worker-server",
         ]
     )
     procs = preflight.parse(ps)
