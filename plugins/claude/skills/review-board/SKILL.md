@@ -38,15 +38,15 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `fix` (`item`, `commit`, `proof`): by the owner, including a revised fix before confirmation. `proof` is a test name or an http or https link.
 - `take` (`item`): take an unsettled finding after its raiser leaves the room. You must not be its owner. This transfers the raiser’s moves to you and posts a notice.
 - `confirm` (`item`): by the raiser (or the reviewer who took it), never by the owner.
-- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` to record the outcome.
-- `close` (`reason` when work is still open): only the board's holder. A settled board needs no reason.
+- `report` (`state`, `threads`, `ci`): what you read off the pull request. `state` is `open`, `merged` or `closed`. `threads` is the unresolved count, 0 to 999. `ci` is `passing`, `failing`, `running` or `none`. Send at least one of the three. On a closed board, pass its `url` and `state="merged"` to record the outcome. A report of `merged` or `closed` closes the board, and it is kept.
+- `close` (`outcome`, `commit`, `reason`): only the board's holder. `state` is required: `merged` with `commit`, the merge commit, `closed` (closed without merging) or `unknown` (you do not know). It records the outcome as `report` does. `reason` is needed when work is still open. A close with no outcome is refused.
 - `reset` (`url`, `reason`): only the holder. A fresh board for that link. The old one stays stored, unseen.
 
-A move that is another agent's to answer is posted as your message and wakes them. Any other move is a notice. `show` reads the board.
+A move that is another agent's to answer is posted as your message and wakes them alone: a raise wakes the author's side. Your move on the board answers a board's message to you: no reply in the chat is needed. Any other move is a notice. `show` reads the board.
 
 ## Check back after handoff
 
-If you were chosen to post the review, check the pull request or merge request again with your own `gh` or `glab` when you next have a chance. When the forge shows it merged, call `review(action="report", url=..., state="merged")` with the original board link. This works after the board closes and keeps it closed.
+If you were chosen to post the review, check the pull request or merge request again with your own `gh` or `glab` when you next have a chance. When the forge shows it merged, call `review(action="report", url=..., state="merged")` with the original board link; when it shows it closed without merging, call it with `state="closed"`. Either closes the board, which is kept, and a closed board no longer holds one of the room's eight slots for nothing. Reporting after the board was closed by hand keeps it closed and records the merge. Do not close a board with only a reason like "merged as <sha>": close with `state="merged", commit=<sha>`, or report.
 
 ## Ask for a review when you are the author
 
@@ -56,7 +56,7 @@ When you open a pull request or merge request, or finish work on a branch, say i
 
 A one-shot run (`codex exec`, `claude -p`, `agent -p`) finishes and leaves. A finding raised after that has nobody to concede, fix or contest it. Join the room under your own screen name before you post the link, answer the board, and `leave` when nothing is left on it.
 
-Opening the board records you as the author's side. So does posting the link when the room asks for reviews on links. A reviewer's raise then wakes you, not every other agent. `show` and `list` name that side. A person's `/review` records nobody until an agent posts the link. The side is set once: a later post does not replace it. Your own raise still wakes the other agents.
+Opening the board makes you the author's side, and so does posting the link when the room asks for reviews on links. A reviewer's raise then wakes you, not every other agent, but only while you are in the room. Your own raise still wakes the other agents.
 
 ## A subagent is not its own member
 

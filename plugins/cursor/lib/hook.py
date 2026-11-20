@@ -9,10 +9,12 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
+VERSION = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 # a delivery's batch token, as switchboard writes it into a tool's answer
 TOKEN = re.compile(r"yk:b\d{1,12}\.[0-9a-f]{8}")
 MAX_TOKENS = 20
@@ -29,9 +31,23 @@ OTHER = ("post-other", "failure-other")
 OWN_TOOL = "MCP:switchboard_"  # how Cursor names the tools of the plugin's server
 ID_MAX = 128  # an id or a tool's name longer than this is not relayed (the broker takes no more)
 OTHER_TIMEOUT = 1.5  # under the group's own timeout (2 s): the script ends itself, Cursor never kills it
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+OUTAGE_LIMIT_S = 120
 
 
-def send(path, body, timeout):
+def plugin_version():
+    """This plugin's own version, from its manifest, for X-Switchboard-Plugin-Version (docs/DESIGN.md §49.13).
+    Only ``X.Y.Z`` of digits is sent: a missing or odd manifest sends no header, and never breaks a hook."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".cursor-plugin", "plugin.json")
+        with open(path, encoding="utf-8") as f:
+            version = json.load(f).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return version if isinstance(version, str) and VERSION.fullmatch(version) else None
+
+
+def send(path, body, timeout, retry_stop=False):
     base = os.environ.get("SWITCHBOARD_URL", "").rstrip("/")
     token = os.environ.get("SWITCHBOARD_AGENT_TOKEN", "")
     u = urlsplit(base)
@@ -40,17 +56,62 @@ def send(path, body, timeout):
         and not (u.scheme == "http" and u.hostname in ("localhost", "127.0.0.1", "switchboard.localhost"))
     ):
         return None
-    req = urllib.request.Request(
-        base + path,
-        data=json.dumps(body).encode(),
-        headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
-        method="POST",
-    )
+    headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+    version = plugin_version()
+    if version:
+        headers["X-Switchboard-Plugin-Version"] = version
+    req = urllib.request.Request(base + path, data=json.dumps(body).encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.load(response)
-    except (OSError, ValueError, urllib.error.HTTPError):
+    except urllib.error.HTTPError as err:
+        err.close()
+        if retry_stop and err.code in RETRY_STATUSES:
+            raise
         return None
+    except OSError:
+        if retry_stop:
+            raise
+        return None
+    except ValueError:
+        return None
+
+
+def park(body):
+    """Only Stop backs off on outages, within the original hook's time budget."""
+    stop_deadline = time.monotonic() + body["wait_s"]
+    retry_deadline = None
+    backoff = 1
+    while True:
+        began = time.monotonic()
+        remaining = int(stop_deadline - began)
+        if remaining < 10:
+            break
+        try:
+            return send("/mcp/event", {**body, "wait_s": remaining}, remaining + 10, retry_stop=True)
+        except OSError as err:
+            now = time.monotonic()
+            if now - began >= 10:
+                retry_deadline = None
+                backoff = 1
+                continue
+            delay = backoff
+            if isinstance(err, urllib.error.HTTPError):
+                retry_deadline = None
+            else:
+                if retry_deadline is None:
+                    retry_deadline = now + OUTAGE_LIMIT_S
+                if now >= retry_deadline:
+                    print(
+                        "[switchboard] Switchboard has been unreachable for at least 2 minutes. "
+                        "The listener stopped. Start a turn in Cursor to listen again.",
+                        file=sys.stderr,
+                    )
+                    return None
+                delay = min(delay, retry_deadline - now)
+            time.sleep(min(delay, max(0, stop_deadline - now - 10)))
+            backoff = min(backoff * 2, 60)
+    return None
 
 
 def short(value):
@@ -143,8 +204,10 @@ def main():
         text = out if isinstance(out, str) else json.dumps(out)
         body["tool_response"] = " ".join(list(dict.fromkeys(TOKEN.findall(text)))[:MAX_TOKENS])
     if kind == "stop":
-        body["wait_s"] = 630
-    reply = send("/mcp/event", body, 650 if kind == "stop" else 5)
+        body["wait_s"] = 3630
+        reply = park(body)
+    else:
+        reply = send("/mcp/event", body, 5)
     if isinstance(reply, dict) and (
         set(reply) == {"followup_message"} or set(reply) == {"additional_context"}
     ):

@@ -2,8 +2,9 @@
 
 A transcript outlives the session, and people paste secrets into it, or agents echo them. The step that stores
 a message (``Service.human_say`` for a person, ``AgentApi.say`` for an agent) calls ``redact`` first, so a
-secret never reaches the database, the search index, the WebSocket or another agent. The patterns are fixed
-here: a room message never changes them.
+secret never reaches the database, the search index, the WebSocket or another agent. A review board reads its
+text through ``reviews.text``, which calls it too (#890): a card and the line a move posts hold none either.
+The patterns are fixed here: a room message never changes them.
 
 **Best effort, and tightened only by evidence.** Only shapes that are obviously a secret match, so an ordinary
 sentence, a hash in a code block, a git SHA or a UUID is left alone: a well-known key prefix followed by a

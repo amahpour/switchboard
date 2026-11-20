@@ -57,6 +57,13 @@ FIXTURES = ROOT / "tests" / "fixtures" / "compat"
 OLD_PLUGIN = FIXTURES / "plugin-1.0.0"
 OLD_SERVER = json.loads((FIXTURES / "server-1.0.0.json").read_text())
 TOKEN = "sbat_" + "x" * 43
+# Optional headers the newest listener may add that the oldest release never read. Adding one is a minor
+# change, not a major one, when an older server ignores it and the plugin still works without it: the
+# maintainer's ruling of 2026-11-19 ("As long as backwards compatible ignores it then it is NOT a breaking
+# change"). Each entry says what it is for; the stand-in, like the old server, ignores it.
+ADDITIVE_HEADERS = {
+    "x-switchboard-resume-idle": "#838: this listener was parked before a broker restart",
+}
 
 
 def major(version: str) -> int:
@@ -328,9 +335,16 @@ def check_old_server_would_accept(requests: list[tuple[str, str, dict[str, str],
         assert h.get("x-switchboard-again") in ("0", "1")
         assert "origin" not in h
         sent = {k for k in h if k.startswith("x-switchboard") or k == "authorization"}
-        assert sent <= set(OLD_SERVER["listen"]["headers_read"]), sent - set(
-            OLD_SERVER["listen"]["headers_read"]
-        )
+        allowed = set(OLD_SERVER["listen"]["headers_read"]) | set(ADDITIVE_HEADERS)
+        assert sent <= allowed, sent - allowed
+
+
+def test_an_additive_header_is_one_the_oldest_release_never_read() -> None:
+    """An optional header is listed as additive only while the oldest release of the major ignores it
+    (the maintainer's ruling of 2026-11-19). A header the old server reads is part of the protocol it
+    checks, so it can't hide in that list. Fails if a protocol header is moved into ADDITIVE_HEADERS."""
+    assert not set(ADDITIVE_HEADERS) & set(OLD_SERVER["listen"]["headers_read"])
+    assert all(name.startswith("x-switchboard-") for name in ADDITIVE_HEADERS)
 
 
 def listen_once(

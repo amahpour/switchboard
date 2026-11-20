@@ -73,7 +73,7 @@ async def test_closing_a_board_keeps_it_and_open_brings_back_its_items_history_a
             await tool(author, action="concede", item="F1")
             await tool(author, action="fix", item="F1", commit="bbb2222", proof="test_total")
             await tool(reviewer, action="confirm", item="F1")
-            closed = await tool(reviewer, action="close", reason="moving on")
+            closed = await tool(reviewer, action="close", state="unknown", reason="moving on")
             assert closed["ok"] and closed["closed"] and "is kept" in closed["note"], closed
             assert boards(web) == []
 
@@ -81,7 +81,7 @@ async def test_closing_a_board_keeps_it_and_open_brings_back_its_items_history_a
             assert shown["ok"], shown
             head_line, *lines = shown["board"].splitlines()
             assert head_line.startswith(f"Review of {PR_A} at aaa1111: open (closed by codex-1 on ")
-            assert head_line.endswith("; open(url) brings it back). Author's side: codex-1")
+            assert head_line.endswith("; open(url) brings it back)")
             assert any(x.startswith("F2 [raised] rounding") for x in lines)
             assert any(x.startswith("F1 [fixed] wrong total") for x in lines)
             listed = (await tool(author, action="list"))["boards"]
@@ -184,66 +184,20 @@ async def test_a_settled_board_does_not_count_toward_the_open_limit(broker: InPr
         assert still["ok"] is False and "the most it holds" in still["error"]
         back = await tool(agent, action="raise", url=urls[0], title="another gap")
         assert back["ok"] is False and "the most it holds" in back["error"]
-        assert (await tool(agent, action="close", url=urls[1]))["ok"]
+        assert (await tool(agent, action="close", state="unknown", url=urls[1]))["ok"]
         assert (await tool(agent, action="raise", url=urls[0], title="another gap"))["ok"]
         # settle it and close it, then fill the slot it held: bringing the settled board back
         # needs no slot, and bringing back one that still has a finding does
         assert (await tool(agent, action="drop", url=urls[0], item="F2", reason="withdrawn"))["ok"]
-        assert (await tool(agent, action="close", url=urls[0]))["ok"]
+        assert (await tool(agent, action="close", state="unknown", url=urls[0]))["ok"]
         assert (await tool(agent, action="open", url=urls[1]))["ok"]
         assert (await tool(agent, action="open", url=urls[0]))["ok"]
         assert (await tool(agent, action="raise", url=extra, title="still open"))["ok"]
-        assert (await tool(agent, action="close", url=extra, reason="pausing it"))["ok"]
+        assert (await tool(agent, action="close", state="unknown", url=extra, reason="pausing it"))["ok"]
         fresh = "https://github.com/example/shop/pull/92"
         assert (await tool(agent, action="open", url=fresh))["ok"]
         refused = await tool(agent, action="open", url=extra)
         assert refused["ok"] is False and "the most it holds" in refused["error"], refused
-
-
-async def test_the_agent_that_opens_a_board_is_its_authors_side_and_a_raise_wakes_only_them(
-    broker: InProcBroker,
-) -> None:
-    """The member who opens a board is the author's side. A reviewer's raise wakes that member,
-    not every other agent, and ``show`` names them. A person opening a board names nobody, and a
-    later head move does not take the side. Fails if a raise still wakes the whole room, or if
-    the side is missing from the board the agents read."""
-    async with (
-        FakeAgent(broker.home, "k1") as author,
-        FakeAgent(broker.home, "k2") as reviewer,
-        FakeAgent(broker.home, "k3") as other,
-    ):
-        await author.join("#build", "grok-author")
-        await reviewer.join("#build", "codex-1")
-        await other.join("#build", "claude-1")
-        opened = await tool(author, action="open", url=PR_A, head="abc1234def")
-        assert opened["ok"] and "Author's side: grok-author" in opened["board"]
-        raised = await tool(reviewer, action="raise", url=PR_A, title="tax order")
-        assert raised["ok"]
-        told = q(broker, "SELECT text FROM messages WHERE kind='chat' AND sender_name='codex-1'")
-        assert told[-1]["text"].startswith("Review board: F1 raised: tax order. @grok-author:")
-        assert "@claude-1" not in told[-1]["text"] and "@codex-1" not in told[-1]["text"]
-        moved = await tool(reviewer, action="open", url=PR_A, head="def5678abc")
-        assert moved["ok"] and "Author's side: grok-author" in moved["board"]
-        row = q(broker, "SELECT author_side FROM reviews WHERE url=?", PR_A)[0]
-        assert row["author_side"] == "grok-author"
-        # the author raising a gap wakes the reviewers, not themselves
-        gap = await tool(author, action="raise", title="a gap I see")
-        assert gap["ok"]
-        own = q(broker, "SELECT text FROM messages WHERE kind='chat' AND sender_name='grok-author'")
-        assert "@codex-1" in own[-1]["text"] and "@claude-1" in own[-1]["text"]
-        assert "@grok-author" not in own[-1]["text"]
-        web = broker.web_client()
-        try:
-            started = web.post(
-                "/api/rooms/build/command",
-                json={"text": f"/review {PR_B}"},
-                headers=broker.write_headers(),
-            )
-            assert started.status_code == 200, started.text
-            person = q(broker, "SELECT opened_by, author_side FROM reviews WHERE url=?", PR_B)[0]
-            assert person["opened_by"] == "alice" and person["author_side"] == ""
-        finally:
-            web.close()
 
 
 async def test_a_room_holds_at_most_a_handful_of_open_boards(broker: InProcBroker) -> None:
@@ -256,7 +210,7 @@ async def test_a_room_holds_at_most_a_handful_of_open_boards(broker: InProcBroke
             assert (await tool(agent, action="open", url=u))["ok"]
         refused = await tool(agent, action="open", url=urls[-1])
         assert refused["ok"] is False and "the most it holds" in refused["error"], refused
-        assert (await tool(agent, action="close", url=urls[0]))["ok"]
+        assert (await tool(agent, action="close", state="unknown", url=urls[0]))["ok"]
         assert (await tool(agent, action="open", url=urls[-1]))["ok"]
         again = await tool(agent, action="open", url=urls[0])  # the room is full again
         assert again["ok"] is False and "the most it holds" in again["error"]
@@ -277,10 +231,10 @@ async def test_only_the_holder_or_a_person_closes_a_board_and_anyone_elses_close
             await tool(author, action="open", url=PR_A)
             await tool(author, action="raise", title="tax order")
 
-            bare = await tool(reviewer, action="close", url=PR_A)
+            bare = await tool(reviewer, action="close", state="unknown", url=PR_A)
             assert bare["ok"] is False and "reason is required" in bare["error"]
             for _ in range(2):
-                refused = await tool(reviewer, action="close", url=PR_A, reason="stale")
+                refused = await tool(reviewer, action="close", state="unknown", url=PR_A, reason="stale")
                 assert refused["ok"] is False
                 assert "#7 was opened by claude-1: only claude-1 or a person can close it" in refused["error"]
             assert len(boards(web)) == 1  # nothing changed
@@ -300,9 +254,9 @@ async def test_only_the_holder_or_a_person_closes_a_board_and_anyone_elses_close
             assert (await tool(reviewer, action="open", url=PR_A))["ok"]
             [board] = boards(web)
             assert (board["opened_by"], board["reopened_by"]) == ("claude-1", "codex-1")
-            no = await tool(author, action="close", reason="mine")
+            no = await tool(author, action="close", state="unknown", reason="mine")
             assert no["ok"] is False and "only codex-1 or a person" in no["error"]
-            yes = await tool(reviewer, action="close", reason="done")
+            yes = await tool(reviewer, action="close", state="unknown", reason="done")
             assert yes["ok"] and yes["closed"]
             assert q(broker, "SELECT closed_by FROM reviews")[0]["closed_by"] == "codex-1"
             assert any(n.startswith("Review board for #7 closed by codex-1: done") for n in notices(broker))
@@ -412,9 +366,8 @@ async def test_a_boards_history_and_handoff_decisions_are_its_own_though_labels_
 async def test_reset_starts_a_fresh_board_and_keeps_the_old_one_in_the_database(broker: InProcBroker) -> None:
     """``reset`` is on purpose: the url, a reason, and the board's holder. The fresh board is empty and
     its history starts over, while the earlier board's items and events stay stored and nothing is
-    deleted. The author's side is copied onto the fresh row. Fails if a bystander can reset, a reset
-    needs no reason, the old rows are dropped, the fresh board's F1 reads the old F1's moves, or the
-    side is lost."""
+    deleted. Fails if a bystander can reset, a reset needs no reason, the old rows are dropped, or the
+    fresh board's F1 reads the old F1's moves."""
     web = broker.web_client()
     try:
         async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
@@ -436,9 +389,7 @@ async def test_reset_starts_a_fresh_board_and_keeps_the_old_one_in_the_database(
             assert [i["title"] for i in boards(web)[0]["items"]] == ["old finding"]  # nothing happened
 
             fresh = await tool(author, action="reset", url=PR_A, reason="the PR was rebuilt")
-            assert fresh["ok"] and fresh["board"].splitlines() == [
-                f"Review of {PR_A}: settled. Author's side: claude-1"
-            ], fresh
+            assert fresh["ok"] and fresh["board"].splitlines() == [f"Review of {PR_A}: settled"], fresh
             [board] = boards(web)
             assert board["items"] == [] and board["id"] == 2
             await tool(author, action="raise", title="new finding")
@@ -467,7 +418,7 @@ async def test_list_names_each_board_once_even_after_a_reset(broker: InProcBroke
         await agent.join("#build", "claude-1")
         await tool(agent, action="open", url=PR_A)
         await tool(agent, action="open", url=PR_B)
-        await tool(agent, action="close", url=PR_B)
+        await tool(agent, action="close", state="unknown", url=PR_B)
         await tool(agent, action="reset", url=PR_A, reason="again")
         text = (await tool(agent, action="list"))["boards"]
         lines = [x for x in text.splitlines() if x.startswith("https://")]
@@ -524,9 +475,9 @@ async def test_every_move_gives_the_page_all_the_open_boards_and_the_last_close_
             await tool(agent, action="raise", url=PR_A, title="only A moved")
             both = frame(lambda bs: len(bs) == 2 and bs[0]["items"])
             assert [b["url"] for b in both] == [PR_A, PR_B]
-            await tool(agent, action="close", url=PR_A, reason="r")
+            await tool(agent, action="close", state="unknown", url=PR_A, reason="r")
             assert [b["url"] for b in frame(lambda bs: len(bs) == 1)] == [PR_B]
-            await tool(agent, action="close", url=PR_B)
+            await tool(agent, action="close", state="unknown", url=PR_B)
             assert frame(lambda bs: bs == []) == []
     finally:
         ws.close()
@@ -571,7 +522,7 @@ async def test_past_review_route_lists_closed_boards_and_reads_one_but_not_an_op
         await agent.join("#build", "claude-1")
         assert (await tool(agent, action="open", url=PR_A))["ok"]
         assert (await tool(agent, action="raise", title="Check tax order"))["ok"]
-        assert (await tool(agent, action="close", reason="paused"))["ok"]
+        assert (await tool(agent, action="close", state="unknown", reason="paused"))["ok"]
         assert (await tool(agent, action="open", url=PR_B))["ok"]
         web = broker.web_client()
         try:

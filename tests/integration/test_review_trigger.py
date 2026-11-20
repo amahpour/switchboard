@@ -92,37 +92,6 @@ async def room_of(broker: InProcBroker, *agents: tuple[str, str]) -> list[FakeAg
     return out
 
 
-async def test_a_posted_link_records_the_author_and_a_second_poster_does_not_take_it(
-    broker: InProcBroker,
-) -> None:
-    """With the room's setting on, the agent who posts the link is the board's author's side, even
-    though switchboard opens the board. A later post of the same link does not replace them, and
-    a board a person already opened takes the poster when it had no side. Fails if the side stays
-    switchboard, or if the reviewer who mentions the link becomes the author."""
-    a, b = await room_of(broker, ("grok-author", "claude"), ("codex-1", "codex"))
-    try:
-        command(broker, "/room review on")
-        web = broker.web
-        started = web.post(
-            "/api/rooms/build/command",
-            json={"text": f"/review {PR}2"},
-            headers=broker.write_headers(),
-        )
-        assert started.status_code == 200, started.text
-        await say(broker, a, f"please look at {PR}2")
-        await say(broker, b, f"I see {PR}2")
-        person = broker.on_loop(lambda: broker.state.store.review_for_url(1, PR + "2"))
-        assert person is not None and person["author_side"] == "grok-author"
-        await say(broker, a, f"opened {PR}")
-        await say(broker, b, f"also {PR}")
-        opened = broker.on_loop(lambda: broker.state.store.review_for_url(1, PR))
-        assert opened is not None and opened["opened_by"] == "switchboard"
-        assert opened["author_side"] == "grok-author"
-    finally:
-        await a.close()
-        await b.close()
-
-
 async def test_with_the_setting_off_a_posted_link_changes_nothing(broker: InProcBroker) -> None:
     """The default: nothing is asked and no board opens, so a room that never turned this on is as it was.
     Fails if a link opens a board or posts a request while the setting is off."""

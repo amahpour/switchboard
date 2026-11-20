@@ -169,6 +169,7 @@ TOKEN_HEADER = b"x-switchboard-token"  # where the plugin sends a typed token: n
 SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
+RESUME_IDLE_HEADER = b"x-switchboard-resume-idle"  # Claude listener revocable by local hooks
 WAIT_MAX_S = 86400.0  # the longest any one wait is held (a Codex Stop hook may ask for a day)
 LISTEN_AGAIN = frozenset({"timeout", "paused"})  # a round that ended so: the listener waits again (408)
 # the states of a session whose turn is running or that has ended: a listener that reconnects (a later
@@ -748,6 +749,13 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _plugin_raw(scope: Scope) -> str | None:
+    """The plugin-version header of a hook or listener request, cut, or None when it carried none: a
+    request without it says nothing about the plugin (§49.13)."""
+    raw = _header(scope, plugin_versions.HEADER)
+    return raw[:PLUGIN_RAW_MAX] if raw is not None else None
+
+
 @dataclass(frozen=True)
 class Door:
     """Who is at ``/mcp/listen`` or ``/mcp/session``: the token (a key's own token, when it came in with a
@@ -1049,7 +1057,7 @@ class CommandHook:
                 return
             self.tools.input_uses.report(row.id, harness, sid, use, tool)
             if harness == "devin":
-                conn = self.tools.conn_for(row, harness)
+                conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
                 await self.tools.state.agents.http_hook(
                     conn,
                     harness,
@@ -1084,7 +1092,7 @@ class CommandHook:
             # session id and nothing else of the body (not the tool, its input or the rest of the hook's
             # payload, which the plugin's script doesn't send either), and the reply is always empty: the
             # hook's command discards it, and the server never writes a decision (§11).
-            conn = self.tools.conn_for(row, harness)
+            conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
             await self.tools.state.agents.http_hook(
                 conn, harness, ev, hook_params(ev, {"session_id": sid}, self.tools.state.clock.now())
             )
@@ -1098,7 +1106,7 @@ class CommandHook:
             await _reply(send, 200, {})
             return
         agents: Any = self.tools.state.agents
-        conn = self.tools.conn_for(row, harness)
+        conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
         res = await agents.http_hook(
             conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
         )
@@ -1169,7 +1177,7 @@ class OpenCodeStatus:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
             self.auth.touch(row)
-            conn = self.tools.conn_for(row, "opencode")
+            conn = self.tools.conn_for(row, "opencode", plugin=_plugin_raw(scope))
             self.tools.state.agents.http_continue(
                 conn, sid, body["batch_id"], body["ack"], queued=event == "wake.queued"
             )
@@ -1197,7 +1205,7 @@ class OpenCodeStatus:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
         self.auth.touch(row)
-        conn = self.tools.conn_for(row, "opencode")
+        conn = self.tools.conn_for(row, "opencode", plugin=_plugin_raw(scope))
         agents = self.tools.state.agents
         p = agents.http_session(conn, sid)
         ev = OPENCODE_STATUS_EVENTS[event]
@@ -1222,7 +1230,8 @@ class Listener:
     A later round (``X-Switchboard-Again: 1``) is the same listener coming back after a proxy cut its
     wait, so it is refused (409) only when the session has moved on (``MOVED_ON``: a turn started, or
     the session ended) and waits in any other state. A refusal ends the listener for good, so a state
-    that merely isn't "idle" must not cause one (#436). Each refusal is logged at warning level."""
+    that merely isn't "idle" must not cause one (#436). At startup, a session that was idle is offline
+    until its listener returns. Each refusal is logged at warning level."""
 
     def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
         self.auth = auth
@@ -1280,7 +1289,7 @@ class Listener:
             wait = 900.0
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
-        conn = self.tools.conn_for(row, harness)
+        conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
         # OpenCode has already reported idle. Even a first round must not turn a busy or
         # approval-blocked session idle when its state changed between that report and this POST.
         if harness == "opencode" or _header(scope, AGAIN_HEADER) == "1":
@@ -1295,8 +1304,13 @@ class Listener:
                 log.warning("listener refused for session %s: it is in no room (409)", sid)
                 await _reply(send, 409, {"error": "not_idle", "message": "in no room: its next Stop listens"})
                 return
-            retry = _header(scope, AGAIN_HEADER) == "1" and state.engine.adapter(p).listener_retry(
-                p, any(c.participant_id == p.id for c in state.engine.continues.values())
+            can_resume = harness == "opencode" or _header(scope, RESUME_IDLE_HEADER) == "1"
+            retry = (
+                _header(scope, AGAIN_HEADER) == "1"
+                and (not p.idle_at_restart or can_resume)
+                and state.engine.adapter(p).listener_retry(
+                    p, any(c.participant_id == p.id for c in state.engine.continues.values())
+                )
             )
             if p.status in MOVED_ON and not retry:
                 why = MOVED_ON[p.status]

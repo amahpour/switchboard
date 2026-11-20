@@ -13,7 +13,7 @@ A board is about one pull request (on GitHub) or merge request (on GitLab). A ro
 
 Here is the life of a finding. Say codex-1 reviews a shop's pull request and claude-1 wrote it.
 
-1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. Every other agent in the room is woken and asked to concede or contest it.
+1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. claude-1 opened the board, so it is woken and asked to concede or contest it. Other agents in the room are not.
 2. **Concede or contest.** Another agent answers. It is never the agent that raised the finding. To *concede* is to agree, and to name the agent that will fix it. To *contest* is to disagree, with a reason.
 3. **Drop or insist.** A contest goes back to the agent that raised the finding. It either *drops* the finding, because the contest convinced it, or *insists*, with its own reason. The other side can still concede at any point.
 4. **Fixed, with proof.** The owner fixes it. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
@@ -44,14 +44,18 @@ stateDiagram-v2
 
 ### Who each move wakes
 
-Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
+Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. Only that agent gets the message: it is in the room's log, but no other agent is woken by it or has it to answer. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
 
-- A **raised** finding wakes the author's side, when the board names one and that member is in the room: concede or contest it. Otherwise it wakes every other agent. The author's own raise still wakes the other agents.
+- A **raised** finding wakes the author's side: concede or contest it. The board knows that side from what happened on it: the agents that own a finding, the agent that opened the board or moved it to a new commit, and the agents that conceded or contested a finding. An agent that has raised a finding on the board is a reviewer, so opening the board or answering another finding does not make it the author's side; owning a finding does. When switchboard opened the board for a link an agent posted, that agent is the author. An agent that is offline is left out. Until the board knows anyone on that side, for example after your `/review`, a raise wakes every other agent in the room, and the first agent to answer a finding is then the side for the raises after it.
 - A **contest** wakes the agent that raised the finding: drop it or insist.
 - A **concession** that names another agent wakes that agent: it is yours to fix.
 - A **fix**, including a revised fix, wakes the agent that raised the finding: check the proof.
 - A **reopen** wakes its owner: the raiser rejected the fix, with a reason.
-- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view.
+- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view. So does a finding raised with fix options, since its recommendation counts every agent's pick.
+
+**Several raises at once are one wake.** Each raise is its own short message, sent at once. The first wakes the agent that has to answer; the others wait while that wake is on its way, and the agent's turn gets them all together. Eleven raises cost it one turn, not eleven, and nobody else is woken by any of them.
+
+**A move on the board is the answer.** An agent does not need to reply in the chat to a board's message. Once the cards it named have moved on, or the agent has nothing left to do on them (it picked an option, or the finding is another agent's to answer), the message counts as answered for that agent. It is not brought back to it as unanswered when its turn ends, and switchboard does not remind it. An agent that still has a card to answer still gets that reminder, and so does one asked to pick among a card's options until it picks or abstains, even after the finding was conceded. A message that reached an agent only because it names something that agent claimed is answered the usual way, in the chat. Closing a board answers all of its messages.
 
 Every other move is only a notice. A notice is one line in the room that wakes nobody and costs no agent a turn. Insist, drop, defer, confirm, report, close, a pick among options and an abstention are notices. So is a concession that leaves the fix with the agent that conceded.
 
@@ -221,7 +225,9 @@ After a hand off, the board still takes reports and a close. It takes no more mo
 
 **Close board** is in the header. It asks you to confirm, then closes the board on show, whoever opened it. The board is kept, with everything on it. An agent that opens its link again, or `/review` with the link, brings it back with its findings and history. Other boards in the room stay open.
 
-Agents can close a board too. If work is still open on it, the agent has to give a reason, and the room gets a notice that names the agent, the reason and every open item. Only the agent that holds the board can close it: the one that opened it, or opened it again last. If another agent tries, nothing changes. One line in the room says it asks a person to close the board, and you close it with **Close board**.
+**Close board** records no outcome, so the board reads **Unknown** on **Past boards** until an agent reports how the pull request ended.
+
+Agents can close a board too. They must say how the pull request ended (`state`). If work is still open on it, the agent has to give a reason, and the room gets a notice that names the agent, the reason and every open item. Only the agent that holds the board can close it: the one that opened it, or opened it again last. If another agent tries, nothing changes. One line in the room says it asks a person to close the board, and you close it with **Close board**.
 
 ## What agents do
 
@@ -301,13 +307,14 @@ review(room="build", action="confirm", item="F1")
 
 ### Reporting, closing and starting over
 
-- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` to record the merge while keeping the original close time and closer.
-- **`close`** closes the board. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
+- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board, and the board is kept. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` to record the merge while keeping the original close time and closer.
+- **`close`** closes the board and says how the pull request ended, with `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown` (said on purpose). A close with no outcome is refused, and the refusal names the three. The outcome is recorded as `report` records it, so **Past boards** and the Usage page read it. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
 - **`reset`** starts a fresh board for a link that already has one, on purpose. It takes `url` and a `reason`, and only the agent that holds the board can do it. The old board stays in the database, unseen.
 
 ```text
 review(room="build", action="report", state="open", threads=2, ci="failing")
-review(room="build", action="close", reason="Moving on: the author is rewriting the change.")
+review(room="build", action="close", state="unknown", reason="Moving on: the author is rewriting the change.")
+review(room="build", action="close", state="merged", commit="0123abc4567def")
 ```
 
 ### What the agents are told
@@ -322,6 +329,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 - **Only agents in the room can move cards.** An agent calls the tool with its own credential. A move is always a tool call, never something picked out of chat text. An agent cannot answer a question. Only you can.
 - **Your answers go out as your own messages, naming items by number.** "Review board: Q1 answered with option 0." never contains an agent's title or option. If it did, an agent's words would reach every other agent as if you had said them, including any @mention in them. The agents read their own text from the board, as other agents' text.
 - **The page treats what agents write as text.** Titles and reasons are shown as plain text. A card's detail goes through the same Markdown renderer as the chat, which runs no HTML and checks every link. The links to lines and commits are built only from the forge's own parts and checked values. A Mermaid diagram is drawn with the chat's safety settings. One that cannot be drawn keeps its code and says why.
+- **Obvious secrets are cut out.** What an agent or you write on a board goes through the same check as a chat message: a key or token with a well-known prefix, `Bearer` and a long token, a private-key block, or a `password=` style value becomes `[redacted: github token]` (or its kind) before it is stored, shown or posted in the room. A board link or a proof link that holds one (or a `user:password@` in front of the host) is refused, and so is a field that the marker would make too long. This is best effort, as it is for messages ([Secrets in messages](../USAGE.md#secrets-in-messages)): don't put secrets on a board.
 - **The proof rule.** A fix has to name its commit and a proof. The agent that raised the finding checks it and confirms, and a fix cannot be confirmed by its own owner. switchboard checks only the shape of the proof, a test name or an http or https link. It never runs the test and never opens the link. Whether the proof is good is for the agent that checks it, and for you. [The proof rule on a real review](../research/proof-rule.md) has the experiment behind it.
 - **One handoff, chosen by you.** At hand off you pick which of your agents posts, and you see the exact summary and line comments first. The message that wakes that agent carries only item numbers, never an agent's words. The agent posts with its own credentials and leaves the line conversations open. switchboard stores the hand off and sends that one message. Nothing more.
 - **Nothing reaches an agent at an approval prompt.** When an agent's person has a permission prompt open, nothing is delivered to that session until the prompt is answered, and nothing in a room can answer it. The card shows "waiting for approval".
@@ -377,7 +385,7 @@ Look at its refusal, which says why. These are the usual causes:
 
 ### A card sits in Agents working and nobody moves it
 
-A raised finding is answered by the other agents. If the agent that raised it is the only one in the room, nobody can concede or contest it. It never comes to you on its own. The same happens when the other agents are idle, the room is paused or its wake budget is used up. Check Members for each agent's state. You can drop or defer the finding from its card, or add an agent to the room.
+A raised finding is answered by the author's side, or by the other agents when the board does not know that side yet. If the agent that raised it is the only one in the room, nobody can concede or contest it. It never comes to you on its own. The same happens when the other agents are idle, the room is paused or its wake budget is used up. Check Members for each agent's state. You can drop or defer the finding from its card, or add an agent to the room.
 
 ### Hand off stays locked
 
@@ -417,6 +425,10 @@ The two links differ as text, for example `…/pull/7` and `…/pull/7/files`. C
 ### A link was posted and no review was asked
 
 Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Past boards**); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
+
+### An agent's close is refused for its outcome
+
+A close needs `state`: `merged` with `commit` (the merge commit), `closed` or `unknown`. The refusal says so in one line. Have the agent close again with one, or report the merge with `state="merged"`.
 
 ### An agent can't close a board
 

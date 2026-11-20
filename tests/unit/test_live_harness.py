@@ -166,6 +166,34 @@ def test_the_preflight_flags_another_mcp_server_under_the_cli() -> None:
     assert preflight.problems(102, procs=procs) == []
 
 
+def test_cursors_own_worker_server_is_its_helper_and_a_look_alike_is_not() -> None:
+    """Cursor Agent 2026.11.19 starts its own worker on a resume after a long idle: its bundled node running
+    its own index.js. Fails if that is flagged as another MCP server (the resume test then fails, as it did
+    live after #885's long park), or if a look-alike is let through: another install's index.js (another
+    version, or the same version in another folder), a script elsewhere named the same, a command that only
+    ends in the worker's shape, or the worker with arguments added."""
+    v = "/tmp/h/.local/share/cursor-agent/versions"
+    ver = "2026.11.19-f005e9d"
+    ps = "\n".join(
+        [
+            "100 1 tmux",
+            f"101 100 {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js",
+            f"102 101 {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js worker-server",
+            f"103 101 {v}/2026.11.19-f005e9d/node {v}/2026.10.18-0000000/index.js worker-server",
+            "104 101 node /tmp/evil/index.js worker-server",
+            f"105 101 {v}/2026.11.19-f005e9d/node {v}/2026.11.19-f005e9d/index.js worker-server --mcp x",
+            "106 101 node /tmp/h/.npm/_npx/9/node_modules/.bin/typescript-language-server",
+            f"107 101 {v}/{ver}/node /tmp/cursor-agent/versions/{ver}/index.js worker-server",
+            f"108 101 node /tmp/server.js {v}/{ver}/node {v}/{ver}/index.js worker-server",
+        ]
+    )
+    procs = preflight.parse(ps)
+    flagged = sorted(x.split(":")[0] for x in preflight.problems(101, cursor.CursorRun.helpers, procs=procs))
+    assert flagged == ["103", "104", "105", "107", "108"]
+    assert preflight.is_helper(procs[2][2], cursor.CursorRun.helpers)
+    assert not preflight.is_helper(procs[4][2], cursor.CursorRun.helpers)
+
+
 def test_cursor_quota_and_login_failures_are_named() -> None:
     """Fails if a Cursor account that can't make a call is not told apart from one that failed otherwise."""
     assert (
@@ -745,7 +773,7 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the eleven live modules (nine harness runs, the meeting self-test and its
+    """With no ``SWITCHBOARD_LIVE`` the twelve live modules (ten harness runs, the meeting self-test and its
     hosted variant, which start containers and join a real call) are collected and skipped, each with the
     line that says how to run it, and nothing is run. (The hosted variant imports the self-test, whose skip
     it shares, so that line shows twice.) Fails if a live module starts a broker, a container or a CLI on
@@ -757,7 +785,7 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "11 skipped" in out and "passed" not in out and "failed" not in out, out
+    assert "12 skipped" in out and "passed" not in out and "failed" not in out, out
     for h in ("claude", "codex", "devin", "cursor", "opencode", "meeting"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
@@ -770,4 +798,5 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
         "test_live_cursor.py",
         "test_live_devin.py",
         "test_live_opencode.py",
+        "test_live_restart.py",
     ]

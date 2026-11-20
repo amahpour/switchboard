@@ -721,6 +721,8 @@ class RoomService:
         a restart forgets it until the session's next call, and a session never heard from says nothing."""
         if raw is None or p.harness not in plugin_versions.PINNED:
             return
+        if raw == "" and p.harness in plugin_versions.HEADER_NOT_ON_MCP:
+            return  # an MCP call of a plugin whose MCP connection can't carry it: not a plugin without one
         self.plugin_seen[p.id] = plugin_versions.parse(raw)
 
     def plugin_check(self, participant_id: int, harness: str) -> plugin_versions.PluginCheck | None:

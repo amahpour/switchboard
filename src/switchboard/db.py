@@ -38,16 +38,19 @@ every step up to the current version in one transaction; a newer one is refused.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
+from switchboard import reviews
 from switchboard.models import Room, room_slug
+from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
@@ -205,8 +208,7 @@ CREATE TABLE reviews(
   pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none')),
   reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
   closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
-  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL,
-  author_side TEXT NOT NULL DEFAULT '' CHECK(length(author_side) <= 24));
+  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
 CREATE INDEX reviews_room ON reviews(room_id, id);
 CREATE TABLE review_items(
   id INTEGER PRIMARY KEY, review_id INTEGER NOT NULL REFERENCES reviews(id),
@@ -1124,12 +1126,157 @@ V53_TO_V54 = (
     " CHECK(joined_with IS NULL OR length(joined_with) BETWEEN 1 AND 64)",
     "UPDATE meta SET value='54' WHERE key='schema_version'",
 )
-# v54 -> v55 (#886, DESIGN.md §37.14, §37.16): who answers a raise on this board. Empty on every
-# board already stored; a screen name is at most 24 characters (models.SCREEN_NAME_RE).
-V54_TO_V55 = (
-    "ALTER TABLE reviews ADD COLUMN author_side TEXT NOT NULL DEFAULT '' CHECK(length(author_side) <= 24)",
-    "UPDATE meta SET value='55' WHERE key='schema_version'",
+
+
+# v54 -> v55 (#890, DESIGN.md §11 item 10, §37.2): a review board's stored text is cleaned once, by
+# ``clean_review_rows`` (a step that computes), since the check on what a board takes in applies only to
+# what is written from now on. The step has no schema change.
+V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
+
+# What the cleaning reads: the review board's free text, with each column's length limit in the schema.
+# Names (who raised, owned, answered or closed something) are not text: the room's members' names were
+# checked when they joined, and a pick is keyed by one.
+_ITEM_TEXT = {
+    "title": 200,
+    "detail": 4000,
+    "reason": 500,
+    "answer": 500,
+    "deferred_to": 200,
+    "insisted": 500,
+}
+_URL_MAX = 500
+
+
+def _clean_json(value: object) -> object:
+    """``value`` with every string in it (not a key) cleaned by ``reviews.scrub``."""
+    if isinstance(value, str):
+        return reviews.scrub(value)
+    if isinstance(value, dict):
+        return {k: _clean_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean_json(v) for v in value]
+    return value
+
+
+_PLACEHOLDER = (
+    "https://invalid.example/{what}-{id}"  # a link that is clearly no real one, and one ``url`` takes
 )
+
+
+def _link_ok(url: str) -> bool:
+    """Whether ``reviews.url`` takes ``url`` as it is."""
+    try:
+        return reviews.url(url) == url
+    except reviews.ReviewError:
+        return False
+
+
+def _free_url(base: str, rid: int, taken: set[str]) -> str:
+    """``base``, if it is a link ``url`` takes, fits the column and is not ``taken`` in the room; else it with
+    ``#board-<id>`` on the end (``-1``, ``-2``... after that until nothing in the room has it), cut so the
+    whole fits; and if that is no link either, the placeholder with the same ending. A board's key is its URL,
+    so two rows of a room with one URL would hide a board: every one is checked against ``taken``."""
+    for root in (base, _PLACEHOLDER.format(what="board", id=rid)):
+        if len(root) <= _URL_MAX and root not in taken and _link_ok(root):
+            return root
+        n = 0
+        while True:
+            tail = f"#board-{rid}" + (f"-{n}" if n else "")
+            cand = root[: _URL_MAX - len(tail)] + tail
+            if cand not in taken and _link_ok(cand):
+                return cand
+            n += 1
+            if n > 1000:  # nothing so crowded exists; the placeholder is next
+                break
+    raise sqlite3.IntegrityError(f"no free URL for board {rid}")
+
+
+def _clean_board_urls(con: sqlite3.Connection) -> int:
+    """Each board's URL without credentials or secret, and still a link ``reviews.url`` takes. A room's boards
+    are its distinct URLs (a reset adds a row under the same one), and each must stay one: a URL that is
+    already clean and valid keeps it; of the others the board whose newest row is last gets the cleaned URL
+    first, and a board whose cleaned URL is taken in the room, too long, or no link (a marker in a host name
+    is not one) gets ``#board-<id of its newest row>`` on the end, and failing that a fixed placeholder
+    (``https://invalid.example/board-<id>``), each checked unused in the room. Returns how many changed."""
+    changed = 0
+    by_room: dict[int, dict[str, int]] = {}
+    for rid, room_id, url in con.execute("SELECT id, room_id, url FROM reviews ORDER BY id"):
+        by_room.setdefault(room_id, {})[url] = rid  # the last row of a URL is its newest
+    for room_id, newest in by_room.items():
+        cleaned = {url: reviews.clean_url(url) for url in newest}
+        keep = {u for u in newest if cleaned[u] == u and len(u) <= _URL_MAX and _link_ok(u)}
+        taken = set(keep)
+        for url in sorted((u for u in newest if u not in keep), key=lambda u: -newest[u]):
+            new = _free_url(cleaned[url], newest[url], taken)
+            taken.add(new)
+            con.execute("UPDATE reviews SET url=? WHERE room_id=? AND url=?", (new, room_id, url))
+            changed += 1
+    return changed
+
+
+def _clean_proof(proof: str, item_id: int) -> str:
+    """A proof as the upgrade keeps it: a link stays a link ``reviews.proof`` takes, else (it grew past its
+    column, say, or is no link once cut) a fixed placeholder; anything else is text cut to its column."""
+    if not proof.startswith(("http://", "https://")):
+        return reviews.clean_text(proof, 500)
+    new = reviews.clean_url(proof)
+    try:
+        if len(new) <= 500 and reviews.proof(new) == new:
+            return new
+    except reviews.ReviewError:
+        pass
+    return _PLACEHOLDER.format(what="proof", id=item_id)
+
+
+def _clean_location(file: str, lines: str) -> tuple[str, str]:
+    """A card's place as the upgrade keeps it. ``reviews.where`` searches a compact location whole, since a
+    match can reach across the colon between file and lines, and every move's reply joins them again: a pair
+    whose joined form redacts differently from its parts is kept as one cleaned file, with no lines."""
+    if lines and redact(f"{file}:{lines}")[0] != redact(file)[0] + ":" + redact(lines)[0]:
+        return reviews.clean_text(f"{file}:{lines}", 300), ""
+    return reviews.clean_text(file, 300), reviews.clean_text(lines, 40)
+
+
+def clean_review_rows(con: sqlite3.Connection) -> int:
+    """Run every string a review board stored through the cleaning its input gets (#890): the boards' URLs,
+    each card's text (title, detail, file, reason, options, answer, proof, ticket and the raiser's answer to
+    a contest) and every string in the data of a board's events (``review``, ``review_line``). Room chat is
+    not rewritten, as for #819. Idempotent. Returns how many values changed. Run it with
+    ``secure_delete`` on, so the old bytes are zeroed, not left in a free page (``_migrate``)."""
+    changed = _clean_board_urls(con)
+    for row in con.execute("SELECT * FROM review_items").fetchall():
+        new: dict[str, object] = {c: reviews.clean_text(row[c], n) for c, n in _ITEM_TEXT.items()}
+        new["file"], new["lines"] = _clean_location(row["file"], row["lines"])
+        new["proof"] = _clean_proof(row["proof"], row["id"])
+        try:
+            options = json.loads(row["options"])
+        except ValueError:
+            options = None
+        if isinstance(options, list):
+            new["options"] = json.dumps(_clean_json(options))
+        sets = {c: v for c, v in new.items() if v != row[c]}
+        if sets:
+            cols = ", ".join(f"{c}=?" for c in sets)
+            con.execute(f"UPDATE review_items SET {cols} WHERE id=?", (*sets.values(), row["id"]))
+            changed += len(sets)
+    events = con.execute(
+        "SELECT id, data FROM events WHERE kind='review' OR kind LIKE 'review\\_%' ESCAPE '\\'"
+    ).fetchall()
+    for event_id, data in events:
+        try:
+            loaded = json.loads(data)
+        except ValueError:
+            continue
+        cleaned = _clean_json(loaded)
+        if cleaned != loaded:
+            con.execute("UPDATE events SET data=? WHERE id=?", (json.dumps(cleaned), event_id))
+            changed += 1
+    return changed
+
+
+# The steps that also rewrite rows with code, by the version they migrate to: run inside the migration's
+# transaction after the step's statements. Defined after ``clean_review_rows``, below.
+REWRITES: dict[int, Callable[[sqlite3.Connection], int]] = {}
 
 
 class MigrationStep(NamedTuple):
@@ -1138,6 +1285,9 @@ class MigrationStep(NamedTuple):
     new_tables: tuple[str, ...]
     # Nonempty enables writable_schema for this step and verifies each required SQL fragment.
     schema_edits: tuple[tuple[str, str], ...] = ()
+
+
+REWRITES[55] = clean_review_rows
 
 
 def _steps(frm: int) -> list[MigrationStep]:
@@ -1441,6 +1591,9 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     old_tables = tables_of(frm)
     dest, counts = backup_verified(con, backup_to, tables=old_tables)
     log.warning("schema migration %d -> %d: backup written to %s", frm, SCHEMA_VERSION, dest.name)
+    # a rewrite zeroes the bytes it replaces, and leaves none in a free page (#890)
+    secure = con.execute("PRAGMA secure_delete").fetchone()[0]
+    con.execute("PRAGMA secure_delete=ON")
     con.execute("BEGIN IMMEDIATE")
     try:
         v = schema_version(con)
@@ -1456,6 +1609,8 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             try:
                 for stmt in stmts:
                     con.execute(stmt)
+                if to in REWRITES:
+                    log.warning("schema migration to %d rewrote %d stored values", to, REWRITES[to](con))
                 for table, required in schema_edits:
                     row = con.execute(
                         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -1481,6 +1636,10 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
+        if SCHEMA_VERSION >= 55 and frm < 55 and con.execute("SELECT 1 FROM reviews LIMIT 1").fetchone():
+            # a rewrite can't zero what earlier edits left in free pages: a VACUUM after the commit does,
+            # and this row (written with it, after the counts above) says it is still owed
+            con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (CLEAN_PENDING,))
     except BaseException as e:
         if con.in_transaction:  # SQLite may already have rolled back (a full disk, an I/O error)
             con.execute("ROLLBACK")
@@ -1495,8 +1654,41 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             ) from e
         raise
     con.execute("COMMIT")
+    con.execute(f"PRAGMA secure_delete={int(secure)}")
     log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
-    return dest
+    return dest  # the cleanup it owes is finished by ``migrate``, once for the start
+
+
+CLEAN_PENDING = "review_clean_pending"
+
+
+def finish_review_clean(con: sqlite3.Connection) -> bool:
+    """After the upgrade that cleaned a review board's stored text (schema 55, #890): rebuild the database
+    file (``VACUUM``: the free pages earlier releases left, which a rewrite can't zero, go too) and fold the
+    WAL into it and empty it (``wal_checkpoint(TRUNCATE)``, whose answer is read: a reader holding an old
+    snapshot makes it report busy). Only then is the ``meta`` row that says it is owed removed. A failure or a
+    busy checkpoint is logged and leaves the row, and the next start tries again (``migrate``). True when
+    nothing is owed or it is done."""
+    if con.execute("SELECT 1 FROM meta WHERE key=?", (CLEAN_PENDING,)).fetchone() is None:
+        return True
+    secure = con.execute("PRAGMA secure_delete").fetchone()[0]
+    con.execute("PRAGMA secure_delete=ON")
+    try:
+        con.execute("VACUUM")
+        busy = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        if busy:
+            log.warning(
+                "cleaning stored review boards: the WAL could not be emptied (busy); retrying at start"
+            )
+            return False
+        con.execute("DELETE FROM meta WHERE key=?", (CLEAN_PENDING,))
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # the row's own page: nothing secret, but leave no log
+    except sqlite3.Error as e:
+        log.warning("cleaning stored review boards: %s; retrying at start", e)
+        return False
+    finally:
+        con.execute(f"PRAGMA secure_delete={int(secure)}")
+    return True
 
 
 def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None) -> int:
@@ -1517,6 +1709,7 @@ def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None)
         v = schema_version(con)
     if v != SCHEMA_VERSION:
         raise SchemaError(f"database schema version {v} is not supported (expected {SCHEMA_VERSION})")
+    finish_review_clean(con)  # owed by an upgrade whose checkpoint was busy or whose VACUUM failed
     return v
 
 

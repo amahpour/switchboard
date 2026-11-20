@@ -102,6 +102,7 @@
     wsEverOpen: false,  // a socket was up once: a close now is a drop, not the first connect (#129)
     backoff: 500,
     pingTimer: null,
+    offlineTimer: null,
     sendQueue: null,   // sends (typed or from the Inspector) go out one at a time, in order
     // Inspector: which agent, the latest member-detail GET, and its UI toggles
     inspect: null,     // { room, name, host } for an agent, { room, call: true } for the room's call, or null (Members)
@@ -825,7 +826,7 @@
     'claude:https': 'Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle',
     'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
     'opencode:https': 'OpenCode over HTTPS: its plugin waits while idle and queues the broker’s wake as a new turn',
-    'cursor:https': 'Cursor over HTTPS: its Stop hook waits about 10 minutes for messages and hands it the next one. After that, type in Cursor to start listening again.',
+    'cursor:https': 'Cursor over HTTPS: its Stop hook waits up to an hour for messages (10 minutes with an older plugin copy) and hands it the next one. After that, type in Cursor to start listening again.',
     'devin:https': 'Devin hears idle mentions only while wait() is open. Stop reminders are capped; when they run out, type in Devin to restart listening.',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
   };
@@ -3781,6 +3782,9 @@
   }
 
   // ---------------------------------------------------------- websocket
+  const LONG_OUTAGE_MS = 120000;
+  const RECONNECTING_TEXT = 'Disconnected: reconnecting… What you see may be out of date.';
+
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     const ws = new WebSocket(proto + location.host + '/ws');
@@ -3789,6 +3793,9 @@
       const reopened = state.wsEverOpen;
       state.wsOpen = true;
       state.wsEverOpen = true;
+      clearTimeout(state.offlineTimer);
+      state.offlineTimer = null;
+      $('banner-offline-text').textContent = RECONNECTING_TEXT;
       if (reopened) refreshAgentIcons();  // an avatar may have changed while the socket was down
       state.backoff = 500;
       // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
@@ -3810,6 +3817,12 @@
     ws.addEventListener('close', function () {
       state.wsOpen = false;
       clearInterval(state.pingTimer);
+      if (state.wsEverOpen && state.offlineTimer === null) {
+        state.offlineTimer = setTimeout(function () {
+          $('banner-offline-text').textContent =
+            'Switchboard has been unreachable for at least 2 minutes. Still trying to reconnect.';
+        }, LONG_OUTAGE_MS);
+      }
       renderStatus();
       renderBuddies();
       const wait = state.backoff;
@@ -5128,8 +5141,8 @@
       + ' The member’s tier note shows the broker’s configured limits.');
     devinLimit.id = 'agent-devin-idle-limit';
     body.append(devinLimit);
-    const cursorLimit = el('p', 'fine', 'Cursor hears an idle session for about 10 minutes after each turn ends:'
-      + ' its Stop hook waits that long for a message. Past that, later mentions stay queued until you type in'
+    const cursorLimit = el('p', 'fine', 'Cursor hears an idle session for up to an hour after each turn ends (10 minutes with an older plugin copy):'
+      + ' its Stop hook waits that long for a message. While it waits, something you type in Cursor during a busy turn is queued until a room message arrives or the wait ends. Past that, later mentions stay queued until you type in'
       + ' Cursor; its next Stop starts a new wait. The member’s tier note says so too.');
     cursorLimit.id = 'agent-cursor-idle-limit';
     body.append(cursorLimit);
@@ -6997,7 +7010,8 @@
       });
       if (focusedId === String(b.id)) restore = open;
       const merged = b.outcome === 'merged';
-      const outcome = el('span', 'chip' + (merged ? ' chip-ok' : ''), merged ? 'Merged' : 'Unknown');
+      const outcome = el('span', 'chip' + (merged ? ' chip-ok' : ''),
+        merged ? 'Merged' : b.outcome === 'closed' ? 'Closed' : 'Unknown');
       const dates = el('dl', 'past-board-dates');
       for (const [label, ts] of [['Opened', b.opened_at], ['Settled', b.settled_at], ['Closed', b.closed_at]]) {
         const value = el('dd');
@@ -7137,7 +7151,8 @@
     if (tabbed) head.append(boardTabs(r));
     if (past) {
       head.append(pastBoardsBack(past), title, el('span', 'chip', 'Read-only'),
-        el('span', 'chip' + (b.pr_state === 'merged' ? ' chip-ok' : ''), b.pr_state === 'merged' ? 'Merged' : 'Unknown'));
+        el('span', 'chip' + (b.pr_state === 'merged' ? ' chip-ok' : ''),
+          b.pr_state === 'merged' ? 'Merged' : b.pr_state === 'closed' ? 'Closed' : 'Unknown'));
     } else {
       head.append(title, status, boardHandoff(r, b), close);
     }

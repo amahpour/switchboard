@@ -1598,7 +1598,9 @@ class Engine:
         elif p.status == "waiting-approval" and E not in REPORT_ONLY_EVENTS:
             new = "busy"  # a hook with no status of its own (Devin's PreToolUse): the turn moved on
         p = self.store.get_participant(p.id) or p
-        if new is not None and (new != "waiting-approval" or p.status != "offline" or revived):
+        if new is not None and (
+            new != "waiting-approval" or p.status != "offline" or revived or p.idle_at_restart
+        ):
             out += self.set_status(p, new, f"hook:{E}", bump=bump)
             p = self.store.get_participant(p.id) or p
         elif mode_changed:

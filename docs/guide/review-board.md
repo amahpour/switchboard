@@ -12,7 +12,7 @@ Codex and Claude Code review a pull request on the room's board. Claude, which w
 
 A board is about one pull request (GitHub) or merge request (GitLab). A **finding** (F1, F2) is a problem an agent found. A **question** (Q1, Q2) is something only a person can decide.
 
-1. **Raise.** An agent raises a finding with a title, the file and lines, and the evidence. If the board names an author's side, that member is woken to concede or contest it. Otherwise the other agents are.
+1. **Raise.** An agent raises a finding with a title, the file and lines, and the evidence. The author's side is woken to concede or contest it: the agent that opened the board, or one that already owns or answered a finding on it. Until the board knows who that is, every other agent is.
 2. **Concede or contest.** To concede is to agree and name the agent that will fix it. To contest is to disagree, with a reason. A contest goes back to the agent that raised the finding, which drops it or insists.
 3. **Needs you.** The middle lane holds only what the agents cannot settle: your questions, findings both sides have argued, and fixes nobody else can check.
 4. **Fix, with proof.** The owner records the commit and a proof, a test name or a link. The agent that raised the finding is woken to check it.
@@ -21,7 +21,7 @@ A board is about one pull request (GitHub) or merge request (GitLab). A **findin
 
 There are three lanes: **Agents working**, **Needs you** and **Settled**. A dot on a card shows whether the agent it waits on is working, idle or offline. When that agent's person has a permission prompt open, the dot is an amber ring that reads **waiting for approval**, and nothing is delivered to it until the person answers.
 
-Most moves are only a one-line notice in the room. A raise, a contest, a concession that names another agent, a fix and a question wake the agent that has to act next, under the room's normal delivery rules.
+Most moves are only a one-line notice in the room. A raise, a contest, a concession that names another agent, a fix and a question wake the agent that has to act next, and nobody else, under the room's normal delivery rules. Several raises at once still wake that agent once, and answering on the board answers them: no reply in the chat is needed.
 
 ![The review board with the question Q1 open on the right](../media/ui/board-light.png)
 
@@ -53,7 +53,7 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **Work with several boards.** A room can have several open boards, one for each pull request. Tabs at the top of the board pick one. What you do applies to the board on show.
 
-**When the author will stop.** A one-shot run (`codex exec`, `claude -p`, `agent -p`) finishes and leaves, so a finding raised afterwards has nobody to answer it. Have that author join the room under its own name before it posts the link, answer the board, and leave when nothing is left on it. Opening the board, or posting the link when the room asks for reviews on links, records that member as the author's side. A reviewer's raise then wakes them. `show` names the side. A person's `/review` records nobody until an agent posts the link.
+**When the author will stop.** A one-shot run (`codex exec`, `claude -p`, `agent -p`) finishes and leaves, so a finding raised afterwards has nobody to answer it. Have that author join the room under its own name before it posts the link, answer the board, and leave when nothing is left on it. Opening the board, or posting the link when the room asks for reviews on links, makes that member the author's side, and a reviewer's raise then wakes them, while they are in the room.
 
 **A subagent is the parent's member.** A Claude Code subagent uses its parent session's switchboard identity, and a Codex subagent is another turn of the parent's session. Neither can join under its own name. Don't send a subagent to answer a board: the moves are the parent's, and a wake meant for the subagent reaches the parent. The author should be its own session in the room.
 
@@ -65,9 +65,9 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **Close.** **Close board** keeps the board with everything on it. Opening its link again through `/review` brings it back.
 
-**Read past reviews.** Choose **Past boards** in the room header. Each row shows when the board opened, settled and closed, with **Merged** or **Unknown** as the outcome. A dash means the settlement time is unavailable. Choose a pull request to read its cards and history.
+**Read past reviews.** Choose **Past boards** in the room header. Each row shows when the board opened, settled and closed, with **Merged**, **Closed** (the pull request was closed without merging) or **Unknown** as the outcome. A dash means the settlement time is unavailable. Choose a pull request to read its cards and history.
 
-**Record a merge.** After posting a review from **Hand off**, the agent checks the pull request again with its own `gh` or `glab`. When it sees a merge, it calls `review(action="report", url=..., state="merged")` even if the board has closed.
+**Record a merge or a close.** After posting a review from **Hand off**, the agent checks the pull request again with its own `gh` or `glab`. When it sees a merge, it calls `review(action="report", url=..., state="merged")` even if the board has closed. When the pull request was closed without merging, it reports `state="closed"`. Either one closes the board, and the board is kept. switchboard holds no forge token, so it only knows what an agent reports. An agent that closes a board itself must say how the pull request ended: `state="merged"` with the merge commit, `state="closed"`, or `state="unknown"` on purpose. Your own **Close board** on the page records no outcome, so it reads **Unknown** until an agent reports one.
 
 ## Limits
 

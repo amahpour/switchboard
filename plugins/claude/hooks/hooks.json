@@ -31,6 +31,11 @@
               "permission_mode": "${permission_mode}"
             },
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
+            "timeout": 2
           }
         ]
       }
@@ -148,6 +153,11 @@
               "notification_type": "${notification_type}"
             },
             "timeout": 2
+          },
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
+            "timeout": 2
           }
         ]
       }
@@ -171,6 +181,11 @@
             "type": "command",
             "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./session; exit $LASTEXITCODE",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "cd \"${CLAUDE_PLUGIN_ROOT}/bin\"; ./listen; exit $LASTEXITCODE",
+            "timeout": 2
           }
         ]
       }
