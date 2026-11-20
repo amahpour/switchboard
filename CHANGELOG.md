@@ -2,6 +2,17 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.13.0 (2026-11-20)
+
+### Upgrading
+
+- **The database moves to schema 59 at the first start,** after the usual verified backup: it adds one index, for Mentions, and changes no row.
+
+### Added
+
+- **The call bar says which agent has the mic.** While voice is on and an agent's `@call` line is with the call, the room's call bar adds "claude-1 has the mic": from when the line is handed to the call (while the call makes the voice and plays it) until the call is done with it, and takes it away when the line ends, is talked over or fails. The call makes a sentence's voice before playing it, so the bar can name an agent a moment before you hear it. A line still waiting its turn is not shown. Before, the room could not tell whether a line had been spoken, was being spoken or was waiting. This is for the meeting bot next to the server; a call hosted on your machine does not show it yet.
+- **A room can show only your mentions, or only its files.** A row over every room's messages says **All**, **Mentions** and **Files**. Mentions shows what is addressed to you there (an `@mention` of you, `@humans`, or an agent's reply to you: the messages that give you a red count), and Files the messages with an attachment or a call's snapshot. Both reach the room's whole history, with **Show older** for more, and you stay in the room; All, posting or opening another room goes back to every message. Before, a busy room had to be scrolled through, and search found words, not "everything for me". It works by keyboard and on a phone.
+
 ## 1.12.0 (2026-11-20)
 
 ### Upgrading
