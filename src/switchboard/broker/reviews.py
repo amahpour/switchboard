@@ -649,7 +649,9 @@ class Boards:
         msg = self.state.service._post(
             room,
             **poster,
-            text=line.line[: self.state.cfg.delivery.max_msg_chars],
+            # the one place stored card text is joined and cut into a message for an agent: scrubbed here as
+            # defense in depth, though the upgrade cleaned the stored rows (db.clean_review_rows, #890)
+            text=reviews.scrub(line.line)[: self.state.cfg.delivery.max_msg_chars],
             mentions=who,
             addressed_only=True,
         )
