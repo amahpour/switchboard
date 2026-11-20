@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from switchboard import board, board_checks, board_layout, board_style
-from switchboard.board import MAX_DIAGRAM, MAX_TEXT, Reject
+from switchboard.board import MAX_DIAGRAM, Reject
 from switchboard.board_layout import Group, Item, Link
 
 DIRECTIONS = {"TD": "TD", "TB": "TD", "BT": "BT", "LR": "LR", "RL": "RL"}
@@ -141,7 +141,7 @@ def _label(raw: str) -> str:
 
     s = re.sub(r"#(\w+);", entity, s)
     s = "\n".join(line.strip() for line in s.split("\n")).strip()
-    return board.clean(s)[:MAX_TEXT]
+    return board.read_text(board.clean(s))  # redacted before it is cut, wrapped or sized (#893)
 
 
 def _statements(text: str) -> list[tuple[int, str]]:
@@ -434,14 +434,14 @@ def _register(flow: _Flow, stack: list[str], ref: _Ref) -> None:
     node = flow.nodes.get(ref.id)
     here = stack[-1] if stack else None
     if node is None:
-        node = flow.nodes[ref.id] = _Node(ref.id, ref.id, "rect", here, flow.order())
+        node = flow.nodes[ref.id] = _Node(ref.id, _label(ref.id), "rect", here, flow.order())
     elif here is not None and node.group is None:
         node.group = here  # listed inside a subgraph: it belongs there
     if ref.kind:
         node.kind = ref.kind
         node.named = True
     if ref.label is not None:
-        node.label = _label(ref.label) or node.id
+        node.label = _label(ref.label) or _label(node.id)
         node.named = True
     if ref.klass:
         node.classes.append(ref.klass)

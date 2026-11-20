@@ -95,10 +95,10 @@ Two more things to know. `/review` needs at least one agent in the room. And **H
 
 Two ways, both an agent's link in the room.
 
-- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent may not follow it.
+- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent that will stop after it posts (a one-shot run) is told to join the room first, under its own name, answer the board, and leave when nothing is left on it. Opening the board, or posting the link when this setting is on, records that member as the author's side, and a raise wakes them. An agent may not follow it. A subagent is not a separate member: it acts as its parent, so it should not be the one that answers the board.
 - **The room's setting.** `/room review on` makes it automatic, `/room review off` stops it, and bare `/room` shows it. It is off in every room until you turn it on, and only you can: an agent's `/room review on` is only text. When an agent posts a new pull or merge request link in the room, switchboard opens that pull request's board, held by `switchboard`, and posts one message from `switchboard` that names the room's agents of another vendor than the author's, asks them to review it on the board, and says who posted the link. The message has the checked link and none of the agent's own words.
 
-What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 open boards a note says why nothing was asked. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
+What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 boards with work (or with no cards yet) a note says why nothing was asked. A settled board does not count toward those 8. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
 
 ### Start a review
 
@@ -193,7 +193,7 @@ When a room has two or more open boards, a row of tabs sits at the top of the bo
 
 ![Two boards as tabs, with the first on show](../media/ui/guide-review-tabs.png)
 
-A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight open boards.
+A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count toward the eight, but a room keeps at most 24 boards open in all.
 
 ### When the head commit changes
 
@@ -225,7 +225,9 @@ After a hand off, the board still takes reports and a close. It takes no more mo
 
 **Close board** is in the header. It asks you to confirm, then closes the board on show, whoever opened it. The board is kept, with everything on it. An agent that opens its link again, or `/review` with the link, brings it back with its findings and history. Other boards in the room stay open.
 
-Agents can close a board too. If work is still open on it, the agent has to give a reason, and the room gets a notice that names the agent, the reason and every open item. Only the agent that holds the board can close it: the one that opened it, or opened it again last. If another agent tries, nothing changes. One line in the room says it asks a person to close the board, and you close it with **Close board**.
+**Close board** records no outcome, so the board reads **Unknown** on **Past boards** until an agent reports how the pull request ended.
+
+Agents can close a board too. They must say how the pull request ended (`state`). If work is still open on it, the agent has to give a reason, and the room gets a notice that names the agent, the reason and every open item. Only the agent that holds the board can close it: the one that opened it, or opened it again last. If another agent tries, nothing changes. One line in the room says it asks a person to close the board, and you close it with **Close board**.
 
 ## What agents do
 
@@ -305,13 +307,14 @@ review(room="build", action="confirm", item="F1")
 
 ### Reporting, closing and starting over
 
-- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` to record the merge while keeping the original close time and closer.
-- **`close`** closes the board. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
+- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board, and the board is kept. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` (or `"closed"`, never over a recorded merge) to record the outcome while keeping the original close time and closer.
+- **`close`** closes the board and says how the pull request ended, with `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown` (said on purpose). A close with no `state` still works, as it did before: it reads **Unknown**, and its reply asks the agent to name one next time. A `state` that is given is checked: a bad value, `merged` without `commit`, or a `commit` with another state is refused, and so is `closed` on a board whose pull request is recorded as merged (a reopened board keeps its merge). The outcome is recorded as `report` records it, so **Past boards** and the Usage page read it. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
 - **`reset`** starts a fresh board for a link that already has one, on purpose. It takes `url` and a `reason`, and only the agent that holds the board can do it. The old board stays in the database, unseen.
 
 ```text
 review(room="build", action="report", state="open", threads=2, ci="failing")
-review(room="build", action="close", reason="Moving on: the author is rewriting the change.")
+review(room="build", action="close", state="unknown", reason="Moving on: the author is rewriting the change.")
+review(room="build", action="close", state="merged", commit="0123abc4567def")
 ```
 
 ### What the agents are told
@@ -335,13 +338,14 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 
 ## Limits
 
-- A room holds at most **8 open boards**. A ninth is refused until one is closed. A reopened board counts.
+- A room holds at most **8 boards that fill a slot**: an empty board, or one that still has work. A board whose cards are all settled stays open and does not count, so a finished review does not block the next pull request. Putting work back on a settled board at that cap is refused until one with work is closed. Reopening a closed settled board does not count; reopening one that still has work does.
 - A board holds at most **200 cards**.
 - A board is named by its link, exactly as written. `…/pull/7` and `…/pull/7/files` are two boards. The link has to start with `http://` or `https://` and has to be 500 characters or fewer.
 - A title is 200 characters at most. A detail is 4,000. A reason, and a proof, are 500. A follow-up ticket is 200. An option is 200, and a question has two to four, all different.
 - A finding's file is 300 characters at most, and its lines are a number or a range, such as `42` or `40-58`.
 - A card's history shows at most 12 lines.
-- `list` names at most 50 boards. The older closed ones are counted.
+- `list` names at most 50 boards: the caller's own board, then boards that have work, then settled open ones, then closed ones. What it leaves out is counted by state.
+- A room keeps at most 24 open boards in all, settled ones included, so each update stays small. Opening or reopening a 25th is refused, and the refusal names the settled boards to close. A close never needs room. Boards that have work, or no cards, are still capped at eight.
 - Only a person answers a question. Only the agent responsible for reviewing a finding (its raiser, or a replacement through `take`) confirms its fix. You can confirm any fix too.
 - Only the agent that holds a board can close it or reset it. The holder is the one that opened the board, or opened it again last. A board you open, or open again, with `/review` is held by you. An agent cannot close or reset it. It can ask you to close it.
 - After a hand off, a board takes no more moves on its cards. It takes reports and a close.
@@ -363,7 +367,7 @@ The button shows only while the room has an open board. Start one with `/review`
 - `usage: /review <url> [note]`: you gave no link. Put the link right after `/review`.
 - `url must be an http(s) link to the pull request or merge request`: the link is not an http or https link. Copy it from the browser's address bar.
 - `the note is too long`: the whole request has to fit in one message. Shorten the note.
-- `close one before opening another`: the room already has eight open boards. Close one, then run `/review` again.
+- `close one before opening another`: the room already has eight boards that still have work, or that have no cards yet. A settled board does not count. Close one that does, then run `/review` again. A room also refuses a board when it already has 24 open, settled ones included: close a finished one.
 - A room that is paused sends the request only after `/resume`.
 
 ### I typed `/review` and it came out as plain text
@@ -378,7 +382,7 @@ Look at its refusal, which says why. These are the usual causes:
 - **The agent's session does not have the `review` tool yet.** A running session keeps the tool list it started with. After an upgrade that adds a tool or a parameter, Claude Code sees it after `/mcp`, and Codex after a restart. If the broker itself is old, upgrade it first. [Agents over HTTPS](../USAGE.md#agents-over-https-a-preview) has the steps.
 - **A permission prompt is open.** The card's dot is an amber ring with "waiting for approval". Nothing in the room can answer the prompt. Its person has to. Devin asks before it runs each tool, including `review`, unless its tools are listed under `permissions.allow` in `.devin/config.json`.
 - **The rules forbid the move.** For example, an agent cannot concede its own finding, and only the owner can fix.
-- **The board is closed or handed off.** A closed board needs `open` again. The one exception is `report` with `state="merged"`. A handed-off board takes no more moves.
+- **The board is closed or handed off.** A closed board needs `open` again. The exception is `report` with `state="merged"` or `state="closed"` (`closed` never over a recorded merge). A handed-off board takes no more moves.
 
 ### A card sits in Agents working and nobody moves it
 
@@ -397,7 +401,7 @@ The words beside the button say what is left. They name each kind of card with a
 
 ### A call is refused because several boards are open
 
-The agent gave no link, and nothing says which board it means. The refusal lists the open boards. Have the agent repeat the call with `url`. The `/review` request already asks for it. A ninth open board is refused with "close one before opening another". After a broker restart, agents forget their last board, so they need `url` again.
+The agent gave no link, and nothing says which board it means. The refusal lists the open boards. Have the agent repeat the call with `url`. The `/review` request already asks for it. A ninth board that still has work, or that has no cards yet, is refused with "close one before opening another". A board whose cards are all settled does not count toward that eight. After a broker restart, agents forget their last board, so they need `url` again.
 
 ### The CI status looks old, or wrong
 
@@ -422,6 +426,10 @@ The two links differ as text, for example `…/pull/7` and `…/pull/7/files`. C
 ### A link was posted and no review was asked
 
 Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Past boards**); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
+
+### An agent's close is refused for its outcome
+
+A close with no `state` works and reads **Unknown**. One with a `state` is refused when the value is not `merged`, `closed` or `unknown`, when `merged` has no `commit`, or when a `commit` comes with another state. The refusal says which. Have the agent close again with a valid one, or report with `state="merged"` or `state="closed"`, which also works on a board you closed on the page.
 
 ### An agent can't close a board
 

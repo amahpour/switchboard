@@ -37,6 +37,7 @@ MAX_OPTION = 200
 MAX_OPTIONS = 4
 MAX_ITEMS = 200  # per review: a board, not a log
 MAX_OPEN_BOARDS = 8  # open boards in one room (§37.14): a room holds several, not any number
+MAX_OPEN_BOARDS_TOTAL = 24  # every open board of a room, settled ones too (§37.14, #886): bounds each update
 MAX_LISTED = 50  # boards `list` names, open ones first
 FIX_CONFIRM_TIMEOUT_S = 24 * 60 * 60
 
@@ -725,16 +726,38 @@ def list_line(board: dict[str, Any], default: bool = False) -> str:
     return f"{board['url']}{head_s} [{state}]: {', '.join(bits)}{mark}"
 
 
+def _list_rank(board: dict[str, Any], default_url: str | None) -> int:
+    """Where a board sorts in ``list``: the caller's default board, then boards that fill a slot
+    (work left, or no cards), then settled open ones, then closed ones (§37.14, #886)."""
+    if board.get("closed_at") is not None:
+        return 3
+    if board["url"] == default_url:
+        return 0
+    n = board["counts"]
+    empty = not (n["open"] or n["fixed"] or n["dropped"] or n["answered"])
+    return 1 if n["open"] or empty else 2
+
+
 def list_text(boards: Sequence[dict[str, Any]], default_url: str | None = None) -> str:
-    """The room's boards, open first, as an agent reads them. ``boards`` come from the broker with
-    ``counts`` and the row's own columns. At most ``MAX_LISTED``; the rest are counted."""
+    """The room's boards as an agent reads them: its default board, the boards with work, the
+    settled open ones, then the closed ones, each group newest first. ``boards`` come from the broker
+    with ``counts`` and the row's own columns. At most ``MAX_LISTED``; the rest are counted by state."""
     if not boards:
         return 'This room has no review boards. review(action="open", url=...) starts one.'
-    shown = boards[:MAX_LISTED]
-    out = [f"{len(boards)} review board{'s' if len(boards) != 1 else ''} in this room, open ones first:"]
+    ordered = sorted(boards, key=lambda b: _list_rank(b, default_url))  # stable: newest first kept
+    shown = ordered[:MAX_LISTED]
+    out = [
+        f"{len(boards)} review board{'s' if len(boards) != 1 else ''} in this room, boards with work first:"
+    ]
     out.extend(list_line(b, b["url"] == default_url) for b in shown)
-    if len(boards) > len(shown):
-        out.append(f"... and {len(boards) - len(shown)} older closed boards")
+    left = ordered[len(shown) :]
+    if left:
+        parts = []
+        for rank, what in ((0, "open"), (1, "open with work"), (2, "open and settled"), (3, "closed")):
+            n = sum(1 for b in left if _list_rank(b, default_url) == rank)
+            if n:
+                parts.append(f"{n} {what}")
+        out.append(f"... and {len(left)} more not listed: {', '.join(parts)}")
     out.append(
         'review(action="show", url=...) reads any, closed ones too; open(url) brings a closed one back.'
     )
@@ -1120,6 +1143,45 @@ def person_move(item: Item, move: str) -> str:
 def settled(items: list[Item]) -> bool:
     """Nothing left to do: every finding fixed or dropped, every question answered or dropped."""
     return not open_items(items)
+
+
+def fills_open_slot(items: list[Item]) -> bool:
+    """Whether an open board takes one of the room's ``MAX_OPEN_BOARDS`` slots (§37.14, #886).
+
+    A board with cards, every one settled, does not: the review is finished, and leaving it open
+    must not block another pull request. An empty board does. ``settled`` is true of no cards, and
+    opening boards must not run past the cap.
+    """
+    return not items or not settled(items)
+
+
+# What a close says about the pull request (#886): merged (with its merge commit), closed without
+# merging, or unknown. A close without one still works, as it did in 1.x, and reads unknown; its
+# reply asks for the outcome next time.
+CLOSE_OUTCOMES = ("merged", "closed", "unknown")
+CLOSE_OUTCOME_HELP = (
+    'name the outcome: state="merged" with commit=<merge commit>, state="closed" (closed'
+    ' without merging) or state="unknown"; report(state=...) still records it on the closed board'
+)
+
+
+def close_outcome(params: dict[str, Any]) -> tuple[str, str, bool]:
+    """A close's ``(outcome, merge commit, given)``, checked. No ``state`` is a 1.x close: unknown,
+    ``given`` False. A ``state`` that is given is checked: one of three, a merged one names its
+    commit (7 to 64 hex digits, as a head), and a commit with another outcome is refused."""
+    outcome = params.get("state")
+    commit = head(params.get("commit"))
+    if outcome in (None, ""):
+        if commit:
+            raise ReviewError('commit is the merge commit: give it with state="merged"')
+        return "unknown", "", False
+    if outcome not in CLOSE_OUTCOMES:
+        raise ReviewError(f"state must be one of: {', '.join(CLOSE_OUTCOMES)}")
+    if outcome == "merged" and not commit:
+        raise ReviewError('state="merged" needs commit=<the merge commit>, 7 to 64 hex digits')
+    if outcome != "merged" and commit:
+        raise ReviewError('commit is the merge commit: give it with state="merged" only')
+    return str(outcome), commit, True
 
 
 def open_items(items: list[Item]) -> list[Item]:

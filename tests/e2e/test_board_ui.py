@@ -302,3 +302,184 @@ def test_an_agent_elbow_arrow_follows_a_shape_a_person_drags(
     assert abs(after["end"][1] - before["end"][1] - moved_by) < 8, (before["end"], after["end"])
     for p, q in zip(after["points"], after["points"][1:], strict=False):
         assert abs(p[0] - q[0]) < 1 or abs(p[1] - q[1]) < 1, after["points"]
+
+
+def test_a_secret_a_person_types_is_cut_out_and_the_drawing_tab_shows_the_committed_text(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """Real typing in the real frame, through both client cleaners and the socket (#893). The text crosses
+    character 200, where the browser used to cut it before the broker saw it, so the broker could not
+    recognize what was left; and the tab that drew keeps its own copy until the broker answers, and the
+    answer lost a tie, so the author kept seeing the secret and an image read of the board would show it.
+    Fails if the stored text holds the token, or if the drawing tab's scene (the source of an agent's image
+    read) still holds it after the broker's reply."""
+    room = "board-secret"
+    world.create_room(room)
+    page = ui.open(room)
+    frame = open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    token = "ghp" + "_" + "aB3" * 12
+    typed = "x" * 170 + " " + token
+    frame.locator("label").filter(has=frame.locator('[data-testid="toolbar-text"]')).click()
+    box = page.locator("#whiteboard-host iframe").bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.4)
+    page.keyboard.type(typed)
+    page.keyboard.press("Escape")
+    b = world.broker
+
+    def stored() -> str:
+        return str(b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id)))
+
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements()"
+        ".some(e => e.type === 'text' && e.originalText.includes('[redacted'))",
+    )
+    assert token not in stored(), stored()[:3000]
+    assert "[redacted: github token]" in stored()
+    scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElementsIncludingDeleted())")
+    assert token not in scene and "aB3aB3" not in scene
+
+
+def test_a_picture_for_an_agent_shows_only_the_committed_board(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """The image read is made from the scene the broker has committed, never the live drawing (#893). A shape
+    with a secret is put on the frame's canvas and not yet flushed: the picture must be byte for byte the
+    one taken before, and the export message must hold no token. Fails if the picture changes or the export
+    carries the secret."""
+    room = "board-export"
+    world.create_room(room)
+    world.add_agents("#" + room, ("drawer",))
+    made = world.agent_call("#" + room, "drawer", "board", action="note", text="committed")
+    assert made["ok"], made
+    page = ui.open(room)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(board_frame, "() => window.sbBoard.api.getSceneElements().length >= 2")
+    board_frame.evaluate("""() => {
+      window.exported = [];
+      window.addEventListener('message', ev => {
+        if (ev.data && ev.data.action === 'export') window.exported.push(JSON.stringify(ev.data));
+      });
+    }""")
+    agent = world._extra_named[("#" + room, "drawer")]
+
+    def picture() -> str:
+        got = world._scripted(agent.raw("board", {"room": "#" + room, "action": "read", "text": "image"}))
+        assert not got.is_error and got.content[0].type == "image"
+        return str(got.content[0].data)
+
+    before = picture()
+    token = "ghp" + "_" + "aB3" * 12
+
+    board_frame.evaluate(
+        """() => { window.putEl = (eid, text, y) => {
+          const a = window.sbBoard.api;
+          a.updateScene({ elements: [...a.getSceneElementsIncludingDeleted(), {
+            id: eid, type: 'rectangle', x: 40, y, width: 160, height: 90, version: 1, versionNonce: 7,
+            isDeleted: false, seed: 1, angle: 0, strokeColor: '#000000', backgroundColor: '#ff0000',
+            fillStyle: 'solid', strokeWidth: 2, roughness: 1, opacity: 100, groupIds: [], frameId: null,
+            roundness: null, boundElements: null, updated: 1, link: null, locked: false, text }] });
+        }; }"""
+    )
+
+    def put(eid: str, text: str, y: int = 300) -> None:
+        board_frame.evaluate("([eid, text, y]) => window.putEl(eid, text, y)", [eid, text, y])
+
+    put("unsent1", token)  # on the canvas, never flushed: dirty is not set, so the frame does not send it
+    assert token in board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElements())")
+    assert picture() == before, "the picture drew the live drawing"
+    exported = board_frame.evaluate("window.exported")
+    assert exported and all(token not in e for e in exported)
+    # a shape the broker refuses: its text fits, and its marker would push it past the limit
+    refused = "x" * 170 + " password=" + "hunter2" * 2
+    put("refused1", refused)
+    assert board_frame.evaluate("window.sbBoard.api.getSceneElements().some(e => e.id === 'refused1')")
+    # as drawing does: dirty, then a flush; then the person starts a different shape and the pointer stays
+    # down, so the frame is dirty (and does not flush) when the broker's answer arrives. The refused shape was
+    # sent and has not changed since, so it goes with the broker's board; the new one was never sent: stays.
+    board_frame.evaluate(
+        "() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })); window.sbBoard.flush();"
+        " window.putEl('keep1', 'still drawing', 450);"
+        " document.dispatchEvent(new PointerEvent('pointerdown')); }"
+    )
+    wait_js(board_frame, "() => !window.sbBoard.api.getSceneElements().some(e => e.id === 'refused1')")
+    ids = board_frame.evaluate("window.sbBoard.api.getSceneElements().map(e => e.id)")
+    assert "keep1" in ids and "unsent1" in ids
+
+
+def test_text_stored_unwrapped_is_wrapped_again_by_the_page_and_a_wrapped_secret_shows_as_a_marker(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """The broker keeps one string, the read ``originalText``, and ignores the page's wrapped ``text`` (#893).
+    That is only sound if Excalidraw wraps a loaded text again from the words it is given: a fixed-width text
+    stored on one line must come out wrapped in the scene, and a token the page had wrapped across two lines
+    must be stored and drawn as the marker. Fails if the scene's text has no line break, or holds a piece of
+    the token."""
+    room = "board-rewrap"
+    world.create_room(room)
+    b = world.broker
+    long = "a long label that has to wrap inside a narrow fixed width text box " * 2
+    token = "ghp" + "_" + "aB3" * 12
+
+    def text(eid: str, y: int, words: str, wrapped: str) -> dict[str, Any]:
+        return {
+            "id": eid, "type": "text", "x": 20, "y": y, "width": 120, "height": 25, "version": 1,
+            "versionNonce": 3, "isDeleted": False, "text": wrapped, "originalText": words, "fontSize": 16,
+            "fontFamily": 1, "autoResize": False, "textAlign": "left", "verticalAlign": "top",
+            "containerId": None, "lineHeight": 1.25,
+        }  # fmt: skip
+
+    b.on_loop(
+        lambda: b.state.room_board.from_page(
+            b.state.store.get_room("#" + room),
+            "alice",
+            [
+                text("w1", 20, long, long),
+                text("w2", 300, f"key {token} end", f"key {token[:20]}\n{token[20:]} end"),
+            ],
+        )
+    )
+    stored = str(b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id)))
+    assert token not in stored and token[20:] not in stored and "[redacted: github token]" in stored
+    page = ui.open(room)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements().some(e => e.id === 'w1' && e.text.includes('\\n'))",
+    )
+    scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElements())")
+    assert token[:20] not in scene and token[20:] not in scene and "redacted" in scene
+
+
+def test_one_old_stored_shape_does_not_keep_the_whole_board_from_opening(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """An earlier broker stored a text with a line break and no ``originalText``, which a write now refuses
+    (#893). The board it loads is read as it was stored: the page shows every shape, and records the board's
+    seq, which a picture for an agent waits for. Fails if the whole board is dropped (no shapes, and the
+    picture read never answers)."""
+    room = "board-legacy"
+    world.create_room(room)
+    world.add_agents("#" + room, ("drawer",))
+    b = world.broker
+    base = {"x": 20, "width": 120, "height": 40, "version": 1, "versionNonce": 3, "isDeleted": False}
+    old_text = {**base, "id": "old1", "type": "text", "y": 20, "text": "two\nlines", "fontSize": 16}
+    old_text.update(fontFamily=1, textAlign="left", verticalAlign="top", containerId=None, lineHeight=1.25)
+    box = {**base, "id": "box1", "type": "rectangle", "y": 120, "link": None}
+    row = b.on_loop(lambda: b.state.store.get_room("#" + room))
+    b.on_loop(lambda: b.state.store.board_write(row.id, 1, [old_text, box], "alice", ["old1", "box1"]))
+    page = ui.open(room)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(board_frame, "() => window.sbBoard.api.getSceneElements().length === 2")
+    agent = world._extra_named[("#" + room, "drawer")]
+    got = world._scripted(agent.raw("board", {"room": "#" + room, "action": "read", "text": "image"}))
+    assert not got.is_error and got.content[0].type == "image"

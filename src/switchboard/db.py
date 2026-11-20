@@ -30,9 +30,9 @@ on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room
 new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
 agent chat and wake batches (§61);
 53 (#823) adds say retry receipts (§8.4); 54 (#843) says which agent made a person a member of a public room,
-whose members are in ``room_people`` too (§63); 57 (#823) remembers which client opened each MCP session, so a
-session survives a restart (§49.2). 56 is taken by #896 (open while this was built), so this step goes from 55
-to 57 until that merges, and from 56 once it has.
+whose members are in ``room_people`` too (§63); 55 (#890) and 56 (#893) clean what a review board and
+a room's whiteboard stored before their text was checked (§37.2, §56.5); 57 (#823) remembers which client
+opened each MCP session, so a session survives a restart (§49.2).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -1136,6 +1136,10 @@ V53_TO_V54 = (
 # what is written from now on. The step has no schema change.
 V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
 
+# v55 -> v56 (#893, DESIGN.md §11 item 10, §56.5): a room's whiteboard is cleaned once, by
+# ``clean_whiteboard_rows``, as for v55: no schema change, and the same finish (``finish_review_clean``).
+V55_TO_V56 = ("UPDATE meta SET value='56' WHERE key='schema_version'",)
+
 # Both fresh databases and the migration use these statements (#823, DESIGN.md §49.2): which client opened
 # each MCP session of a token, by the sha256 of the session's ID, so the broker can open it again after a
 # restart for a client that keeps its ID. The client's own claim, cut as ``client_info`` cuts it.
@@ -1150,8 +1154,8 @@ MCP_SESSIONS_DDL = (
     " PRIMARY KEY(token_id, sid_hash)) WITHOUT ROWID",
     "CREATE INDEX mcp_sessions_opened ON mcp_sessions(token_id, opened_at)",
 )
-# v55 -> v57 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens. 56 is #896's (not merged yet).
-V55_TO_V57 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='57' WHERE key='schema_version'")
+# v56 -> v57 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens.
+V56_TO_V57 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='57' WHERE key='schema_version'")
 
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
@@ -1294,6 +1298,53 @@ def clean_review_rows(con: sqlite3.Connection) -> int:
     return changed
 
 
+def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
+    """Clean what a room's whiteboard stored (#893): every board's elements and every change record's
+    ids. A shape that needs any change (a secret in its text, original text or name, a legacy multi-line
+    text without its original words, an id or reference that is a secret, a tombstone with text) is
+    **removed**, with the references to it and its id in the change records (``board.clean_stored``,
+    ``board.clean_change_ids``), and a shape that needs none is kept as it is. A board can only shrink. A
+    row that is not a board is cleared. Idempotent. Returns how many values changed. Run with
+    ``secure_delete`` on."""
+    from switchboard import board
+
+    changed = 0
+    dropped: dict[int, set[str]] = {}
+    for row in con.execute("SELECT room_id, elements FROM room_boards").fetchall():
+        try:
+            loaded = json.loads(row["elements"])
+        except ValueError:
+            loaded = None
+        if not isinstance(loaded, list):
+            # not a board (``Store.board_load`` reads it as empty): cleared, so nothing in it is kept (fail
+            # closed), and the upgrade goes on
+            if row["elements"] != "[]":
+                con.execute("UPDATE room_boards SET elements='[]' WHERE room_id=?", (row["room_id"],))
+                changed += 1
+            continue
+        cleaned, gone = board.clean_stored(loaded)
+        dropped[row["room_id"]] = gone
+        if cleaned != loaded:
+            text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
+            con.execute("UPDATE room_boards SET elements=? WHERE room_id=?", (text, row["room_id"]))
+            changed += 1
+    for row in con.execute("SELECT id, room_id, ids FROM room_board_changes").fetchall():
+        try:
+            ids = json.loads(row["ids"])
+        except ValueError:
+            ids = None
+        kept = (
+            board.clean_change_ids(ids, dropped.get(row["room_id"], set())) if isinstance(ids, list) else []
+        )
+        if kept != ids:
+            con.execute(
+                "UPDATE room_board_changes SET ids=? WHERE id=?",
+                (json.dumps(kept, ensure_ascii=False, separators=(",", ":")), row["id"]),
+            )
+            changed += 1
+    return changed
+
+
 # The steps that also rewrite rows with code, by the version they migrate to: run inside the migration's
 # transaction after the step's statements. Defined after ``clean_review_rows``, below.
 REWRITES: dict[int, Callable[[sqlite3.Connection], int]] = {}
@@ -1308,6 +1359,7 @@ class MigrationStep(NamedTuple):
 
 
 REWRITES[55] = clean_review_rows
+REWRITES[56] = clean_whiteboard_rows
 
 
 def _steps(frm: int) -> list[MigrationStep]:
@@ -1375,7 +1427,8 @@ def _steps(frm: int) -> list[MigrationStep]:
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
         53: MigrationStep(54, V53_TO_V54, ()),
         54: MigrationStep(55, V54_TO_V55, ()),
-        55: MigrationStep(57, V55_TO_V57, ("mcp_sessions",)),
+        55: MigrationStep(56, V55_TO_V56, ()),
+        56: MigrationStep(57, V56_TO_V57, ("mcp_sessions",)),
     }
     out = []
     v = frm
@@ -1659,7 +1712,10 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
-        if SCHEMA_VERSION >= 55 and frm < 55 and con.execute("SELECT 1 FROM reviews LIMIT 1").fetchone():
+        # always owed by the upgrade to 55 or 56, whatever survives: a room deleted before the upgrade left
+        # its board's text in free pages or the log (DESIGN §28.6), and cleaning rows cannot reach that
+        owed = (SCHEMA_VERSION >= 55 and frm < 55) or (SCHEMA_VERSION >= 56 and frm < 56)
+        if owed:
             # a rewrite can't zero what earlier edits left in free pages: a VACUUM after the commit does,
             # and this row (written with it, after the counts above) says it is still owed
             con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (CLEAN_PENDING,))
@@ -1686,7 +1742,8 @@ CLEAN_PENDING = "review_clean_pending"
 
 
 def finish_review_clean(con: sqlite3.Connection) -> bool:
-    """After the upgrade that cleaned a review board's stored text (schema 55, #890): rebuild the database
+    """After the upgrade that cleaned a review board's or a whiteboard's stored text (schema 55, #890, and 56,
+    #893; one pending row and one VACUUM for both): rebuild the database
     file (``VACUUM``: the free pages earlier releases left, which a rewrite can't zero, go too) and fold the
     WAL into it and empty it (``wal_checkpoint(TRUNCATE)``, whose answer is read: a reader holding an old
     snapshot makes it report busy). Only then is the ``meta`` row that says it is owed removed. A failure or a
