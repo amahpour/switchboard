@@ -62,6 +62,8 @@ redact-{light,dark,phone-light} (a pasted token, with and without the redaction 
 past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
 merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
 ``--only past_boards``),
+report-conflict-{before,after}-{light,dark,phone-light} (the board's header for a pull request that
+conflicts with its base: only "CI none", then "conflicts with its base", #907; ``--only report_conflict``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -4247,6 +4249,44 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names``, ``admins`` and ``backups`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
+def shoot_report_conflict(browser: Any, out: Path, world: Any) -> None:
+    """#907: the board's header for a pull request that conflicts with its base. Before: the reviewer
+    reports only the CI it saw (none, since a conflict runs no CI), which is all the board said. After:
+    the same report as ci="blocked". Light, dark and the phone (light)."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#conflict-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            world.agent_call(room, "codex-1", "review", action="report", state="open", ci="none")
+            expect(page.locator("#board-report")).to_contain_text("CI none")
+            settle(page)
+            shot(page, out, "report-conflict-before-" + slug + ".png")
+            world.agent_call(room, "codex-1", "review", action="report", ci="blocked")
+            expect(page.locator("#board-report")).to_contain_text("conflicts with its base")
+            settle(page)
+            shot(page, out, "report-conflict-after-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
 def shoot_review_edit(browser: Any, out: Path, world: Any) -> None:
     """#786: a person corrects a card. Light shows the card before; light, dark and the phone
     show it after, with the new title and the history line."""
@@ -4705,6 +4745,7 @@ ONLY: dict[str, Any] = {
     "review_guide": shoot_review_guide,
     "past_boards": shoot_past_boards,
     "review_edit": shoot_review_edit,
+    "report_conflict": shoot_report_conflict,
     "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
