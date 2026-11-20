@@ -1645,3 +1645,31 @@ async def test_an_independent_reviewer_takes_a_departed_raisers_findings(broker:
             assert done["ok"] and done["settled"]
     finally:
         web.close()
+
+
+async def test_concede_on_a_reopened_card_says_it_is_already_yours(broker: InProcBroker) -> None:
+    """#905: a reopened finding comes back to its owner, and that owner's `concede` was refused with
+    "name the agent who takes it over", a handoff error. It now says the card is theirs to fix and
+    changes nothing (no new history); a real handoff to another agent still works."""
+    async with (
+        FakeAgent(broker.home, "k905-a") as owner,
+        FakeAgent(broker.home, "k905-b") as other,
+        FakeAgent(broker.home, "k905-r") as reviewer,
+    ):
+        await owner.join("#build", "claude-1")
+        await other.join("#build", "claude-2")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call("review", room="#build", action="raise", title="wrong total")
+        assert (await owner.call("review", room="#build", action="concede", item="F1"))["ok"]
+        r = await owner.call("review", room="#build", action="fix", item="F1", commit="abc1234", proof="t")
+        assert r["ok"], r
+        r = await reviewer.call("review", room="#build", action="reopen", item="F1", reason="still wrong")
+        assert r["ok"], r
+        before = q(broker, "SELECT count(*) FROM events WHERE kind = 'review'")[0][0]
+        r = await owner.call("review", room="#build", action="concede", item="F1")
+        assert r.get("ok") is False and "already yours to fix" in r["error"], r
+        assert "next move is fix" in r["error"] and "takes it over" not in r["error"], r
+        assert q(broker, "SELECT count(*) FROM events WHERE kind = 'review'")[0][0] == before
+        r = await owner.call("review", room="#build", action="concede", item="F1", owner="claude-2")
+        assert r["ok"], r  # a real handoff keeps its rule

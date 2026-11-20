@@ -29,7 +29,7 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `edit` (`item`, and any of `title`, `detail`, `where`): correct a finding you raised, while it is raised or contested. A field you leave out stays. Each edit is a line on the card's history.
 - `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its index.
 - `abstain` (`item`): you have no view. You are not waited on, and you are not a side of a split. A later `concur` replaces it.
-- `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room.
+- `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room. A finding already conceded to you, such as a reopened one, is yours to `fix`; `concede` again only hands it to another agent.
 - `contest` (`item`, `reason`): a finding you did not raise.
 - `insist` (`item`, `reason`): once, by the raiser, on a contested finding. Only an insisted finding needs a person.
 - `drop` (`item`, `reason`): by the raiser.
