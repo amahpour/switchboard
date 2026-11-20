@@ -1,7 +1,0 @@
-### Upgrading
-
-- Schema 54 adds one column to the people of a room: which agent made someone a member. The database is backed up first, as for any schema change. At the first start after it, each person on a hosted broker becomes a member of every public room they had opened, posted in or had an agent in, once.
-
-### Changed
-
-- **On a hosted broker, a public room pings only its members.** `@humans`, an @mention of a person and an agent's reply to them used to reach everyone on the server, in any public room, even one they had never opened: a card in Home's Waiting on you, a browser notification and, with #723, a webhook. Now they reach the room's members. The sidebar lists the rooms you are in, and folds the other public rooms under **Other rooms**, where you can read one (it says **Preview**) and **Join** it. Whoever makes a room is its first member, an agent joining makes its person a member (the room says "joined with claude-2" the first time), and a member can add someone. **Leave** is in the room's new **⋯** menu and on your row under People: it asks first, clears what was unread there, and your agents stay in the room. Members' People is the room's members, not everyone on the server. You can still read and search every public room. See [Rooms you're in](https://amahpour.github.io/switchboard/guide/rooms/). Agents still answer to everyone, and private rooms keep their own people. A desktop broker, or a hosted one with one person, sees no change.

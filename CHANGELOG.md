@@ -2,6 +2,38 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.11.0 (2026-11-20)
+
+### Upgrading
+
+- Schema 54 adds one column to the people of a room: which agent made someone a member. The database is backed up first, as for any schema change. At the first start after it, each person on a hosted broker becomes a member of every public room they had opened, posted in or had an agent in, once.
+
+### Added
+
+- **Read past review boards from a room.** Past boards shows closed reviews, their dates and whether a merge was reported. Open any listed board to read its cards and history. Agents can record a merge after closing the board.
+- **See how reviews go on the Usage page.** A new Reviews section shows, per room and per agent, today and over the last 7 days: boards opened and settled with the median time to settle, findings raised, confirmed, contested and dropped (and the share confirmed, a rough measure of a reviewer's precision), reopened fixes and the commits a board went through, and the time from opening to the first finding, to settled and to a reported merge. Merged reads unknown until an agent reports it.
+
+### Changed
+
+- **On a hosted broker, a public room pings only its members.** `@humans`, an @mention of a person and an agent's reply to them used to reach everyone on the server, in any public room, even one they had never opened: a card in Home's Waiting on you, a browser notification and, with #723, a webhook. Now they reach the room's members. The sidebar lists the rooms you are in, and folds the other public rooms under **Other rooms**, where you can read one (it says **Preview**) and **Join** it. Whoever makes a room is its first member, an agent joining makes its person a member (the room says "joined with claude-2" the first time), and a member can add someone. **Leave** is in the room's new **⋯** menu and on your row under People: it asks first, clears what was unread there, and your agents stay in the room. Members' People is the room's members, not everyone on the server. You can still read and search every public room. See [Rooms you're in](https://amahpour.github.io/switchboard/guide/rooms/). Agents still answer to everyone, and private rooms keep their own people. A desktop broker, or a hosted one with one person, sees no change.
+- **Every plugin now reports its version, so a stale Cursor, Devin or OpenCode V2 plugin is flagged too.** Cursor's and Devin's hooks and OpenCode's listener send `X-Switchboard-Plugin-Version`, as Claude Code's and Codex's plugins already did, and `/who`, the Inspector and `join` say when a plugin is from another major version than the server, with the steps to update it. Before, only Claude Code and Codex were checked, so a copy left at an old version on a machine went unnoticed. A plugin that sends no version (one from before this release) is left unsaid, as now. A different minor or patch still says nothing.
+- **A release sets OpenCode's and Devin's plugin versions too.** OpenCode's `package.json` no longer stays at `0.1.0`, and Devin's plugin has a small `plugin.json` for its version. Every plugin under `plugins/` is now the release's version, and a test fails when a new plugin is not stamped.
+- **An idle Cursor keeps listening for up to an hour, not ten minutes.** Cursor's Stop hook is now held about an hour after each turn, so a mention within the hour wakes it with nothing typed, and an idle session re-parks once an hour instead of six times. A held hook costs no model turns. The price: something you type in Cursor while it is busy waits in Cursor's follow-up queue until a room message arrives or the hour runs out; typed while idle and parked, it runs at once. Cursor's plugin is copied into each project, so a project with an older copy keeps the ten-minute wait until you copy the new one in; the tier note, the parked reason and the join text say "up to 1 hour (10 min with an older plugin copy)" for that reason.
+- **The upgrade cleans the review boards an earlier release stored, once** (schema 55). Every board link, card and board event is run through the same cleaning, so a secret written on a board before this release is gone from the live database file and its log once the upgrade finishes (it rebuilds the database, which needs free disk space about its size, and retries at the next start if it could not). Two boards of a room whose links clean to the same text keep apart: the one opened last keeps the cleaned link, an older one gets `#board-<id>` on the end, and a link that is no link once cleaned becomes `https://invalid.example/board-<id>`. Room chat is not rewritten. Every migration backup next to the database still holds the old text (`switchboard.db.v<N>.bak*`: `switchboard.db.v<N>.bak`, then `.bak.<epoch>` and `.bak.<epoch>-<n>` when those names were taken, from this upgrade and earlier ones), as does any other copy: delete them when you are satisfied.
+
+### Fixed
+
+- **Keep idle listeners running through proxy timeouts.** Claude Code and OpenCode start another
+  round when a proxy cuts a long wait. Cursor retries within its Stop window. An HTTP reply or
+  a round that lasts at least 10 seconds resets the two-minute outage clock.
+- **Recover idle listeners after a broker restart.** Claude Code and OpenCode can repark when the
+  broker returns. Cursor retries within its existing Stop window. These listeners and the web UI
+  report a prolonged outage. Claude Code preserves a wake it already received when a local hook
+  cancels its listener. An open browser tab catches up when the broker returns.
+  [#823](https://github.com/amahpour/switchboard/issues/823)
+- **A review board's raise wakes only the agents who answer it, once.** A raise used to @mention every agent in the room, one message per finding, so a review of eleven findings woke the other reviewers and every bystander eleven times, and they answered each one. Now it goes to the pull request's author side, as the board knows it (the agent that opened the board, or one that owns or answered a finding on it), and to every other agent only while the board knows nobody on that side. Eleven raises at once still cost that agent one wake: the first wakes it, and its turn gets the rest together. A board's message reaches only the agents it names, and a move on the board answers it: an agent that conceded or contested a finding, or has nothing left to do on it, is no longer woken again with `again=yes` or reminded of it.
+- **A secret written on a review board is cut out, as it is from a message.** What an agent or you write on a board (a card's title, detail, place and options, a reason, a deferral's ticket, a fix's proof) is stored with `[redacted: <kind>]` in place of an obvious secret, with the same patterns as chat. Before, a board move skipped it: a secret on a card was kept on the card and posted in the room in the line that asks the next agent to act. A board link or a proof link that holds a secret, or a user name and password (`user:password@host`), is now refused, and so is a `where` that holds one across its colon.
+
 ## 1.10.0 (2026-11-19)
 
 ### Added
