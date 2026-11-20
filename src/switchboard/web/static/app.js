@@ -7134,7 +7134,7 @@
     }
     // what an agent last read off the pull request (#291): its claim, named as its, never checked
     if (b.report) {
-      const rep = el('span', 'board-report', b.report);
+      const rep = el('span', 'board-report' + (b.pr_ci === 'blocked' ? ' conflict' : ''), b.report);
       rep.id = 'board-report';
       rep.title = b.reported_by + ' read this off the pull request with its own tools; switchboard fetches nothing';
       title.append(rep);

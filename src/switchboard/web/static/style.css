@@ -3210,6 +3210,8 @@ body.login {
   font-size: calc(11px * var(--text-scale)); font-weight: 700; font-variant-numeric: tabular-nums;
 }
 .board-report { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); min-width: 0; overflow-wrap: anywhere; }
+/* CI blocked by a conflict with the base (#907): the author has to act, so it isn't muted */
+.board-report.conflict { color: var(--danger); font-weight: 600; }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
 /* The open card beside the lanes (#343). The card was a fixed 340 px: cramped on a wide window,
    and on a narrower one it left the lanes about 110 px each. Now it takes a share of the board,

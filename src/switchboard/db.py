@@ -55,7 +55,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 56
+SCHEMA_VERSION = 57
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -206,7 +206,7 @@ CREATE TABLE reviews(
   opened_by TEXT NOT NULL, opened_at REAL NOT NULL, closed_at REAL, posted_at REAL, posted_by TEXT,
   pr_state TEXT NOT NULL DEFAULT '' CHECK(pr_state IN ('', 'open', 'merged', 'closed')),
   pr_threads INTEGER CHECK(pr_threads IS NULL OR pr_threads BETWEEN 0 AND 999),
-  pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none')),
+  pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none', 'blocked')),
   reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
   closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
   reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
@@ -1138,6 +1138,19 @@ V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
 # ``clean_whiteboard_rows``, as for v55: no schema change, and the same finish (``finish_review_clean``).
 V55_TO_V56 = ("UPDATE meta SET value='56' WHERE key='schema_version'",)
 
+# v56 -> v57 (#907, DESIGN.md §37.11): the reported CI can be ``blocked``, a pull request that conflicts with
+# its base and so runs no CI. Only the ``pr_ci`` CHECK gains a value: the same schema-text edit as v33 -> v34
+# (_migrate brackets the step with schema editing, checks the new CHECK is in the table's text or fails
+# closed and rolls back, and checks integrity), so no row or foreign key moves. The needle ends at the
+# closing parenthesis, so it matches only the CHECK on ``pr_ci``.
+V56_TO_V57 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''failing'', ''running'', ''none''))',"
+    " '''failing'', ''running'', ''none'', ''blocked''))')"
+    " WHERE type='table' AND name='reviews'",
+    "UPDATE meta SET value='57' WHERE key='schema_version'",
+)
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1409,6 +1422,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         53: MigrationStep(54, V53_TO_V54, ()),
         54: MigrationStep(55, V54_TO_V55, ()),
         55: MigrationStep(56, V55_TO_V56, ()),
+        56: MigrationStep(57, V56_TO_V57, (), (("reviews", "'none', 'blocked'"),)),
     }
     out = []
     v = frm

@@ -820,6 +820,22 @@ def test_a_report_takes_only_what_it_knows_and_says_whose_it_is() -> None:
     assert reviews.report_line({"reported_by": ""}, 0.0) == ""
 
 
+def test_a_report_can_say_ci_is_blocked_by_a_conflict_with_the_base() -> None:
+    """#907: a pull request that conflicts with its base runs no CI, so a reviewer reported ci "none" and
+    the board read "CI none", as if the PR had no CI, hiding that the author must resolve a conflict. `ci`
+    takes "blocked" for it, and the line says why; a value the board doesn't know is still refused.
+    Fails if "blocked" is refused, the line says only "CI blocked" or still "CI none", or a near miss
+    ("conflicting", "Blocked") is accepted."""
+    assert reviews.report({"ci": "blocked"}) == {"pr_ci": "blocked"}
+    for bad in ({"ci": "conflicting"}, {"ci": "Blocked"}, {"ci": "mergeable"}):
+        with pytest.raises(ReviewError, match="ci must be one of: .*blocked"):
+            reviews.report(bad)
+    rv = {"reported_by": "claude-1", "reported_at": 1000.0, "pr_ci": "blocked"}
+    assert reviews.report_line(rv, 1180.0) == "CI blocked: conflicts with its base (per claude-1, 3 min ago)"
+    mr = {**rv, "pr_threads": 1, "url": "https://gitlab.com/g/p/-/merge_requests/3"}
+    assert reviews.report_line(mr, 1180.0).startswith("1 open on the MR, CI blocked: conflicts with its base")
+
+
 def test_report_line_says_mr_for_a_gitlab_merge_request() -> None:
     """GitLab calls it a merge request, so a board on one reads "on the MR"; a GitHub board, or a
     URL the board can't place, keeps "on the PR"; `show` names it a merge request. Fails while both

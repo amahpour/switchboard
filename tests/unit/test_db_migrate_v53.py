@@ -30,7 +30,7 @@ def test_retry_receipt_table_matches_fresh_schema(tmp_path: Path, monkeypatch: p
     backup = db.connect(path.with_name("old.db.v52.bak"), readonly=True)
     try:
         query = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='say_keys' ORDER BY name"
-        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 56
+        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 57
         assert db.schema_version(backup) == 52
         assert db.row_counts(upgraded, db.TABLES) == {**counts, "say_keys": 0}
         assert [tuple(r) for r in upgraded.execute(query)] == [tuple(r) for r in fresh.execute(query)]

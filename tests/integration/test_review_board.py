@@ -546,6 +546,46 @@ async def test_an_agent_reports_the_pull_request_and_a_merge_closes_the_board(br
         web.close()
 
 
+async def test_a_report_of_ci_blocked_by_a_conflict_shows_on_the_board_and_in_show(
+    broker: InProcBroker,
+) -> None:
+    """#907: a pull request that conflicts with its base runs no CI, so the board said "CI none" and hid
+    that the author must resolve the conflict. A report with ci="blocked" is on the page and in `show`,
+    one notice says it once, a later report replaces it, and an unknown ci is refused with the stored
+    report untouched. Fails if "blocked" is refused or the board still reads only "CI none"."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "kc-r") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked")
+            assert r["ok"] and "CI blocked: conflicts with its base (per codex-1" in r["board"], r
+            shown = await reviewer.call("review", room="#build", action="show")
+            assert "CI blocked: conflicts with its base" in shown["board"], shown
+            page = page_board(web.get("/api/rooms/build/review"))
+            assert page["report"].startswith("CI blocked: conflicts with its base (per codex-1")
+            assert page["pr_ci"] == "blocked"
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked")
+            assert r["ok"], r  # the same again: no second notice
+            r = await reviewer.call("review", room="#build", action="report", ci="conflicting")
+            assert r.get("ok") is False and "ci must be one of" in r["error"], r
+            assert page_board(web.get("/api/rooms/build/review"))["pr_ci"] == "blocked"
+            r = await reviewer.call("review", room="#build", action="report", ci="passing")
+            assert r["ok"] and "blocked" not in r["board"] and "CI passing" in r["board"], r
+        texts = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        said = [t for t in texts if "reports CI" in t]
+        assert said == [
+            f"codex-1 reports CI blocked on {PR}: it conflicts with its base",
+            f"codex-1 reports CI passing on {PR}",
+        ], texts
+    finally:
+        web.close()
+
+
 async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
     broker: InProcBroker,
 ) -> None:
