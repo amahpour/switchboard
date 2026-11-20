@@ -4522,5 +4522,14 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
     expect(page.locator("#board-close, #board-handoff, .board-actions")).to_have_count(0)
     page.get_by_role("button", name="Back to past boards").click()
     expect(history.get_by_role("button", name="example/shop #7")).to_be_focused()
+    # the read-only head of a board closed without merging says Closed too, not Unknown (#886):
+    # the chip right after "Read-only", so the list rows' "Closed" date labels can't satisfy it
+    history.get_by_role("button", name="example/shop #9").press("Enter")
+    expect(page.get_by_text("Read-only", exact=True)).to_be_visible()
+    expect(
+        page.get_by_text("Read-only", exact=True).locator("xpath=following-sibling::span[1]")
+    ).to_have_text("Closed")
+    page.get_by_role("button", name="Back to past boards").click()
+    expect(history.get_by_role("button", name="example/shop #9")).to_be_focused()
     move(action="report", url=unknown, state="merged")
     expect(unknown_row).to_contain_text("Merged")
