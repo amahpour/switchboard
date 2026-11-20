@@ -9743,11 +9743,33 @@
     if (stick) log.scrollTop = log.scrollHeight;
   }
 
-  // A message that arrives while the room is filtered: drawn when the filter would have answered with it.
+  // A message that arrives while the room is filtered: drawn when the filter would have answered with it. A reply
+  // whose parent this page does not hold (older than its history) cannot be judged here, so the broker is asked
+  // about that one message, with its own rule (home.addressed_to): no second copy of the rule.
   function filterTake(r, m) {
     const f = filterOf(r);
-    const takes = f.show === 'mentions' ? forMe(r, m) : Array.isArray(m.files) && m.files.length > 0;
-    if (takes) filterAdd(r, f, [m]);
+    if (f.show !== 'mentions') {
+      if (Array.isArray(m.files) && m.files.length > 0) filterAdd(r, f, [m]);
+      return;
+    }
+    if (forMe(r, m)) filterAdd(r, f, [m]);
+    else if (m.kind === 'chat' && m.reply_to && !r.msgs.some(function (x) { return x.id === m.reply_to; })) {
+      filterAsk(r, f, m.id);
+    }
+  }
+
+  // Ask the filter route whether the one message `id` is in this filter, and draw the broker's answer if it is.
+  async function filterAsk(r, f, id) {
+    let data;
+    try {
+      const q = '?show=' + f.show + '&before=' + String(Number(id) + 1) + '&limit=1';
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/filter' + q);
+    } catch (e) {
+      return;  // the line is still in the room's history, and All shows it
+    }
+    const list = data && Array.isArray(data.messages) ? data.messages : [];
+    const got = list.filter(function (x) { return x.id === id; });
+    if (got.length) filterAdd(r, f, got);
   }
 
   function bindRoomFilters() {

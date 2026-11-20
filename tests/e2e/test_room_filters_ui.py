@@ -220,6 +220,9 @@ def test_on_a_phone_the_row_fits_and_its_buttons_are_tall_enough(ui: UI) -> None
 
 
 # ------------------------------------------------- what arrives while a filter is on (the review of #916)
+FILTER_NONE = "Nothing in this room is addressed to you yet."
+
+
 def fresh_room(world: UIWorld, room: str, mentions: int = 0, agent: str | None = None) -> list[int]:
     """A room of this test's own: ``mentions`` planted @alice lines, oldest first, and a scripted agent named
     ``agent`` joined to speak live. Returns the planted ids."""
@@ -260,5 +263,42 @@ def test_a_live_match_keeps_the_focus_on_show_older(ui: UI) -> None:
         expect(page.locator(f'#log .line[data-id="{mid}"]')).to_have_count(1)
         expect(page.locator("#room-filter-note")).to_have_text("The newest 51 messages addressed to you")
         expect(page.locator("#log .filter-older")).to_be_focused()
+    finally:
+        ui.world.close_extra_agents()
+
+
+def test_a_live_reply_to_an_older_message_of_mine_shows_under_mentions(ui: UI) -> None:
+    """alice's question is older than the history the page loaded; an agent replies to it, naming nobody,
+    while Mentions is on. The reply is addressed to alice (the broker's rule: an agent's reply to something
+    alice said), so it shows at once, as reopening Mentions would show it. Fails if the page judges the reply
+    only by the parents it holds and drops it."""
+    room = "e2e-filters-reply"
+    fresh_room(ui.world, room, agent="helper")
+    asked = ui.world.say(room, "which branch should ship?")
+
+    def chatter() -> None:
+        store = ui.world.broker.state.store
+        r = store.get_room("#" + room)
+        assert r is not None
+        for i in range(CHATTER):
+            store.insert_message(
+                r.id, sender_name="codex-1", sender_kind="agent", via="mcp", text=f"chatter {i}",
+                sender_harness="codex",
+            )  # fmt: skip
+
+    ui.world.broker.on_loop(chatter)
+    try:
+        page = ui.open(room)
+        expect(page.locator("#log .line[data-id]").last).to_contain_text(f"chatter {CHATTER - 1}")
+        assert asked not in shown(page)  # the question is beyond what the page holds
+        button(page, "mentions").click()
+        expect(page.locator("#room-filter-note")).to_have_text(FILTER_NONE)
+        mid = ui.world.agent_say("#" + room, "helper", "main, once CI is green", reply_to=asked)
+        expect(page.locator(f'#log .line[data-id="{mid}"]')).to_have_count(1)
+        expect(page.locator("#room-filter-note")).to_have_text("1 message addressed to you")
+        button(page, "all").click()
+        button(page, "mentions").click()
+        expect(page.locator("#room-filter-note")).to_have_text("1 message addressed to you")
+        assert shown(page) == [mid]
     finally:
         ui.world.close_extra_agents()
