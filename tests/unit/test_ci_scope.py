@@ -20,6 +20,14 @@ def runs_tests(files: list[str], title: str = "docs: x") -> bool:
     return scope_mod.scope(files, title)[0]
 
 
+def stamped_tree(root: Path, version: str) -> Path:
+    """A tree whose every plugin manifest (release.py's PLUGIN_MANIFESTS) says ``version``."""
+    for manifest in scope_mod.release.PLUGIN_MANIFESTS.values():
+        (root / manifest).parent.mkdir(parents=True, exist_ok=True)
+        (root / manifest).write_text(f'{{\n  "name": "switchboard",\n  "version": "{version}"\n}}\n')
+    return root
+
+
 def test_a_docs_only_pr_skips_the_tests() -> None:
     assert not runs_tests(
         ["README.md", "docs/USAGE.md", "CLAUDE.md", "docs/media/ui/light.png", "docs/media/demo.mp4"]
@@ -76,13 +84,18 @@ def test_a_release_pr_skips_the_tests() -> None:
     ],
 )
 def test_only_a_release_edits_the_changelog(
-    title: str, ok: bool, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    title: str,
+    ok: bool,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     files = ["CHANGELOG.md", "src/switchboard/cli.py"]
     assert (scope_mod.changelog_problem(files, title) is None) is ok
     assert scope_mod.changelog_problem(["README.md"], title) is None
     monkeypatch.setattr(sys, "stdin", io.StringIO("\n".join(files) + "\n"))
-    assert scope_mod.main(["--title", title]) == (0 if ok else 1)
+    root = stamped_tree(tmp_path, "0.7.0")  # a release PR's plugins carry its version
+    assert scope_mod.main(["--title", title, "--root", str(root)]) == (0 if ok else 1)
     if not ok:
         assert "::error file=CHANGELOG.md::" in capsys.readouterr().out
 
@@ -99,3 +112,40 @@ def test_the_cli_writes_the_decision_for_the_workflow(
     monkeypatch.setattr(sys, "stdin", io.StringIO("src/switchboard/cli.py\n"))
     assert scope_mod.main([]) == 0
     assert out.read_text() == "tests=false\ntests=true\n"
+
+
+def test_a_release_pr_fails_unless_every_plugin_manifest_carries_its_version(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A release PR skips the suite, so its stamps are checked here (#901): v1.11.0 was cut by an
+    older release.py that left Devin's and OpenCode's manifests at 1.10.0, and only the next PR's
+    tests noticed. Fails if a manifest left at an old version, or missing, passes a release PR."""
+    root = stamped_tree(tmp_path, "0.7.0")
+    assert scope_mod.release_problem("release: v0.7.0", root) is None
+    assert scope_mod.release_problem("fix(web): x", root) is None  # only a release PR is checked
+    (root / "plugins/devin/plugin.json").write_text('{"version": "0.6.0"}\n')
+    (root / "plugins/opencode/package.json").unlink()
+    problem = scope_mod.release_problem("release: v0.7.0", root)
+    assert problem and "plugins/devin/plugin.json" in problem and "plugins/opencode/package.json" in problem
+    assert "plugins/claude" not in problem  # a stamped one is not named
+    # only the top-level version counts. Each of these holds a matching "version": "0.7.0" that a text
+    # search finds first (c31bd418's regex passed all three): one nested before a stale top-level one,
+    # one inside a JSON array, one in truncated JSON
+    (root / "plugins/claude/.claude-plugin/plugin.json").write_text(
+        '{"engines": {"version": "0.7.0"}, "version": "0.6.0"}\n'
+    )
+    (root / "plugins/codex/.codex-plugin/plugin.json").write_text('[{"version": "0.7.0"}]\n')
+    (root / "plugins/cursor/.cursor-plugin/plugin.json").write_text('{"version": "0.7.0",\n')
+    problem = scope_mod.release_problem("release: v0.7.0", root)
+    assert problem and all(
+        f in problem
+        for f in (
+            "plugins/claude/.claude-plugin/plugin.json",
+            "plugins/codex/.codex-plugin/plugin.json",
+            "plugins/cursor/.cursor-plugin/plugin.json",
+        )
+    )
+    monkeypatch.setattr(sys, "stdin", io.StringIO("pyproject.toml\n"))
+    assert scope_mod.main(["--title", "release: v0.7.0", "--root", str(root)]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("::error::release v0.7.0: ") and "plugins/devin/plugin.json" in out
