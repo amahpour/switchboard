@@ -379,3 +379,23 @@ def test_a_mention_that_came_under_files_is_still_waiting_on_home(ui: UI) -> Non
         expect(card).to_contain_text("which branch should ship?")
     finally:
         ui.world.close_extra_agents()
+
+
+def test_opening_search_returns_the_room_to_all(ui: UI) -> None:
+    """Search lies over the room; opening it leaves the filter, so dismissing Search shows the live log with
+    All pressed, not the filtered one. Fails if the filter survives under Search."""
+    ids = seed(ui.world)
+    page = ui.open(ROOM)
+    button(page, "mentions").click()
+    expect(page.locator("#room-filter-note")).to_have_text("3 messages addressed to you")
+    page.locator("#log").click(position={"x": 5, "y": 5})
+    page.keyboard.press("/")
+    expect(page.locator("#search-input")).to_be_focused()
+    page.keyboard.type("release notes")
+    expect(page.locator("#app")).to_have_class(re.compile("search-open"))
+    page.keyboard.press("Escape")
+    expect(page.locator("#app")).not_to_have_class(re.compile("search-open"))
+    expect(page.locator("#room-title")).to_have_text(ROOM)
+    expect(button(page, "all")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#room-filter-note")).to_have_text("")
+    expect(page.locator(f'#log .line[data-id="{ids["last"]}"]')).to_have_count(1)

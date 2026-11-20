@@ -33,7 +33,7 @@ A row over the messages of every room says **All**, **Mentions** and **Files**. 
 - **Files:** the messages with a file. What someone attached, and a call's snapshots.
 - **All:** every message again, as it comes in.
 
-Mentions and Files cover the room's whole history, not just what was on screen: a line beside the buttons says how many there are, and **Show older** at the top brings the ones before. While one is chosen, a new message shows if it belongs there; posting a message, or opening another room, goes back to All. Tab reaches the buttons, and Enter or Space chooses one. On a phone they are full-size buttons under the room's name.
+Mentions and Files cover the room's whole history, not just what was on screen: a line beside the buttons says how many there are, and **Show older** at the top brings the ones before. While one is chosen, a new message shows if it belongs there; posting a message, opening Search, or opening another room goes back to All. Tab reaches the buttons, and Enter or Space chooses one. On a phone they are full-size buttons under the room's name.
 
 ![A room showing only its Mentions, with the All, Mentions and Files row over the log](../media/ui/guide-room-filters-light.png)
 

@@ -9122,6 +9122,7 @@
     if (state.searchOn) return;
     closePop();
     if (state.inspect) closeInspector(false);
+    if (state.filter) leaveFilter(false);  // Search returns to All, not to a filtered log (#914, §64.4)
     state.searchOn = true;
     $('app').classList.add('search-open');
     $('app').classList.remove('sheet-open');
