@@ -205,6 +205,7 @@ class RoomBoard:
         agent_raw: bool = False,
         summary: str = "",
     ) -> dict[str, Any]:
+        from_page = raw is not None and not callable(raw) and not agent_raw
         who = clean(actor).strip()[:100] or "someone"
         now = self.state.clock.now()
         published: dict[str, Any] | None = None
@@ -235,10 +236,16 @@ class RoomBoard:
             result = board.merge(elements, incoming, agent=agent, cap=big)
             if agent_raw and (len(result.taken) != len(incoming) or result.rejected):
                 raise ServiceError("bad_request", "the diagram does not fit on this board")
+            dropped = len(result.rejected)
             if not result.taken:
                 why = result.rejected[0] if result.rejected else "the board kept a newer copy of that shape"
                 if raw is not None:
-                    return {"seq": seq, "changed": False, "ids": []}
+                    return {
+                        "seq": seq,
+                        "changed": False,
+                        "ids": [],
+                        **({"dropped": dropped} if from_page else {}),
+                    }
                 raise ServiceError("bad_request", why)
             try:
                 self.state.store.board_write(
@@ -271,7 +278,10 @@ class RoomBoard:
         text = summary or _done(action, ids)
         if problems:
             text += "\nlayout warnings, fix before announcing:\n" + "\n".join(f"- {w}" for w in problems)
-        return {"seq": published["seq"], "changed": True, "ids": ids, "text": text}
+        done = {"seq": published["seq"], "changed": True, "ids": ids, "text": text}
+        if from_page:  # what the page asked for that was not kept: the socket answers it with the board
+            done["dropped"] = dropped
+        return done
 
 
 def _done(action: str | None, ids: list[str]) -> str:

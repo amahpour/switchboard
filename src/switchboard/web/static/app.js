@@ -3878,7 +3878,7 @@
     } else if (f.t === 'board') {
       if (r && whiteboard) {
         if (f.task) whiteboard.task(f.room, f.task);
-        else whiteboard.receive(f.room, f.elements, f.full === true);
+        else whiteboard.receive(f.room, f.elements, f.full === true, f.seq);
       }
     } else if (f.t === 'members') {
       if (!r) return;
