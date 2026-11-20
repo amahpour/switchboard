@@ -636,6 +636,30 @@ def test_open_pr_refuses_to_run_a_copy_of_the_script_that_is_not_mains(
     assert "pr create" not in (repo.parent / "gh.log").read_text()
 
 
+def test_open_pr_cuts_from_the_commit_it_checked_even_if_main_moves_in_between(
+    remote: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The script is checked against one commit of origin/main, and the release must be cut from that
+    same commit: a fetch that moves origin/main in between would otherwise let an older copy's rules
+    stamp a newer main (#901). With the commit pinned, the moved main is seen and nothing is released.
+    Fails if open_pr resolves origin/main again for its worktree."""
+    repo, origin = remote
+    real = rel.own_copy_is_mains
+
+    def check_then_main_moves(*args: object, **kwargs: object) -> bool:
+        ok = real(*args, **kwargs)  # type: ignore[arg-type]
+        git(repo, "commit", "-q", "--allow-empty", "-m", "feat: another merge lands (#31)")
+        git(repo, "push", "-q", "origin", "main")
+        git(repo, "fetch", "-q", "origin", "main")  # origin/main moves after the check
+        return ok
+
+    monkeypatch.setattr(rel, "own_copy_is_mains", check_then_main_moves)
+    assert rel.open_pr(repo, "2026-09-30") is None
+    assert "main has moved on" in capsys.readouterr().out
+    assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
+    assert len(git(repo, "worktree", "list").splitlines()) == 1
+
+
 def test_open_pr_with_nothing_to_release(
     remote: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:

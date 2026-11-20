@@ -337,14 +337,14 @@ def behind_main(root: Path = ROOT) -> bool:
 SCRIPT_PATH = ".github/scripts/release.py"
 
 
-def own_copy_is_mains(root: Path = ROOT, script: Path = Path(__file__)) -> bool:
-    """True when the script running is origin/main's own copy. Which files a release stamps is written
-    in this script, so an older copy stamps an older set: v1.11.0 ran from a checkout of v1.10.0 and
-    left the Devin and OpenCode plugins at 1.10.0, which #891 had added. A main with no copy is not a
-    match, so the release stops rather than guess."""
+def own_copy_is_mains(main: str, root: Path = ROOT, script: Path = Path(__file__)) -> bool:
+    """True when the script running is the copy at commit ``main`` (the origin/main a release is cut
+    from). Which files a release stamps is written in this script, so an older copy stamps an older
+    set: v1.11.0 ran from a checkout of v1.10.0 and left the Devin and OpenCode plugins at 1.10.0,
+    which #891 had added. A main with no copy is not a match, so the release stops rather than guess."""
     try:
         mains = subprocess.run(
-            ["git", "show", f"origin/main:{SCRIPT_PATH}"], cwd=root, check=True, capture_output=True
+            ["git", "show", f"{main}:{SCRIPT_PATH}"], cwd=root, check=True, capture_output=True
         ).stdout
     except subprocess.CalledProcessError:
         return False
@@ -414,14 +414,17 @@ def open_pr(root: Path, today: str, *, major: bool = False) -> str | None:
     if stale := [f"#{p['number']}" for p in listed if p["headRefName"].startswith("release/")]:
         raise SystemExit(f"release PR {', '.join(stale)} is still open: merge it or close it first")
     git("fetch", "-q", "--tags", "origin", "main", root=root)
-    if not own_copy_is_mains(root):
+    # one commit for both the check and the release: a fetch that moves origin/main in between
+    # must not let an older copy's rules stamp a newer main
+    main = git("rev-parse", "--verify", "origin/main^{commit}", root=root).strip()
+    if not own_copy_is_mains(main, root):
         raise SystemExit(
             f"this {SCRIPT_PATH} is not origin/main's: run main's own copy, from a checkout of a fresh "
             "origin/main (git fetch, then git worktree add <dir> origin/main)"
         )
     with tempfile.TemporaryDirectory(prefix="switchboard-release-") as tmp:
         tree, notes = Path(tmp) / "tree", Path(tmp) / "notes.md"
-        git("worktree", "add", "-q", "--detach", str(tree), "origin/main", root=root)
+        git("worktree", "add", "-q", "--detach", str(tree), main, root=root)
         try:
             version = release(tree, notes, today, major=major)
             if version is None:
