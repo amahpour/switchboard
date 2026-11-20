@@ -602,9 +602,10 @@ def test_a_live_match_keeps_the_focus_on_a_download_link_in_a_row(ui: UI) -> Non
 FILE_NAMES = ("first.txt", "second.txt")
 
 
-def two_files(world: UIWorld, room: str) -> tuple[int, str, str]:
-    """bob's message with two artifact lines, sent to the open pages: first.txt still pending, then second.txt
-    stored, so only the second has a download link. Returns the message id and both file ids."""
+def two_files(world: UIWorld, room: str, second: str = "stored") -> tuple[int, str, str]:
+    """bob's message with two artifact lines, sent to the open pages: first.txt still pending, then
+    second.txt stored (or in the state ``second``), so only the second has a download link. Returns the
+    message id and both file ids."""
 
     def run() -> tuple[int, str, str]:
         state = world.broker.state
@@ -613,7 +614,7 @@ def two_files(world: UIWorld, room: str) -> tuple[int, str, str]:
         ids = (secrets.token_hex(16), secrets.token_hex(16))
         text = "\n".join(f"artifact: {n} | 3 | sha256:{'0' * 64} | /Users/someone/{n}" for n in FILE_NAMES)
         m = state.store.insert_message(r.id, sender_name="bob", sender_kind="human", via="web", text=text)
-        for fid, name, st in zip(ids, FILE_NAMES, ("pending", "stored"), strict=True):
+        for fid, name, st in zip(ids, FILE_NAMES, ("pending", second), strict=True):
             state.store.file_insert(
                 file_id=fid, room_id=r.id, name=name, size=3, sha256="0" * 64, content_type="text/plain",
                 uploader_name="bob", uploader_kind="human", state=st, created_at=1.0,
@@ -686,5 +687,30 @@ def test_a_files_page_that_adds_a_link_above_the_focus_keeps_it_on_its_file(ui: 
     store_file(ui.world, room, mid, first, tell=False)
     assert len(held) == 1
     held[0].continue_()
+    expect(file_link(page, mid, first)).to_have_count(1)
+    expect(file_link(page, mid, second)).to_be_focused()
+
+
+def test_a_file_stored_above_a_focused_link_in_the_filters_own_copy_keeps_the_focus(ui: UI) -> None:
+    """Two copies of one row: the live log's, and the one Files fetched. A message arrives on All with both
+    its files pending; second.txt is stored with no frame to this page (as during a disconnect), so the live
+    copy has no link and Files, chosen next, draws the broker's copy with second.txt's link, which takes the
+    keyboard. Then first.txt's file frame arrives. The row is drawn once, from the copy Files shows, and the
+    focus stays on second.txt's link. Fails if the row is first drawn from the live copy (which has no second
+    link: the focus drops to the row) before the merged copy is drawn."""
+    room = "e2e-filters-focus-two-copies"
+    fresh_room(ui.world, room)
+    page = ui.open(room)
+    mid, first, second = two_files(ui.world, room, second="pending")
+    expect(page.locator(f'#log .line[data-id="{mid}"]')).to_have_count(1)
+    expect(page.locator(f'#log .line[data-id="{mid}"] a.md-file')).to_have_count(0)
+    store_file(ui.world, room, mid, second, tell=False)
+    button(page, "files").click()
+    expect(page.locator("#room-filter-note")).to_have_text("1 message with a file")
+    expect(file_link(page, mid, second)).to_have_count(1)
+    expect(file_link(page, mid, first)).to_have_count(0)
+    file_link(page, mid, second).focus()
+    expect(file_link(page, mid, second)).to_be_focused()
+    store_file(ui.world, room, mid, first, tell=True)
     expect(file_link(page, mid, first)).to_have_count(1)
     expect(file_link(page, mid, second)).to_be_focused()

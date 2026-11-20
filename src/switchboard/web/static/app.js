@@ -3893,9 +3893,12 @@
       if (m) {
         m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
         m.files.push(f.file);
-        if (r.name === state.active) refreshMsgText(m);
       }
-      filterFile(r, f.message_id, f.file, m);  // a filtered log holds its own rows (#914)
+      // a filtered log holds its own copies of its rows (#914), which can have files the live copy lacks (one
+      // stored during a disconnect): the row on screen is drawn once, from the copy it shows, after the merge
+      const held = filterFile(r, f.message_id, f.file, m);
+      const drawn = held || (filterOf(r) ? null : m);
+      if (drawn && r.name === state.active) refreshMsgText(drawn);
     } else if (f.t === 'board') {
       if (r && whiteboard) {
         if (f.task) whiteboard.task(f.room, f.task);
@@ -9922,17 +9925,21 @@
   // A file of message `id` was stored (an agent's upload ends after its message arrived, §53). A filtered log
   // holds the broker's copies of its rows, so the row there is brought up to date; under Files, a message that
   // came while its upload was pending now has a stored file and is taken (or, when this page does not hold it,
-  // asked for). `m` is the page's own copy, if it has one.
+  // asked for). `m` is the page's own copy, if it has one. Returns the filter's copy of the row when it holds one,
+  // for the caller to draw (once, after both copies are merged); null otherwise.
   function filterFile(r, id, file, m) {
     const f = filterOf(r);
-    if (!f) return;
+    if (!f) return null;
     const had = f.msgs.find(function (x) { return x.id === id; });
     if (had) {
-      if (had !== m && filterFilesInto(had, [file])) refreshMsgText(had);
-    } else if (f.show === 'files') {
+      if (had !== m) filterFilesInto(had, [file]);
+      return had;
+    }
+    if (f.show === 'files') {
       if (m) filterAdd(r, f, [m]);
       else filterAsk(r, f, id);
     }
+    return null;
   }
 
   // Ask the filter route whether the one message `id` is in this filter, and draw the broker's answer if it is.
