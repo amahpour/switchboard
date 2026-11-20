@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import secrets
+import shutil
 import socket
 import sqlite3
 from collections.abc import Iterator
@@ -79,7 +80,10 @@ class Relay:
 
 
 class World:
-    """A desktop broker on a ``FakeClock`` with the owner's web session and two rooms."""
+    """A desktop broker on a ``FakeClock`` with the owner's web session and two rooms.
+
+    It owns ``home``: ``stop()`` removes it once the broker has stopped (#919), so every test and
+    fixture that makes a World with ``make_tmp_home()`` leaves nothing in /tmp."""
 
     def __init__(self, home: Path, clock: FakeClock, max_calls: int = 2, files_mb: int | None = None) -> None:
         cfg = Config(human_name="alice").replace(
@@ -91,6 +95,7 @@ class World:
             cfg = cfg.replace(files=FilesCfg(max_mb=files_mb))
         cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0, rate_limit_s=0.0)
         self.clock = clock
+        self.home = home
         self.b = InProcBroker(home, cfg, clock=clock).start()
         self.web = self.b.web_client()
         for room in ("#build", "#uploads", "#third"):
@@ -101,9 +106,12 @@ class World:
         self.relay = Relay(self.b)
 
     def stop(self) -> None:
-        self.relay.close()
-        self.web.close()
-        self.b.stop()
+        try:
+            self.relay.close()
+            self.web.close()
+            self.b.stop()
+        finally:
+            shutil.rmtree(self.home, ignore_errors=True)
 
     # ---- what a person sees and does
     def command(self, text: str, room: str = "build", *, expect: int = 200) -> dict[str, Any]:
