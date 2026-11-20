@@ -826,7 +826,7 @@
     'claude:https': 'Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle',
     'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
     'opencode:https': 'OpenCode over HTTPS: its plugin waits while idle and queues the broker’s wake as a new turn',
-    'cursor:https': 'Cursor over HTTPS: its Stop hook waits about 10 minutes for messages and hands it the next one. After that, type in Cursor to start listening again.',
+    'cursor:https': 'Cursor over HTTPS: its Stop hook waits up to an hour for messages (10 minutes with an older plugin copy) and hands it the next one. After that, type in Cursor to start listening again.',
     'devin:https': 'Devin hears idle mentions only while wait() is open. Stop reminders are capped; when they run out, type in Devin to restart listening.',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
   };
@@ -5141,8 +5141,8 @@
       + ' The member’s tier note shows the broker’s configured limits.');
     devinLimit.id = 'agent-devin-idle-limit';
     body.append(devinLimit);
-    const cursorLimit = el('p', 'fine', 'Cursor hears an idle session for about 10 minutes after each turn ends:'
-      + ' its Stop hook waits that long for a message. Past that, later mentions stay queued until you type in'
+    const cursorLimit = el('p', 'fine', 'Cursor hears an idle session for up to an hour after each turn ends (10 minutes with an older plugin copy):'
+      + ' its Stop hook waits that long for a message. While it waits, something you type in Cursor during a busy turn is queued until a room message arrives or the wait ends. Past that, later mentions stay queued until you type in'
       + ' Cursor; its next Stop starts a new wait. The member’s tier note says so too.');
     cursorLimit.id = 'agent-cursor-idle-limit';
     body.append(cursorLimit);
