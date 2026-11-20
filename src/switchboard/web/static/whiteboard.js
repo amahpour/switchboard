@@ -138,24 +138,39 @@
       options.host.classList.remove('hidden');
     },
     close,
-    receive(room, raw, full, seq) {
+    receive(room, raw, full, seq, refused) {
       const elements = rules.batch(raw);
       if (!elements || typeof room !== 'string') return;
       // The broker's copy is the committed one: an echo of what this tab sent replaces the optimistic copy (the
-      // broker may have cut a secret out of it), and a full board replaces everything and forgets what was pending.
-      // A full board while something this tab sent was never answered means the broker did not keep it as drawn (it
-      // was refused, or the connection dropped): the frame is told to let the committed board replace its own copy.
-      const reset = full && pendings.has(room) && pendings.get(room).size > 0;
-      if (full) pendings.delete(room);
+      // broker may have cut a secret out of it), and a full board replaces what the tab has, except for what it
+      // sent and has not heard about. `refused` names what a full board is the answer to: the ids the broker did
+      // not keep as sent. Only those are put back to the broker's copy in the frame, as a copy with a higher
+      // version (the frame keeps the higher version), so the rest of what is being drawn is left alone (#893).
+      const pend = pendings.get(room) || new Map();
+      const overrides = [];
+      if (full) {
+        const ids = Array.isArray(refused) ? refused.filter(v => typeof v === 'string') : null;
+        if (ids === null) pend.clear(); // a board for a page that just connected: nothing it sent is still owed
+        else for (const id of ids) {
+          const sent = pend.get(id);
+          if (sent === undefined) continue;
+          pend.delete(id);
+          const mine = (cache.get(room) || []).find(e => e.id === id);
+          const theirs = elements.find(e => e.id === id);
+          const base = theirs || (mine && Object.assign({}, mine, { isDeleted: true }));
+          if (base) overrides.push(Object.assign({}, base, { version: Math.max(parseInt(sent, 10), theirs ? theirs.version : 0) + 1, versionNonce: 1 }));
+        }
+      }
       committed.set(room, rules.batch(full ? elements : rules.merge(committed.get(room) || [], elements)) || []);
       if (typeof seq === 'number') seqs.set(room, seq);
       const held = waiting.get(room);
       if (held && (seqs.get(room) || 0) >= held.seq) { waiting.delete(room); if (pendingImages.has(held.id)) exportCommitted(room, held.id); }
-      const merged = rules.batch(full ? elements : rules.settle(cache.get(room) || [], elements, pendings.get(room) || new Map()));
+      const inFlight = full ? (cache.get(room) || []).filter(e => pend.has(e.id)) : [];
+      const merged = rules.batch(full ? rules.merge(elements, inFlight) : rules.settle(cache.get(room) || [], elements, pend));
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {
-        post('elements', reset ? { elements: merged, reset: true } : { elements: merged });
+        post('elements', { elements: overrides.length ? rules.batch(rules.merge(merged, overrides)) || merged : merged });
         el('play').disabled = !frames().length;
         if (playing) showFrame(Math.max(0, frames().findIndex(f => f.id === selected)));
       }

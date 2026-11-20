@@ -147,6 +147,9 @@ def test_a_page_whose_element_was_refused_is_sent_the_committed_board(broker: In
         ws.send(json.dumps({"t": "board", "room": "#build", "elements": [page_shape(text=value)]}))
         full = recv_until(ws, lambda f: f.get("t") == "board" and f.get("full") is True and f.get("seq") == 0)
         assert full["elements"] == []
+        assert full["refused"] == [
+            "s1"
+        ]  # only the shape it did not keep is named, so the page puts back only that
     finally:
         ws.close()
         web.close()

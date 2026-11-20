@@ -378,18 +378,19 @@ def test_a_picture_for_an_agent_shows_only_the_committed_board_and_a_refused_sha
     before = picture()
     token = "ghp" + "_" + "aB3" * 12
 
-    def put(eid: str, text: str) -> None:
-        board_frame.evaluate(
-            """([eid, text]) => {
+    board_frame.evaluate(
+        """() => { window.putEl = (eid, text, y) => {
           const a = window.sbBoard.api;
           a.updateScene({ elements: [...a.getSceneElementsIncludingDeleted(), {
-            id: eid, type: 'rectangle', x: 40, y: 300, width: 160, height: 90, version: 1, versionNonce: 7,
+            id: eid, type: 'rectangle', x: 40, y, width: 160, height: 90, version: 1, versionNonce: 7,
             isDeleted: false, seed: 1, angle: 0, strokeColor: '#000000', backgroundColor: '#ff0000',
             fillStyle: 'solid', strokeWidth: 2, roughness: 1, opacity: 100, groupIds: [], frameId: null,
             roundness: null, boundElements: null, updated: 1, link: null, locked: false, text }] });
-        }""",
-            [eid, text],
-        )
+        }; }"""
+    )
+
+    def put(eid: str, text: str, y: int = 300) -> None:
+        board_frame.evaluate("([eid, text, y]) => window.putEl(eid, text, y)", [eid, text, y])
 
     put("unsent1", token)  # on the canvas, never flushed: dirty is not set, so the frame does not send it
     assert token in board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElements())")
@@ -402,13 +403,19 @@ def test_a_picture_for_an_agent_shows_only_the_committed_board_and_a_refused_sha
     assert board_frame.evaluate(
         "window.sbBoard.api.getSceneElementsIncludingDeleted().some(e => e.id === 'refused1')"
     )
-    # as drawing does: dirty, then a flush, and the pointer goes down again, so the frame is dirty (and
-    # does not flush) when the broker answers. Without `reset` it would merge its refused copy back in.
+    # as drawing does: dirty, then a flush; then the person starts a different shape and the pointer stays
+    # so the frame is dirty (and does not flush) when the broker answers. The answer must put back only the
+    # refused shape: merging it all back would keep the refused one, resetting the frame would lose the other.
     board_frame.evaluate(
         "() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })); window.sbBoard.flush();"
+        " window.putEl('keep1', 'still drawing', 450);"
         " document.dispatchEvent(new PointerEvent('pointerdown')); }"
     )
     wait_js(
         board_frame,
-        "() => !window.sbBoard.api.getSceneElementsIncludingDeleted().some(e => e.id === 'refused1')",
+        "() => !window.sbBoard.api.getSceneElements().some(e => e.id === 'refused1')",
     )
+    ids = board_frame.evaluate(
+        "window.sbBoard.api.getSceneElementsIncludingDeleted().filter(e => !e.isDeleted).map(e => e.id)"
+    )
+    assert "keep1" in ids and "unsent1" in ids and "refused1" not in ids

@@ -113,40 +113,63 @@ def test_a_page_shape_is_redacted_in_every_text_field_and_customdata_is_dropped(
     assert s["link"] is None and "customData" not in t
 
 
-def refused(text: str) -> board.MergeResult:
-    el = shape(type="text", text=text, originalText=text.replace("\n", ""))
-    return board.merge([], [el], agent=False)
+def stand_alone(text: str) -> board.MergeResult:
+    """A wrapped copy sent with no ``originalText``: it has to stand on its own."""
+    return board.merge([], [shape(type="text", text=text)], agent=False)
 
 
-def test_a_wrapped_text_that_hides_a_secret_in_its_line_breaks_is_refused_whole() -> None:
-    """Excalidraw keeps ``text`` as ``originalText`` wrapped to the shape's width, and a wrap breaks a long
-    token, or a ``Bearer`` and its token, across lines, where no pattern matches. Two different strings are
-    never reconciled: a text whose flattened reading finds what the as-written one did not replace the same
-    way is refused, naming the kind and never the value, so no part of the secret is stored. Fails if the
-    element is stored (the unwrapped copy or the rest of the token would be in it)."""
-    body = "a1b2c3d4e5f6" * 4
+def pair(text: str, original: str) -> list[dict[str, Any]]:
+    return list(board.merge([], [shape(type="text", text=text, originalText=original)], agent=False).elements)
+
+
+BODY = "a1b2c3d4e5f6" * 4
+
+
+def test_a_wrapped_text_alone_that_hides_a_secret_in_its_line_breaks_is_refused_whole() -> None:
+    """A wrap breaks a long token, or a ``Bearer`` and its token, across lines, where no pattern matches, and
+    can do both at once (replace the space before the token and split the token). With no ``originalText``
+    to derive the display copy from, each break is read as nothing and as a space in every combination, and
+    a text whose readings do not all redact alike is refused, naming the kind and never the value. Fails if
+    the element is stored (the pieces of the token would be in it)."""
     for wrapped in (
-        f"sk-{body[:14]}\n{body[14:]}",  # a break in the middle of a token
-        "Bearer\n" + body,  # a Bearer match that needs its space
+        f"sk-{BODY[:14]}\n{BODY[14:]}",  # a break in the middle of a token
+        "Bearer\n" + BODY,  # a Bearer match that needs its space
+        "Bearer\n" + BODY[:14] + "\n" + BODY[14:],  # the mixed case: a separator break and a token break
+        f"sk-{BODY[:24]}\n{BODY[24:]}",  # the first fragment matches alone: the rest must not be kept
         f"see {PASSWORD[:12]}\n{PASSWORD[12:]}",
-        f"sk-{body[:24]}\n{body[24:]}",  # the first fragment matches alone: the rest must not be kept
     ):
-        got = refused(wrapped)
-        assert got.elements == () and "line breaks hide" in got.rejected[0], wrapped
-        assert body not in got.rejected[0] and "hunter2" not in got.rejected[0]
-    plain = shape(type="text", text="two\nlines", originalText="two lines")
-    assert board.merge([], [plain], agent=False).elements[0]["text"] == "two\nlines"
+        got = stand_alone(wrapped)
+        assert got.elements == () and "line breaks" in got.rejected[0], wrapped
+        assert BODY not in got.rejected[0] and "hunter2" not in got.rejected[0]
+    many = "\n".join(["word"] * 10)  # more breaks than every way of reading them can be tried
+    assert stand_alone(many).elements == ()
+    assert (
+        board.merge([], [shape(type="text", text="two\nlines")], agent=False).elements[0]["text"]
+        == "two\nlines"
+    )
 
 
-def test_a_wrapped_text_with_a_split_token_and_a_separate_token_stores_neither() -> None:
-    """The case the first fix got wrong: a token split across a wrap plus a second, whole token in the same
-    text. The first reading to find anything must not decide the stored string, or the second secret (or the
-    rest of the first) is kept. The whole text is refused. Fails if either token is stored in any part."""
-    body = "a1b2c3d4e5f6" * 4
-    got = refused(f"sk-{body[:24]}\n{body[24:]} and {TOKEN}")
-    assert got.elements == ()
-    assert "api key" in got.rejected[0] or "github token" in got.rejected[0]
-    assert TOKEN not in got.rejected[0] and body not in got.rejected[0]
+def test_a_wrapped_text_is_derived_from_the_original_when_the_original_holds_a_secret() -> None:
+    """``originalText`` is the authority: when redacting it changes it, ``text`` is stored as that redacted
+    original, whatever the wrap did to the pieces (a split token, a space replaced by a break, both).
+    Fails if any piece of the token, or of a second separate token, is in the stored shape."""
+    for wrapped, original in (
+        ("Bearer\n" + BODY[:14] + "\n" + BODY[14:], "Bearer " + BODY),
+        (f"sk-{BODY[:24]}\n{BODY[24:]} and\n{TOKEN}", f"sk-{BODY} and {TOKEN}"),
+    ):
+        (out,) = pair(wrapped, original)
+        assert out["text"] == out["originalText"] and "[redacted" in out["text"]
+        assert BODY[24:] not in stored_text([out]) and TOKEN not in stored_text([out])
+    # a pair whose secret is only in the wrapped copy, not in the original: refused
+    assert pair(f"sk-{BODY[:14]}\n{BODY[14:]}", "something else entirely") == []
+
+
+def test_a_wrapped_text_that_does_not_match_its_original_is_refused_and_one_that_does_is_kept() -> None:
+    """With nothing to cut out of ``originalText``, a wrapped ``text`` keeps its breaks only when it holds the
+    same characters (spaces and breaks aside), so it cannot carry other words."""
+    (kept,) = pair("one two\nthree", "one two three")
+    assert kept["text"] == "one two\nthree"
+    assert pair("other\nwords", "one two three") == []
 
 
 def test_mermaid_labels_edges_and_subgraph_titles_are_redacted() -> None:
@@ -218,7 +241,9 @@ def test_a_wrapped_text_that_expands_past_the_cap_is_refused_like_any_other() ->
     (the same rule as an unwrapped value). Fails if the wrapped copy comes back cut at 200."""
     value = "x" * (board.MAX_TEXT - 30) + " " + "password=hunter\n2hunter2"
     assert len(value) <= board.MAX_TEXT
-    merged = board.merge([], [shape(type="text", text=value, originalText="plain")], agent=False)
+    merged = board.merge(
+        [], [shape(type="text", text=value, originalText=value.replace("\n", ""))], agent=False
+    )
     assert merged.elements == () and "password or token" in merged.rejected[0]
     assert "hunter" not in merged.rejected[0]
 

@@ -50,8 +50,7 @@ window.addEventListener('message', async ev => {
     if (elements.some(e => !e.isDeleted)) api.scrollToContent(undefined, { fitToContent: true });
   } else if (m.session === session && m.room === room && m.action === 'elements') {
     const elements = rules.batch(m.elements);
-    // `reset`: the broker did not keep something this tab sent, so its board replaces the tab's own unsent copy (#893)
-    if (elements) { if (m.reset === true) dirty = false; apply(elements); }
+    if (elements) apply(elements);
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
   } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {
