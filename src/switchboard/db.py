@@ -30,7 +30,8 @@ on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room
 new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
 agent chat and wake batches (§61);
 53 (#823) adds say retry receipts (§8.4); 54 (#843) says which agent made a person a member of a public room,
-whose members are in ``room_people`` too (§63).
+whose members are in ``room_people`` too (§63); 55 (#890) and 56 (#893) clean what a review board and
+a room's whiteboard stored before their text was checked (§37.2, §56.5).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -54,7 +55,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 55
+SCHEMA_VERSION = 56
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -1133,6 +1134,10 @@ V53_TO_V54 = (
 # what is written from now on. The step has no schema change.
 V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
 
+# v55 -> v56 (#893, DESIGN.md §11 item 10, §56.5): a room's whiteboard is cleaned once, by
+# ``clean_whiteboard_rows``, as for v55: no schema change, and the same finish (``finish_review_clean``).
+V55_TO_V56 = ("UPDATE meta SET value='56' WHERE key='schema_version'",)
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1274,6 +1279,48 @@ def clean_review_rows(con: sqlite3.Connection) -> int:
     return changed
 
 
+def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
+    """Clean what a room's whiteboard stored (#893): every board's elements and every change record's ids,
+    through ``board.clean_stored`` and ``board.clean_change_ids``. A text is redacted and cut, a
+    tombstone keeps
+    no text, a multi-line text with no ``originalText`` gets one, and an element whose id or reference holds a
+    secret is dropped with the references to it, and its id is removed from the change records, so no
+    secret id
+    survives anywhere. Idempotent. Returns how many values changed. Run with ``secure_delete`` on."""
+    from switchboard import board
+
+    changed = 0
+    dropped: dict[int, set[str]] = {}
+    for row in con.execute("SELECT room_id, elements FROM room_boards").fetchall():
+        try:
+            loaded = json.loads(row["elements"])
+        except ValueError:
+            continue
+        if not isinstance(loaded, list):
+            continue
+        cleaned, gone = board.clean_stored(loaded)
+        dropped[row["room_id"]] = gone
+        text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
+        if cleaned != loaded:
+            con.execute("UPDATE room_boards SET elements=? WHERE room_id=?", (text, row["room_id"]))
+            changed += 1
+    for row in con.execute("SELECT id, room_id, ids FROM room_board_changes").fetchall():
+        try:
+            ids = json.loads(row["ids"])
+        except ValueError:
+            continue
+        if not isinstance(ids, list):
+            continue
+        kept = board.clean_change_ids(ids, dropped.get(row["room_id"], set()))
+        if kept != ids:
+            con.execute(
+                "UPDATE room_board_changes SET ids=? WHERE id=?",
+                (json.dumps(kept, ensure_ascii=False, separators=(",", ":")), row["id"]),
+            )
+            changed += 1
+    return changed
+
+
 # The steps that also rewrite rows with code, by the version they migrate to: run inside the migration's
 # transaction after the step's statements. Defined after ``clean_review_rows``, below.
 REWRITES: dict[int, Callable[[sqlite3.Connection], int]] = {}
@@ -1288,6 +1335,7 @@ class MigrationStep(NamedTuple):
 
 
 REWRITES[55] = clean_review_rows
+REWRITES[56] = clean_whiteboard_rows
 
 
 def _steps(frm: int) -> list[MigrationStep]:
@@ -1355,6 +1403,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
         53: MigrationStep(54, V53_TO_V54, ()),
         54: MigrationStep(55, V54_TO_V55, ()),
+        55: MigrationStep(56, V55_TO_V56, ()),
     }
     out = []
     v = frm
@@ -1636,7 +1685,12 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
-        if SCHEMA_VERSION >= 55 and frm < 55 and con.execute("SELECT 1 FROM reviews LIMIT 1").fetchone():
+        owed = (
+            SCHEMA_VERSION >= 55 and frm < 55 and con.execute("SELECT 1 FROM reviews LIMIT 1").fetchone()
+        ) or (
+            SCHEMA_VERSION >= 56 and frm < 56 and con.execute("SELECT 1 FROM room_boards LIMIT 1").fetchone()
+        )
+        if owed:
             # a rewrite can't zero what earlier edits left in free pages: a VACUUM after the commit does,
             # and this row (written with it, after the counts above) says it is still owed
             con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (CLEAN_PENDING,))
@@ -1663,7 +1717,8 @@ CLEAN_PENDING = "review_clean_pending"
 
 
 def finish_review_clean(con: sqlite3.Connection) -> bool:
-    """After the upgrade that cleaned a review board's stored text (schema 55, #890): rebuild the database
+    """After the upgrade that cleaned a review board's or a whiteboard's stored text (schema 55, #890, and 56,
+    #893; one pending row and one VACUUM for both): rebuild the database
     file (``VACUUM``: the free pages earlier releases left, which a rewrite can't zero, go too) and fold the
     WAL into it and empty it (``wal_checkpoint(TRUNCATE)``, whose answer is read: a reader holding an old
     snapshot makes it report busy). Only then is the ``meta`` row that says it is owed removed. A failure or a

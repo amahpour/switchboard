@@ -22,7 +22,6 @@ import math
 import re
 import secrets
 from collections.abc import Callable
-from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -158,12 +157,7 @@ def read_text(text: str) -> str:
     return out[:MAX_TEXT]
 
 
-def _same(stored: dict[str, Any] | None, key: str, value: str) -> bool:
-    """True when ``value`` is the text the stored element already has: it is not new."""
-    return stored is not None and stored.get(key) == value
-
-
-def _display_text(raw_text: str, raw_original: Any, *, same: bool = False) -> str:
+def _display_text(raw_text: str, raw_original: Any) -> str:
     """A shape's ``text``, which Excalidraw keeps as ``originalText`` wrapped to the shape's width. With an
     ``originalText`` the page's wrapped copy is ignored (#893): ``text`` is the read ``originalText``, and the
     page wraps it again when it draws (Excalidraw's own restore wraps a bound or fixed-width text from the
@@ -172,50 +166,23 @@ def _display_text(raw_text: str, raw_original: Any, *, same: bool = False) -> st
     ``originalText`` is refused: Excalidraw and the agents always send both, so only a hand-built client
     meets it."""
     if isinstance(raw_original, str):
-        return _text(raw_original, same=same)
-    if "\n" in raw_text and not same:  # a text already stored this way is kept; a new one is refused
+        return _text(raw_original)
+    if "\n" in raw_text:
         raise Reject("text with line breaks needs its originalText")
-    return _text(raw_text, same=same)
+    return _text(raw_text)
 
 
-def _text(v: Any, *, same: bool = False) -> str:
-    """A string from outside, cleaned and read by ``read_text``: the one reader of every stored text. A text
-    the stored element already has (``same``) is still redacted, and cut, never refused for its length."""
+def _text(v: Any) -> str:
+    """A string from outside, cleaned and read by ``read_text``: the one reader of every stored text."""
     if not isinstance(v, str):
         return ""
-    text = clean(v)[:_SCAN_MAX]
-    return redact(text)[0][:MAX_TEXT] if same else read_text(text)
-
-
-# The ids and references of the stored element a write is to (``clean_element(stored=...)``): they were
-# accepted when stored, possibly by an earlier broker, and an action on that element (a move, a delete)
-# carries them again. A new element, or an id the stored one did not have, is checked as before (#893).
-_TRUSTED: ContextVar[frozenset[str]] = ContextVar("board_trusted_ids", default=frozenset())
-
-
-def _stored_ids(stored: dict[str, Any] | None) -> frozenset[str]:
-    if not stored:
-        return frozenset()
-    found: list[Any] = [
-        stored.get("id"),
-        stored.get("frameId"),
-        stored.get("containerId"),
-        stored.get("index"),
-    ]
-    found += stored.get("groupIds") or []
-    found += [b.get("id") for b in stored.get("boundElements") or [] if isinstance(b, dict)]
-    found += [
-        stored[k].get("elementId") for k in ("startBinding", "endBinding") if isinstance(stored.get(k), dict)
-    ]
-    return frozenset(v for v in found if isinstance(v, str))
+    return read_text(clean(v)[:_SCAN_MAX])
 
 
 def _no_secret(v: str) -> str:
     """An id or a reference that is kept as written must hold no secret: one that does is refused, naming
     the kind and never the value (#893). The character and length check is not enough: a complete token
     (``ghp_`` and 36 letters) fits it."""
-    if v in _TRUSTED.get():  # already stored under this element: a write to it may carry it again
-        return v
     kinds = redact(v)[1]
     if kinds:
         raise Reject(f"an id holds what looks like a secret ({', '.join(kinds)}): use another id")
@@ -306,18 +273,13 @@ def _bound_list(raw: Any) -> list[dict[str, str]] | None:
     return out
 
 
-def clean_element(raw: Any, *, agent: bool, stored: dict[str, Any] | None = None) -> dict[str, Any]:
-    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all. ``stored`` is the
-    element already stored under this id, when there is one: what a write copies from it (its ids, and a
-    text it does not change) is not refused again, and a tombstone keeps no text (#893)."""
-    token = _TRUSTED.set(_stored_ids(stored))
-    try:
-        return _clean_element(raw, agent=agent, stored=stored)
-    finally:
-        _TRUSTED.reset(token)
+def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
+    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all. A tombstone
+    (``isDeleted``) keeps no text: a delete copies the old fields, and nothing in them is checked or kept."""
+    return _clean_element(raw, agent=agent)
 
 
-def _clean_element(raw: Any, *, agent: bool, stored: dict[str, Any] | None) -> dict[str, Any]:
+def _clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise Reject("not an element")
     eid = _ident(raw.get("id"))
@@ -398,13 +360,9 @@ def _clean_element(raw: Any, *, agent: bool, stored: dict[str, Any] | None) -> d
         el["locked"] = raw["locked"]
     for key in ("originalText", "name"):
         if isinstance(raw.get(key), str):
-            el[key] = "" if deleted else _text(raw[key], same=_same(stored, key, raw[key]))
+            el[key] = "" if deleted else _text(raw[key])
     if isinstance(raw.get("text"), str):
-        el["text"] = (
-            ""
-            if deleted
-            else _display_text(raw["text"], raw.get("originalText"), same=_same(stored, "text", raw["text"]))
-        )
+        el["text"] = "" if deleted else _display_text(raw["text"], raw.get("originalText"))
     size = _iint(raw.get("fontSize"), 8, 48)
     if size is not None:
         el["fontSize"] = size
@@ -492,9 +450,7 @@ def merge(
             rejected.append("too many")
             break
         try:
-            raw_id = raw.get("id") if isinstance(raw, dict) else None
-            stored = by_id.get(raw_id) if isinstance(raw_id, str) else None
-            el = clean_element(raw, agent=agent, stored=stored)
+            el = clean_element(raw, agent=agent)
         except Reject as e:
             rejected.append(e.reason)
             continue
@@ -1279,3 +1235,76 @@ def mermaid_elements(current: list[dict[str, Any]], raw: Any, *, now: float) -> 
     if _nbytes(elements) > MAX_BYTES:
         raise Reject("diagram exceeds the board byte limit")
     return elements
+
+
+# ----------------------------------------------------------------------------- stored data, cleaned once
+
+
+def _id_strings(el: dict[str, Any]) -> list[str]:
+    """Every string of an element that is kept as written and names a shape: its id, its group ids,
+    ``frameId``,
+    ``containerId``, the ids it is bound to (``boundElements``, ``startBinding``, ``endBinding``) and
+    ``index``."""
+    found: list[Any] = [el.get("id"), el.get("frameId"), el.get("containerId"), el.get("index")]
+    found += el["groupIds"] if isinstance(el.get("groupIds"), list) else []
+    found += (
+        [b.get("id") for b in el["boundElements"] if isinstance(b, dict)]
+        if isinstance(el.get("boundElements"), list)
+        else []
+    )
+    found += [el[k].get("elementId") for k in ("startBinding", "endBinding") if isinstance(el.get(k), dict)]
+    return [v for v in found if isinstance(v, str)]
+
+
+def _normal_text(v: Any) -> str:
+    """``_text`` that never refuses (a stored text is cut to the limit, not rejected): redacted, then cut."""
+    return redact(clean(v)[:_SCAN_MAX])[0][:MAX_TEXT] if isinstance(v, str) else ""
+
+
+def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
+    """A stored whiteboard as the cleaner of a write would leave it, for the upgrade that cleans old data
+    (#893, schema 56). Unlike a write it normalizes and never refuses. Every text field is redacted and cut;
+    a tombstone keeps no text; a ``text`` with a line break and no ``originalText`` gets that text as its
+    ``originalText``. An element whose id, or whose id-like string in any reference, holds something
+    ``redact`` finds is dropped, and the references other elements hold to a dropped element are removed
+    (its entry in a bound list, a binding, ``frameId`` or ``containerId`` set to ``None``). Returns the
+    elements and the ids that were dropped. Idempotent."""
+    dropped = {e["id"] for e in elements if isinstance(e, dict) and isinstance(e.get("id"), str)
+               and any(redact(v)[1] for v in _id_strings(e))}  # fmt: skip
+    out: list[dict[str, Any]] = []
+    for e in elements:
+        if not isinstance(e, dict) or e.get("id") in dropped or not isinstance(e.get("id"), str):
+            continue
+        el = dict(e)
+        deleted = el.get("isDeleted") is True
+        for key in ("originalText", "name"):
+            if isinstance(el.get(key), str):
+                el[key] = "" if deleted else _normal_text(el[key])
+        if isinstance(el.get("text"), str):
+            if deleted:
+                el["text"] = ""
+            elif isinstance(el.get("originalText"), str):
+                el["text"] = el["originalText"]
+            else:
+                el["text"] = _normal_text(el["text"])
+                if "\n" in el["text"]:
+                    el["originalText"] = el["text"]
+        if isinstance(el.get("boundElements"), list):
+            el["boundElements"] = [
+                b for b in el["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
+            ]
+        if isinstance(el.get("groupIds"), list):
+            el["groupIds"] = [g for g in el["groupIds"] if g not in dropped]
+        for key in ("startBinding", "endBinding"):
+            if isinstance(el.get(key), dict) and el[key].get("elementId") in dropped:
+                el[key] = None
+        for key in ("frameId", "containerId"):
+            if el.get(key) in dropped and el.get(key) is not None:
+                el[key] = None
+        out.append(el)
+    return out, dropped
+
+
+def clean_change_ids(ids: list[Any], dropped: set[str]) -> list[str]:
+    """A change record's element ids without a dropped id or one that holds a secret (#893, schema 56)."""
+    return [i for i in ids if isinstance(i, str) and i not in dropped and not redact(i)[1]]
