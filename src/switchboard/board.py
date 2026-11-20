@@ -7,9 +7,11 @@ claim: known fields only, text cut, coordinates clamped, ``link`` forced null, a
 embed or frame-of-a-page never stored.
 
 Every string that can reach a stored shape (a shape's or a label's ``text`` and ``originalText``, a frame's
-``name``) is read by ``_text``, which cuts obvious secrets out with ``redact`` (§11, #893): the one place, so
-an agent's action, a Mermaid diagram and a person's page all pass it. ``customData`` and ``link`` are never
-kept, and a Mermaid source is never stored (only the shapes drawn from it), so there is nothing else to read.
+``name``) is read by ``_text`` (``read_text``), which cuts obvious secrets out with ``redact`` (§11, #893):
+the one place, so an agent's action, a Mermaid diagram and a person's page all pass it. The strings kept as
+written (an id, a group id, a reference, ``index``) are checked by ``_no_secret`` and refused when they hold
+one. ``customData`` and ``link`` are never kept, and a Mermaid source is never stored (only the shapes drawn
+from it), so there is nothing else to read.
 """
 
 from __future__ import annotations
@@ -139,15 +141,22 @@ def _iint(v: Any, lo: int, hi: int) -> int | None:
 _SCAN_MAX = 100_000  # the most of one string that is read for secrets: text is cut at MAX_TEXT after
 
 
-def _text(v: Any) -> str:
-    """A string from outside, cleaned, with obvious secrets cut out (``redact``, §11, #893), then cut to
-    ``MAX_TEXT``. Redaction runs before the cut, so half a secret is never left at the cut. A value that
-    fit and that its marker would push past the limit is refused (``Reject``), naming the kind and never
-    the value: a cut there would leave half a marker, and a silent one would hide that it was redacted."""
-    if not isinstance(v, str):
-        return ""
-    text = clean(v)[:_SCAN_MAX]
+def read_text(text: str) -> str:
+    """``text`` (already ``clean``) with obvious secrets cut out (``redact``, §11, #893), then cut to
+    ``MAX_TEXT``. The whole string is read first, then cut, so half a secret is never left at the cut. A
+    wrapped label's line breaks can split a token, so a text with a break is also read with the breaks
+    removed (``""`` and a space), and the first reading that finds a secret is the one kept: it sees the
+    whole value, where the line-by-line reading might replace only the fragment that matches alone. A value
+    that fit and that its marker would push past the limit is refused (``Reject``), naming the kind and
+    never the value: a cut there would leave half a marker, and a silent one would hide the redaction."""
+    text = text[:_SCAN_MAX]
     out, kinds = redact(text)
+    if "\n" in text:
+        for sep in ("", " "):
+            flat, found = redact(text.replace("\n", sep))
+            if found:
+                out, kinds = flat, [*kinds, *(k for k in found if k not in kinds)]
+                break
     if kinds and len(text) <= MAX_TEXT < len(out):
         raise Reject(
             f"text is too long once what looks like a secret ({', '.join(kinds)}) is cut out: "
@@ -156,19 +165,26 @@ def _text(v: Any) -> str:
     return out[:MAX_TEXT]
 
 
-def _unwrapped(text: str) -> str | None:
-    """``text`` redacted as one line when its line breaks hid a secret from ``redact`` (a wrapped label
-    holds a long token across two lines, or a space and a newline apart), else None."""
-    for sep in ("", " "):
-        out, kinds = redact(text.replace("\n", sep))
-        if kinds:
-            return out[:MAX_TEXT]
-    return None
+def _text(v: Any) -> str:
+    """A string from outside, cleaned and read by ``read_text``: the one reader of every stored text."""
+    if not isinstance(v, str):
+        return ""
+    return read_text(clean(v)[:_SCAN_MAX])
+
+
+def _no_secret(v: str) -> str:
+    """An id or a reference that is kept as written must hold no secret: one that does is refused, naming
+    the kind and never the value (#893). The character and length check is not enough: a complete token
+    (``ghp_`` and 36 letters) fits it."""
+    kinds = redact(v)[1]
+    if kinds:
+        raise Reject(f"an id holds what looks like a secret ({', '.join(kinds)}): use another id")
+    return v
 
 
 def _ident(v: Any) -> str | None:
     if isinstance(v, str) and _ID.fullmatch(v):
-        return v
+        return _no_secret(v)
     return None
 
 
@@ -315,7 +331,7 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
         if "frameId" in raw:
             el["frameId"] = frame if frame is None else _ident(frame)
     if isinstance(raw.get("index"), str) and _INDEX.fullmatch(raw["index"]):
-        el["index"] = raw["index"]
+        el["index"] = _no_secret(raw["index"])
     rnd = raw.get("roundness")
     if isinstance(rnd, dict) and _iint(rnd.get("type"), 1, 3) is not None:
         el["roundness"] = {"type": rnd["type"]}
@@ -333,10 +349,6 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
     for key in ("text", "originalText", "name"):
         if isinstance(raw.get(key), str):
             el[key] = _text(raw[key])
-    if "\n" in el.get("text", ""):  # ``text`` is the wrapped copy of ``originalText``: read it unwrapped too
-        flat = _unwrapped(el["text"])
-        if flat is not None:
-            el["text"] = flat
     size = _iint(raw.get("fontSize"), 8, 48)
     if size is not None:
         el["fontSize"] = size

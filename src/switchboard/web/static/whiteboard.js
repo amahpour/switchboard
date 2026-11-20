@@ -4,6 +4,7 @@
   const rules = window.SBBoardRules;
   let frame = null, current = null, options = null, serial = 0, session = '', ready = false;
   const cache = new Map();
+  const pendings = new Map(); // room -> Map(id -> 'version:nonce' this page sent and has not heard back)
   const pendingImages = new Set();
   let playing = false, selected = null;
   const el = id => document.getElementById('whiteboard-' + id);
@@ -91,7 +92,11 @@
       if (!elements || !elements.length) return;
       const merged = rules.batch(rules.merge(cache.get(current) || [], elements));
       if (!merged) return;
-      if (options.send(current, elements)) cache.set(current, merged);
+      if (options.send(current, elements)) {
+        cache.set(current, merged);
+        if (!pendings.has(current)) pendings.set(current, new Map());
+        for (const e of elements) pendings.get(current).set(e.id, rules.sig(e));
+      }
       else options.status.textContent = 'Disconnected. Reconnect before drawing.';
     } else if (m.action === 'rendered' && Object.keys(m).length === 4) {
       reveal(false);
@@ -130,7 +135,10 @@
     receive(room, raw, full) {
       const elements = rules.batch(raw);
       if (!elements || typeof room !== 'string') return;
-      const merged = rules.batch(full ? elements : rules.merge(cache.get(room) || [], elements));
+      // The broker's copy is the committed one: an echo of what this tab sent replaces the optimistic copy (the
+      // broker may have cut a secret out of it), and a full board replaces everything and forgets what was pending.
+      if (full) pendings.delete(room);
+      const merged = rules.batch(full ? elements : rules.settle(cache.get(room) || [], elements, pendings.get(room) || new Map()));
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {

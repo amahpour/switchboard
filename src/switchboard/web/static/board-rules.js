@@ -7,7 +7,10 @@
   const clamp = (v, lo, hi) => num(v) ? Math.max(lo, Math.min(hi, v)) : null;
   const integer = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi ? v : null;
   const choice = (v, values) => typeof v === 'string' && values.includes(v) ? v : null;
-  const text = v => Array.from(v.slice(0, 2000).normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u2028\u2029]/gu, c => c === '\n' || c === '\t' ? c : '')).slice(0, 200).join('');
+  // The broker redacts a text and then cuts it to 200 (DESIGN §56.5, #893), so the frame boundary keeps what it
+  // may send, up to 2000 characters, and does not cut at 200: a secret that crossed character 200 would reach
+  // the broker as a prefix it cannot recognize. The stored copy (a broker echo) is always the short one.
+  const text = v => Array.from(v.slice(0, 2000).normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u2028\u2029]/gu, c => c === '\n' || c === '\t' ? c : '')).slice(0, 2000).join('');
   const types = ['rectangle', 'ellipse', 'diamond', 'arrow', 'text', 'frame', 'line', 'freedraw'];
   function clean(raw) {
     if (!raw || typeof raw !== 'object' || !id(raw.id) || !types.includes(raw.type)) return null;
@@ -84,7 +87,21 @@
     }
     return Array.from(all.values());
   }
-  const rules = { clean, batch, merge };
+  const sig = e => e.version + ':' + e.versionNonce;
+  // The broker's echo of what this page sent (same id, version and nonce) is the committed copy: the broker may
+  // have cut a secret out of it, and the page's own copy, which wins a tie in `merge`, still holds it. So an
+  // echo that matches a pending revision replaces the page's copy outright (DESIGN §56.5, #893). `pending`
+  // maps an id to the `version:nonce` the page sent and is changed in place; anything else merges as before.
+  function settle(current, incoming, pending) {
+    const echoed = new Map(), rest = [];
+    for (const e of incoming) {
+      if (pending.get(e.id) === sig(e)) { echoed.set(e.id, e); pending.delete(e.id); } else rest.push(e);
+    }
+    const base = current.map(o => echoed.get(o.id) || o);
+    for (const e of echoed.values()) if (!base.some(o => o.id === e.id)) base.push(e);
+    return merge(base, rest);
+  }
+  const rules = { clean, batch, merge, settle, sig };
   if (typeof module !== 'undefined') module.exports = rules;
   else root.SBBoardRules = rules;
 })(typeof window === 'undefined' ? globalThis : window);

@@ -135,7 +135,7 @@ def test_mermaid_labels_edges_and_subgraph_titles_are_redacted() -> None:
     flow = board_flow.convert(source)
     els = board.mermaid_elements([], flow.elements, now=10)
     assert_clean(els)
-    names = [e.get("text") or e.get("name") for e in els]
+    names = [e.get("originalText") or e.get("name") for e in els]
     assert f"a {GH}" in names and f"edge {GH}" in names and f"group {GH}" in names and "plain" in names
     assert len([e for e in els if e["type"] == "arrow"]) == 1
 
@@ -179,3 +179,64 @@ def test_redacting_twice_changes_nothing() -> None:
     assert_clean(once)
     twice = board.merge(once, [e for e in once], agent=True)
     assert not twice.rejected and list(twice.elements) == once
+
+
+def test_a_mermaid_label_is_redacted_before_it_is_cut_so_a_token_across_the_cut_is_gone() -> None:
+    """The decoder cut a label at ``MAX_TEXT`` before anyone read it, so a token that crossed character 200
+    kept a prefix too short to match (#893). A node label, an edge label and a subgraph title each carry one.
+    Fails if the cut runs before the redaction: the first 19 characters of the token reach the board."""
+    pad = "x" * (board.MAX_TEXT - 21) + " "
+    source = f'flowchart LR\nsubgraph G["{pad}{TOKEN}"]\nA["{pad}{TOKEN}"] -->|"{pad}{TOKEN}"| B[b]\nend'
+    els = board.mermaid_elements([], board_flow.convert(source).elements, now=10)
+    blob = stored_text(els)
+    assert "ghp_" not in blob and "aB3aB3" not in blob and "[redacted" in blob
+
+
+def test_a_wrapped_text_whose_first_fragment_matches_alone_is_read_whole_and_unmutated() -> None:
+    """``text`` is read before it is changed or cut. A break inside a long ``sk-`` token leaves a first
+    fragment that matches by itself, and a line-by-line reading replaces only that and keeps the rest;
+    the unwrapped reading sees the whole token. Fails if the rest of the token is stored."""
+    body = "a1b2c3d4e5f6" * 4
+    wrapped = f"sk-{body[:24]}\n{body[24:]}"
+    el = shape(type="text", text=wrapped, originalText=wrapped.replace("\n", ""))
+    (out,) = board.merge([], [el], agent=False).elements
+    assert out["text"] == "[redacted: api key]" == out["originalText"]
+    assert body[24:] not in stored_text([out])
+
+
+def test_a_wrapped_text_that_expands_past_the_cap_is_refused_like_any_other() -> None:
+    """A short wrapped value whose marker makes it longer than ``MAX_TEXT`` is refused, not silently cut
+    (the same rule as an unwrapped value). Fails if the wrapped copy comes back cut at 200."""
+    value = "x" * (board.MAX_TEXT - 30) + " " + "password=hunter\n2hunter2"
+    assert len(value) <= board.MAX_TEXT
+    merged = board.merge([], [shape(type="text", text=value, originalText="plain")], agent=False)
+    assert merged.elements == () and "password or token" in merged.rejected[0]
+    assert "hunter" not in merged.rejected[0]
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["id", "groupIds", "frameId", "containerId", "boundElements", "startBinding", "endBinding", "index"],
+)
+def test_an_id_or_reference_that_is_a_secret_is_refused_naming_the_kind(field: str) -> None:
+    """An id, a group id, a reference or a fractional ``index`` is stored as written and goes into the
+    change log and an agent's summary, and a complete token fits its character check. One in which
+    ``redact`` finds a kind drops the element, naming the kind and never the value. Fails if the token is
+    stored (or only dropped from a list, keeping the element)."""
+    tok = "ghp_" + "aB3" * 12
+    values: dict[str, Any] = {
+        "id": tok,
+        "groupIds": [tok],
+        "frameId": tok,
+        "containerId": tok,
+        "boundElements": [{"id": tok, "type": "arrow"}],
+        "startBinding": {"elementId": tok, "focus": 0, "gap": 1},
+        "endBinding": {"elementId": tok, "focus": 0, "gap": 1},
+        "index": "AKIA" + "ABCDEFGHIJKLMNOP",
+    }
+    base = shape(type="arrow", points=[[0, 0], [5, 5]])
+    el = {**base, field: values[field]} if field != "id" else {**base, "id": tok}
+    merged = board.merge([], [el], agent=False)
+    assert merged.elements == () and "secret" in merged.rejected[0]
+    assert "ghp_" not in merged.rejected[0] and "AKIA" not in merged.rejected[0]
+    assert board.merge([], [base], agent=False).elements  # an ordinary id is untouched

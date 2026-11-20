@@ -129,3 +129,25 @@ async def test_a_page_that_sends_a_secret_stores_and_broadcasts_a_marker(broker:
         right.close()
         web.close()
     no_secret_on_disk(broker)
+
+
+def test_a_page_whose_element_was_refused_is_sent_the_committed_board(broker: InProcBroker) -> None:
+    """The page keeps its own copy of what it drew until the broker answers. An element the broker refuses
+    (here: text its marker would make too long) is never echoed, so without an answer the tab would keep the
+    refused copy for good (#893). The sender is sent the whole board, and its own copy then gives way. Fails
+    if no ``full`` frame comes back."""
+    from switchboard import board
+
+    web = broker.web_client()
+    ws = ws_connect(broker, cookie_of(web))
+    try:
+        ws.send(json.dumps({"t": "hello", "rooms": ["#build"], "after": {}}))
+        recv_until(ws, lambda f: f.get("t") == "board" and f.get("seq") == 0)
+        value = "x" * (board.MAX_TEXT - len("password=" + PASSWORD_VALUE) - 1) + " password=" + PASSWORD_VALUE
+        ws.send(json.dumps({"t": "board", "room": "#build", "elements": [page_shape(text=value)]}))
+        full = recv_until(ws, lambda f: f.get("t") == "board" and f.get("full") is True and f.get("seq") == 0)
+        assert full["elements"] == []
+    finally:
+        ws.close()
+        web.close()
+    no_secret_on_disk(broker)

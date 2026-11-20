@@ -437,7 +437,7 @@ BOARD_ASSETS = {
         "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31"
     ),
     "vendor/board/chunks/chunk-4RIBWQVO.js": (
-        "b645f17fa47e923dce21b42bda8abeb5373053be11d8e9f351fa18eb2f1ffe4b"
+        "c37e81a8d2e6fe0a68f555566221e9beba41dc8147f63c83e006fb2c0447c59a"
     ),
     "vendor/board/chunks/chunk-4RIBWQVO.js.LEGAL.txt": (
         "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"

@@ -302,3 +302,42 @@ def test_an_agent_elbow_arrow_follows_a_shape_a_person_drags(
     assert abs(after["end"][1] - before["end"][1] - moved_by) < 8, (before["end"], after["end"])
     for p, q in zip(after["points"], after["points"][1:], strict=False):
         assert abs(p[0] - q[0]) < 1 or abs(p[1] - q[1]) < 1, after["points"]
+
+
+def test_a_secret_a_person_types_is_cut_out_and_the_drawing_tab_shows_the_committed_text(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """Real typing in the real frame, through both client cleaners and the socket (#893). The text crosses
+    character 200, where the browser used to cut it before the broker saw it, so the broker could not
+    recognize what was left; and the tab that drew keeps its own copy until the broker answers, and the
+    answer lost a tie, so the author kept seeing the secret and an image read of the board would show it.
+    Fails if the stored text holds the token, or if the drawing tab's scene (the source of an agent's image
+    read) still holds it after the broker's reply."""
+    room = "board-secret"
+    world.create_room(room)
+    page = ui.open(room)
+    frame = open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    token = "ghp" + "_" + "aB3" * 12
+    typed = "x" * 170 + " " + token
+    frame.locator("label").filter(has=frame.locator('[data-testid="toolbar-text"]')).click()
+    box = page.locator("#whiteboard-host iframe").bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.4)
+    page.keyboard.type(typed)
+    page.keyboard.press("Escape")
+    b = world.broker
+
+    def stored() -> str:
+        return str(b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id)))
+
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements()"
+        ".some(e => e.type === 'text' && e.originalText.includes('[redacted'))",
+    )
+    assert token not in stored(), stored()[:3000]
+    assert "[redacted: github token]" in stored()
+    scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElementsIncludingDeleted())")
+    assert token not in scene and "aB3aB3" not in scene
