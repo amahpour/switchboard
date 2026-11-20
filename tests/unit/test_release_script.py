@@ -514,7 +514,11 @@ def remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
     git(repo, "remote", "add", "origin", str(origin))
-    git(repo, "commit", "-q", "--allow-empty", "-m", "feat(cli): colour the framing (#30)")
+    # main carries this very script, so the copy that runs is main's own (open_pr refuses any other)
+    (repo / rel.SCRIPT_PATH).parent.mkdir(parents=True)
+    (repo / rel.SCRIPT_PATH).write_bytes(SCRIPT.read_bytes())
+    git(repo, "add", rel.SCRIPT_PATH)
+    git(repo, "commit", "-q", "-m", "feat(cli): colour the framing (#30)")
     git(repo, "push", "-q", "origin", "main", "--tags")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "gh").write_text(FAKE_GH)
@@ -608,6 +612,52 @@ def test_open_pr_refuses_while_a_release_pr_is_open(
     with pytest.raises(SystemExit, match="release PR #7 is still open"):
         rel.open_pr(repo, "2026-09-30")
     assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
+
+
+@pytest.mark.parametrize("main_has", ["an older copy", "no copy"])
+def test_open_pr_refuses_to_run_a_copy_of_the_script_that_is_not_mains(
+    remote: tuple[Path, Path], main_has: str
+) -> None:
+    """What a release stamps is written in the script, so a stale copy stamps a stale set: v1.11.0 ran
+    from a checkout of v1.10.0 and left Devin's and OpenCode's manifests at 1.10.0. Fails if open_pr
+    runs a copy that differs from origin/main's, or guesses when main has none."""
+    repo, origin = remote
+    if main_has == "an older copy":
+        (repo / rel.SCRIPT_PATH).write_text(SCRIPT.read_text().replace('"plugins/devin"', '"plugins/x"'))
+        git(repo, "commit", "-qam", "ci: an older release script (#31)")
+    else:
+        git(repo, "rm", "-q", rel.SCRIPT_PATH)
+        git(repo, "commit", "-qm", "ci: no release script (#31)")
+    git(repo, "push", "-q", "origin", "main")
+    with pytest.raises(SystemExit, match=r"release\.py is not origin/main's: run main's own copy"):
+        rel.open_pr(repo, "2026-09-30")
+    assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
+    assert len(git(repo, "worktree", "list").splitlines()) == 1
+    assert "pr create" not in (repo.parent / "gh.log").read_text()
+
+
+def test_open_pr_cuts_from_the_commit_it_checked_even_if_main_moves_in_between(
+    remote: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The script is checked against one commit of origin/main, and the release must be cut from that
+    same commit: a fetch that moves origin/main in between would otherwise let an older copy's rules
+    stamp a newer main (#901). With the commit pinned, the moved main is seen and nothing is released.
+    Fails if open_pr resolves origin/main again for its worktree."""
+    repo, origin = remote
+    real = rel.own_copy_is_mains
+
+    def check_then_main_moves(*args: object, **kwargs: object) -> bool:
+        ok = real(*args, **kwargs)  # type: ignore[arg-type]
+        git(repo, "commit", "-q", "--allow-empty", "-m", "feat: another merge lands (#31)")
+        git(repo, "push", "-q", "origin", "main")
+        git(repo, "fetch", "-q", "origin", "main")  # origin/main moves after the check
+        return ok
+
+    monkeypatch.setattr(rel, "own_copy_is_mains", check_then_main_moves)
+    assert rel.open_pr(repo, "2026-09-30") is None
+    assert "main has moved on" in capsys.readouterr().out
+    assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
+    assert len(git(repo, "worktree", "list").splitlines()) == 1
 
 
 def test_open_pr_with_nothing_to_release(
