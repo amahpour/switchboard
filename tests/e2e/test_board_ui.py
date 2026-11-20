@@ -395,6 +395,21 @@ def test_a_picture_for_an_agent_shows_only_the_committed_board(
     assert picture() == before, "the picture drew the live drawing"
     exported = board_frame.evaluate("window.exported")
     assert exported and all(token not in e for e in exported)
+    # a shape the broker refuses: its text fits, and its marker would push it past the limit
+    refused = "x" * 170 + " password=" + "hunter2" * 2
+    put("refused1", refused)
+    assert board_frame.evaluate("window.sbBoard.api.getSceneElements().some(e => e.id === 'refused1')")
+    # as drawing does: dirty, then a flush; then the person starts a different shape and the pointer stays
+    # down, so the frame is dirty (and does not flush) when the broker's answer arrives. The refused shape was
+    # sent and has not changed since, so it goes with the broker's board; the new one was never sent: stays.
+    board_frame.evaluate(
+        "() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' })); window.sbBoard.flush();"
+        " window.putEl('keep1', 'still drawing', 450);"
+        " document.dispatchEvent(new PointerEvent('pointerdown')); }"
+    )
+    wait_js(board_frame, "() => !window.sbBoard.api.getSceneElements().some(e => e.id === 'refused1')")
+    ids = board_frame.evaluate("window.sbBoard.api.getSceneElements().map(e => e.id)")
+    assert "keep1" in ids and "unsent1" in ids
 
 
 def test_text_stored_unwrapped_is_wrapped_again_by_the_page_and_a_wrapped_secret_shows_as_a_marker(
@@ -441,3 +456,30 @@ def test_text_stored_unwrapped_is_wrapped_again_by_the_page_and_a_wrapped_secret
     )
     scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElements())")
     assert token[:20] not in scene and token[20:] not in scene and "redacted" in scene
+
+
+def test_one_old_stored_shape_does_not_keep_the_whole_board_from_opening(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """An earlier broker stored a text with a line break and no ``originalText``, which a write now refuses
+    (#893). The board it loads is read as it was stored: the page shows every shape, and records the board's
+    seq, which a picture for an agent waits for. Fails if the whole board is dropped (no shapes, and the
+    picture read never answers)."""
+    room = "board-legacy"
+    world.create_room(room)
+    world.add_agents("#" + room, ("drawer",))
+    b = world.broker
+    base = {"x": 20, "width": 120, "height": 40, "version": 1, "versionNonce": 3, "isDeleted": False}
+    old_text = {**base, "id": "old1", "type": "text", "y": 20, "text": "two\nlines", "fontSize": 16}
+    old_text.update(fontFamily=1, textAlign="left", verticalAlign="top", containerId=None, lineHeight=1.25)
+    box = {**base, "id": "box1", "type": "rectangle", "y": 120, "link": None}
+    row = b.on_loop(lambda: b.state.store.get_room("#" + room))
+    b.on_loop(lambda: b.state.store.board_write(row.id, 1, [old_text, box], "alice", ["old1", "box1"]))
+    page = ui.open(room)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(board_frame, "() => window.sbBoard.api.getSceneElements().length === 2")
+    agent = world._extra_named[("#" + room, "drawer")]
+    got = world._scripted(agent.raw("board", {"room": "#" + room, "action": "read", "text": "image"}))
+    assert not got.is_error and got.content[0].type == "image"

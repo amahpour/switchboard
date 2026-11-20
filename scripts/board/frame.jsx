@@ -25,10 +25,13 @@ function flush() {
 }
 function apply(elements) {
   applying = true;
+  const before = known;
   known = new Map(elements.map(e => [e.id, sig(e)]));
   // Restore the full stored scene, not a skeleton conversion of new shapes in isolation.
   // This preserves both arrow bindings and the existing targets' exact dimensions.
-  const local = dirty ? rules.batch(api.getSceneElementsIncludingDeleted()) : null;
+  // Only what changed since it was last sent or received is merged in: a shape that was sent, was not kept
+  // and has not changed since is gone with the broker's board, while what is still being drawn stays (#893).
+  const local = dirty ? (rules.batch(api.getSceneElementsIncludingDeleted()) || []).filter(e => before.get(e.id) !== sig(e)) : null;
   const scene = local ? rules.merge(elements, local) : elements;
   fullScene = scene;
   const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;

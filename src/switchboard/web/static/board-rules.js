@@ -12,7 +12,10 @@
   // the broker as a prefix it cannot recognize. The stored copy (a broker echo) is always the short one.
   const text = v => Array.from(v.slice(0, 2000).normalize('NFKC').replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cs}\u2028\u2029]/gu, c => c === '\n' || c === '\t' ? c : '')).slice(0, 2000).join('');
   const types = ['rectangle', 'ellipse', 'diamond', 'arrow', 'text', 'frame', 'line', 'freedraw'];
-  function clean(raw) {
+  // `load` is for what the broker sent or this tab holds, which an earlier broker may have stored in a form it
+  // would now refuse; only a write refuses it (a text with a line break and no originalText), so one old shape
+  // can never keep a whole board from opening.
+  function clean(raw, load) {
     if (!raw || typeof raw !== 'object' || !id(raw.id) || !types.includes(raw.type)) return null;
     const x = clamp(raw.x, -20000, 20000), y = clamp(raw.y, -20000, 20000);
     const width = clamp(raw.width, 0, 10000), height = clamp(raw.height, 0, 10000);
@@ -38,7 +41,7 @@
     // as the broker: the wrapped `text` is the page's copy of `originalText`, and the broker keeps only the words
     if (typeof raw.text === 'string') {
       if (typeof raw.originalText === 'string') e.text = e.originalText;
-      else if (raw.text.includes('\n')) return null;
+      else if (raw.text.includes('\n') && !load) return null;
       else e.text = text(raw.text);
     }
     for (const k of ['locked', 'autoResize', 'simulatePressure', 'elbowed']) if (typeof raw[k] === 'boolean') e[k] = raw[k];
@@ -79,9 +82,9 @@
     }
     return new TextEncoder().encode(JSON.stringify(e)).length <= 32000 ? e : null;
   }
-  function batch(raw) {
+  function batch(raw, load) {
     if (!Array.isArray(raw) || raw.length > 1500) return null;
-    const out = raw.map(clean);
+    const out = raw.map(e => clean(e, load));
     if (out.includes(null) || new TextEncoder().encode(JSON.stringify(out)).length > 1000000) return null;
     return out;
   }

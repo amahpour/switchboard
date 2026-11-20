@@ -92,7 +92,7 @@
     } else if (m.action === 'change' && Object.keys(m).every(k => ['t', 'action', 'session', 'room', 'elements'].includes(k))) {
       const elements = rules.batch(m.elements);
       if (!elements || !elements.length) return;
-      const merged = rules.batch(rules.merge(cache.get(current) || [], elements));
+      const merged = rules.batch(rules.merge(cache.get(current) || [], elements), true);
       if (!merged) return;
       if (options.send(current, elements)) cache.set(current, merged);
       else options.status.textContent = 'Disconnected. Reconnect before drawing.';
@@ -134,16 +134,16 @@
     },
     close,
     receive(room, raw, full, seq) {
-      const elements = rules.batch(raw);
+      const elements = rules.batch(raw, true); // what the broker stored, as it is: only a write is refused
       if (!elements || typeof room !== 'string') return;
       // What the broker sends is the committed copy, and the tab shows its own drawing until it arrives: an echo
       // of what this tab drew replaces the tab's copy (the broker may have cut a secret out of it), and a full
       // board replaces what the tab has. A shape the broker did not keep is gone at the next full board.
-      committed.set(room, rules.batch(full ? elements : rules.adopt(committed.get(room) || [], elements)) || []);
+      committed.set(room, rules.batch(full ? elements : rules.adopt(committed.get(room) || [], elements), true) || []);
       if (typeof seq === 'number') seqs.set(room, seq);
       const held = waiting.get(room);
       if (held && (seqs.get(room) || 0) >= held.seq) { waiting.delete(room); if (pendingImages.has(held.id)) exportCommitted(room, held.id); }
-      const merged = rules.batch(full ? elements : rules.adopt(cache.get(room) || [], elements));
+      const merged = rules.batch(full ? elements : rules.adopt(cache.get(room) || [], elements), true);
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {

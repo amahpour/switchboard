@@ -77,7 +77,7 @@ def test_browser_scrubs_the_same_fields_and_rejects_hostile_shapes_as_the_server
             expected.append(None)
     code = """const fs = require('fs');
 const r = require('./src/switchboard/web/static/board-rules.js');
-process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(0, 'utf8')).map(r.clean)));"""
+process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(0, 'utf8')).map(e => r.clean(e))));"""
     result = subprocess.run(
         [shutil.which("node") or "node", "-e", code],
         input=json.dumps(cases),
@@ -158,3 +158,16 @@ def test_the_browser_keeps_the_original_words_as_the_text_like_the_broker() -> N
     got = node(code, {**el, "text": "one\ntwo", "originalText": "one two"})
     assert got["text"] == "one two"  # type: ignore[index]
     assert node(code, {**el, "text": "one\ntwo"}) is None
+
+
+def test_a_stored_text_with_breaks_and_no_original_loads_but_is_refused_as_a_write() -> None:
+    """The write rule (a text with a line break and no ``originalText`` is not sent) must not apply to what
+    the broker stored under an older rule: ``batch`` of a board drops every shape when one fails. Fails if
+    ``load`` is not honoured, and if a write is let through."""
+    el = dict(id="s1", type="text", x=0, y=0, width=10, height=10, version=1, versionNonce=1, text="a\nb")
+    load = node(
+        "const e = JSON.parse(require('fs').readFileSync(0,'utf8'));"
+        "process.stdout.write(JSON.stringify({load: r.batch([e], true), write: r.batch([e])}))",
+        el,
+    )
+    assert load["load"][0]["text"] == "a\nb" and load["write"] is None  # type: ignore[index]
