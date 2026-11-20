@@ -610,7 +610,7 @@ def test_the_call_bar_names_the_agent_while_its_line_is_spoken(
     ui: UI, voice_call: tuple[InProcBroker, FakeJoinly]
 ) -> None:
     """With voice on, claude-1's ``@call`` line goes to the scripted joinly, which holds it mid-speech: the
-    bar says "claude-1 is speaking" in light, in dark and on a phone (nothing cut off), and once joinly is
+    bar says "claude-1 has the mic" in light, in dark and on a phone (nothing cut off), and once joinly is
     done the words go, without a reload (#913, §52.13). Fails if the page never shows the speaker, or still
     shows it after the line ends."""
     broker, joinly = voice_call
@@ -628,7 +628,7 @@ def test_the_call_bar_names_the_agent_while_its_line_is_spoken(
     expect(bar).to_contain_text("Transcribing a call (Meet)")
     assert _post(broker, "/api/rooms/speaking/command", {"text": "/meeting voice on"}).status_code == 200
     expect(bar).to_contain_text("agents can speak")
-    expect(bar).not_to_contain_text("is speaking")
+    expect(bar).not_to_contain_text("has the mic")
 
     joinly.hold_speech = True
     spoken = len(joinly.spoken)
@@ -640,21 +640,21 @@ def test_the_call_bar_names_the_agent_while_its_line_is_spoken(
 
     try:
         broker.on_loop(speak)
-        expect(bar).to_contain_text("claude-1 is speaking")
+        expect(bar).to_contain_text("claude-1 has the mic")
         # the bar is published before the request reaches joinly: wait for the fake's record on its own
         _until(lambda: joinly.spoken[spoken:] == ["the build is green"], "joinly to hold the line")
         page.emulate_media(color_scheme="dark")
-        expect(bar).to_contain_text("claude-1 is speaking")
+        expect(bar).to_contain_text("claude-1 has the mic")
         phone = _open(ui, broker, room="speaking", **PHONE)
-        expect(phone.locator("#banner-meeting-text")).to_contain_text("claude-1 is speaking")
+        expect(phone.locator("#banner-meeting-text")).to_contain_text("claude-1 has the mic")
         assert phone.evaluate(
             "() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1"
         )
     finally:
         joinly.release_speech()
-    expect(bar).not_to_contain_text("is speaking")
+    expect(bar).not_to_contain_text("has the mic")
     expect(bar).to_contain_text("agents can speak")
-    expect(phone.locator("#banner-meeting-text")).not_to_contain_text("is speaking")
+    expect(phone.locator("#banner-meeting-text")).not_to_contain_text("has the mic")
 
 
 @pytest.mark.parametrize(
@@ -693,4 +693,4 @@ def test_the_call_bar_shows_no_speaker_it_does_not_recognize(
 
     broker.on_loop(send)
     expect(bar).to_contain_text("agents can speak")  # the frame arrived
-    expect(bar).not_to_contain_text("is speaking")
+    expect(bar).not_to_contain_text("has the mic")

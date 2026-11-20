@@ -3682,7 +3682,7 @@ def shoot_listen(browser: Any, out: Path, world: Any) -> None:
 def shoot_speaking_now(browser: Any, out: Path, world: Any) -> None:
     """#913, who is speaking on a call: a live Zoom call with voice on in a room with claude-1 and codex-1, and
     claude-1's ``@call`` line held mid-speech by a stand-in joinly client, so the broker's own bridge takes the
-    line and the bar says "claude-1 is speaking" (``speaking-now-{light,dark,phone}``); then the line ends and the
+    line and the bar says "claude-1 has the mic" (``speaking-now-{light,dark,phone}``); then the line ends and the
     words go (``speaking-now-done-{light,dark,phone}``). The same script on ``main`` gives the before: the line
     is being spoken and the bar does not say so."""
     import asyncio
@@ -3775,7 +3775,7 @@ def shoot_speaking_now(browser: Any, out: Path, world: Any) -> None:
             _time.sleep(0.05)
         if speaking():
             for page in pages.values():
-                expect(page.locator("#banner-meeting-text")).to_contain_text("claude-1 is speaking")
+                expect(page.locator("#banner-meeting-text")).to_contain_text("claude-1 has the mic")
         take("speaking-now")
         b.on_loop(joinly.gate.set)
         r_id = b.on_loop(lambda: b.state.store.get_room(room).id)
@@ -3783,7 +3783,7 @@ def shoot_speaking_now(browser: Any, out: Path, world: Any) -> None:
             assert _time.monotonic() < deadline + WAIT_MS / 1000, "the line never ended"
             _time.sleep(0.05)
         for page in pages.values():
-            expect(page.locator("#banner-meeting-text")).not_to_contain_text("is speaking")
+            expect(page.locator("#banner-meeting-text")).not_to_contain_text("has the mic")
         take("speaking-now-done")
     finally:
         for page in pages.values():

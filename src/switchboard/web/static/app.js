@@ -2262,7 +2262,7 @@
     // a picture shown in the call (/meeting share): the broker's own bot only, and it says so until it stops
     const sharing = !hosted && call.sharing === true;
     // the agent whose @call line is being spoken now (§52.13): the broker's own bot only, and only a name; a hosted
-    // call, or anything else in the field, shows nothing rather than a "speaking" that may be stale
+    // call, or anything else in the field, shows nothing rather than a "has the mic" that may be stale
     const speaker = !hosted && typeof call.speaking === 'string' ? call.speaking.trim().slice(0, 64) : '';
     const words = $('banner-meeting-text');
     words.textContent = text + (voice ? ' · agents can speak' : '') + (sharing ? ' · sharing a picture' : '');
@@ -2271,7 +2271,7 @@
       const who = document.createElement('span');
       who.className = 'call-speaker';
       who.textContent = speaker;
-      words.append(' · ', who, ' is speaking');
+      words.append(' · ', who, ' has the mic');
     }
     $('meeting-share-stop').classList.toggle('hidden', !sharing);
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
