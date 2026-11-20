@@ -1743,3 +1743,27 @@ async def test_show_and_the_page_name_the_newest_commit_the_board_was_told(broke
             assert reread["board"].splitlines()[0].startswith(f"Review of {PR} at b0b0b0b0b0b0 (reported)")
     finally:
         web.close()
+
+
+async def test_a_repeated_report_after_a_reopen_records_the_head_again(broker: InProcBroker) -> None:
+    """A closed outcome reported at B, a reopen at C, then a close with no outcome, keeps
+    ``pr_state``. Reporting B again used to see B on the old report and return without
+    recording it, so the header stayed at C although B was the latest head told. Fails if
+    that second report is dropped."""
+    opened, reported, moved = "4f2c9e1a7b30", "bbbbbbbbbbbb", "cccccccccccc"
+    async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+        closed = await reviewer.call("review", room="#build", action="report", state="closed", head=reported)
+        assert closed["ok"] and closed["closed"] is True, closed
+        back = await reviewer.call("review", room="#build", action="open", url=PR, head=moved)
+        assert back["board"].splitlines()[0].startswith(f"Review of {PR} at {moved}")
+        shut = await reviewer.call("review", room="#build", action="close", reason="pausing")
+        assert shut["ok"] and shut["closed"] is True, shut
+        again = await reviewer.call(
+            "review", room="#build", action="report", state="closed", url=PR, head=reported
+        )
+        assert again["ok"] and again["closed"] is True, again
+        shown = await reviewer.call("review", room="#build", action="show", url=PR)
+        assert shown["board"].splitlines()[0].startswith(f"Review of {PR} at {reported} (reported)")

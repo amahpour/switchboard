@@ -271,9 +271,49 @@ def test_show_names_the_newest_commit_the_board_was_told_and_keeps_the_opened_on
     ]
     assert reviews.header_commit(review, items, merge_events) == (merged, "merged")
     assert first(merge_events) == f"Review of {url} at {merged} (merged): settled"
-    # a commit that is not hex, or a fix that named none, is not a header
-    junk = told + [{"ts": 9.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": "main"}}]
-    assert reviews.header_commit(review, items, junk) == (fix, "last fix")
+    # a non-hex commit is ignored. It must not promote the row's older commit over a
+    # commit told since: the row still holds the first fix.
+    between = "abababababab"
+    junk = told + [
+        {"ts": 8.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": between}},
+        {"ts": 9.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": "main"}},
+    ]
+    assert reviews.header_commit(review, items, junk) == (between, "reported")
+    # an old agent fix event has no commit field: the finding's commit is what it named
+    legacy = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {"ts": 2.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "proof": "t"}},
+    ]
+    assert reviews.header_commit(review, items, legacy) == (fix, "last fix")
+    # a person's mark-fixed names no commit. The row still holds A after a reopen, and
+    # that ruling must not put A back over a commit the board was told since (B).
+    fixed_at, told_b = "aaa1111aaa11", "bbb2222bbb22"
+    ruled = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {
+            "ts": 2.0,
+            "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": fixed_at, "proof": "t"},
+        },
+        {"ts": 3.0, "data": {"item": "F1", "to": "conceded", "by": "codex-1"}},
+        {"ts": 4.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": told_b}},
+        {"ts": 5.0, "data": {"item": "F1", "to": "fixed", "by": "alice", "person": True}},
+    ]
+    assert reviews.header_commit(
+        review, [replace(finding("conceded", owner="claude-1"), commit=fixed_at)], ruled
+    ) == (told_b, "reported")
+    # a merge commit and a head on the same event: the merge commit is the one named
+    both = "dddddddddddd"
+    tie = [
+        {
+            "ts": 1.0,
+            "data": {
+                "report": {"pr_state": "merged", "commit": merged},
+                "by": "claude-1",
+                "head": both,
+            },
+        }
+    ]
+    assert reviews.header_commit(review, items, tie) == (merged, "merged")
     # with no events the line is the stored head, as a caller that has not loaded history reads it
     assert reviews.render(review, items, None, present).splitlines()[0] == (
         f"Review of {url} at {opened}: settled"

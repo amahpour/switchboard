@@ -1329,12 +1329,19 @@ def header_commit(
     never replaces the stored head: that commit stays what history, ``list``, the outdated
     mark and a GitLab line link use. With no events, the stored head is the answer, so a
     caller that has not loaded the history reads the board as it did before.
+
+    A person's mark-fixed (``person`` true) names no commit and is skipped: the finding's
+    row can still hold an older one. An agent fix event with no ``commit`` field is an old
+    event and uses the finding's commit; a ``commit`` that is not a hash is ignored, not
+    replaced by the row. A merge commit on the same event as a head outranks that head.
     """
     stored = _told_sha(review.get("head"))
     if not events:
         return stored, ""
     current = ""
-    candidates: list[tuple[float, int, str, str]] = []
+    # when, event order, then a rank so a merge commit beats a head on the same event.
+    # A sha is never part of the order: hex order is not git order.
+    candidates: list[tuple[float, int, int, str, str]] = []
     by_label = {item.label: item for item in items}
     for index, event in enumerate(events):
         data = event.get("data") if isinstance(event, dict) else None
@@ -1345,32 +1352,33 @@ def header_commit(
         how = data.get("how") if isinstance(data.get("how"), str) else ""
         if "open" in data and named and how != "kept" and (how in ("opened", "moved") or named != current):
             current = named
-            candidates.append((when, order, named, ""))
-        if data.get("to") == "fixed":
-            commit = _told_sha(data.get("commit"))
-            if not commit and isinstance(data.get("item"), str):
+            candidates.append((when, order, 0, named, ""))
+        if data.get("to") == "fixed" and data.get("person") is not True:
+            if "commit" in data:
+                commit = _told_sha(data.get("commit"))
+            elif isinstance(data.get("item"), str):
                 item = by_label.get(data["item"])
                 commit = _told_sha(item.commit) if item is not None else ""
+            else:
+                commit = ""
             if commit:
-                candidates.append((when, order, commit, "last fix"))
+                candidates.append((when, order, 0, commit, "last fix"))
         if "report" in data:
             # a report's own head, or the merge commit a close stores inside the report (#894)
             reported = _told_sha(data.get("head"))
             body = data.get("report")
             merged = _told_sha(body.get("commit")) if isinstance(body, dict) else ""
             if reported:
-                candidates.append((when, order, reported, "reported"))
+                candidates.append((when, order, 0, reported, "reported"))
             if merged:
-                # after a head on the same event, so the merge commit wins that tie
-                candidates.append((when, order, merged, "merged"))
-    if stored and not any(sha == stored and note == "" for _, _, sha, note in candidates):
+                candidates.append((when, order, 1, merged, "merged"))
+    if stored and not any(sha == stored and note == "" for _, _, _, sha, note in candidates):
         opened = review.get("opened_at")
         when = float(opened) if type(opened) is int or type(opened) is float else 0.0
-        candidates.append((when, -1, stored, ""))
+        candidates.append((when, -1, 0, stored, ""))
     if not candidates:
         return "", ""
-    # time, then the event's order. A sha is never part of the order: hex order is not git order.
-    _, _, sha, note = max(candidates, key=lambda item: (item[0], item[1]))
+    _, _, _, sha, note = max(candidates, key=lambda item: (item[0], item[1], item[2]))
     if sha == stored:
         note = ""
     return sha, note

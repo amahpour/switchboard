@@ -500,7 +500,7 @@ class Boards:
         ended = state in ("merged", "closed")
         result = {"ok": True, "closed": True, "board": f"{url} is {state}: the board is closed."}
         same = was_closed and all(rv[key] == value for key, value in fields.items())
-        if same and (not named or named == self._reported_head(room, rv)):
+        if same and self._reported_head_is_current(room, rv, named):
             return result
         now = self.state.clock.now()
         closure = {"closed_at": now, "closed_by": actor} if ended and not was_closed else {}
@@ -520,13 +520,25 @@ class Boards:
             return result
         return self._shown(room, rv)
 
-    def _reported_head(self, room: Room, rv: dict[str, Any]) -> str:
-        """The head on the latest report event, or "" when none named one (#906)."""
-        for event in reversed(self.store.review_events(room.id, rv["id"], rv["opened_at"])):
-            if "report" in event.data:
-                head = event.data.get("head")
-                return head if isinstance(head, str) else ""
-        return ""
+    def _reported_head_is_current(self, room: Room, rv: dict[str, Any], named: str) -> bool:
+        """Whether this report of a closed board adds no commit (#906).
+
+        No head is a repeat of the outcome alone. The same head as the latest report is a
+        repeat only when nothing told since that report changed the commit the header names.
+        A reopen at a newer commit does change it, so reporting the old head again is recorded."""
+        if not named:
+            return True
+        raw = self.store.review_events(room.id, rv["id"], rv["opened_at"])
+        events = [{"ts": event.ts, "data": event.data} for event in raw]
+        last = next((i for i in range(len(events) - 1, -1, -1) if "report" in events[i]["data"]), None)
+        if last is None:
+            return False
+        previous = events[last]["data"].get("head")
+        if not isinstance(previous, str) or named != previous:
+            return False
+        items = self.store.review_items(rv["id"])
+        earlier = reviews.header_commit(rv, items, events[: last + 1])
+        return earlier == reviews.header_commit(rv, items, events)
 
     def _close(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """Close a settled board at any time; open work needs the mover's reason in the room. The

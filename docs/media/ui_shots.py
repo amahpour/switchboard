@@ -62,7 +62,7 @@ redact-{light,dark,phone-light} (a pasted token, with and without the redaction 
 past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
 merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
 ``--only past_boards``),
-board-header-commit-{light,dark} (the header names the newest commit the board was told, #906;
+board-header-commit-{light,dark,phone-light} (the header names the newest commit the board was told, #906;
 ``--only header_commit``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
@@ -4268,6 +4268,7 @@ def shoot_header_commit(browser: Any, out: Path, world: Any) -> None:
     for slug, ctx_args in (
         ("light", {**DESKTOP, "color_scheme": "light"}),
         ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
     ):
         ctx = browser.new_context(**base, **ctx_args)
         ctx.set_default_timeout(WAIT_MS)
