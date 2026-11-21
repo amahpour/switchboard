@@ -18,6 +18,9 @@
  *     it paints inside its box. Its styles are inline, so the app page's CSP allows inline styles
  *     (style-src 'unsafe-inline', auth.app_csp); scripts stay 'self' only.
  *   - Links in a drawing lose their href: md.js's mdLink stays the one link path.
+ *   - A tag in the source with an event-handler attribute is made no tag before Mermaid sees it
+ *     (handlerTagsAsText): a zero width space goes right after its own '<', so a newer Chromium
+ *     has nothing to report to the CSP (#917). Nothing is removed, and no closing tag is touched.
  *   - Nothing comes back from Mermaid but the drawing, and errors are shown as text.
  */
 'use strict';
@@ -90,8 +93,108 @@
     return loading;
   }
 
+  // `source` with each HTML tag in it that carries an event-handler attribute (on…) made no tag
+  // (issue #917). Mermaid's DOMPurify parses each label in this page's documents, and Chromium
+  // from 157 reports a handler attribute to the CSP as soon as it is parsed, though nothing runs
+  // and DOMPurify then drops it. A tag opens only at '<' followed by an ASCII letter, '/', '!' or
+  // '?', so a zero width space (U+200B) put right after the '<' makes the tag text: DOMPurify
+  // parses no handler, and Chromium has nothing to report. That '<' is the only place touched.
+  // Mermaid sanitizes each label on its own and that '<' lies inside one label, so no other label
+  // can change. A closing tag is never touched: this scan can't see where one label ends and the
+  // next begins, so the "matching" closer may sit in another label, and marking it would leave
+  // that label's own tag unbalanced (#918's review, F4); and '</' with a zero width space after it
+  // is a bogus comment to the HTML tokenizer, which would draw as nothing (F3). The marked tag's
+  // own closer is then a stray end tag, parsed as the HTML parser parses one in any label: most
+  // are dropped (`<b onclick=x>a</b>` draws `<b onclick=x>a`), and `</p>` becomes an empty
+  // `<p></p>` (`<p onclick=go>tap</p>` draws `<p onclick=go>tap<p></p>`, measured in Chromium
+  // 157). Nothing is ever removed: removing text from Mermaid source
+  // can cross a label's boundary that this scan can't see (#918's review, F1), while a zero width
+  // space is no Mermaid delimiter, so the diagram's structure can't change. This is not what keeps
+  // a diagram safe (the CSP and DOMPurify are).
+  // A candidate tag starts at '<' and an ASCII letter, stays on its line, holds no other '<', and
+  // ends at the first '>' outside a quoted value it opened; its tag name and every attribute name
+  // must be plain, each quoted value must be followed by a space, '/' or '>', and an unquoted one
+  // may not hold a quote, a backtick or Mermaid's closing brackets. It is marked when one of its
+  // attribute names starts with "on".
+  const ZWSP = '\u200B';
+  const TAG_NAME = /^[A-Za-z][A-Za-z0-9-]*$/;
+  const ATTR_NAME = /^[A-Za-z_:][A-Za-z0-9_:.-]*$/;
+  const BAD_UNQUOTED = /["'`\]}|]/;
+
+  function space(c) { return c === ' ' || c === '\t' || c === '\f' || c === '\r'; }
+
+  // The candidate tag at source[lt] ('<' and a letter): {end, handler} with `end` just past
+  // its '>' and `handler` whether an attribute is named on…, or {stop} where it stopped being one.
+  // Every loop stops at a '<', so no '<' lies between lt and either: the caller goes on from
+  // there, and each character of a line is read once (#918's review: a rescan per attribute
+  // made a long line quadratic).
+  function readTag(source, lt) {
+    const n = source.length;
+    const bad = function (c) { return c === '\n' || c === '<'; };
+    let j = lt + 1;
+    while (j < n && !space(source[j]) && '/>\n<'.indexOf(source[j]) < 0) j++;
+    const tagName = source.slice(lt + 1, j);
+    if (!TAG_NAME.test(tagName)) return { stop: j };
+    let handler = false;
+    for (;;) {
+      if (j >= n || bad(source[j])) return { stop: j };
+      const c = source[j];
+      if (c === '>') {
+        if ('-='.indexOf(source[j - 1]) >= 0) return { stop: j };  // an edge's arrow, not a tag's end
+        return { end: j + 1, handler: handler };
+      }
+      if (space(c) || c === '/') { j++; continue; }
+      const start = j;
+      while (j < n && !space(source[j]) && '/>=\n<'.indexOf(source[j]) < 0) j++;
+      const name = source.slice(start, j);
+      if (!ATTR_NAME.test(name)) return { stop: j };
+      let k = j;
+      while (k < n && space(source[k])) k++;
+      if (source[k] === '=') {
+        k++;
+        while (k < n && space(source[k])) k++;
+        const q = source[k];
+        if (q === '"' || q === "'") {
+          k++;
+          while (k < n && source[k] !== q) {
+            if (bad(source[k])) return { stop: k };
+            k++;
+          }
+          if (k >= n) return { stop: k };
+          k++;
+          if (k < n && !space(source[k]) && '/>'.indexOf(source[k]) < 0) return { stop: k };
+        } else {
+          const v = k;
+          while (k < n && !space(source[k]) && '>\n<'.indexOf(source[k]) < 0) k++;
+          if (k === v || BAD_UNQUOTED.test(source.slice(v, k))) return { stop: k };
+        }
+        j = k;
+      }
+      if (/^on/i.test(name)) handler = true;
+    }
+  }
+
+  function handlerTagsAsText(source) {
+    let out = '';
+    let at = 0;  // source[at..] is not copied yet
+    let i = 0;
+    for (;;) {
+      const lt = source.indexOf('<', i);
+      if (lt < 0) break;
+      if (!/[A-Za-z]/.test(source[lt + 1] || '')) { i = lt + 1; continue; }
+      const tag = readTag(source, lt);
+      if (tag.end === undefined) { i = Math.max(lt + 1, tag.stop); continue; }  // not a tag: as written
+      i = tag.end;
+      if (!tag.handler) continue;
+      out += source.slice(at, lt + 1) + ZWSP;
+      at = lt + 1;
+    }
+    return at ? out + source.slice(at) : source;
+  }
+
   // Mermaid's drawing of `source` as a detached <svg>, or a rejection with its message.
   function draw(source) {
+    source = handlerTagsAsText(source);
     const job = queue.then(function () {
       return load().then(function (mermaid) {
         mermaid.initialize(config());
@@ -213,5 +316,5 @@
   } catch (e) { /* no matchMedia: the theme is the one at draw time */ }
   window.addEventListener('switchboard-theme-change', redrawShown);
 
-  window.SBDiagram = Object.freeze({ toggle: toggle });
+  window.SBDiagram = Object.freeze({ toggle: toggle, handlerTagsAsText: handlerTagsAsText });
 })();
