@@ -1,17 +1,18 @@
 """diagram.js's source clean-up, run for real in node (tests/diagram_harness.js; DESIGN.md §33).
 
 Before Mermaid sees a diagram, each complete one-line HTML tag in it with an event-handler
-attribute, and its closing tag, are shown as text by a zero width space after `<` or `</` (issue
-#917): Mermaid's DOMPurify parses each label in the page's own documents,
-and Chromium from 157 reports a handler attribute to the CSP as soon as it is parsed, which the
-e2e tests count as a failure, though nothing runs. Nothing is removed, so no diagram's structure
-changes (#918's review). Skipped where node is missing, except under
-SWITCHBOARD_REQUIRE_NODE=1 (CI), where that fails."""
+attribute is shown as text by a zero width space right after its own `<` (issue #917): Mermaid's
+DOMPurify parses each label in the page's own documents, and Chromium from 157 reports a handler
+attribute to the CSP as soon as it is parsed, which the e2e tests count as a failure, though
+nothing runs. Nothing is removed, so no diagram's structure changes, and no closing tag is
+touched, since the scan can't tell which label a closer is in (#918's review). Skipped where node
+is missing, except under SWITCHBOARD_REQUIRE_NODE=1 (CI), where that fails."""
 
 from __future__ import annotations
 
 import json
 import random
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -36,7 +37,7 @@ Z = "\u200b"  # the zero width space that makes a handler tag text
 
 def test_a_handler_tag_is_shown_as_its_text() -> None:
     """Every spelling a browser parses as a handler attribute marks its tag, valued or not: a
-    zero width space after its '<' (and its closing tag's '</') makes it text, so nothing is parsed
+    zero width space after its '<' makes it text, so nothing is parsed
     and Chromium 157 has nothing to report to the CSP, and the hostile-diagram e2e test passes."""
     got = clean(
         'A["<img src=x onerror=window.__pwned=1> <b>bold</b>"] --> B',
@@ -51,18 +52,33 @@ def test_a_handler_tag_is_shown_as_its_text() -> None:
         f"A[<{Z}img/onerror=a>]",
         f"A[<{Z}IMG ONERROR=a>]",
         f'A[<{Z}img title=">" onerror="a" alt=\'b\'>]',
-        f"A[<svg><{Z}g onload = 'a'></{Z}g></svg>]",
-        f"A[<{Z}b class=c onmouseover=a onfocus=b>x</{Z}B>]",
+        f"A[<svg><{Z}g onload = 'a'></g></svg>]",
+        f"A[<{Z}b class=c onmouseover=a onfocus=b>x</B>]",
     ]
 
 
-def test_a_handler_tag_and_its_first_closing_tag_are_marked() -> None:
-    """The closing tag of a marked tag is marked too, so it is text as well: only the first one of
-    the same name after it on its line, and no other tag."""
+def test_a_closing_tag_is_never_marked() -> None:
+    """Only the candidate's own `<` gets a zero width space; its closing tag is left as written.
+    At 53238e08 the first closing tag of the same name on the line was marked too, and `</` with a
+    zero width space after it is a bogus comment to the HTML tokenizer, so it drew as nothing
+    (#918's review, F3)."""
     assert clean('A["<p onclick=go>tap</p>"]', "A[<b onclick=x>a</b> <b>c</b>]") == [
-        f'A["<{Z}p onclick=go>tap</{Z}p>"]',
-        f"A[<{Z}b onclick=x>a</{Z}b> <b>c</b>]",
+        f'A["<{Z}p onclick=go>tap</p>"]',
+        f"A[<{Z}b onclick=x>a</b> <b>c</b>]",
     ]
+
+
+def test_a_closing_tag_in_the_next_label_is_left_as_written() -> None:
+    """The review's F4 on #918: the scan reads A's `<b one="` as a candidate that ends at the first
+    `>` in B's label, and at 53238e08 it then marked B's own `</b>`, which left B's `<b>` with no
+    closer when Mermaid sanitized B's label on its own. The scan can't see label boundaries, so the
+    only edit is one zero width space after A's `<`, and B's text is unchanged byte for byte."""
+    b = '[" > threshold <b>inner</b> tail"]'
+    src = f'flowchart TD\n  A["check x<b one="] --> B{b}'
+    (got,) = clean(src)
+    assert got.count(Z) == 1
+    assert got == src.replace("x<b", f"x<{Z}b")
+    assert got.endswith(f"B{b}")
 
 
 def test_the_reviewers_case_keeps_both_nodes_and_the_edge() -> None:
@@ -111,10 +127,11 @@ def test_a_comparison_in_a_label_that_runs_into_an_arrow_is_left_as_written() ->
 
 # Pieces of the labels of ordinary diagrams: comparisons, quotes, arrows, entities, <br> and <b>
 # tags, and words that start with "on", which can line up into a tag with an on… attribute (as
-# `x<limit one="` does in #918's review). Whatever they spell, only zero width spaces are added.
+# `x<limit one="` does in #918's review), and a tag with a handler and its closer. Whatever they
+# spell, only zero width spaces are added, each after a candidate's own `<`.
 WORDS = ("one", "only", "on", "onward", "x", "total", "it's", "a = b", "(b)", "n:1", "#quot;", "one=", '"')
 SIGNS = (" < ", " > ", "<=", ">=", "&lt;", "&gt;", "&amp;", "#lt;", "-->", "->>", "<br>", "<br/>")
-TAGS = ("<b>bold</b>", "<i>it</i>", "<<interface>>", "</b>")
+TAGS = ("<b>bold</b>", "<i>it</i>", "<<interface>>", "</b>", "<b onclick=go>tap</b>")
 OPEN = ("a<b", "x<y", "n<m", "x<limit")
 
 
@@ -172,6 +189,15 @@ def test_any_diagram_is_its_input_with_only_zero_width_spaces_added() -> None:
     changed = [(s, g) for s, g in zip(sources, got, strict=True) if g.replace(Z, "") != s]
     assert not changed, changed[:3]
     assert any(Z in g for g in got)  # the generator does make candidates
+    for g in got:
+        assert f"</{Z}" not in g, g  # a closing tag is never marked (#918's review, F3 and F4)
+        for m in re.finditer(Z, g):
+            assert CANDIDATE.match(g, m.start() - 1), (g, m.start())
+
+
+# What follows a zero width space the clean-up put in: the '<' just before it, a tag name, and an
+# attribute named on… before the next '<' or the line's end, which is where a candidate tag lies.
+CANDIDATE = re.compile("<" + Z + r"[A-Za-z][^\s/>\n<]*[^\n<]*?[\s/](?i:on)[^\n<]*")
 
 
 def test_a_diagram_with_no_candidate_comes_out_unchanged() -> None:

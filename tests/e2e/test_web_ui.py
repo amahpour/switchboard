@@ -2658,6 +2658,30 @@ def test_a_diagram_whose_quoted_value_spans_two_labels_keeps_its_edge(ui: UI) ->
     assert "checkx<limitone=" in drawn and "threshold" in drawn, found
 
 
+def test_a_diagram_with_a_closing_tag_in_the_next_label_draws_that_label_as_on_main(ui: UI) -> None:
+    """The review's F4 on #918: `x<b one="` reads as a tag that ends at the first `>` in B's label,
+    and at 53238e08 the clean-up also marked B's own `</b>`, so B's `<b>` lost its closer when
+    Mermaid sanitized B's label on its own and B drew `<b>innertail</b>`. Only A's `<` is marked
+    now, so B draws as it does on main (no clean-up at all), measured in Chromium 157: two nodes,
+    one edge, and no console error (the fixture's watch). Whitespace is left out of the compare,
+    since a wrapped label's tspans drop the spaces between words."""
+    source = 'flowchart TD\n  A["check x<b one="] --> B[" > threshold <b>inner</b> tail"]'
+    page = diagram_room(ui, "e2e-diagram-closer-next-label", f"{FENCE}mermaid\n{source}\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box.locator(".md-diagram-error")).to_have_text("")
+    found = box.evaluate(
+        "(b) => { const r = b.querySelector('.md-diagram').shadowRoot; return {"
+        " nodes: [...r.querySelectorAll('g.node')].map(n => [n.id,"
+        " [...n.querySelectorAll('text')].map(t => t.textContent).join(' ')]),"
+        " edges: r.querySelectorAll('path.flowchart-link').length }; }"
+    )
+    assert len(found["nodes"]) == 2 and found["edges"] == 1, found
+    drawn = {re.sub(r"^.*-flowchart-([A-Z])-\d+$", r"\1", i): "".join(t.split()) for i, t in found["nodes"]}
+    assert drawn["B"] == ">threshold<b>inner</b>tail", found  # what main draws for B
+    assert drawn["A"].replace("\u200b", "") == "checkx<bone=", found
+
+
 def test_a_broken_diagram_says_why_and_keeps_its_code(ui: UI) -> None:
     page = diagram_room(ui, "e2e-diagram-broken", f"{FENCE}mermaid\nflowchart LR\n  A -->\n{FENCE}")
     box = show(page)
