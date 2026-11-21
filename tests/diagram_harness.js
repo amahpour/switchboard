@@ -1,5 +1,5 @@
 // Runs diagram.js (window.SBDiagram) in node with a bare window, for tests/unit/test_web_diagram.py.
-// Reads a JSON list of diagram sources on stdin; prints withoutHandlers of each (issue #917), or
+// Reads a JSON list of diagram sources on stdin; prints handlerTagsAsText of each (issue #917), or
 // with --count that and how much indexOf read.
 'use strict';
 const fs = require('fs');
@@ -22,8 +22,8 @@ if (process.argv[2] === '--count') {
     read += (at < 0 ? this.length : at + 1) - start;
     return at;
   };
-  const out = sources.map((s) => window.SBDiagram.withoutHandlers(s));
+  const out = sources.map((s) => window.SBDiagram.handlerTagsAsText(s));
   process.stdout.write(JSON.stringify({ out, read }));
 } else {
-  process.stdout.write(JSON.stringify(sources.map((s) => window.SBDiagram.withoutHandlers(s))));
+  process.stdout.write(JSON.stringify(sources.map((s) => window.SBDiagram.handlerTagsAsText(s))));
 }

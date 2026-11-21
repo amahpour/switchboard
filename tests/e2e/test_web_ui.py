@@ -2599,7 +2599,13 @@ def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
         " css: [...r.querySelectorAll('style')].map(s => s.textContent).join('') }; }"
     )
     assert found["unsafe"] == 0 and found["links"] == 0, found
-    assert '<img src="x"' in found["text"] and "onerror" not in found["text"]  # a label is text
+    drawn = "".join(found["text"].replace("\u200b", "").split())
+    assert "<imgsrc=xonerror=window.__pwned=1>" in drawn, found["text"]  # the tag, as text
+    handlers = box.evaluate(
+        f"(b) => [...({root})(b).querySelectorAll('svg, svg *')]"
+        ".flatMap(e => [...e.attributes].map(a => a.name)).filter(n => /^on/i.test(n))"
+    )
+    assert handlers == [], handlers  # no element drawn holds a handler attribute
     assert "display: none" not in found["css"] and "#cde498" not in found["css"]  # no themeCSS, not forest
     # clicking either node does nothing: no callback was bound (an alert() would have opened, and
     # been recorded, before the click returned) and there is no href to follow (above)
@@ -2628,6 +2634,28 @@ def test_a_comparison_in_a_label_before_an_arrow_still_draws(ui: UI) -> None:
         ".map(t => t.textContent).join(' ')"
     )
     assert "if a" in text and "done" in text, text
+
+
+def test_a_diagram_whose_quoted_value_spans_two_labels_keeps_its_edge(ui: UI) -> None:
+    """The review's case on #918 (F1): `x<limit one="` reads as a tag whose quoted value runs from
+    A's closing quote to B's opening one, and removing that attribute took `] --> B["` with it:
+    one node and no edge. Nothing is removed now, so both nodes and the edge are drawn. Mermaid
+    drops the leading `>` of B's label as Markdown (as it does on main), and a wrapped label's
+    tspans drop the spaces between words, so the text is compared without whitespace."""
+    source = 'flowchart TD\n  A["check x<limit one="] --> B[" > threshold"]'
+    page = diagram_room(ui, "e2e-diagram-spanning-value", f"{FENCE}mermaid\n{source}\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box.locator(".md-diagram-error")).to_have_text("")
+    found = box.evaluate(
+        "(b) => { const r = b.querySelector('.md-diagram').shadowRoot; return {"
+        " nodes: r.querySelectorAll('g.node').length,"
+        " edges: r.querySelectorAll('path.flowchart-link').length,"
+        " text: [...r.querySelectorAll('text')].map(t => t.textContent).join(' ') }; }"
+    )
+    assert found["nodes"] == 2 and found["edges"] == 1, found
+    drawn = "".join(found["text"].replace("\u200b", "").split())
+    assert "checkx<limitone=" in drawn and "threshold" in drawn, found
 
 
 def test_a_broken_diagram_says_why_and_keeps_its_code(ui: UI) -> None:

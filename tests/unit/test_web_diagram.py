@@ -1,10 +1,11 @@
 """diagram.js's source clean-up, run for real in node (tests/diagram_harness.js; DESIGN.md §33).
 
-Before Mermaid sees a diagram, the event-handler attributes of any complete one-line HTML tag in
-it are dropped (issue #917): Mermaid's DOMPurify parses each label in the page's own documents,
+Before Mermaid sees a diagram, each complete one-line HTML tag in it with an event-handler
+attribute, and its closing tag, are shown as text by a zero width space after `<` or `</` (issue
+#917): Mermaid's DOMPurify parses each label in the page's own documents,
 and Chromium from 157 reports a handler attribute to the CSP as soon as it is parsed, which the
-e2e tests count as a failure, though nothing runs. Everything else in the source stays as it was
-written, so no diagram draws differently. Skipped where node is missing, except under
+e2e tests count as a failure, though nothing runs. Nothing is removed, so no diagram's structure
+changes (#918's review). Skipped where node is missing, except under
 SWITCHBOARD_REQUIRE_NODE=1 (CI), where that fails."""
 
 from __future__ import annotations
@@ -30,32 +31,51 @@ def clean(*sources: str) -> list[str]:
     return json.loads(r.stdout)
 
 
-def test_a_handler_attribute_leaves_the_source_before_mermaid_parses_it() -> None:
-    """Every spelling a browser parses as a handler attribute goes, valued or not: an attribute
-    left in would be reported to the CSP under Chromium 157 and fail the hostile-diagram e2e test."""
+Z = "\u200b"  # the zero width space that makes a handler tag text
+
+
+def test_a_handler_tag_is_shown_as_its_text() -> None:
+    """Every spelling a browser parses as a handler attribute marks its tag, valued or not: a
+    zero width space after its '<' (and its closing tag's '</') makes it text, so nothing is parsed
+    and Chromium 157 has nothing to report to the CSP, and the hostile-diagram e2e test passes."""
     got = clean(
         'A["<img src=x onerror=window.__pwned=1> <b>bold</b>"] --> B',
         "A[<img/onerror=a>]",
         "A[<IMG ONERROR=a>]",
         'A[<img title=">" onerror="a" alt=\'b\'>]',
-        "A[<p onclick>x</p>]",
         "A[<svg><g onload = 'a'></g></svg>]",
-        "A[<b class=c onmouseover=a onfocus=b>x</b>]",
+        "A[<b class=c onmouseover=a onfocus=b>x</B>]",
     )
     assert got == [
-        'A["<img src=x > <b>bold</b>"] --> B',
-        "A[<img/>]",
-        "A[<IMG >]",
-        "A[<img title=\">\"  alt='b'>]",
-        "A[<p >x</p>]",
-        "A[<svg><g ></g></svg>]",
-        "A[<b class=c  >x</b>]",
+        f'A["<{Z}img src=x onerror=window.__pwned=1> <b>bold</b>"] --> B',
+        f"A[<{Z}img/onerror=a>]",
+        f"A[<{Z}IMG ONERROR=a>]",
+        f'A[<{Z}img title=">" onerror="a" alt=\'b\'>]',
+        f"A[<svg><{Z}g onload = 'a'></{Z}g></svg>]",
+        f"A[<{Z}b class=c onmouseover=a onfocus=b>x</{Z}B>]",
     ]
+
+
+def test_a_handler_tag_and_its_first_closing_tag_are_marked() -> None:
+    """The closing tag of a marked tag is marked too, so it is text as well: only the first one of
+    the same name after it on its line, and no other tag."""
+    assert clean('A["<p onclick=go>tap</p>"]', "A[<b onclick=x>a</b> <b>c</b>]") == [
+        f'A["<{Z}p onclick=go>tap</{Z}p>"]',
+        f"A[<{Z}b onclick=x>a</{Z}b> <b>c</b>]",
+    ]
+
+
+def test_the_reviewers_case_keeps_both_nodes_and_the_edge() -> None:
+    """The review's case on #918 (F1): the scan reads A's closing quote and B's opening quote as one
+    attribute value, and removing that `one=...` attribute deleted `] --> B["`, so Mermaid drew one
+    node and no edge. Nothing is removed now: the only change is a zero width space after `<`."""
+    src = 'flowchart TD\n  A["check x<limit one="] --> B[" > threshold"]'
+    assert clean(src) == [f'flowchart TD\n  A["check x<{Z}limit one="] --> B[" > threshold"]']
 
 
 def test_everything_else_in_a_diagram_is_left_as_written() -> None:
     """Mermaid's own syntax, text that only looks like a tag, and a tag that doesn't close on its
-    line are not touched, so a diagram draws exactly as before: only handler attributes go."""
+    line are not touched, so a diagram draws exactly as before."""
     keep = (
         "flowchart TD\n  A --> B\n  A <--> C\n  one --> onward\n  A -- on hold --> B",
         "classDiagram\n  class Shape{\n    <<interface>>\n    onDraw()\n  }",
@@ -64,20 +84,20 @@ def test_everything_else_in_a_diagram_is_left_as_written() -> None:
         'flowchart TD\n  A["<img onerror="a\n">"]',  # nor does the value
         "graph LR\n  A[a < b] --> B[<x]",
         "flowchart TD\n  A[\"<img title='onerror=a' alt=on>\"]",  # \"on\" in a value is a value
+        'flowchart TD\n  A["<p>x</p>"] --> B["<b class=c>y</b>"]',
     )
     assert clean(*keep) == list(keep)
 
 
-def test_any_attribute_named_on_something_goes_its_value_with_it() -> None:
-    """The rule is by name, as the browser's is: an attribute whose name starts with "on" is
-    dropped with its value (DOMPurify would drop a name it doesn't know, such as `one`, anyway)."""
-    assert clean("A[\"<img one=1 title='x'>\"]") == ["A[\"<img  title='x'>\"]"]
+def test_any_attribute_named_on_something_marks_its_tag() -> None:
+    """The rule is by name, as the browser's is: an attribute whose name starts with "on" marks
+    its tag, though DOMPurify would drop a name it doesn't know, such as `one`, anyway."""
+    assert clean("A[\"<img one=1 title='x'>\"]") == [f"A[\"<{Z}img one=1 title='x'>\"]"]
 
 
 def test_a_comparison_in_a_label_that_runs_into_an_arrow_is_left_as_written() -> None:
-    """The review's case on #918: `a<b only` in a quoted label read as a tag `<b` with an
-    attribute `only"]`, closed by the edge's `-->`, and the strip took the label's closing quote
-    and bracket with it, so Mermaid refused a valid flowchart. It isn't a tag: nothing changes."""
+    """`a<b only` in a quoted label could read as a tag `<b` with an attribute `only"]`, closed by
+    the edge's `-->`. It isn't a tag: nothing changes."""
     keep = (
         'flowchart TD\n  A["if a<b only"] --> B["done"]',
         "flowchart TD\n  A[x<y one] --> B",
@@ -90,25 +110,19 @@ def test_a_comparison_in_a_label_that_runs_into_an_arrow_is_left_as_written() ->
 
 
 # Pieces of the labels of ordinary diagrams: comparisons, quotes, arrows, entities, <br> and <b>
-# tags, and words that start with "on". OPEN leaves a '<' and a letter unclosed; a label that has
-# one gets no later piece with a '>' or a '=', so no piece list can spell a real tag with an on…
-# attribute (that would be a hostile diagram, which the tests above cover).
-WORDS = ("one", "only", "on", "onward", "x", "total", "it's", "a = b", "(b)", "n:1", "#quot;")
+# tags, and words that start with "on", which can line up into a tag with an on… attribute (as
+# `x<limit one="` does in #918's review). Whatever they spell, only zero width spaces are added.
+WORDS = ("one", "only", "on", "onward", "x", "total", "it's", "a = b", "(b)", "n:1", "#quot;", "one=", '"')
 SIGNS = (" < ", " > ", "<=", ">=", "&lt;", "&gt;", "&amp;", "#lt;", "-->", "->>", "<br>", "<br/>")
-TAGS = ("<b>bold</b>", "<i>it</i>", "<<interface>>")
-OPEN = ("a<b", "x<y", "n<m")
+TAGS = ("<b>bold</b>", "<i>it</i>", "<<interface>>", "</b>")
+OPEN = ("a<b", "x<y", "n<m", "x<limit")
 
 
 def label(rng: random.Random) -> str:
     out: list[str] = []
-    opened = False
     for _ in range(rng.randint(1, 6)):
         pool = WORDS + SIGNS + TAGS + OPEN
-        piece = rng.choice(pool)
-        if opened and ("=" in piece or ">" in piece):
-            piece = rng.choice(WORDS[:5])
-        opened = opened or piece in OPEN
-        out.append(piece)
+        out.append(rng.choice(pool))
     return rng.choice(("", " ")).join(out)
 
 
@@ -148,24 +162,34 @@ def sequence(rng: random.Random) -> str:
     return "\n".join(lines)
 
 
-def test_any_ordinary_diagram_comes_out_byte_for_byte() -> None:
-    """Over many generated flowcharts and sequence diagrams with no hostile tag in them, the
-    output is the input, byte for byte: a strip that changes a valid diagram can break it (#918)."""
+def test_any_diagram_is_its_input_with_only_zero_width_spaces_added() -> None:
+    """Over many generated flowcharts and sequence diagrams, removing every zero width space from
+    the output gives the input byte for byte: nothing is ever removed, since a removal can cross a
+    label's boundary the scan can't see and change the diagram (#918's review, F1)."""
     rng = random.Random(918)
     sources = [rng.choice((flowchart, sequence))(rng) for _ in range(3000)]
     got = clean(*sources)
-    changed = [(s, g) for s, g in zip(sources, got, strict=True) if s != g]
+    changed = [(s, g) for s, g in zip(sources, got, strict=True) if g.replace(Z, "") != s]
     assert not changed, changed[:3]
+    assert any(Z in g for g in got)  # the generator does make candidates
 
 
-def test_a_handler_in_an_ordinary_diagram_still_goes_and_nothing_else_does() -> None:
-    """The same diagrams with a hostile tag in a label lose just its handler attribute."""
+def test_a_diagram_with_no_candidate_comes_out_unchanged() -> None:
+    """A diagram with no tag that has an on… attribute is passed on as written."""
+    rng = random.Random(57)
+    sources = [rng.choice((flowchart, sequence))(rng).replace("on", "in") for _ in range(500)]
+    assert clean(*sources) == sources
+
+
+def test_a_handler_in_an_ordinary_diagram_is_marked() -> None:
+    """The same diagrams with a hostile tag in a label have that tag shown as text."""
     rng = random.Random(917)
     hostile = "<img src=x onerror=alert(1)>"
     sources = [f'{flowchart(rng)}\n  H["{label(rng)} {hostile}"] --> N0' for _ in range(300)]
     sources += [f"{sequence(rng)}\n  alice->>bob: {hostile} {label(rng)}" for _ in range(300)]
-    want = [s.replace(hostile, "<img src=x >") for s in sources]
-    assert clean(*sources) == want
+    for s, g in zip(sources, clean(*sources), strict=True):
+        assert g.replace(Z, "") == s
+        assert f"<{Z}img src=x onerror" in g
 
 
 def test_a_very_long_line_is_read_once() -> None:
