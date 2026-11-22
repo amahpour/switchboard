@@ -33,19 +33,32 @@ A home is only a candidate with both the lock file and the marker, as regular fi
 directory (not a symlink) owned by this user, directly under the root and named ``yk-*``.
 ``make_locked_home()`` takes the lock before it writes the marker, so a home that is mid-creation,
 or was made before this lock existed, has no marker or no lock file and is left alone; a failure
-part way removes what it made.
+part way removes what it made. Nothing is ever chosen by its name alone.
 
-Every check is bound to one directory: the root is opened once, the home is opened through it
-with ``O_NOFOLLOW`` and its (dev, inode) noted, the locks are opened through the home's own fd,
-and the identity is checked again after the locks. Then the home is **renamed** to a tombstone
-and what was renamed is removed.
+**A broker that is starting.** ``switchboard start`` opens ``logs/broker.out`` (``Paths.out_log``)
+before it spawns the daemon, and the daemon creates and locks ``run/broker.lock`` only once it runs.
+So a home with ``logs/broker.out`` and no ``run/broker.lock`` is kept and counted in use: a daemon
+may be starting. One that died before it made its lock leaves a home that is kept for good, which
+is the safe side (CONTRIBUTING.md, "Sharing a machine", lists such homes). The window between the
+daemon creating ``broker.lock`` and locking it is safe too: if the sweep takes the lock first, the
+daemon's ``LOCK_EX | LOCK_NB`` fails and it exits without using the home.
 
-**Tombstones.** ``remove_home()`` (the ``tmp_home`` fixture's teardown, and the sweep's) first
-renames a home, atomically, to ``yk-gone-<rest>-<random>``, a name ``mkdtemp`` never makes (its
-alphabet has no ``-``), and only then deletes it. A run killed part way through a delete leaves a
-tombstone, with no marker or lock perhaps, and the next sweep removes every tombstone it finds that
-is a real directory of this user's (never a symlink). Tests that remove a home with a plain
-``shutil.rmtree`` still can leave an unrecognized remainder if killed mid-delete.
+**One directory, removed in place.** The root is opened once, the home is opened through it with
+``O_NOFOLLOW`` and its (dev, inode) noted, the locks are opened through the home's own fd, and the
+identity is checked again after the locks and once more before the final ``rmdir``; any mismatch
+keeps the home. The removal (``_empty_home``, the same for the sweep and for ``remove_home()``,
+the ``tmp_home`` fixture's teardown) goes through the home's fd: every entry but the marker and
+the lock file first, then the marker, then the lock file, then the ``rmdir`` through the root's
+fd. A removal interrupted in the first step (a killed run, an error) leaves a home that still has
+the marker and the lock file under its own name, so the next sweep treats it as any other
+candidate, and a fixture's ``no_homes_left_behind`` sees it and fails the run. Only the last two
+unlinks and the ``rmdir`` can leave a remainder nothing recognizes: an empty directory, or one
+with the lock file alone. There is no rename and no second name.
+
+**One sweeper at a time.** The sweep first takes ``LOCK_EX | LOCK_NB`` on ``SWEEP_LOCK`` in the
+root, a regular file of this user's opened with ``O_NOFOLLOW`` (anything else is refused, and
+nothing is swept). If another sweep holds it, this one skips the run and says so in its line, so
+no sweep ever finds a home another sweep is halfway through removing.
 
 The sweep runs once a session in the xdist controller (``pytest_sessionstart`` in the root conftest),
 and nothing it raises reaches the run, nor anything its report raises.
@@ -56,7 +69,6 @@ from __future__ import annotations
 import errno
 import fcntl
 import os
-import secrets
 import shutil
 import socket
 import stat
@@ -69,9 +81,10 @@ from pathlib import Path
 TEST_MARKER = ".switchboard-test"  # switchboard.paths.TEST_MARKER; this module imports nothing of src
 LOCK_NAME = ".switchboard-test.lock"
 BROKER_LOCK = ("run", "broker.lock")  # switchboard.paths.Paths.lockfile, relative to the home
+BROKER_OUT = ("logs", "broker.out")  # switchboard.paths.Paths.out_log, relative to the home
 TMP_HOME_ROOT = Path("/tmp")
 TMP_HOME_PREFIX = "yk-"
-TOMBSTONE_PREFIX = TMP_HOME_PREFIX + "gone-"  # mkdtemp's names have no "-" after the prefix
+SWEEP_LOCK = "yk-sweep.lock"  # a file directly under the root, never a home (homes are directories)
 
 # How long the sweep waits for a socket under a candidate home to answer. A live broker accepts at
 # once (the kernel completes the connect from the backlog); a timeout keeps the home, never removes it.
@@ -79,6 +92,7 @@ SOCKET_TIMEOUT_S = 0.5
 
 _OPEN_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 _OPEN_LOCK = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC  # never blocks on a FIFO
+_OPEN_SWEEP_LOCK = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 
 # The shared locks this process holds, one per home it made and hasn't seen removed yet.
 _LOCKS: dict[Path, int] = {}
@@ -89,6 +103,11 @@ _walk = os.fwalk
 
 def _lstat_at(name: str, dir_fd: int) -> os.stat_result:
     return os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+
+
+def _rmtree_at(name: str, dir_fd: int) -> None:
+    """A directory under a home, removed (a seam for the tests that interrupt a removal)."""
+    shutil.rmtree(name, dir_fd=dir_fd)
 
 
 def make_locked_home(root: Path = TMP_HOME_ROOT) -> Path:
@@ -140,26 +159,60 @@ def lock_fds_for(home: Path) -> tuple[int, ...]:
     return ()
 
 
-def tombstone_name(name: str) -> str:
-    """The name a home is renamed to before it is deleted (module docstring, "Tombstones")."""
-    rest = name[len(TMP_HOME_PREFIX) :] if name.startswith(TMP_HOME_PREFIX) else name
-    return f"{TOMBSTONE_PREFIX}{rest}-{secrets.token_hex(4)}"
+class _NotThisHome(Exception):
+    """The name no longer is the directory that was checked: it is kept."""
+
+
+def _empty_home(home_fd: int) -> None:
+    """Remove what is in the open home, the marker and the lock file last (module docstring, "One
+    directory, removed in place"), so that an interruption before the end leaves both."""
+    last = (TEST_MARKER, LOCK_NAME)
+    for name in sorted(os.listdir(home_fd)):
+        if name in last:
+            continue
+        if stat.S_ISDIR(os.stat(name, dir_fd=home_fd, follow_symlinks=False).st_mode):
+            _rmtree_at(name, home_fd)
+        else:
+            os.unlink(name, dir_fd=home_fd)
+    for name in last:
+        try:
+            os.unlink(name, dir_fd=home_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _rmdir_if_same(root_fd: int, name: str, before: os.stat_result) -> None:
+    """``rmdir`` the emptied home, after checking once more that ``name`` is still that directory."""
+    if not _same(before, os.stat(name, dir_fd=root_fd, follow_symlinks=False)):
+        raise _NotThisHome(name)
+    os.rmdir(name, dir_fd=root_fd)
 
 
 def remove_home(home: Path) -> None:
-    """Remove a ``make_locked_home`` home so that a run killed part way leaves a tombstone the next
-    sweep recognizes: rename it, then delete what was renamed, then close this process's lock.
-    Errors are ignored, as the ``shutil.rmtree(..., ignore_errors=True)`` it replaces did; a home
-    that is not a real directory (a symlink a test left) is only ``rmtree``'d as before."""
+    """Remove a ``make_locked_home`` home in place, through its own fd, the marker and the lock file
+    last, then close this process's lock. An error part way is not raised, as the
+    ``shutil.rmtree(..., ignore_errors=True)`` this replaces did not; it leaves the home under its
+    own name with the marker and the lock file, where ``no_homes_left_behind`` finds it and fails
+    the run, and a later sweep removes it. A ``home`` that is not a real directory of this user's
+    (a symlink a test left) is not touched."""
     home = Path(home)
     try:
-        target = home
-        if stat.S_ISDIR(os.lstat(home).st_mode):
-            target = home.with_name(tombstone_name(home.name))
-            os.rename(home, target)
-    except OSError:
-        target = home
-    shutil.rmtree(target, ignore_errors=True)
+        root_fd = os.open(home.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            before = os.stat(home.name, dir_fd=root_fd, follow_symlinks=False)
+            if _own_dir(before):
+                home_fd = os.open(home.name, _OPEN_DIR, dir_fd=root_fd)
+                try:
+                    if not _same(before, os.fstat(home_fd)):
+                        raise _NotThisHome(home.name)
+                    _empty_home(home_fd)
+                finally:
+                    os.close(home_fd)
+                _rmdir_if_same(root_fd, home.name, before)
+        finally:
+            os.close(root_fd)
+    except (OSError, _NotThisHome):
+        pass
     release_home(home)
 
 
@@ -169,8 +222,14 @@ class SweepResult:
     removed: list[Path] = field(default_factory=list)
     in_use: list[Path] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
+    skipped: bool = False  # another sweep held SWEEP_LOCK
 
     def line(self) -> str:
+        if self.skipped:
+            return (
+                f"switchboard test homes: skipped, another sweep holds {self.root / SWEEP_LOCK}, "
+                "nothing removed (#922)"
+            )
         line = (
             f"switchboard test homes: removed {len(self.removed)} a killed run left in {self.root}, "
             f"kept {len(self.in_use)} in use (#922)"
@@ -188,10 +247,10 @@ def _own_dir(st: os.stat_result) -> bool:
     return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid()
 
 
-def _entries(root_fd: int) -> tuple[list[str], list[str]]:
-    """The names under the root that may be homes, and the tombstones, each a real directory (not a
-    symlink) owned by this user."""
-    homes, tombs = [], []
+def _entries(root_fd: int) -> list[str]:
+    """The names under the root that may be homes: ``yk-*``, a real directory (not a symlink) owned
+    by this user. Being one makes a name no more than a candidate (``_sweep_one``)."""
+    homes = []
     with os.scandir(root_fd) as it:
         for e in it:
             if not e.name.startswith(TMP_HOME_PREFIX):
@@ -201,8 +260,8 @@ def _entries(root_fd: int) -> tuple[list[str], list[str]]:
                     continue
             except FileNotFoundError:
                 continue
-            (tombs if e.name.startswith(TOMBSTONE_PREFIX) else homes).append(e.name)
-    return homes, tombs
+            homes.append(e.name)
+    return homes
 
 
 def socket_answers(path: str) -> bool:
@@ -253,6 +312,22 @@ def _open_at(path: tuple[str, ...], dir_fd: int) -> int | None:
             os.close(fd)
 
 
+def _lexists_at(path: tuple[str, ...], dir_fd: int) -> bool:
+    """Whether ``path`` (directories, then any entry) is under ``dir_fd``, following no symlink. Only
+    "not there" is False; any other error is raised, and keeps the home."""
+    fds: list[int] = []
+    try:
+        for part in path[:-1]:
+            fds.append(os.open(part, _OPEN_DIR, dir_fd=fds[-1] if fds else dir_fd))
+        _lstat_at(path[-1], fds[-1] if fds else dir_fd)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
 def _take(fd: int) -> bool:
     """LOCK_EX on a regular file's fd without waiting; False if someone holds it."""
     if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -293,43 +368,59 @@ def _sweep_one(root_fd: int, root: Path, name: str) -> bool | None:
             fds.append(broker)
             if not _take(broker):
                 return False  # a broker runs from the home, daemonized perhaps
+        elif _lexists_at(BROKER_OUT, home_fd):
+            return False  # `switchboard start` made broker.out: its daemon may not have its lock yet
         if has_live_socket(home_fd, str(root / name)):
             return False
-        if not _same(before, os.stat(name, dir_fd=root_fd, follow_symlinks=False)):
-            return False  # the name now is another directory: not the one locked
-        tomb = tombstone_name(name)
-        os.rename(name, tomb, src_dir_fd=root_fd, dst_dir_fd=root_fd)
-        if not _same(before, os.stat(tomb, dir_fd=root_fd, follow_symlinks=False)):
-            os.rename(tomb, name, src_dir_fd=root_fd, dst_dir_fd=root_fd)  # not ours: put it back
+        try:
+            if not _same(before, os.stat(name, dir_fd=root_fd, follow_symlinks=False)):
+                return False  # the name now is another directory: not the one locked
+            _empty_home(home_fd)
+            _rmdir_if_same(root_fd, name, before)
+        except _NotThisHome:
             return False
-        shutil.rmtree(tomb, dir_fd=root_fd)
         return True
     finally:
         for fd in reversed(fds):
             os.close(fd)  # the locks go with them, after the home is gone
 
 
-def _remove_tombstone(root_fd: int, name: str) -> None:
-    def gone_ok(func: object, path: str, exc: BaseException) -> None:
-        if not isinstance(exc, FileNotFoundError):  # another process may be deleting it too
-            raise exc
-
-    shutil.rmtree(name, dir_fd=root_fd, onexc=gone_ok)
+def _take_sweep_lock(root_fd: int, root: Path) -> int | None:
+    """An fd holding ``LOCK_EX`` on the root's ``SWEEP_LOCK``, or None if another sweep holds it.
+    Raises if it is not a regular file of this user's (a symlink, a FIFO, another user's file)."""
+    fd = os.open(SWEEP_LOCK, _OPEN_SWEEP_LOCK, 0o600, dir_fd=root_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            raise PermissionError(errno.EPERM, "not a regular file of this user's", str(root / SWEEP_LOCK))
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fd
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def sweep_killed_homes(root: Path = TMP_HOME_ROOT) -> SweepResult:
-    """Remove the homes under ``root`` that a killed run left and nobody uses, and the tombstones a
-    delete killed part way left (module docstring). Never raises an ``Exception``: one that a home
-    causes is noted and the next home is checked."""
+    """Remove the homes under ``root`` that a killed run left and nobody uses (module docstring),
+    holding the root's ``SWEEP_LOCK``, or skip if another sweep holds it. Never raises an
+    ``Exception``: one that a home causes is noted and the next home is checked."""
     result = SweepResult(root)
     try:
         root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except Exception as e:
         result.failed.append(f"{root}: {type(e).__name__}: {e}")
         return result
+    sweep_lock = None
     try:
         try:
-            homes, tombs = _entries(root_fd)
+            sweep_lock = _take_sweep_lock(root_fd, root)
+            if sweep_lock is None:
+                result.skipped = True
+                return result
+            homes = _entries(root_fd)
         except Exception as e:
             result.failed.append(f"{root}: {type(e).__name__}: {e}")
             return result
@@ -340,14 +431,10 @@ def sweep_killed_homes(root: Path = TMP_HOME_ROOT) -> SweepResult:
                     (result.removed if swept else result.in_use).append(root / name)
             except Exception as e:
                 result.failed.append(f"{root / name}: {type(e).__name__}: {e}")
-        for name in tombs:
-            try:
-                _remove_tombstone(root_fd, name)
-                result.removed.append(root / name)
-            except Exception as e:
-                result.failed.append(f"{root / name}: {type(e).__name__}: {e}")
         return result
     finally:
+        if sweep_lock is not None:
+            os.close(sweep_lock)
         os.close(root_fd)
 
 
@@ -379,7 +466,7 @@ def sweep_at_session_start(
         _report(write_line, f"switchboard test homes: {failed}")
         return None
     try:
-        if result.removed or result.in_use or result.failed:
+        if result.removed or result.in_use or result.failed or result.skipped:
             _report(write_line, result.line())
     except Exception:
         pass

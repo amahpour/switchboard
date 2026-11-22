@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 
 pytest_plugins = ["pytester"]
 
+# How long an inner pytest run may take before pytester kills it and the test fails.
+INNER_RUN_TIMEOUT_S = 120.0
+
 _CONFTEST = Path(__file__).resolve().parents[1] / "conftest.py"
 
 # The inner run's conftest: the real fixture and make_tmp_home, from this suite's conftest loaded
@@ -38,6 +41,7 @@ sb = importlib.util.module_from_spec(_spec)
 sys.modules["sb_root_conftest"] = sb
 _spec.loader.exec_module(sb)
 no_homes_left_behind = sb.no_homes_left_behind
+tmp_home = sb.tmp_home
 """
 
 _TESTS = """
@@ -67,13 +71,15 @@ def test_leaks_its_home():
 """
 
 
-def _run(pytester: Pytester, *, leak: bool, workers: int = 0) -> tuple[RunResult, list[Path]]:
+def _run(
+    pytester: Pytester, *, leak: bool, workers: int = 0, tests: str = _TESTS
+) -> tuple[RunResult, list[Path]]:
     pytester.makeconftest(_INNER_CONFTEST)
-    pytester.makepyfile(test_homes=f"LEAK = {leak!r}\n" + _TESTS)
+    pytester.makepyfile(test_homes=f"LEAK = {leak!r}\n" + tests)
     args = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"]
     if workers:
         args += ["-n", str(workers)]
-    result = pytester.run(*args)
+    result = pytester.run(*args, timeout=INNER_RUN_TIMEOUT_S)
     note = pytester.path / "homes.txt"
     homes = [Path(p) for p in note.read_text().split()] if note.exists() else []
     return result, homes
@@ -116,6 +122,49 @@ def test_a_leaked_home_fails_a_run_under_xdist(pytester: Pytester) -> None:
             len(leaked) == 1
             and f"{leaked[0]}  made by test_homes.py::test_leaks_its_home" in result.stdout.str()
         )
+    finally:
+        _clean(homes)
+
+
+# A test whose tmp_home teardown fails part way: the removal's rmtree of the home's "run" removes one
+# file, then raises (as a disk error or a kill would stop it), for the rest of the inner run.
+_FAILING_CLEANUP = """
+import errno
+import os
+
+import tmp_homes
+
+
+def _stops(name, dir_fd):
+    os.unlink(os.path.join(name, "f"), dir_fd=dir_fd)
+    raise OSError(errno.EIO, "Input/output error", name)
+
+
+def test_cleanup_fails_part_way(tmp_home):
+    with open(os.path.join(os.path.dirname(__file__), "homes.txt"), "a") as f:
+        f.write(f"{tmp_home}\\n")
+    (tmp_home / "run").mkdir()
+    (tmp_home / "run" / "f").write_text("x")
+    (tmp_home / "run" / "g").write_text("x")
+    tmp_homes._rmtree_at = _stops
+"""
+
+
+def test_a_fixture_cleanup_that_fails_part_way_is_caught(pytester: Pytester) -> None:
+    """``tmp_home``'s teardown removes its home in place (tmp_homes.remove_home), so when that removal
+    fails part way the home stays under its own name, with its marker and lock file, and
+    ``no_homes_left_behind`` fails the run naming it. Fails if the removal renames the home first (the
+    remainder has another name, nothing counts it, and the run passes)."""
+    result, homes = _run(pytester, leak=False, tests=_FAILING_CLEANUP)
+    try:
+        assert len(homes) == 1
+        (home,) = homes
+        assert (home / TEST_MARKER).is_file() and (home / "run").is_dir()
+        assert result.ret != 0, result.stdout.str()
+        result.assert_outcomes(passed=1, errors=1)
+        out = result.stdout.str()
+        assert "1 temp home(s) made by make_tmp_home() were not removed" in out
+        assert f"{home}  made by test_homes.py::test_cleanup_fails_part_way" in out
     finally:
         _clean(homes)
 

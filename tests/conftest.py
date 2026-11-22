@@ -276,6 +276,8 @@ TMP_HOME_PREFIX = tmp_homes.TMP_HOME_PREFIX
 assert tmp_homes.TEST_MARKER == TEST_MARKER
 # The broker's own home lock, which the sweep takes too (tmp_homes.py imports nothing of src).
 assert Paths(Path("/h")).lockfile == Path("/h", *tmp_homes.BROKER_LOCK)
+# The file `switchboard start` opens before the daemon exists: the sweep keeps a home that has it and no lock.
+assert Paths(Path("/h")).out_log == Path("/h", *tmp_homes.BROKER_OUT)
 
 # Every home make_tmp_home() made in this process (an xdist worker is a process of its own), for
 # no_homes_left_behind: only these are ever counted, so a home another run made never is (#919). Each
@@ -323,7 +325,9 @@ def tmp_home() -> Iterator[Path]:
     try:
         yield d
     finally:
-        tmp_homes.remove_home(d)  # renamed to a tombstone first, so a killed delete is swept (#922)
+        # in place, the marker and the lock file last: a removal stopped part way leaves a home the
+        # leak check names and the next sweep removes (#922)
+        tmp_homes.remove_home(d)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

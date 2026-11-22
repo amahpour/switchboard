@@ -1228,9 +1228,12 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                    pytest_sessionstart: the controller sweeps the /tmp homes a killed run left (tmp_homes.py): a
                      home goes only if nobody holds its flock (its maker and the children given it, pass_fds) nor
                      its broker's run/broker.lock (a daemonized broker), no Unix socket under it answers and all of
-                     it could be read; one with no lock file or no marker is never a candidate. It is checked and
-                     removed as one directory (dir fds, identity rechecked), renamed to a yk-gone-* tombstone first;
-                     tmp_home's teardown removes through the same remove_home(), and the sweep removes tombstones
+                     it could be read; one with no lock file or no marker is never a candidate, whatever its name,
+                     and one with logs/broker.out but no run/broker.lock is kept (a daemon may be starting). It is
+                     checked and removed in place as one directory (dir fds, identity rechecked after the locks and
+                     before rmdir): every entry, then the marker, then the lock file, then rmdir, so a removal cut
+                     short leaves a candidate; tmp_home's teardown removes the same way (remove_home(), and the leak
+                     check sees what it leaves). One sweep at a time: it takes the root's yk-sweep.lock, or skips
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),
                    web_client (httpx, base_url http://switchboard.localhost:<p>, logged in via the test token)
 engine_world.py    a store, an engine and a FakeClock with no broker; engine_agents.py builds the sessions over HTTPS
