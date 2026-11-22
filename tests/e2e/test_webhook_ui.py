@@ -9,6 +9,7 @@ failed post say so in the person's own settings, and the layout fits in light, d
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from typing import Any
 
@@ -20,6 +21,7 @@ from test_web_ui import PHONE, UI
 from ui_world import UIWorld
 
 from switchboard import notify
+from switchboard.broker import web, webhook
 from switchboard.config import NotifyCfg
 
 pytestmark = pytest.mark.e2e
@@ -180,6 +182,9 @@ def test_the_form_fits_in_light_dark_and_on_a_phone(ui: UI, hook: TlsHook) -> No
             )
 
 
+FIRST_PATH = "/services/T000/B000/secretsecret?token=s3cr3t"
+
+
 def second_url(hook: TlsHook) -> str:
     return hook.url.replace("secretsecret", "loudloud")
 
@@ -292,6 +297,45 @@ def test_send_a_test_shows_each_addresses_own_result_from_the_answer(ui: UI, hoo
     expect(second).to_have_class("fine bad")
     expect(first).to_have_text("The test failed at the first address: " + notify.fail_reason("limit"))
     assert len(hook.posts) == notify.MAX_PER_HOUR
+
+
+def test_a_test_whose_settings_change_meanwhile_says_so_in_place_of_its_results(
+    ui: UI, world: UIWorld, hook: TlsHook, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#923 (F15): a test has gone through to both addresses; in the next one, while its first post is out,
+    the second address is replaced from another tab. The page shows the one line that the settings changed,
+    in red, and the second section no longer shows the earlier test's result; the new address got nothing.
+    Fails if the route reloads the webhook for its second post (the page said both went through), or the
+    page leaves the earlier second result beside the line."""
+    monkeypatch.setattr(webhook, "TIMEOUT_S", 30.0)  # the held post outlasts the 5 s timeout under load
+    page = open_settings(ui)
+    save_both(page, hook)
+    first, second = page.locator("#settings-webhook-status"), page.locator("#settings-webhook-second-status")
+    page.click("#settings-webhook-test")
+    expect(second).to_have_text("The test went through to the second address.")
+    hook.posts.clear()
+    hook.hold, hook.arrived, hook.release = FIRST_PATH, threading.Event(), threading.Event()
+    try:
+        page.click("#settings-webhook-test")
+        assert hook.arrived.wait(20), "the test's first post never reached the receiver"
+        client = world.broker.web_client()
+        try:
+            body = {"second_url": hook.url.replace("secretsecret", "louder")}
+            r = client.put("/api/me/webhook", json=body, headers=world.broker.write_headers())
+            assert r.status_code == 200, r.text
+        finally:
+            client.close()
+    finally:
+        hook.release.set()
+    expect(first).to_have_text(web.TEST_CHANGED)
+    expect(first).to_have_class("fine bad")
+    expect(second).to_have_text("")
+    hook.hold = None
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    # the 409 is the point of this test; the browser logs it as a console error
+    refused = [p for p in ui.problems if "409 (Conflict)" in p and "/api/me/webhook/test" in p]
+    assert len(refused) == 1, ui.problems
+    ui.problems[:] = [p for p in ui.problems if p not in refused]
 
 
 def test_a_save_keeps_what_is_typed_in_the_other_sections(ui: UI, hook: TlsHook) -> None:

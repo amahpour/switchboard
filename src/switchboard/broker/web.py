@@ -122,6 +122,9 @@ WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
 WS_FRAME_MAX = 16384  # hello and ping; a board frame may be as large as the board itself
 BAD_TOKEN_EVENT_S = 60.0
+# Send a test's answer when the webhook changed while a test post was out (#923, F15): the page shows it in
+# place of the results
+TEST_CHANGED = "Your webhook settings changed during the test, so nothing more was sent. Send a test again."
 # the ceremony cookies (§31.3, §31.4): the claim's id, a sign-in's sealed state, an add's
 SETUP_COOKIE = "switchboard_setup"
 PASSKEY_COOKIE = "switchboard_passkey"
@@ -1917,11 +1920,19 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if state.notifier is None or hook is None:
             return _err(400, "bad_request", "set a webhook first")
         # Both addresses are tried, whatever the first one did, and the answer carries both results: the page
-        # shows these, never a stored status, which a capped try does not write (#923, F7).
-        code = await state.notifier.post(key, notify.test_payload(state.web_origin.origin))
+        # shows these, never a stored status, which a capped try does not write (#923, F7). Both posts go to
+        # the one webhook read above; when it was replaced, removed or made again while a post was out, no
+        # more is sent and the answer says so, rather than reporting on settings that are gone (#923, F15).
+        code = await state.notifier.post(key, hook, notify.test_payload(state.web_origin.origin))
+        if not state.notifier.unchanged(key, hook):
+            return _err(409, "changed", TEST_CHANGED)
         second: dict[str, Any] | None = None
         if hook["second"] is not None:
-            code2 = await state.notifier.post(key, notify.test_payload(state.web_origin.origin, True), True)
+            code2 = await state.notifier.post(
+                key, hook, notify.test_payload(state.web_origin.origin, True), True
+            )
+            if not state.notifier.unchanged(key, hook):
+                return _err(409, "changed", TEST_CHANGED)
             second = {"ok": code2 is None, "error": None if code2 is None else notify.fail_reason(code2)}
         return _ok(
             {

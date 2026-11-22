@@ -43,7 +43,7 @@ If something still needs you that long after its first alert was due, switchboar
  "alert": "second"}
 ```
 
-Both addresses share the 12 posts an hour, so two addresses never mean twice the posts. **Send a test** posts to both, and says how each went in its own part: the first under the address, the second under **Second alert**. **Remove second alert** keeps the first.
+Both addresses share the 12 posts an hour, so two addresses never mean twice the posts. **Send a test** posts to both, and says how each went in its own part: the first under the address, the second under **Second alert**. If you change either address, or remove the webhook, while a test is out, it stops there and says "Your webhook settings changed during the test, so nothing more was sent. Send a test again." **Remove second alert** keeps the first.
 
 ## Quiet hours
 

@@ -21,7 +21,7 @@ from test_passkeys import Browser, hosted_broker, stop
 from test_people import join_as_bob, set_up
 
 from switchboard import notify
-from switchboard.broker import webhook
+from switchboard.broker import web, webhook
 from switchboard.config import NotifyCfg
 from switchboard.models import session_key
 
@@ -948,3 +948,88 @@ def test_a_save_that_outlives_its_account_writes_nothing(world: Any, hook: TlsHo
     con = b.state.store.con
     assert con.execute("SELECT count(*) FROM webhooks").fetchone()[0] == 0
     assert not any("secretsecret" in line for line in con.iterdump())
+
+
+# ------------------------------------------------------------------ the fourth review round of #925
+@pytest.mark.parametrize("field", ["url", "second_url"])
+def test_an_address_that_cannot_be_stored_is_refused_at_save(world: Any, hook: TlsHook, field: str) -> None:
+    """A JSON body can hold an unpaired surrogate (``\\ud800``), which no TEXT column can store. Saved as the
+    first or the second address, it is refused with a 400 and nothing is written. Fails without
+    ``notify.storable`` in ``url_problem``: the address passed every check, and the bind raised
+    UnicodeEncodeError, a 500 (#923, F11)."""
+    b, _, alice, _ = world
+    assert put(alice, "/api/me/webhook", {"url": hook.url}).status_code == 200
+    # the receiver's address, with an unpaired surrogate on the end
+    raw = '{"%s": %s\\ud800"}' % (field, json.dumps(hook.url)[:-1])
+    headers = {**alice.headers(True), "content-type": "application/json"}
+    r = alice.c.request("PUT", "/api/me/webhook", content=raw.encode("ascii"), headers=headers)
+    alice.take(r)
+    assert r.status_code == 400, r.text
+    assert r.json()["message"].endswith("That is not an address."), r.text
+    row = b.state.store.webhook_get(0)
+    assert row is not None and (row["url"], row["second_url"]) == (hook.url, None)
+
+
+def send_test_held(b: InProcBroker, hook: TlsHook, alice: Browser, during: Any) -> Any:
+    """Alice's Send a test, the receiver holding its first post open while ``during`` runs; its answer."""
+    hook.hold, hook.arrived, hook.release = FIRST_PATH, threading.Event(), threading.Event()
+    out: list[Any] = []
+    t = threading.Thread(target=lambda: out.append(alice.post("/api/me/webhook/test", {})))
+    t.start()
+    try:
+        assert hook.arrived.wait(20), "the test's first post never reached the receiver"
+        during()
+    finally:
+        hook.release.set()
+        t.join(30)
+        hook.hold = None
+    assert out
+    return out[0]
+
+
+def test_send_a_test_never_reaches_a_second_address_saved_while_its_first_post_is_out(
+    world: Any, hook: TlsHook, slow_sends: None
+) -> None:
+    """Alice sends a test; while its first post is out she replaces the second address in another tab. The
+    new address gets nothing, the answer says the settings changed (409), and nothing of the test is written
+    for the new address. Fails if the route reloads the webhook for its second post: the test went to an
+    address the person had not tested, and reported on it (#923, F15)."""
+    _, _, alice, _ = world
+    body = {"url": hook.url, "second_url": loud(hook)}
+    assert put(alice, "/api/me/webhook", body).status_code == 200
+    newer = hook.url.replace("secretsecret", "louder")
+
+    def replace() -> None:
+        assert put(alice, "/api/me/webhook", {"second_url": newer}).status_code == 200
+
+    r = send_test_held(world[0], hook, alice, replace)
+    assert r.status_code == 409, r.text
+    assert r.json()["message"] == web.TEST_CHANGED
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    assert me(alice)["webhook"]["second"]["last"] is None
+
+
+def test_send_a_test_stops_when_the_webhook_is_removed_and_made_again_meanwhile(
+    world: Any, hook: TlsHook, slow_sends: None
+) -> None:
+    """The same, with alice removing the webhook and making it again with the same two addresses while the
+    test's first post is out: nothing more goes, the answer says the settings changed, and the new webhook
+    has no status of the test's. Fails if the route checks the addresses rather than the webhook's id and
+    generations, or reloads what is current between its posts (#923, F15)."""
+    b, _, alice, _ = world
+    body = {"url": hook.url, "second_url": loud(hook)}
+    assert put(alice, "/api/me/webhook", body).status_code == 200
+    old_id = b.state.store.webhook_get(0)["id"]
+
+    def remake() -> None:
+        assert delete(alice, "/api/me/webhook").status_code == 200
+        assert put(alice, "/api/me/webhook", body).status_code == 200
+
+    r = send_test_held(b, hook, alice, remake)
+    assert r.status_code == 409, r.text
+    assert r.json()["message"] == web.TEST_CHANGED
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    new = b.state.store.webhook_get(0)
+    assert new is not None and new["id"] != old_id
+    w = me(alice)["webhook"]
+    assert w["last"] is None and w["second"]["last"] is None

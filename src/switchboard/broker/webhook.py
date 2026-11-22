@@ -386,14 +386,27 @@ class Notifier:
         if (w := load(self.state, person_key)) is not None:
             self._policy_of(w).ack_room(slug, self.state.clock.now())
 
-    async def post(self, person_key: int, body: dict[str, Any], second: bool = False) -> str | None:
-        """Send ``body`` to the person's webhook now (``second``: to their second address). None when it
-        went, else a failure code. Both addresses count toward the one hourly cap, and how it went is
-        recorded where the person's settings show it."""
-        w = load(self.state, person_key)
-        if w is None or (second and w["second"] is None):
+    async def post(
+        self, person_key: int, w: dict[str, Any], body: dict[str, Any], second: bool = False
+    ) -> str | None:
+        """Send ``body`` now to the webhook ``w``, as the caller read it (``second``: to its second address),
+        never to what is current by then. None when it went, else a failure code. Both addresses count toward
+        the one hourly cap, and how it went is recorded where the person's settings show it, only while
+        ``w`` is still the webhook with that address (``_send``)."""
+        if second and w["second"] is None:
             return "error"
         return await self._send(person_key, w, body, second)
+
+    def unchanged(self, person_key: int, w: dict[str, Any]) -> bool:
+        """Whether the person's webhook is still ``w``: the same id (not removed and made again) and the same
+        address generations (neither address replaced). Send a test checks it between its posts and before
+        it answers, so a test never reaches an address it did not read (#923, F15)."""
+        row = self.state.store.webhook_get(person_key)
+        return row is not None and (int(row["id"]), int(row["first_gen"]), int(row["second_gen"])) == (
+            int(w["id"]),
+            int(w["first_gen"]),
+            int(w["second_gen"]),
+        )
 
     async def _send(
         self, person_key: int, w: dict[str, Any], body: dict[str, Any], second: bool

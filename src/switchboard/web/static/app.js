@@ -4700,7 +4700,12 @@
           second.say(two.ok ? 'The test went through to the second address.'
             : 'The test failed at the second address: ' + two.error, !two.ok);
         }
-      } catch (e) { say(String(e.message || e), true); }
+      } catch (e) {
+        // a test that stopped (the settings changed while it ran, #923 F15) has no result for either address:
+        // its one line takes the place of both, so an earlier test's second result is not left showing
+        say(String(e.message || e), true);
+        second.say('', false);
+      }
     });
     remove.addEventListener('click', async function () {
       try {
