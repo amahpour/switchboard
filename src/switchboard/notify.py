@@ -348,6 +348,18 @@ test_payload.__test__ = False  # type: ignore[attr-defined]  # a payload builder
 _HOST_OK = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
+def storable(value: str) -> bool:
+    """Whether ``value`` can be kept as text: it encodes as UTF-8, strictly. A str from JSON can hold an
+    unpaired surrogate (``"\\ud800"``), which SQLite's TEXT bind refuses with ``UnicodeEncodeError``; a
+    save refuses such an address and the v60 migration drops such a text, so one never reaches a bind
+    (#923, F11)."""
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def url_problem(raw: object) -> str | None:
     """Why ``raw`` cannot be a webhook address, or None. Syntax only: https, a host, no sign-in in the
     address, no spaces or control characters. Where the host points is checked when it is resolved
@@ -358,6 +370,8 @@ def url_problem(raw: object) -> str | None:
         return f"That address is longer than {URL_MAX} characters."
     if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in raw):
         return "An address has no spaces or control characters."
+    if not storable(raw):
+        return "That is not an address."
     try:
         u = urllib.parse.urlsplit(raw)
         port = u.port

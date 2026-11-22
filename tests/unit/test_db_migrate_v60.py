@@ -237,6 +237,48 @@ def test_a_person_key_no_broker_wrote_is_skipped_and_the_upgrade_commits(tmp_pat
         con.close()
 
 
+LONE = "\ud800"  # an unpaired surrogate: JSON holds it, a str holds it, UTF-8 (and so a TEXT bind) does not
+
+
+@pytest.mark.parametrize(
+    "extra, status_1",
+    [
+        (
+            {"webhook:2": {"url": f"https://hooks.example.com/services/{LONE}", "wait_s": 300.0}},
+            (T0 + 5, 0, notify.fail_reason("status")),
+        ),
+        (
+            {"webhook_status:1": {"at": T0 + 5, "ok": False, "error": f"refused {LONE}"}},
+            (None, None, None),
+        ),
+        (
+            {"webhook_sent:0": ["q:build:12", f"q:build:{LONE}"]},
+            (T0 + 5, 0, notify.fail_reason("status")),
+        ),
+    ],
+    ids=["address", "error-text", "sent-key"],
+)
+def test_text_that_cannot_be_stored_is_dropped_and_the_upgrade_commits(
+    tmp_path: Path, extra: dict[str, object], status_1: tuple[object, ...]
+) -> None:
+    """Legacy JSON can hold an unpaired surrogate. A webhook whose address holds one is skipped (it is no
+    address, ``notify.url_problem``), a status whose error text holds one is dropped (bob's webhook moves with
+    no status), and a sent key that holds one is skipped (the owner's other key moves); the clean webhooks
+    move and the upgrade commits. Fails without ``notify.storable``: the TEXT bind raised UnicodeEncodeError
+    and the whole upgrade stopped (#923, F11)."""
+    path = tmp_path / "old.db"
+    at_59(path, extra)
+    con = db.open_db(path)
+    try:
+        assert db.schema_version(con) == 60
+        assert moved_people(con) == CLEAN
+        assert rows(con, "SELECT first_at, first_ok, first_error FROM webhooks WHERE person=1") == [status_1]
+        assert rows(con, "SELECT key FROM webhook_sent") == [("q:build:12",)]
+        assert rows(con, "SELECT key FROM broker_settings") == [("notify_text:0",)]
+    finally:
+        con.close()
+
+
 def test_the_largest_canonical_person_key_moves(tmp_path: Path) -> None:
     """The largest key SQLite holds is a key like any other: its webhook moves. Fails if the range check is
     off by one."""

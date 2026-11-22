@@ -1536,7 +1536,10 @@ def _old_person(tail: str) -> int | None:
 def _old_status(raw: str | None) -> tuple[float, int, str | None] | None:
     """A pre-60 status row, or None when it does not parse or its time is not one a broker wrote: not a
     finite number, not after 1970, or past the year 3000 (NaN is stored as NULL, which the row's CHECK
-    refuses, so one bad time would stop the whole upgrade, #923, F11). The error is cut to its column."""
+    refuses, so one bad time would stop the whole upgrade, #923, F11). The error is cut to its column, and
+    an error that is not storable text (``notify.storable``: an unpaired surrogate) drops the status too."""
+    from switchboard import notify  # pure; imported here so the schema does not need it
+
     if not raw:
         return None
     try:
@@ -1546,6 +1549,8 @@ def _old_status(raw: str | None) -> tuple[float, int, str | None] | None:
         if not (math.isfinite(at) and 0 < at < STATUS_AT_MAX):
             return None
         error = None if ok or not d["error"] else str(d["error"])[:ERROR_MAX]
+        if error is not None and not notify.storable(error):
+            return None
         return at, int(ok), error
     except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
         return None
@@ -1558,7 +1563,10 @@ def _old_sent(raw: str | None) -> list[str]:
         return []
     if not isinstance(keys, list):
         return []
-    return sorted({k for k in keys if isinstance(k, str) and 1 <= len(k) <= 1000})
+    from switchboard import notify  # pure; imported here so the schema does not need it
+
+    # a key that is not storable text (an unpaired surrogate) is skipped: its bind would stop the upgrade
+    return sorted({k for k in keys if isinstance(k, str) and 1 <= len(k) <= 1000 and notify.storable(k)})
 
 
 def move_webhook_rows(con: sqlite3.Connection) -> dict[str, int]:
