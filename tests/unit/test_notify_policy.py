@@ -412,7 +412,9 @@ def test_quiet_hours_follow_the_zone_on_a_fall_back_day() -> None:
         (1320, 420, NY, ["approval"] * 4),
     ],
 )
-def test_quiet_hours_that_cannot_be_read_are_refused(start: object, end: object, tz: object, always: object) -> None:
+def test_quiet_hours_that_cannot_be_read_are_refused(
+    start: object, end: object, tz: object, always: object
+) -> None:
     """A zone the server does not know, a time that is not one, an unknown kind: refused when saved."""
     assert notify.quiet_problem(start, end, tz, always) is not None
 

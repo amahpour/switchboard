@@ -330,7 +330,9 @@ LOUD_PATH = "/services/T000/B000/loudloud?token=s3cr3t"
 FIRST_PATH = "/services/T000/B000/secretsecret?token=s3cr3t"
 
 
-def test_a_second_alert_goes_to_the_second_address_when_the_item_still_waits(world: Any, hook: TlsHook) -> None:
+def test_a_second_alert_goes_to_the_second_address_when_the_item_still_waits(
+    world: Any, hook: TlsHook
+) -> None:
     """The first alert goes to the first address after the wait; if the question still needs alice the set
     time after that, one post goes to the second address, marked as the second alert, with no message text.
     Fails if it never goes, goes to the first address, repeats, or carries the text."""
@@ -359,7 +361,9 @@ def test_a_second_alert_goes_to_the_second_address_when_the_item_still_waits(wor
     assert me(alice)["webhook"]["second"]["last"]["ok"] is True
 
 
-def test_no_second_alert_once_the_person_looked_or_without_a_second_address(world: Any, hook: TlsHook) -> None:
+def test_no_second_alert_once_the_person_looked_or_without_a_second_address(
+    world: Any, hook: TlsHook
+) -> None:
     """Opening the room after the first alert stops the second; a webhook with no second address only ever
     posts once. Fails if a second alert reaches someone who looked, or appears from nowhere."""
     b, clock, alice, _ = world
@@ -474,7 +478,11 @@ def test_the_second_address_is_never_shown_back_and_has_the_first_ones_checks(
     s = me(alice)["webhook"]["second"]
     assert (s["set"], s["host"], s["after_min"]) == (True, HOST, 30)
     b.on_loop(lambda: setattr(b.state, "cfg", b.state.cfg.replace(notify=NotifyCfg())))
-    for bad in ("http://hooks.example.com/x", f"https://127.0.0.1:{hook.port}/x", "https://169.254.169.254/x"):
+    for bad in (
+        "http://hooks.example.com/x",
+        f"https://127.0.0.1:{hook.port}/x",
+        "https://169.254.169.254/x",
+    ):
         r = put(alice, "/api/me/webhook", {"second_url": bad})
         assert r.status_code == 400, (bad, r.text)
         assert r.json()["message"].startswith("The second address")
@@ -513,12 +521,20 @@ def test_bad_second_alert_and_quiet_hours_bodies_are_refused(world: Any, hook: T
     w = me(alice)["webhook"]
     assert w["second"]["set"] is False and w["quiet"]["set"] is False
     assert put(alice, "/api/me/webhook", {"quiet": q}).status_code == 200
-    assert me(alice)["webhook"]["quiet"] == {"set": True, "from": "22:00", "to": "07:00", "tz": "UTC", "always": []}
+    assert me(alice)["webhook"]["quiet"] == {
+        "set": True,
+        "from": "22:00",
+        "to": "07:00",
+        "tz": "UTC",
+        "always": [],
+    }
     assert put(alice, "/api/me/webhook", {"quiet": None}).status_code == 200
     assert me(alice)["webhook"]["quiet"]["set"] is False
 
 
-def test_an_old_row_still_loads_and_a_row_that_does_not_parse_is_no_webhook(world: Any, hook: TlsHook) -> None:
+def test_an_old_row_still_loads_and_a_row_that_does_not_parse_is_no_webhook(
+    world: Any, hook: TlsHook
+) -> None:
     """A webhook from before #923 (only its ``webhook:`` row) has no second alert and no quiet hours; a second
     address or quiet hours row that does not pass the checks makes it no webhook at all. Fails if an old row
     stops working, or a broken part is read as "none" and the rest still posts."""

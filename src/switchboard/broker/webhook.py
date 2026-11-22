@@ -229,7 +229,7 @@ def save(
     second: dict[str, Any] | None = None,
     quiet: notify.Quiet | None = None,
 ) -> None:
-    """Keep the person's webhook. ``second`` and ``quiet`` None remove those rows. Check ``too_long`` first."""
+    """Keep the person's webhook; ``second`` or ``quiet`` None removes that row. Check ``too_long`` first."""
     store = state.store
     store.setting_set(cfg_key(person_key), json.dumps({"url": url, "wait_s": wait_s}))
     if second is None:
