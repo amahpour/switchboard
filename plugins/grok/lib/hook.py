@@ -22,8 +22,8 @@ flag, the notification's type, and a tool's name and call id; for switchboard's 
 tokens in the answer. Never a tool's input or output, the working directory, the transcript's path or the
 prompt's text, all of which Grok hands the hook: they are the person's, and a hosted broker is another
 machine (§11). The token comes from ``SWITCHBOARD_AGENT_TOKEN`` in Grok's environment: switchboard writes it
-into no file. It goes only to https, or plain http on this machine, and never follows a redirect: a 3xx is a
-failure, so the token never reaches an address the person did not set.
+into no file. It goes only to https, or plain http on this machine, directly (no proxy of the environment), and
+never follows a redirect: a 3xx is a failure, so the token never reaches an address the person did not set.
 
 Everything it reads is bounded: its stdin and the broker's reply to ``INPUT_MAX`` and ``REPLY_MAX`` bytes (more
 is no event, or no answer), and a tool's answer is walked for batch tokens to a size and a depth, never
@@ -87,11 +87,12 @@ def plugin_version():
 
 
 def opener():
-    """urllib's handlers without its redirect handler: a 3xx answer is a failure (``HTTPError``) and is never
-    followed, so the token in the request's header goes nowhere but ``SWITCHBOARD_URL``."""
+    """urllib's handlers without its redirect handler and with no proxy: a 3xx answer is a failure
+    (``HTTPError``) and is never followed, and no ``http_proxy`` or ``https_proxy`` of the environment is used,
+    so the token in the request's header goes nowhere but ``SWITCHBOARD_URL``, directly."""
     o = urllib.request.OpenerDirector()
     for handler in (
-        urllib.request.ProxyHandler(),
+        urllib.request.ProxyHandler({}),
         urllib.request.HTTPHandler(),
         urllib.request.HTTPSHandler(),
         urllib.request.HTTPDefaultErrorHandler(),
@@ -208,22 +209,21 @@ def wakes_file(sid):
 
 
 def wakes_so_far(path, prompt_id, continuing):
-    """How many times this turn was already woken: 0 at a turn's first Stop (``stopHookActive`` false), and
-    for a prompt id other than the one counted. A file that can't be read, or that holds anything but a count
-    (not an object, a bad number), counts as the cap: a broken file never wakes past it."""
+    """How many times this turn was already woken. A turn's first Stop (``stopHookActive`` false) starts at
+    0. A continuing Stop's count is known only from a file this hook wrote for the same prompt: a file that is
+    missing or can't be read, or that holds anything but an object with this prompt's id and a count, is
+    unknown, and unknown counts as the cap, so a turn is never woken past it."""
     if not continuing:
         return 0
+    if prompt_id is None:
+        return MAX_WAKES
     try:
         with open(path, encoding="utf-8") as f:
             got = json.load(f)
-    except FileNotFoundError:
-        return 0
     except (OSError, ValueError, RecursionError):
         return MAX_WAKES
-    if not isinstance(got, dict):
+    if not isinstance(got, dict) or got.get("prompt_id") != prompt_id:
         return MAX_WAKES
-    if got.get("prompt_id") != prompt_id:
-        return 0
     n = got.get("wakes")
     return n if isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= MAX_WAKES else MAX_WAKES
 
