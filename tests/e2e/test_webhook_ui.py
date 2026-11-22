@@ -54,7 +54,7 @@ def hook(world: UIWorld) -> Iterator[TlsHook]:
         h.stop()
 
         def reset() -> None:
-            st.notifier.forget(0)
+            st.notifier._policy.clear()
             st.notifier._limit.pop(0, None)  # the next test starts with the hour's posts unspent
 
         world.broker.on_loop(reset)
@@ -328,3 +328,57 @@ def test_a_save_keeps_what_is_typed_in_the_other_sections(ui: UI, hook: TlsHook)
     expect(page.locator("#settings-webhook-quiet-from")).to_have_value("23:30")
     expect(page.locator("#settings-webhook-url")).to_have_value("https://draft.example.com/x")
     assert "loudloud" not in page.content()
+
+
+def test_a_saved_webhook_that_is_not_used_says_why_and_can_be_fixed_or_removed(ui: UI, hook: TlsHook) -> None:
+    """#923 (F12): a saved webhook whose quiet hours' zone the server no longer knows is not used. The page
+    says so in one line, naming the zone and what to do; Send a test is off, Remove and the quiet-hours
+    controls stay on. Turning quiet hours off brings Send a test back; made unusable again, Remove removes it.
+    Fails if such a webhook shows as none (nothing to fix or remove), or the line or a control is missing."""
+    st = ui.world.broker.state
+    page = open_settings(ui)
+    page.fill("#settings-webhook-url", hook.url)
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    page.fill("#settings-webhook-quiet-tz", "UTC")
+    page.click("#settings-webhook-quiet-save")
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+    problem = page.locator("#settings-webhook-problem")
+    expect(problem).to_be_hidden()
+
+    def lose_zone() -> None:
+        st.store.con.execute("UPDATE webhooks SET quiet_tz='Mars/Olympus_Mons' WHERE person=0")
+
+    ui.world.broker.on_loop(lose_zone)
+    page = open_settings(ui)
+    problem = page.locator("#settings-webhook-problem")
+    expect(problem).to_be_visible()
+    expect(problem).to_have_text(
+        "This webhook is not used: its quiet hours are in a time zone this switchboard does not know"
+        " (Mars/Olympus_Mons). Turn quiet hours off, or save a time zone it knows, below."
+    )
+    expect(page.locator("#settings-webhook-note")).to_have_text(
+        f"Saved for {HOST}, and not used until it is fixed."
+    )
+    expect(page.locator("#settings-webhook-test")).to_be_disabled()
+    expect(page.locator("#settings-webhook-remove")).to_be_enabled()
+    expect(page.locator("#settings-webhook-quiet-remove")).to_be_enabled()
+    expect(page.locator("#settings-webhook-quiet-save")).to_be_enabled()
+    expect(page.locator("#settings-webhook-quiet-tz")).to_have_value("Mars/Olympus_Mons")
+    page.click("#settings-webhook-quiet-remove")
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours turned off.")
+    expect(problem).to_be_hidden()
+    expect(page.locator("#settings-webhook-test")).to_be_enabled()
+    expect(page.locator("#settings-webhook-note")).to_contain_text("Posting to " + HOST)
+    page.fill("#settings-webhook-quiet-tz", "UTC")
+    page.click("#settings-webhook-quiet-save")
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+    ui.world.broker.on_loop(lose_zone)
+    page = open_settings(ui)
+    problem = page.locator("#settings-webhook-problem")
+    expect(problem).to_be_visible()
+    page.click("#settings-webhook-remove")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Removed.")
+    expect(problem).to_be_hidden()
+    expect(page.locator("#settings-webhook-remove")).to_be_disabled()
+    assert ui.world.broker.on_loop(lambda: st.store.webhook_get(0)) is None

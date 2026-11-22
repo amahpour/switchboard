@@ -63,6 +63,8 @@ webhook-{empty,set,failed}-{light,dark,phone-light} (Settings → Profile → We
 webhook-alerts-{light,dark,phone-light} and webhook-quiet-{light,dark,phone-light} (its Second alert and
 Quiet hours saved, #923; ``--only webhook``), webhook-tested-{light,dark,phone-light} (Send a test with the first
 address failing and the second working, each said in its own section, #923),
+webhook-unusable-{light,dark,phone-light} (a saved webhook whose quiet hours' zone this server no longer
+knows: not used, and why, #923),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
 merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
@@ -719,10 +721,10 @@ def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
 
 
 def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
-    """#723: Settings, Profile, Webhook: empty, saved (only the host is shown back), its second alert and quiet
-    hours saved (#923), and a failed test. The
-    receiver is a local HTTPS server (``tests/fakes/tls_hook.py``) the broker is told to trust; its address and
-    secret path are made up."""
+    """#723: Settings, Profile, Webhook: empty, saved (only the host is shown back), its second alert and
+    quiet hours saved (#923), a failed test, and a saved webhook that is not used (a zone the server lost).
+    The receiver is a local HTTPS server (``tests/fakes/tls_hook.py``) the broker is told to trust; its address
+    and secret path are made up."""
     from fakes.tls_hook import TlsHook
     from playwright.sync_api import expect
 
@@ -804,6 +806,26 @@ def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
                 expect(page.locator("#settings-webhook-status")).to_contain_text("The test failed")
                 settle(page)
                 shot(page, out, f"webhook-failed-{theme}.png")
+                hook.status = 200
+
+                def lose_zone() -> None:  # as after a tzdata update dropped the zone (#923, F12)
+                    st.store.con.execute("UPDATE webhooks SET quiet_tz='Mars/Olympus_Mons' WHERE person=0")
+
+                world.broker.on_loop(lose_zone)
+                page.reload()
+                if not page.locator("#me-settings").is_visible():
+                    page.click("#rooms-toggle")
+                page.click("#me-settings")
+                row = page.locator("#settings-row-profile")
+                if row.is_visible():
+                    row.click()
+                problem = page.locator("#settings-webhook-problem")
+                expect(problem).to_be_visible()
+                page.evaluate(
+                    "document.querySelector('#settings-webhook-problem').scrollIntoView({block: 'start'})"
+                )
+                settle(page)
+                shot(page, out, f"webhook-unusable-{theme}.png")
                 page.click("#settings-webhook-remove")
                 expect(page.locator("#settings-webhook-status")).to_have_text("Removed.")
             finally:

@@ -310,6 +310,7 @@ span.ic { stroke: none; }
 .muted { color: var(--muted); }
 .bad { color: var(--danger); }
 #settings-webhook-status.bad { color: var(--danger); }
+#settings-webhook-problem { color: var(--danger); }  /* a saved webhook that is not used (#923) */
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
 .fine { font-size: calc(11.5px * var(--text-scale)); color: var(--muted); line-height: 1.45; }
 .fine code { font-size: calc(11px * var(--text-scale)); }

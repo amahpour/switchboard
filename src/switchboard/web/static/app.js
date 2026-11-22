@@ -4605,6 +4605,10 @@
     wait.step = '1';
     const note = el('p', 'fine');
     note.id = 'settings-webhook-note';
+    // a stored webhook that fails today's checks is not used, and says why here (#923, F12)
+    const problem = el('p', 'fine bad');
+    problem.id = 'settings-webhook-problem';
+    problem.hidden = true;
     const status = el('p', 'fine');
     status.id = 'settings-webhook-status';
     status.setAttribute('role', 'status');
@@ -4616,19 +4620,44 @@
     remove.id = 'settings-webhook-remove';
     const bar = el('div', 'settings-actions');
     bar.append(save, test, remove);
-    box.append(urlLabel, url, waitLabel, wait, note, bar, status);
+    box.append(problem, urlLabel, url, waitLabel, wait, note, bar, status);
     function say(text, bad) {
       status.textContent = text;
       status.classList.toggle('bad', !!bad);
+    }
+    // why a saved webhook is not used, and what fixes it; every part of it is set as text, never as HTML
+    function problemText(cur) {
+      if (!cur.set || cur.usable !== false) return '';
+      const zone = (cur.quiet && cur.quiet.tz) || '';
+      if (cur.problem === 'zone') {
+        return 'This webhook is not used: its quiet hours are in a time zone this switchboard does not know ('
+          + zone + '). Turn quiet hours off, or save a time zone it knows, below.';
+      }
+      if (cur.problem === 'address') {
+        return 'This webhook is not used: its address is not one switchboard accepts now. Paste a new address'
+          + ' and save it, or remove the webhook.';
+      }
+      if (cur.problem === 'second_address') {
+        return 'This webhook is not used: its second address is not one switchboard accepts now. Save a new'
+          + ' second address or remove the second alert, below.';
+      }
+      return 'This webhook is not used: one of its saved settings is not valid now. Save each section again, or'
+        + ' remove the webhook.';
     }
     // full: the form is filled again from what is saved, and the status is the last post's; otherwise only
     // the labels and what can be pressed, so a draft typed here survives a save in another section (#923)
     function showFirst(full) {
       const cur = w();
+      const usable = cur.set && cur.usable !== false;
       url.placeholder = cur.set ? 'Set. Paste a new address to replace it.' : 'https://…';
-      note.textContent = cur.set ? 'Posting to ' + cur.host + ' (the rest of the address is kept secret).'
-        : 'No webhook yet.';
-      test.disabled = remove.disabled = !cur.set;
+      const host = cur.host ? ' ' + cur.host : '';
+      if (!cur.set) note.textContent = 'No webhook yet.';
+      else if (usable) note.textContent = 'Posting to' + host + ' (the rest of the address is kept secret).';
+      else note.textContent = 'Saved for' + (host || ' an address') + ', and not used until it is fixed.';
+      problem.textContent = problemText(cur);
+      problem.hidden = !problem.textContent;
+      test.disabled = !usable;
+      remove.disabled = !cur.set;
       if (!full) return;
       url.value = '';
       wait.value = String(cur.wait_min || 5);
@@ -4739,7 +4768,9 @@
       url.disabled = after.disabled = save.disabled = !cur.set;
       remove.disabled = !cur.set || !two.set;
       if (!cur.set) note.textContent = 'Save a webhook address above first.';
-      else if (two.set) note.textContent = 'Second alert to ' + two.host + ' (the rest of the address is kept secret).';
+      else if (two.set) {
+        note.textContent = 'Second alert to ' + (two.host || 'an address') + ' (the rest of the address is kept secret).';
+      }
       else note.textContent = 'No second alert.';
       if (!full) return;
       url.value = '';
