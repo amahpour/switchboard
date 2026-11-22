@@ -1226,14 +1226,20 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                    no_homes_left_behind: session autouse; fails the run, naming each, if a home make_tmp_home() made in
                      this process (each xdist worker) is still there after every fixture's teardown
                    pytest_sessionstart: the controller sweeps the /tmp homes a killed run left (tmp_homes.py): a
-                     home goes only if nobody holds its flock (its maker and the children given it, pass_fds) nor
+                     home goes only if nobody holds its flock (its maker and the children given it, pass_fds: the
+                     CLI running `switchboard start` holds it until the daemon answers, holding run/broker.lock) nor
                      its broker's run/broker.lock (a daemonized broker), no Unix socket under it answers and all of
-                     it could be read; one with no lock file or no marker is never a candidate, whatever its name,
-                     and one with logs/broker.out but no run/broker.lock is kept (a daemon may be starting). It is
-                     checked and removed in place as one directory (dir fds, identity rechecked after the locks and
-                     before rmdir): every entry, then the marker, then the lock file, then rmdir, so a removal cut
-                     short leaves a candidate; tmp_home's teardown removes the same way (remove_home(), and the leak
-                     check sees what it leaves). One sweep at a time: it takes the root's yk-sweep.lock, or skips
+                     it could be read; one without both the lock file and the marker is no candidate, whatever its
+                     name, except one whose only entry is an unlocked lock file. It is checked and removed in place
+                     as one directory (dir fds, identity rechecked after the locks and just before rmdir): every
+                     entry, then the marker, then the lock file, then rmdir; tmp_home's teardown removes the same way
+                     (remove_home(), and the leak check sees what it leaves). Making, removing and sweeping share
+                     /tmp/yk-sweep-<euid>.lock (regular, this euid's, O_NOFOLLOW): the sweep holds it LOCK_EX|LOCK_NB
+                     for its pass or skips (held or unusable); make_tmp_home() holds LOCK_SH from before mkdtemp to
+                     the marker, remove_home() from its first unlink to its rmdir. Bounded exceptions: an empty yk-*
+                     directory (a removal killed after the lock file; a test's own shutil.rmtree may still need to
+                     rmdir it) is never removed, a daemon whose CLI died before it took its lock may lose its home,
+                     and the stat-to-rmdir gap costs at most one empty directory (sticky /tmp, rmdir takes only empty)
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),
                    web_client (httpx, base_url http://switchboard.localhost:<p>, logged in via the test token)
 engine_world.py    a store, an engine and a FakeClock with no broker; engine_agents.py builds the sessions over HTTPS

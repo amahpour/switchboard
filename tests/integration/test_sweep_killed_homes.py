@@ -3,10 +3,12 @@
 A killed run (SIGKILL, the OOM killer, a timeout) skips every cleanup and leaves its ``/tmp/yk-*``
 homes; they once filled a RAM-backed /tmp. The sweep removes a home only when nobody holds its test
 lock or its broker lock and no socket under it answers, and removes it in place, the marker and
-the lock file last, holding the root's sweep lock. A killed run is simulated by the real thing: a
+the lock file last, holding the root's per-user sweep lock, which making and removing a home take
+too (shared). A killed run is simulated by the real thing: a
 child process that made a home with ``make_locked_home`` and was SIGKILLed. Every wait here is for
 an event (a line, an EOF, a process exit), bounded, never a sleep: a pipe is read with ``select``
-and ``os.read`` against a deadline, never a buffered read that can block. Every child runs in a
+and ``os.read`` against a deadline, never a buffered read that can block, and a process's death is
+polled for (``WNOHANG``) against a deadline, never waited on without one. Every child runs in a
 process group of its own, and its ``finally`` kills the whole group (an orphaned grandchild holds
 the same pipes) and reaps the child before any pipe is closed. Every sweep,
 the nested pytest runs' included, runs against a root of the test's own, never the real /tmp
@@ -35,7 +37,6 @@ import tmp_homes
 from conftest import SubprocBroker, make_tmp_home
 from tmp_homes import (
     BROKER_LOCK,
-    BROKER_OUT,
     LOCK_NAME,
     SWEEP_LOCK,
     TEST_MARKER,
@@ -54,6 +55,10 @@ _CONFTEST = _TESTS_DIR / "conftest.py"
 
 # How long a pipe read may wait for a child's line or EOF: far more than a loaded machine needs.
 PIPE_TIMEOUT_S = 30.0
+# How long a SIGKILLed child may take to be seen dead before the test fails naming it.
+KILL_TIMEOUT_S = 10.0
+# How often that is checked: a poll of an event against a deadline, not a wait meaning "by now".
+KILL_POLL_S = 0.01
 # How long a nested pytest run may take before pytester kills it and the test fails.
 INNER_RUN_TIMEOUT_S = 120.0
 
@@ -81,6 +86,24 @@ import fcntl, os, sys
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(fd, fcntl.LOCK_EX)
 print("locked", flush=True)
+sys.stdin.read()
+"""
+
+# Another process that holds a lock: LOCK_SH on argv[1] (as make_locked_home holds the root's sweep lock
+# while it makes a home), or with argv[2] == "ex", LOCK_EX.
+_LOCK_HOLDER = """
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX if sys.argv[2] == "ex" else fcntl.LOCK_SH)
+print("locked", flush=True)
+sys.stdin.read()
+"""
+
+# A process given the home's test lock (pass_fds), as a SubprocBroker.cli() call running `switchboard
+# start` is, while the daemon it started restarts in the home.
+_GIVEN_LOCK = """
+import sys
+print("ready", flush=True)
 sys.stdin.read()
 """
 
@@ -137,7 +160,9 @@ def _stop(p: subprocess.Popen[bytes]) -> None:
             f.close()
 
 
-def _start(argv: list[str], stdin: int | None = None) -> tuple[subprocess.Popen[bytes], str]:
+def _start(
+    argv: list[str], stdin: int | None = None, pass_fds: tuple[int, ...] = ()
+) -> tuple[subprocess.Popen[bytes], str]:
     """Start ``argv`` in a process group of its own and read its first line, bounded; a child whose
     line never comes is killed with its group."""
     p = subprocess.Popen(
@@ -146,6 +171,7 @@ def _start(argv: list[str], stdin: int | None = None) -> tuple[subprocess.Popen[
         stdout=subprocess.PIPE,
         bufsize=0,
         start_new_session=True,
+        pass_fds=pass_fds,
     )
     try:
         assert p.stdout is not None
@@ -164,12 +190,24 @@ def _start_run(root: Path, mode: str, stdin: int | None = None) -> tuple[subproc
     return p, home
 
 
-def _kill(p: subprocess.Popen[bytes]) -> None:
-    """SIGKILL ``p`` alone (not its group) and wait until it is dead, without reaping it, so that
-    ``_stop`` can still kill its group by its pid."""
+def _wait_dead(p: subprocess.Popen[bytes], timeout: float = KILL_TIMEOUT_S) -> os.waitid_result:
+    """Poll (``WNOHANG``) until ``p`` is dead, without reaping it, so that ``_stop`` can still kill
+    its group by its pid; past ``timeout`` fail the test naming the pid, never hang."""
+    deadline = time.monotonic() + timeout
+    while True:
+        info = os.waitid(os.P_PID, p.pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+        if info is not None:
+            return info
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"pid {p.pid} was not seen dead within {timeout}s")
+        time.sleep(KILL_POLL_S)
+
+
+def _kill(p: subprocess.Popen[bytes], timeout: float = KILL_TIMEOUT_S) -> None:
+    """SIGKILL ``p`` alone (not its group) and see it dead, bounded (``_wait_dead``)."""
     p.send_signal(signal.SIGKILL)
-    info = os.waitid(os.P_PID, p.pid, os.WEXITED | os.WNOWAIT)
-    assert info is not None and info.si_code == os.CLD_KILLED and info.si_status == signal.SIGKILL
+    info = _wait_dead(p, timeout)
+    assert info.si_code == os.CLD_KILLED and info.si_status == signal.SIGKILL
 
 
 def _held(home: Path) -> bool:
@@ -265,21 +303,52 @@ def test_a_home_whose_broker_lock_is_held_is_kept(root: Path) -> None:
     assert sweep_killed_homes(root).removed == [home]
 
 
-def test_a_home_whose_broker_is_starting_is_kept(root: Path) -> None:
-    """``switchboard start`` opens ``logs/broker.out`` before it spawns the daemon, which takes
-    ``run/broker.lock`` only once it runs: a home with broker.out and no broker.lock (and no test
-    lock holder, no socket) is kept and counted in use. With a broker.lock nobody holds, the lock
-    check decides and the home goes. Fails without the broker.out rule (the home is removed while
-    a daemon may be starting in it)."""
-    home = _dead_home(root)
-    (home / BROKER_OUT[0]).mkdir()
-    (home.joinpath(*BROKER_OUT)).write_text("")
-    result = sweep_killed_homes(root)
-    assert result.in_use == [home] and not result.removed and not result.failed
-    assert "kept 1 in use" in result.line()
+def test_a_restarting_brokers_home_is_kept_while_its_cli_holds_the_test_lock(root: Path) -> None:
+    """A restart: the home has an old, unlocked ``run/broker.lock`` and ``logs/broker.out``, and no
+    socket yet, as when ``switchboard start`` has spawned a daemon that hasn't taken its lock. No
+    file tells that from a stopped broker; the CLI's test lock does (``daemon.start()`` returns
+    only once the daemon answers). With a child holding the test lock (given it with ``pass_fds``,
+    as a ``cli()`` call is) the home is kept; after the child exits it is removed. Fails if the
+    sweep ignores the test lock."""
+    home = tmp_homes.make_locked_home(root)
     (home / BROKER_LOCK[0]).mkdir()
-    (home.joinpath(*BROKER_LOCK)).touch()
+    home.joinpath(*BROKER_LOCK).touch()
+    (home / "logs").mkdir()
+    (home / "logs" / "broker.out").write_text("an old broker's output\n")
+    p, line = _start([sys.executable, "-c", _GIVEN_LOCK], pass_fds=tmp_homes.lock_fds_for(home))
+    try:
+        assert line == "ready"
+        tmp_homes.release_home(home)  # only the child holds it now
+        assert _held(home)
+        result = sweep_killed_homes(root)
+        assert result.in_use == [home] and not result.removed and not result.failed
+        assert home.joinpath(*BROKER_LOCK).is_file()
+        assert p.stdin is not None
+        p.stdin.close()  # the child reads EOF and exits, as the CLI does once the daemon answers
+        assert p.stdout is not None and _read_to_eof(p.stdout.fileno(), "the child's EOF") == b""
+        _wait_dead(p)
+    finally:
+        _stop(p)
     assert sweep_killed_homes(root).removed == [home]
+
+
+def test_waiting_for_a_death_fails_at_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_wait_dead`` polls with ``WNOHANG`` against a deadline: a child that is never reported dead
+    (``os.waitid`` patched to say nothing is ready) fails the test naming its pid within the
+    deadline, never hangs. Fails with a blocking ``waitid`` (it returns at once here, so the
+    expected failure never comes; on a real stuck child, it hangs the run)."""
+    p, line = _start([sys.executable, "-c", _GIVEN_LOCK])
+    try:
+        assert line == "ready"
+        with monkeypatch.context() as m:
+            m.setattr(os, "waitid", lambda *args, **kwargs: None)
+            t0 = time.monotonic()
+            with pytest.raises(AssertionError, match=f"pid {p.pid} was not seen dead within 0.5s"):
+                _kill(p, timeout=0.5)
+            assert time.monotonic() - t0 < 0.5 + PIPE_TIMEOUT_S / 10
+        assert _wait_dead(p).si_code == os.CLD_KILLED  # the control: the real waitid sees it dead
+    finally:
+        _stop(p)
 
 
 def test_a_home_with_a_live_socket_and_no_lock_holder_is_kept(root: Path) -> None:
@@ -404,7 +473,7 @@ def test_an_interrupted_removal_leaves_a_home_the_next_sweep_removes(
     assert home not in tmp_homes._LOCKS  # its lock is let go: the sweep can take it
     assert (home / TEST_MARKER).is_file() and (home / LOCK_NAME).is_file()
     assert not (home / "logs").exists() and (home / "run").is_dir()  # some entries went, not all
-    assert sorted(os.listdir(root)) == [home.name]
+    assert sorted(os.listdir(root)) == sorted([home.name, SWEEP_LOCK])
     result = sweep_killed_homes(root)
     assert result.removed == [home] and not result.failed and os.listdir(root) == [SWEEP_LOCK]
 
@@ -424,24 +493,104 @@ def test_an_interrupted_removal_leaves_a_home_the_next_sweep_removes(
 
 def test_a_yk_gone_directory_without_a_marker_is_left(root: Path) -> None:
     """Nothing is chosen by its name: a ``yk-gone-x`` directory with no marker and no lock file (the
-    old tombstones' name) is not removed, nor is one with only a lock file. Fails if any name
-    prefix makes a directory removable (the tombstone sweep removed every ``yk-gone-*``)."""
+    old tombstones' name) is not removed, nor is one with a lock file and other entries. Fails if
+    any name prefix makes a directory removable (the tombstone sweep removed every ``yk-gone-*``)."""
     gone = root / "yk-gone-x"
     (gone / "run").mkdir(parents=True)
     (gone / "run" / "broker.db").write_text("x")
-    lock_only = root / "yk-gone-y"
-    lock_only.mkdir()
-    (lock_only / LOCK_NAME).touch()
+    lock_and_more = root / "yk-gone-y"
+    (lock_and_more / "run").mkdir(parents=True)
+    (lock_and_more / LOCK_NAME).touch()
     result = sweep_killed_homes(root)
     assert result.removed == [] and result.in_use == [] and result.failed == []
-    assert (gone / "run" / "broker.db").is_file() and (lock_only / LOCK_NAME).is_file()
+    assert (gone / "run" / "broker.db").is_file() and (lock_and_more / LOCK_NAME).is_file()
+
+
+def test_a_home_with_only_its_lock_file_is_removed_unless_held(root: Path) -> None:
+    """Only a creation or a removal killed part way leaves a ``yk-*`` directory whose one entry is the
+    lock file: unlocked, the sweep removes it; while another process holds that lock file (a live
+    test ``shutil.rmtree``-ing its own home, uncoordinated) it is kept, and goes once that process
+    exits. Fails without the lock-only rule (the first stays for good) or if it skips the lock
+    (the held one is removed under its holder)."""
+    loose = Path(tempfile.mkdtemp(prefix="yk-", dir=root))
+    (loose / LOCK_NAME).touch()
+    held = Path(tempfile.mkdtemp(prefix="yk-", dir=root))
+    p, line = _start([sys.executable, "-c", _LOCK_HOLDER, str(held / LOCK_NAME), "sh"])
+    try:
+        assert line == "locked"
+        result = sweep_killed_homes(root)
+        assert result.removed == [loose] and result.in_use == [held] and not result.failed
+        assert not os.path.lexists(loose) and os.listdir(held) == [LOCK_NAME]
+    finally:
+        _stop(p)
+    assert sweep_killed_homes(root).removed == [held] and not os.path.lexists(held)
+
+
+def test_an_empty_or_marker_only_directory_is_left(root: Path) -> None:
+    """An empty ``yk-*`` directory (a test's own uncoordinated ``shutil.rmtree`` is about to remove
+    it, whose ``rmdir`` would fail if the sweep took it first; or a removal killed after the lock
+    file) and one holding only the marker (a pre-#922 home starts that way) are left. Fails if the
+    lock-only rule takes any directory without a marker."""
+    empty = Path(tempfile.mkdtemp(prefix="yk-", dir=root))
+    marker_only = Path(tempfile.mkdtemp(prefix="yk-", dir=root))
+    (marker_only / TEST_MARKER).touch()
+    result = sweep_killed_homes(root)
+    assert result.removed == [] and result.in_use == [] and result.failed == []
+    assert os.listdir(empty) == [] and os.listdir(marker_only) == [TEST_MARKER]
+
+
+def _stop_removal_at(m: pytest.MonkeyPatch, step: str) -> None:
+    """Make a removal stop at ``step``: the marker's unlink, the lock file's, or the final rmdir."""
+    real = tmp_homes._unlink_at
+
+    def unlink_at(name: str, dir_fd: int) -> None:
+        if name == step:
+            raise OSError(errno.EIO, "Input/output error", name)
+        real(name, dir_fd)
+
+    def rmdir_at(name: str, dir_fd: int) -> None:
+        raise OSError(errno.EIO, "Input/output error", name)
+
+    m.setattr(tmp_homes, "_unlink_at", unlink_at)
+    if step == "rmdir":
+        m.setattr(tmp_homes, "_rmdir_at", rmdir_at)
+
+
+@pytest.mark.parametrize(
+    ("step", "left", "swept"),
+    [
+        (TEST_MARKER, sorted([LOCK_NAME, TEST_MARKER]), True),  # stopped after the contents
+        (LOCK_NAME, [LOCK_NAME], True),  # stopped after the marker
+        ("rmdir", [], False),  # stopped after the lock file: the bounded exception
+    ],
+)
+def test_a_removal_stopped_at_each_step_leaves_what_the_next_sweep_expects(
+    root: Path, monkeypatch: pytest.MonkeyPatch, step: str, left: list[str], swept: bool
+) -> None:
+    """``remove_home`` removes every entry, then the marker, then the lock file, then the directory.
+    Stopped after the contents it leaves the marker and the lock file, and stopped after the marker
+    the lock file alone: the next sweep removes either. Stopped after the lock file it leaves an
+    empty directory, which the sweep leaves (it never removes an empty one). Fails if the order
+    changes (the marker last leaves a marker-only home that stays for good) or without the
+    lock-only rule (the second case stays)."""
+    home = _home_with_contents(root)
+    with monkeypatch.context() as m:
+        _stop_removal_at(m, step)
+        remove_home(home)
+    assert sorted(os.listdir(home)) == left
+    result = sweep_killed_homes(root)
+    assert not result.failed
+    if swept:
+        assert result.removed == [home] and not os.path.lexists(home)
+    else:
+        assert result.removed == [] and os.listdir(home) == []
 
 
 def test_a_held_sweep_lock_makes_a_second_sweep_skip(root: Path) -> None:
-    """One sweeper at a time: while another sweep holds the root's ``yk-sweep.lock``, a sweep removes
-    nothing, says it skipped, and a dead home stays; once the lock is let go the home is swept. A
-    ``yk-sweep.lock`` that is a symlink is refused, not followed, and nothing is swept. Fails without
-    the sweep lock (the dead home is removed while another sweep may be removing it)."""
+    """One sweeper at a time: while another sweep holds the root's ``yk-sweep-<euid>.lock``, a sweep
+    removes nothing, says it skipped, and a dead home stays; once the lock is let go the home is
+    swept. Fails without the sweep lock (the dead home is removed while another sweep may be
+    removing it)."""
     home = _dead_home(root)
     fd = os.open(root / SWEEP_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -451,22 +600,106 @@ def test_a_held_sweep_lock_makes_a_second_sweep_skip(root: Path) -> None:
         assert result is not None and result.skipped and not result.removed and not result.in_use
         assert home.is_dir() and (home / TEST_MARKER).is_file()
         assert lines == [
-            f"switchboard test homes: skipped, another sweep holds {root / SWEEP_LOCK}, "
-            "nothing removed (#922)"
+            f"switchboard test homes: skipped, {root / SWEEP_LOCK} is held (another sweep, or a home "
+            "being made or removed), nothing removed (#922)"
         ]
     finally:
         os.close(fd)
     result = sweep_killed_homes(root)
     assert not result.skipped and result.removed == [home]
 
-    os.unlink(root / SWEEP_LOCK)
-    target = root / "target"
-    target.touch()
-    (root / SWEEP_LOCK).symlink_to(target)
-    other = _dead_home(root)
-    result = sweep_killed_homes(root)
-    assert not result.removed and len(result.failed) == 1 and other.is_dir()
-    assert (root / SWEEP_LOCK).is_symlink()
+
+def test_the_sweep_lock_is_per_user(root: Path) -> None:
+    """The sweep lock's name carries the euid, so another user's 0600 file at the root (here held,
+    too) never stops this user's sweep. Fails with one shared name (another user's file there is
+    refused, and this user never sweeps again)."""
+    assert SWEEP_LOCK == f"yk-sweep-{os.geteuid()}.lock"
+    other = root / f"yk-sweep-{os.geteuid() + 1}.lock"
+    fd = os.open(other, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if os.geteuid() == 0:
+            os.chown(other, os.geteuid() + 1, -1)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        home = _dead_home(root)
+        result = sweep_killed_homes(root)
+        assert not result.skipped and result.removed == [home] and not result.failed
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize("kind", ["directory", "symlink"])
+def test_an_unusable_sweep_lock_skips_the_sweep_and_homes_still_work(root: Path, kind: str) -> None:
+    """A directory or a symlink at this user's sweep lock's name is refused, not followed: the sweep
+    skips and says why, a dead home stays, and ``make_locked_home`` and ``remove_home`` still work
+    (without the lock: the sweep that would need it doesn't run). Fails if the sweep runs without
+    its lock (the dead home goes), or if making a home fails on the unusable lock."""
+    if kind == "directory":
+        (root / SWEEP_LOCK).mkdir()
+    else:
+        (root / "target").touch()
+        (root / SWEEP_LOCK).symlink_to(root / "target")
+    dead = _dead_home(root)
+    lines: list[str] = []
+    result = sweep_at_session_start(True, lines.append, root)
+    assert result is not None and result.skipped and result.unusable and not result.removed
+    assert lines == [
+        f"switchboard test homes: skipped, {root / SWEEP_LOCK} is not a regular file of this user's, "
+        "nothing removed (#922)"
+    ]
+    assert (dead / TEST_MARKER).is_file()
+    home = tmp_homes.make_locked_home(root)
+    assert (home / TEST_MARKER).is_file() and _held(home)
+    remove_home(home)
+    assert not os.path.lexists(home)
+    assert (root / SWEEP_LOCK).is_dir() if kind == "directory" else (root / SWEEP_LOCK).is_symlink()
+
+
+def test_a_home_being_made_or_removed_makes_the_sweep_skip(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``make_locked_home`` holds ``LOCK_SH`` on the sweep lock from before ``mkdtemp`` to the marker,
+    and ``remove_home`` from before its first unlink to its ``rmdir``: a sweep run inside either
+    window (here from the ``mkdtemp`` and from the marker's unlink) skips, and leaves the half-made
+    or half-removed home. A process holding ``LOCK_SH`` on it (as another run's ``make_tmp_home``
+    does) makes the sweep skip too. Fails if either side doesn't take the lock (the sweep runs, and
+    takes the lock-only directory it finds)."""
+    seen: list[tmp_homes.SweepResult] = []
+    real_mkdtemp = tmp_homes.tempfile.mkdtemp
+
+    def mkdtemp(*args: object, **kwargs: object) -> str:
+        d = real_mkdtemp(*args, **kwargs)  # type: ignore[call-overload]
+        seen.append(sweep_killed_homes(root))
+        return d
+
+    with monkeypatch.context() as m:
+        m.setattr(tmp_homes.tempfile, "mkdtemp", mkdtemp)
+        home = tmp_homes.make_locked_home(root)
+    assert len(seen) == 1 and seen[0].skipped and not seen[0].unusable
+    assert (home / TEST_MARKER).is_file()
+
+    real_unlink = tmp_homes._unlink_at
+
+    def unlink_at(name: str, dir_fd: int) -> None:
+        real_unlink(name, dir_fd)
+        if name == TEST_MARKER:
+            seen.append(sweep_killed_homes(root))  # the home holds only its lock file now
+
+    tmp_homes.release_home(home)  # so only the sweep lock can keep the sweep off it
+    with monkeypatch.context() as m:
+        m.setattr(tmp_homes, "_unlink_at", unlink_at)
+        remove_home(home)
+    assert len(seen) == 2 and seen[1].skipped and not seen[1].removed
+    assert not os.path.lexists(home)
+
+    dead = _dead_home(root)
+    p, line = _start([sys.executable, "-c", _LOCK_HOLDER, str(root / SWEEP_LOCK), "sh"])
+    try:
+        assert line == "locked"
+        result = sweep_killed_homes(root)
+        assert result.skipped and not result.removed and dead.is_dir()
+    finally:
+        _stop(p)
+    assert sweep_killed_homes(root).removed == [dead]
 
 
 def test_a_failed_make_leaves_nothing(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -487,8 +720,12 @@ def test_a_failed_make_leaves_nothing(root: Path, monkeypatch: pytest.MonkeyPatc
 
         return fake
 
+    real_flock = fcntl.flock
+
     def flock_fails(fd: int, op: int) -> None:
-        raise OSError(errno.ENOLCK, "No locks available")
+        if fd in opened:  # the home's lock file; the sweep lock is still taken
+            raise OSError(errno.ENOLCK, "No locks available")
+        real_flock(fd, op)
 
     for what, name, value in (
         ("lock open", "open", open_failing(LOCK_NAME)),
@@ -504,7 +741,7 @@ def test_a_failed_make_leaves_nothing(root: Path, monkeypatch: pytest.MonkeyPatc
                 m.setattr(tmp_homes.os, "open", value)
             with pytest.raises(OSError):
                 tmp_homes.make_locked_home(root)
-        assert os.listdir(root) == [], what
+        assert os.listdir(root) == [SWEEP_LOCK], what
         assert not any(p.parent == root for p in tmp_homes._LOCKS), what
         for fd in opened:
             with pytest.raises(OSError):
@@ -570,14 +807,16 @@ def test_a_failing_report_never_raises_and_is_told_apart(
 
 
 def test_a_home_without_both_the_lock_file_and_the_marker_is_left(root: Path) -> None:
-    """A home with the marker and no lock file (made before #922, or not by make_tmp_home) and one
-    with the lock file and no marker (mid-creation) are not candidates, nor is a ``yk-*`` symlink
-    to a dead home or a directory not named ``yk-*``. Fails if the sweep removes what it can't prove
-    unused."""
+    """A home with the marker and other entries but no lock file (made before #922, or not by
+    make_tmp_home) and one with the lock file and other entries but no marker are not candidates,
+    nor is a ``yk-*`` symlink to a dead home or a directory not named ``yk-*``. Fails if the sweep
+    removes what it can't prove unused."""
     old = Path(tempfile.mkdtemp(prefix="yk-", dir=root))
     (old / TEST_MARKER).touch()
+    (old / "run").mkdir()
     making = Path(tempfile.mkdtemp(prefix="yk-", dir=root))
     (making / LOCK_NAME).touch()
+    (making / "run").mkdir()
     other = root / "not-a-home"
     other.mkdir()
     (other / TEST_MARKER).touch()
