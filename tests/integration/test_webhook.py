@@ -970,6 +970,27 @@ def test_an_address_that_cannot_be_stored_is_refused_at_save(world: Any, hook: T
     assert row is not None and (row["url"], row["second_url"]) == (hook.url, None)
 
 
+@pytest.mark.parametrize("field", ["url", "second_url"])
+@pytest.mark.parametrize("where", ["end", "path"])
+def test_an_address_with_a_nul_is_refused_at_save(world: Any, hook: TlsHook, field: str, where: str) -> None:
+    """A JSON body can hold a NUL (``\\u0000``), where SQLite's ``length()`` stops, so the address column's
+    length CHECK would read a shorter address than the one stored. Saved as the first or the second address,
+    on the end or inside the path, it is refused with a 400 and nothing is written. Two rules refuse it, the
+    control-character check and ``notify.storable``, and either alone keeps this green; it fails (a 200, the
+    NUL stored) only with both gone (#923, F11)."""
+    b, _, alice, _ = world
+    assert put(alice, "/api/me/webhook", {"url": hook.url}).status_code == 200
+    bad = hook.url + ("\x00" if where == "end" else "/a\x00b")
+    headers = {**alice.headers(True), "content-type": "application/json"}
+    raw = json.dumps({field: bad}, ensure_ascii=True)
+    assert "\\u0000" in raw
+    r = alice.c.request("PUT", "/api/me/webhook", content=raw.encode("ascii"), headers=headers)
+    alice.take(r)
+    assert r.status_code == 400, r.text
+    row = b.state.store.webhook_get(0)
+    assert row is not None and (row["url"], row["second_url"]) == (hook.url, None)
+
+
 def send_test_held(b: InProcBroker, hook: TlsHook, alice: Browser, during: Any) -> Any:
     """Alice's Send a test, the receiver holding its first post open while ``during`` runs; its answer."""
     hook.hold, hook.arrived, hook.release = FIRST_PATH, threading.Event(), threading.Event()

@@ -85,7 +85,7 @@ class Quiet:
 
 def zone_of(name: object) -> zoneinfo.ZoneInfo | None:
     """The zone called ``name``, or None when it is not a name this server knows."""
-    if not isinstance(name, str) or not name or len(name) > TZ_MAX:
+    if not isinstance(name, str) or not name or len(name) > TZ_MAX or not storable(name):
         return None
     try:
         return zoneinfo.ZoneInfo(name)
@@ -349,10 +349,14 @@ _HOST_OK = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
 def storable(value: str) -> bool:
-    """Whether ``value`` can be kept as text: it encodes as UTF-8, strictly. A str from JSON can hold an
-    unpaired surrogate (``"\\ud800"``), which SQLite's TEXT bind refuses with ``UnicodeEncodeError``; a
-    save refuses such an address and the v60 migration drops such a text, so one never reaches a bind
+    """Whether ``value`` can be kept as text: it holds no NUL and encodes as UTF-8, strictly. The one rule
+    for text kept in ``webhooks`` and ``webhook_sent``. A str from JSON can hold an unpaired surrogate
+    (``"\\ud800"``), which SQLite's TEXT bind refuses with ``UnicodeEncodeError``, or a NUL (``"\\u0000"``),
+    where SQLite's ``length()`` stops, so a length CHECK refuses a text whose Python length passes. A save
+    refuses such an address and the v60 migration drops such a text, so one never reaches a bind or a CHECK
     (#923, F11)."""
+    if "\x00" in value:
+        return False
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:

@@ -1537,7 +1537,8 @@ def _old_status(raw: str | None) -> tuple[float, int, str | None] | None:
     """A pre-60 status row, or None when it does not parse or its time is not one a broker wrote: not a
     finite number, not after 1970, or past the year 3000 (NaN is stored as NULL, which the row's CHECK
     refuses, so one bad time would stop the whole upgrade, #923, F11). The error is cut to its column, and
-    an error that is not storable text (``notify.storable``: an unpaired surrogate) drops the status too."""
+    an error that is not storable text (``notify.storable``: an unpaired surrogate or a NUL) drops the status
+    too."""
     from switchboard import notify  # pure; imported here so the schema does not need it
 
     if not raw:
@@ -1565,7 +1566,8 @@ def _old_sent(raw: str | None) -> list[str]:
         return []
     from switchboard import notify  # pure; imported here so the schema does not need it
 
-    # a key that is not storable text (an unpaired surrogate) is skipped: its bind would stop the upgrade
+    # a key that is not storable text (an unpaired surrogate, or a NUL, where length() in the CHECK stops)
+    # is skipped: its bind or its CHECK would stop the upgrade
     return sorted({k for k in keys if isinstance(k, str) and 1 <= len(k) <= 1000 and notify.storable(k)})
 
 

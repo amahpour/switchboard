@@ -279,6 +279,28 @@ def test_text_that_cannot_be_stored_is_dropped_and_the_upgrade_commits(
         con.close()
 
 
+@pytest.mark.parametrize(
+    "key", ["\x00", "\x00q:build:13", "q:build:\x0013"], ids=["nul", "leading", "inside"]
+)
+def test_a_sent_key_with_a_nul_is_skipped_and_the_upgrade_commits(tmp_path: Path, key: str) -> None:
+    """A legacy sent key holding a NUL has a positive Python length and encodes as UTF-8, but SQLite's
+    ``length()`` stops at the NUL, so ``webhook_sent``'s CHECK (``length(key) BETWEEN 1 AND 1000``) refuses a
+    key that starts with one, and a NUL anywhere is no key a broker wrote. It is skipped beside clean keys
+    (the owner's other key and bob's moves), the clean webhooks move, and the upgrade commits. Fails without
+    the NUL rule in ``notify.storable``: the INSERT failed its CHECK and the upgrade stopped, or a NUL key
+    was kept (#923, F11)."""
+    path = tmp_path / "old.db"
+    at_59(path, {"webhook_sent:0": ["q:build:12", key], "webhook_sent:1": ["b:plan:3"]})
+    con = db.open_db(path)
+    try:
+        assert db.schema_version(con) == 60
+        assert moved_people(con) == CLEAN
+        assert sorted(rows(con, "SELECT key FROM webhook_sent")) == [("b:plan:3",), ("q:build:12",)]
+        assert rows(con, "SELECT key FROM broker_settings") == [("notify_text:0",)]
+    finally:
+        con.close()
+
+
 def test_the_largest_canonical_person_key_moves(tmp_path: Path) -> None:
     """The largest key SQLite holds is a key like any other: its webhook moves. Fails if the range check is
     off by one."""
