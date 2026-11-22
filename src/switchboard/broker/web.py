@@ -122,6 +122,9 @@ WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
 WS_FRAME_MAX = 16384  # hello and ping; a board frame may be as large as the board itself
 BAD_TOKEN_EVENT_S = 60.0
+# Send a test's answer when the webhook changed while a test post was out (#923, F15): the page shows it in
+# place of the results
+TEST_CHANGED = "Your webhook settings changed during the test, so nothing more was sent. Send a test again."
 # the ceremony cookies (§31.3, §31.4): the claim's id, a sign-in's sealed state, an add's
 SETUP_COOKIE = "switchboard_setup"
 PASSKEY_COOKIE = "switchboard_passkey"
@@ -1811,8 +1814,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.put("/api/me/webhook")
     async def set_webhook(request: Request) -> Response:
         """Set the signed-in person's webhook: ``url`` (https, a public address unless the operator allows
-        more) and ``wait_min`` (1 to 120). Either may be left out once there is one (a new wait for the
-        address they have)."""
+        more) and ``wait_min`` (1 to 120); the second alert (#923, §62.4): ``second_url`` (the same checks,
+        or null to remove it) and ``second_after_min`` (5 to 240); and ``quiet``, ``{from, to, tz, always}``
+        or null to turn quiet hours off. Any may be left out once there is an address (a change to the rest
+        keeps the address they have)."""
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
@@ -1820,11 +1825,16 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        if not body or not set(body) <= {"url", "wait_min"}:
-            return _err(400, "bad_request", "give url, wait_min, or both")
+        fields = {"url", "wait_min", "second_url", "second_after_min", "quiet"}
+        if not body or not set(body) <= fields:
+            return _err(400, "bad_request", "give url, wait_min, second_url, second_after_min or quiet")
         key = state.service.person_key(w.person_id)
-        old = webhook.load(state, key)
-        wait_s = old["wait_s"] if old else notify.WAIT_DEFAULT_S
+        # Only what the body gives is checked and kept, in one statement on the person's row, after the
+        # addresses' checks (which wait on DNS): never a rewrite of the rest from a read made before them,
+        # which would bring back a webhook another tab removed, or undo quiet hours it saved (#923, F3).
+        changes: dict[str, Any] = {}
+        if "url" in body:
+            changes["url"] = body["url"]
         if "wait_min" in body:
             m = body["wait_min"]
             if (
@@ -1833,15 +1843,60 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 or not notify.WAIT_MIN_S <= m * 60 <= notify.WAIT_MAX_S
             ):
                 return _err(400, "bad_request", "wait_min is a whole number of minutes, 1 to 120")
-            wait_s = m * 60.0
-        url = body.get("url", old["url"] if old else None)
-        if url is None:
+            changes["wait_s"] = m * 60.0
+        if "second_url" in body:
+            changes["second_url"] = body["second_url"]
+        if "second_after_min" in body:
+            m = body["second_after_min"]
+            if (
+                isinstance(m, bool)
+                or not isinstance(m, int)
+                or not notify.SECOND_MIN_S <= m * 60 <= notify.SECOND_MAX_S
+            ):
+                return _err(400, "bad_request", "second_after_min is a whole number of minutes, 5 to 240")
+            if changes.get("second_url", "") is None:
+                return _err(400, "bad_request", "give the second address first")
+            changes["second_after_s"] = m * 60.0
+        if "quiet" in body:
+            q = body["quiet"]
+            if q is None:
+                changes["quiet"] = None
+            elif not isinstance(q, dict) or set(q) != {"from", "to", "tz", "always"}:
+                return _err(400, "bad_request", "quiet is {from, to, tz, always} or null")
+            else:
+                start, end = notify.parse_hhmm(q["from"]), notify.parse_hhmm(q["to"])
+                if start is None or end is None:
+                    return _err(400, "bad_quiet", "Quiet hours need a start and an end time, as HH:MM.")
+                if (why := notify.quiet_problem(start, end, q["tz"], q["always"])) is not None:
+                    return _err(400, "bad_quiet", why)
+                changes["quiet"] = {
+                    "from": q["from"],
+                    "to": q["to"],
+                    "tz": q["tz"],
+                    "always": set(q["always"]),
+                }
+        # the cheap answers first, before any DNS; the save below still decides, on the row as it is then
+        now = state.store.webhook_get(key)
+        if now is None and "url" not in body:
             return _err(400, "bad_request", "give the url first")
-        if "url" in body and (why := await webhook.check_for_save(state, url)) is not None:
+        if (
+            "second_after_s" in changes
+            and "second_url" not in changes
+            and (now is None or not now["second_url"])
+        ):
+            return _err(400, "bad_request", "give the second address first")
+        if "url" in changes and (why := await webhook.check_for_save(state, changes["url"])) is not None:
             return _err(400, "bad_webhook", why)
-        webhook.save(state, key, url, wait_s)
-        if state.notifier is not None and "url" in body:
-            state.notifier.forget(key)
+        s_url = changes.get("second_url")
+        if s_url is not None and (why := await webhook.check_for_save(state, s_url)) is not None:
+            return _err(400, "bad_webhook", "The second address: " + why)
+        done = webhook.save(state, key, changes)
+        if done == "gone":  # removed while the addresses were checked: nothing was written (#923, F14)
+            return unauthorized()
+        if done == "none":
+            return _err(409, "conflict", "There is no webhook now: it was removed. Save an address first.")
+        if done == "no_second":
+            return _err(409, "conflict", "There is no second address now: it was removed. Save one first.")
         return _ok(webhook.public(state, key))
 
     @app.delete("/api/me/webhook")
@@ -1854,19 +1909,36 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     @app.post("/api/me/webhook/test")
     async def test_webhook(request: Request) -> Response:
-        """Post a test line to the signed-in person's webhook now, so they can see it works. It goes through
-        the same checks and the same hourly cap as a real one; the answer says how it went."""
+        """Post a test line to the signed-in person's webhook now, and to their second address when there is
+        one, so they can see both work. It goes through the same checks and the same hourly cap as a real
+        one, ignores quiet hours, and the answer says how each went."""
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
         key = state.service.person_key(w.person_id)
-        if state.notifier is None or webhook.load(state, key) is None:
+        hook = webhook.load(state, key)
+        if state.notifier is None or hook is None:
             return _err(400, "bad_request", "set a webhook first")
-        code = await state.notifier.post(key, notify.test_payload(state.web_origin.origin))
+        # Both addresses are tried, whatever the first one did, and the answer carries both results: the page
+        # shows these, never a stored status, which a capped try does not write (#923, F7). Both posts go to
+        # the one webhook read above; when it was replaced, removed or made again while a post was out, no
+        # more is sent and the answer says so, rather than reporting on settings that are gone (#923, F15).
+        code = await state.notifier.post(key, hook, notify.test_payload(state.web_origin.origin))
+        if not state.notifier.unchanged(key, hook):
+            return _err(409, "changed", TEST_CHANGED)
+        second: dict[str, Any] | None = None
+        if hook["second"] is not None:
+            code2 = await state.notifier.post(
+                key, hook, notify.test_payload(state.web_origin.origin, True), True
+            )
+            if not state.notifier.unchanged(key, hook):
+                return _err(409, "changed", TEST_CHANGED)
+            second = {"ok": code2 is None, "error": None if code2 is None else notify.fail_reason(code2)}
         return _ok(
             {
                 "ok": code is None,
                 "error": None if code is None else notify.fail_reason(code),
+                "second": second,
                 "webhook": webhook.public(state, key),
             }
         )

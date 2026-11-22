@@ -36,11 +36,12 @@ def test_a_schema_58_database_gains_the_index_and_nothing_else(
     with sqlite3.connect(path) as before:
         assert db.schema_version(before) == 58
         assert before.execute(INDEX).fetchone() is None
-        counts = db.row_counts(before, db.TABLES)
+        counts = db.row_counts(before, db.tables_of(58))
         others = [tuple(r) for r in before.execute(OTHERS)]
         messages = [tuple(r) for r in before.execute("SELECT * FROM messages ORDER BY id")]
     with monkeypatch.context() as mp:
-        mp.setattr(db, "SCHEMA_VERSION", 59)  # this step alone: 60 edits the participants CHECK (#851)
+        # this step alone: 60 adds the webhook tables (#923), 61 edits the participants CHECK (#851)
+        mp.setattr(db, "SCHEMA_VERSION", 59)
         db.open_db(path).close()
     con = db.connect(path)
     backup = db.connect(db.backup_path_for(path, 58), readonly=True)
@@ -51,7 +52,7 @@ def test_a_schema_58_database_gains_the_index_and_nothing_else(
         assert backup.execute(INDEX).fetchone() is None
         assert [tuple(r) for r in con.execute(INDEX)] == [tuple(r) for r in fresh.execute(INDEX)]
         assert con.execute(INDEX).fetchone() is not None
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.tables_of(59)) == counts
         assert [tuple(r) for r in con.execute(OTHERS)] == others
         assert [tuple(r) for r in con.execute("SELECT * FROM messages ORDER BY id")] == messages
         assert db.integrity_ok(con) is None

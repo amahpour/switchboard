@@ -4,7 +4,7 @@
 
 ### Upgrading
 
-- **The database moves to schema 60** the first time the broker starts, after a checked backup: its participants' harness list gains `grok`, and nothing else changes.
+- **The database moves to schema 61** the first time the broker starts, after a checked backup: its participants' harness list gains `grok`, and nothing else changes.
 
 ### Known limitations
 

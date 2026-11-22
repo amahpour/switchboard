@@ -9,6 +9,8 @@ import pytest
 
 from switchboard import db
 
+NEW_AT_60 = {"webhooks": 0, "webhook_sent": 0}  # 60's tables (#923), empty with no webhook rows to move
+
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 
 
@@ -30,9 +32,9 @@ def test_retry_receipt_table_matches_fresh_schema(tmp_path: Path, monkeypatch: p
     backup = db.connect(path.with_name("old.db.v52.bak"), readonly=True)
     try:
         query = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='say_keys' ORDER BY name"
-        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 60
+        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 61
         assert db.schema_version(backup) == 52
-        assert db.row_counts(upgraded, db.TABLES) == {**counts, "say_keys": 0, "mcp_sessions": 0}
+        assert db.row_counts(upgraded, db.TABLES) == {**counts, "say_keys": 0, "mcp_sessions": 0, **NEW_AT_60}
         assert [tuple(r) for r in upgraded.execute(query)] == [tuple(r) for r in fresh.execute(query)]
         assert len(upgraded.execute(query).fetchall()) >= 2  # table and expiry index
         assert not backup.execute(query).fetchall()
