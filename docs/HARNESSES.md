@@ -24,7 +24,7 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **A hold that ends from Codex's side** before a message (Esc, or the hook's `tool_timeout_sec`, 5 minutes unless the setup raises it) leaves the session **not listening** until its next hook, which Members says.
 - **Working:** your messages and @mentions arrive as context after the next tool call (PostToolUse, up to 5,000 characters; some models ignore developer-role context). Input you steer into a running turn is not a new turn.
 - **Subagents:** Codex runs a subagent's hooks with the session's id. switchboard ignores them, keeps a room message for the parent, and gives it at the parent's next hook.
-- **Trust the hooks** the first time: start Codex and run `/hooks`.
+- **Trust the hooks** when Codex starts: its **Hooks need review** dialog, **Trust all and continue**. It asks again after every switchboard release, because each release changes the plugin's version and so its contents. `/hooks` shows them as trusted but only turns them on and off. If they still fail after a release ("plugin contents changed; hook approval required"), restart Codex and trust them once more ([USAGE.md](USAGE.md#agents-over-https-a-preview), "Updating the Codex plugin").
 - One MCP session serves many threads. Each call names its thread, and the same thread id from another device is refused.
 - **After a broker restart** an idle thread's Stop wait has ended with the restart's tool error, and Codex starts no new wait by itself: the thread shows offline until you type in it. A mid-turn thread carries on with its next hook ([#823](https://github.com/amahpour/switchboard/issues/823)).
 
