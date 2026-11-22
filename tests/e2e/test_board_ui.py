@@ -343,6 +343,48 @@ def test_a_secret_a_person_types_is_cut_out_and_the_drawing_tab_shows_the_commit
     assert token not in scene and "aB3aB3" not in scene
 
 
+def test_text_closed_with_escape_after_the_broker_answered_is_sent_again(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """A person types a secret, stops, and presses Escape only after the broker has answered (#933). The
+    pause lets the frame send the open text, and the broker's redacted copy replaces it while the editor is
+    still open. Escape then commits the editor's own text, a new version holding the secret, inside
+    Excalidraw's key handler and so before the frame's keydown listener had marked the board dirty: the
+    change was never sent, and the author's tab kept the secret. That was the flake of the test above,
+    when a slow runner left a pause before its Escape. Fails if the change Escape made is not sent and
+    redacted, so the tab still shows the token."""
+    room = "board-secret-escape"
+    world.create_room(room)
+    page = ui.open(room)
+    frame = open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    token = "ghp" + "_" + "aB3" * 12
+    frame.locator("label").filter(has=frame.locator('[data-testid="toolbar-text"]')).click()
+    box = page.locator("#whiteboard-host iframe").bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.4)
+    # One input event, so the frame sends the open text once and no older copy of it is still on its way back.
+    page.keyboard.insert_text("note " + token)
+    # the frame sends the open text once typing stops, and the broker's redacted copy lands under the editor
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getAppState().editingTextElement !== null && window.sbBoard.api"
+        ".getSceneElements().some(e => e.type === 'text' && e.originalText.includes('[redacted'))",
+    )
+    page.keyboard.press("Escape")
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getAppState().editingTextElement === null && window.sbBoard.api"
+        ".getSceneElements().some(e => e.type === 'text' && e.originalText.includes('[redacted'))",
+    )
+    b = world.broker
+    stored = str(b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id)))
+    assert token not in stored and "[redacted: github token]" in stored, stored[:3000]
+    scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElementsIncludingDeleted())")
+    assert token not in scene and "aB3aB3" not in scene
+
+
 def test_a_picture_for_an_agent_shows_only_the_committed_board(
     ui: UI,  # noqa: F811
     world: UIWorld,  # noqa: F811
