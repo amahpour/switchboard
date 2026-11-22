@@ -1226,8 +1226,11 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                    no_homes_left_behind: session autouse; fails the run, naming each, if a home make_tmp_home() made in
                      this process (each xdist worker) is still there after every fixture's teardown
                    pytest_sessionstart: the controller sweeps the /tmp homes a killed run left (tmp_homes.py): a
-                     home goes only if nobody holds its flock (its maker and the children given it, pass_fds) and
-                     no Unix socket under it answers; one with no lock file or no marker is never a candidate
+                     home goes only if nobody holds its flock (its maker and the children given it, pass_fds) nor
+                     its broker's run/broker.lock (a daemonized broker), no Unix socket under it answers and all of
+                     it could be read; one with no lock file or no marker is never a candidate. It is checked and
+                     removed as one directory (dir fds, identity rechecked), renamed to a yk-gone-* tombstone first;
+                     tmp_home's teardown removes through the same remove_home(), and the sweep removes tombstones
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),
                    web_client (httpx, base_url http://switchboard.localhost:<p>, logged in via the test token)
 engine_world.py    a store, an engine and a FakeClock with no broker; engine_agents.py builds the sessions over HTTPS
