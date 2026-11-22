@@ -898,6 +898,9 @@ class HookEvent:
     subagent_bg: bool = False
     t: float | None = None
     max_wait_s: float | None = None
+    # a turn's end that was not a completed turn: Grok Build's StopCancelled and StopFailure, which the broker
+    # reads as a Stop (``ev``) but which say the continued turn never ran its follow-up (§49.15)
+    aborted: bool = False
 
     @property
     def ev(self) -> str:

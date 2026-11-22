@@ -363,3 +363,288 @@ def test_the_script_prints_only_the_shapes_grok_may_read_whatever_the_server_say
         flat = json.dumps(body)
         for private in ("/ws", "/grok-home", "echo hi", "Ping the sb server", "probe echo"):
             assert private not in flat, (private, body)
+
+
+# -- the first review of #928 ------------------------------------------------------------------------------
+
+
+class StandIn:
+    """A stand-in for the broker at ``/mcp/event`` on 127.0.0.1: it records each request (path, headers,
+    body) and answers with ``answer(path, body)``, a status, extra headers and a body."""
+
+    def __init__(self, answer: Any) -> None:
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        self.seen: list[tuple[str, dict[str, str], bytes]] = []
+        stand_in = self
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *args: Any) -> None:
+                pass
+
+            def _any(self) -> None:
+                n = int(self.headers.get("content-length") or 0)
+                raw = self.rfile.read(n) if n else b""
+                stand_in.seen.append((self.path, dict(self.headers), raw))
+                status, headers, data = answer(self.path, raw)
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            do_POST = do_GET = do_HEAD = _any
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.server.server_address[1]
+        self.url = f"http://127.0.0.1:{self.port}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def run_script(url: str, data: Path, stdin: str | bytes, token: str = "sbat_synthetic") -> Any:
+    """The plugin's script against ``url`` with a synthetic token; its exit, stdout and stderr."""
+    return subprocess.run(
+        [str(SCRIPT)],
+        input=stdin.encode() if isinstance(stdin, str) else stdin,
+        capture_output=True,
+        timeout=30,
+        env=child_env(
+            SWITCHBOARD_URL=url,
+            SWITCHBOARD_AGENT_TOKEN=token,
+            GROK_PLUGIN_DATA=str(data),
+            NO_PROXY="localhost,127.0.0.1",
+        ),
+    )
+
+
+def batch_of(b: InProcBroker, text: str) -> Any:
+    bid = int(TOKEN.search(text).group(1))
+    return b.on_loop(b.state.store.get_batch, bid)
+
+
+@pytest.mark.parametrize("end", ["StopCancelled", "StopFailure", "Stop"])
+def test_an_old_turn_s_end_leaves_a_session_waiting_on_approval_alone(joined: Any, end: str) -> None:
+    """F1 (§11): Grok can report an old turn's end after the next turn began. When the next turn has an
+    approval prompt open, that late end (StopCancelled, StopFailure, or a Stop of the old prompt) must change
+    nothing: the session still waits on its person and no message reaches it. Fails if the late end is read as
+    a subagent's hook, whose path (``subagent_tool_ran``) turns a session waiting on approval busy, and the
+    next tool hook would then carry the message."""
+    b, token, _g, data = joined
+    hook(b, token, data, payload("UserPromptSubmit.json", promptId="prompt-new"))
+    hook(b, token, data, payload("Notification_permission_prompt.json"))
+    assert row(b, "grok-1")["status"] == "waiting-approval"
+    b.call("human.say", {"room": "#build", "text": "@grok-1 are you there"})
+    late = payload("StopCancelled_permission.json", promptId="prompt-old", hook_event_name=end)
+    if end == "Stop":
+        late = payload("Stop.json", promptId="prompt-old")
+    started = time.monotonic()
+    assert hook(b, token, data, late) == ""
+    assert time.monotonic() - started < 10 and not parked(b)
+    m = row(b, "grok-1")
+    assert m["status"] == "waiting-approval" and m["queued"] == 1, m
+
+
+@pytest.mark.parametrize("end", ["StopCancelled", "StopFailure"])
+def test_a_wake_whose_continued_turn_is_cancelled_or_fails_first_goes_back_to_pending(
+    joined: Any, end: str
+) -> None:
+    """F4: a held Stop is answered with a message, and the next thing the continued turn reports is its
+    StopCancelled (the person pressed Esc) or StopFailure (the model's request failed): the model never worked
+    on it, so the wake is not seen. It goes back to pending, and the next held Stop gets it. Fails if the
+    abort is read as a plain Stop, which confirmed the wake."""
+    b, token, _g, data = joined
+    prompt_id = payload("Stop.json")["promptId"]
+    hook(b, token, data, payload("UserPromptSubmit.json", promptId=prompt_id))
+    stop = Held(b, token, data, payload("Stop.json"))
+    wait_for(lambda: parked(b), 10, what="the Stop hook to be held")
+    b.call("human.say", {"room": "#build", "text": "@grok-1 look at the build"})
+    printed = json.loads(stop.result())
+    assert printed["decision"] == "block"
+    abort = payload("StopCancelled_permission.json", promptId=prompt_id, hook_event_name=end)
+    assert hook(b, token, data, abort) == ""
+    assert batch_of(b, printed["reason"]).state == "expired"
+    m = row(b, "grok-1")
+    assert m["status"] == "idle" and m["queued"] == 1, m
+    hook(b, token, data, payload("UserPromptSubmit.json", promptId="next-turn"))
+    again = Held(b, token, data, payload("Stop.json", promptId="next-turn"))
+    assert "look at the build" in json.loads(again.result())["reason"]
+
+
+def test_a_held_stop_whose_hook_dies_is_closed_and_the_next_stop_gets_the_message(joined: Any) -> None:
+    """F3: Grok drops a held Stop hook (the person quit, or sent a queued prompt). The broker watches the
+    request for its close, as the listener route does, and closes the park at once: a message then is not
+    offered to the dead request, and the session's next Stop gets it. Fails if the park stays open until its
+    hour is up, and the message goes to nobody."""
+    import signal
+
+    b, token, _g, data = joined
+    hook(b, token, data, payload("UserPromptSubmit.json"))
+    proc = subprocess.Popen(
+        [str(SCRIPT)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=child_env(
+            SWITCHBOARD_URL=b.base,
+            SWITCHBOARD_AGENT_TOKEN=token,
+            GROK_PLUGIN_DATA=str(data),
+            NO_PROXY="switchboard.localhost,127.0.0.1",
+        ),
+    )
+    try:
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(payload("Stop.json")).encode())
+        proc.stdin.close()
+        wait_for(lambda: parked(b), 10, what="the Stop hook to be held")
+        proc.send_signal(signal.SIGKILL)
+        proc.wait(10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(10)
+        for f in (proc.stdout, proc.stderr):
+            if f is not None:
+                f.close()
+    wait_for(lambda: not parked(b), 10, what="the dead hook's park to close")
+    b.call("human.say", {"room": "#build", "text": "@grok-1 look at the build"})
+    m = row(b, "grok-1")
+    assert m["queued"] == 1, m
+    hook(b, token, data, payload("UserPromptSubmit.json", promptId="next-turn"))
+    stop = Held(b, token, data, payload("Stop.json", promptId="next-turn"))
+    assert "look at the build" in json.loads(stop.result())["reason"]
+
+
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+@pytest.mark.parametrize("name", ["PostToolUse_bash.json", "Stop.json"])
+def test_the_script_follows_no_redirect_so_the_token_reaches_no_other_address(
+    tmp_path: Path, code: int, name: str
+) -> None:
+    """F2: the script's request carries the token. A server that answers 3xx (to another host and port) is
+    not followed: nothing reaches the second listener, and the script prints nothing. Fails if urllib's
+    redirect handler is used, which follows a 301, 302 or 303 to a POST as a GET with the Authorization
+    header still on it."""
+    second = StandIn(lambda path, raw: (200, {"content-type": "application/json"}, b"{}"))
+    first = StandIn(lambda path, raw: (code, {"location": f"http://localhost:{second.port}/mcp/event"}, b""))
+    try:
+        r = run_script(first.url, tmp_path, json.dumps(payload(name)))
+    finally:
+        first.close()
+        second.close()
+    assert r.returncode == 0 and r.stdout == b"", r.stderr
+    assert first.seen, "the script sent nothing"
+    assert first.seen[0][1].get("Authorization") == "Bearer sbat_synthetic"
+    assert second.seen == [], second.seen
+
+
+def blocks_any_stop(path: str, raw: bytes) -> tuple[int, dict[str, str], bytes]:
+    body = json.loads(raw)
+    if body["event"] == "Stop" and "wait_s" in body:
+        reply = {"decision": "block", "reason": "a message"}
+    else:
+        reply = {}
+    return 200, {"content-type": "application/json"}, json.dumps(reply).encode()
+
+
+def test_a_wake_count_that_cannot_be_kept_means_the_hook_does_not_park(joined: Any, tmp_path: Path) -> None:
+    """F5: the 7-wake cap fails closed. The hook writes the count with this wake in it before it parks; if
+    that write fails (here the data directory is a file), it does not park, so the broker hands it no message,
+    and it reports a plain Stop, the cap reached. The message is delivered later, at the next held Stop. Fails
+    if the hook parks first and counts after, as before: the wake is handed out uncounted."""
+    b, token, _g, _data = joined
+    blocked = tmp_path / "not-a-directory"
+    blocked.write_text("")
+    hook(b, token, blocked, payload("UserPromptSubmit.json"))
+    b.call("human.say", {"room": "#build", "text": "@grok-1 look at the build"})
+    started = time.monotonic()
+    assert hook(b, token, blocked, payload("Stop.json")) == ""
+    assert time.monotonic() - started < 10 and not parked(b)
+    m = row(b, "grok-1")
+    assert m["status"] == "idle" and m["queued"] == 1, m
+    good = tmp_path / "plugin-data"
+    hook(b, token, good, payload("UserPromptSubmit.json", promptId="next-turn"))
+    stop = Held(b, token, good, payload("Stop.json", promptId="next-turn"))
+    assert "look at the build" in json.loads(stop.result())["reason"]
+
+
+@pytest.mark.parametrize("stored", ["[1]", "3", "null", '"wakes"', '{"prompt_id": "P", "wakes": "2"}'])
+def test_a_stored_wake_count_that_is_not_a_count_is_the_cap(tmp_path: Path, stored: str) -> None:
+    """F5: a count file that holds valid JSON that is not a count (not an object, or a bad number) is the cap
+    reached: the hook does not park, so it takes no message, and reports a plain Stop. Fails if a file that
+    isn't an object reads as no wakes yet, as before: the hook parks and is handed a message."""
+    import hashlib
+
+    p = payload("Stop_continuation.json")
+    sid, prompt_id = p["session_id"], p["promptId"]
+    wakes = tmp_path / "wakes"
+    wakes.mkdir()
+    (wakes / hashlib.sha256(sid.encode()).hexdigest()[:32]).write_text(stored.replace("P", prompt_id))
+    server = StandIn(blocks_any_stop)
+    try:
+        r = run_script(server.url, tmp_path, json.dumps(p))
+    finally:
+        server.close()
+    assert r.returncode == 0 and r.stdout == b"", r.stderr
+    [(_path, _headers, raw)] = server.seen
+    assert "wait_s" not in json.loads(raw)  # a plain Stop: nothing is held, nothing handed out
+
+
+def test_the_script_reads_no_stdin_past_its_cap(tmp_path: Path) -> None:
+    """F7: an event's stdin past 1 MB is not read as an event: nothing is reported, nothing printed. Fails if
+    the script reads stdin whole, however large."""
+    server = StandIn(lambda path, raw: (200, {"content-type": "application/json"}, b"{}"))
+    big = payload("PostToolUse_bash.json", padding="x" * (1024 * 1024))
+    try:
+        r = run_script(server.url, tmp_path, json.dumps(big))
+        small = run_script(server.url, tmp_path, json.dumps(payload("PostToolUse_bash.json")))
+    finally:
+        server.close()
+    assert r.returncode == 0 and r.stdout == b"", r.stderr
+    assert small.returncode == 0
+    assert len(server.seen) == 1  # only the small one
+
+
+def test_the_script_takes_no_reply_past_its_cap(tmp_path: Path) -> None:
+    """F7: a broker's answer past 1 MB is no answer: the script prints nothing, even in a shape Grok reads.
+    Fails if the reply is read whole before ``json.loads``."""
+    huge = {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "x" * (1024 * 1024)}}
+    server = StandIn(lambda path, raw: (200, {"content-type": "application/json"}, json.dumps(huge).encode()))
+    try:
+        r = run_script(server.url, tmp_path, json.dumps(payload("PostToolUse_bash.json")))
+    finally:
+        server.close()
+    assert r.returncode == 0 and r.stdout == b"", r.stderr
+    assert server.seen
+
+
+def test_a_huge_tool_response_is_walked_to_a_size_and_depth_never_serialized(tmp_path: Path) -> None:
+    """F7: the batch tokens of a switchboard tool's answer are found by walking it to 32 levels and 10000
+    values, never by serializing all of it. A token past either limit is not looked for; one within them is;
+    and an answer nested past what JSON can parse is no event, not a crash. Fails if ``tool_response`` is
+    serialized whole (every token is found, and the deep one crashes the script)."""
+    near, deep, far = "yk:b11.0123abcd", "yk:b12.0123abcd", "yk:b13.0123abcd"
+    nested: Any = [deep]
+    for _ in range(40):
+        nested = [nested]
+    wide = ["ab"] * 20000
+    wide[10] = near
+    wide[15000] = far
+    server = StandIn(lambda path, raw: (200, {"content-type": "application/json"}, b"{}"))
+    try:
+        own = payload("PostToolUse_mcp_switchboard_unsupported.json", tool_response={"a": wide, "b": nested})
+        r = run_script(server.url, tmp_path, json.dumps(own))
+        crash = payload("PostToolUse_mcp_switchboard_unsupported.json")
+        text = json.dumps(crash).replace(
+            '"tool_response":', '"tool_response": ' + "[" * 100000 + "]" * 100000 + ', "x":'
+        )
+        r2 = run_script(server.url, tmp_path, text)
+    finally:
+        server.close()
+    assert r.returncode == 0 and r2.returncode == 0, (r.stderr, r2.stderr)
+    assert len(server.seen) == 1, server.seen
+    sent = json.loads(server.seen[0][2])["tool_response"]
+    assert sent == near, sent

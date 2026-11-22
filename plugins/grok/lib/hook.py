@@ -22,9 +22,15 @@ flag, the notification's type, and a tool's name and call id; for switchboard's 
 tokens in the answer. Never a tool's input or output, the working directory, the transcript's path or the
 prompt's text, all of which Grok hands the hook: they are the person's, and a hosted broker is another
 machine (§11). The token comes from ``SWITCHBOARD_AGENT_TOKEN`` in Grok's environment: switchboard writes it
-into no file.
+into no file. It goes only to https, or plain http on this machine, and never follows a redirect: a 3xx is a
+failure, so the token never reaches an address the person did not set.
+
+Everything it reads is bounded: its stdin and the broker's reply to ``INPUT_MAX`` and ``REPLY_MAX`` bytes (more
+is no event, or no answer), and a tool's answer is walked for batch tokens to a size and a depth, never
+serialized whole.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -61,6 +67,11 @@ MAX_WAKES = 7  # Grok allows 8 Stop blocks in one turn and fires no Stop after t
 REPORT_TIMEOUT = 4  # under the 5 s hooks.json gives every other event
 RETRY_STATUSES = (429, 500, 502, 503, 504)
 OUTAGE_LIMIT_S = 120
+INPUT_MAX = 1024 * 1024  # a hook's stdin past this is not read as an event
+REPLY_MAX = 1024 * 1024  # nor a broker's answer past this as an answer
+SCAN_MAX = 256 * 1024  # characters of a switchboard tool's answer searched for batch tokens
+SCAN_NODES = 10000  # values of that answer visited, at most
+SCAN_DEPTH = 32  # and how deep
 
 
 def plugin_version():
@@ -73,6 +84,21 @@ def plugin_version():
     except (OSError, ValueError, AttributeError):
         return None
     return version if isinstance(version, str) and VERSION.fullmatch(version) else None
+
+
+def opener():
+    """urllib's handlers without its redirect handler: a 3xx answer is a failure (``HTTPError``) and is never
+    followed, so the token in the request's header goes nowhere but ``SWITCHBOARD_URL``."""
+    o = urllib.request.OpenerDirector()
+    for handler in (
+        urllib.request.ProxyHandler(),
+        urllib.request.HTTPHandler(),
+        urllib.request.HTTPSHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        o.add_handler(handler)
+    return o
 
 
 def send(body, timeout, retry_stop=False):
@@ -94,8 +120,11 @@ def send(body, timeout, retry_stop=False):
         base + "/mcp/event", data=json.dumps(body).encode(), headers=headers, method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            return json.load(response)
+        with opener().open(req, timeout=timeout) as response:
+            if response.status != 200:
+                return None  # only a 200 answers; nothing else is read
+            raw = response.read(REPLY_MAX + 1)
+        return json.loads(raw) if len(raw) <= REPLY_MAX else None
     except urllib.error.HTTPError as err:
         err.close()
         if retry_stop and err.code in RETRY_STATUSES:
@@ -105,7 +134,7 @@ def send(body, timeout, retry_stop=False):
         if retry_stop:
             raise
         return None
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
 
 
@@ -150,19 +179,38 @@ def short(value):
     return value if isinstance(value, str) and 0 < len(value) <= ID_MAX else None
 
 
+def batch_tokens(value):
+    """The batch tokens in a switchboard tool's answer, in the order they appear: its strings, walked to
+    ``SCAN_DEPTH`` levels, ``SCAN_NODES`` values and ``SCAN_MAX`` characters in all, and never serialized
+    whole, however large Grok's ``tool_response`` is."""
+    found = []
+    budget, nodes = SCAN_MAX, 0
+    stack = [(value, 0)]
+    while stack and budget > 0 and nodes < SCAN_NODES and len(found) < MAX_TOKENS:
+        v, depth = stack.pop()
+        nodes += 1
+        if isinstance(v, str):
+            chunk = v[:budget]
+            budget -= len(chunk)
+            found.extend(TOKEN.findall(chunk))
+        elif depth < SCAN_DEPTH and isinstance(v, dict):
+            stack.extend((x, depth + 1) for x in reversed(list(v.values())[:SCAN_NODES]))
+        elif depth < SCAN_DEPTH and isinstance(v, list):
+            stack.extend((x, depth + 1) for x in reversed(v[:SCAN_NODES]))
+    return list(dict.fromkeys(found))[:MAX_TOKENS]
+
+
 def wakes_file(sid):
     """Where this session's count of wakes in its current turn is kept: Grok's data directory for the plugin,
     one small file a session, named by a hash so no id reaches a path."""
-    import hashlib
-
     data = os.environ.get("GROK_PLUGIN_DATA") or os.path.join(os.path.expanduser("~"), ".grok", "switchboard")
     return os.path.join(data, "wakes", hashlib.sha256(sid.encode()).hexdigest()[:32])
 
 
 def wakes_so_far(path, prompt_id, continuing):
     """How many times this turn was already woken: 0 at a turn's first Stop (``stopHookActive`` false), and
-    for a prompt id other than the one counted. Unreadable counts as the cap, so a broken file never wakes
-    past it."""
+    for a prompt id other than the one counted. A file that can't be read, or that holds anything but a count
+    (not an object, a bad number), counts as the cap: a broken file never wakes past it."""
     if not continuing:
         return 0
     try:
@@ -170,23 +218,43 @@ def wakes_so_far(path, prompt_id, continuing):
             got = json.load(f)
     except FileNotFoundError:
         return 0
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return MAX_WAKES
-    if not isinstance(got, dict) or got.get("prompt_id") != prompt_id:
+    if not isinstance(got, dict):
+        return MAX_WAKES
+    if got.get("prompt_id") != prompt_id:
         return 0
     n = got.get("wakes")
-    return n if isinstance(n, int) and not isinstance(n, bool) and 0 <= n else MAX_WAKES
+    return n if isinstance(n, int) and not isinstance(n, bool) and 0 <= n <= MAX_WAKES else MAX_WAKES
 
 
-def count_wake(path, prompt_id, n):
+def reserve_wake(path, prompt_id, n):
+    """Write the count with this wake in it before the hook parks, durably (a temporary file, fsync, rename),
+    so a wake the broker hands out is always counted, even if the hook is then killed. False if it could not
+    be written: then the hook does not park, and no message is handed to it."""
+    tmp = "%s.%d.tmp" % (path, os.getpid())
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump({"prompt_id": prompt_id, "wakes": n}, f)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
     except OSError:
-        pass
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    try:
+        fd = os.open(os.path.dirname(path), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass  # the rename is done; a directory that can't be synced (some filesystems) still holds it
+    return True
 
 
 def watch_parent():
@@ -205,8 +273,11 @@ def watch_parent():
 
 def main():
     try:
-        p = json.load(sys.stdin)
-    except ValueError:
+        raw = sys.stdin.buffer.read(INPUT_MAX + 1)
+        if len(raw) > INPUT_MAX:
+            return  # past any event Grok sends: not read as one
+        p = json.loads(raw)
+    except (OSError, ValueError, RecursionError):
         return
     if not isinstance(p, dict):
         return
@@ -242,17 +313,16 @@ def main():
             body["tool_use_id"] = use
         if tool.startswith(OWN_TOOL):
             # only the batch tokens: the broker reads nothing else of the answer
-            out = p.get("tool_response")
-            text = out if isinstance(out, str) else json.dumps(out)
-            tokens = list(dict.fromkeys(TOKEN.findall(text[: 256 * 1024])))[:MAX_TOKENS]
-            body["tool_response"] = " ".join(tokens)
+            body["tool_response"] = " ".join(batch_tokens(p.get("tool_response")))
     if event == "Stop":
         continuing = p.get("stop_hook_active") is True
         body["stop_hook_active"] = continuing
         path = wakes_file(sid)
         woken = wakes_so_far(path, prompt_id, continuing)
-        if reason != "end_turn" or woken >= MAX_WAKES:
-            send(body, REPORT_TIMEOUT)  # idle, and not listening: the person's next prompt starts again
+        if reason != "end_turn" or woken >= MAX_WAKES or not reserve_wake(path, prompt_id, woken + 1):
+            # idle, and not listening: the person's next prompt starts again. A count that could not be kept
+            # is the cap reached, so the 8th block Grok would end the turn on is never handed out.
+            send(body, REPORT_TIMEOUT)
             return
         watch_parent()
         reply = park(body)
@@ -263,7 +333,6 @@ def main():
             and isinstance(reply["reason"], str)
             and reply["reason"]
         ):
-            count_wake(path, prompt_id, woken + 1)
             print(json.dumps(reply))
         return
     reply = send(body, REPORT_TIMEOUT)

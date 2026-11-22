@@ -41,6 +41,7 @@ def as_broker_reads(name: str, **extra: Any) -> Any:
     ``hook_event_name``, mapped through ``GROK_EVENTS``), through ``hook_params`` and ``parse_hook_event``."""
     p = payload(name)
     event = agent_http.GROK_EVENTS[p["hook_event_name"]]
+    aborted = p["hook_event_name"] in ("StopCancelled", "StopFailure")
     fields = {
         "session_id": p["session_id"],
         "prompt_id": p.get("promptId"),
@@ -53,7 +54,10 @@ def as_broker_reads(name: str, **extra: Any) -> Any:
         **extra,
     }
     fields = {k: v for k, v in fields.items() if v is not None}
-    return parse_hook_event("grok", event, agent_http.hook_params(event, fields, 100.0))
+    params = agent_http.hook_params(event, fields, 100.0)
+    if aborted:
+        params["aborted"] = True  # as ``CommandHook`` marks Grok's two aborted ends
+    return parse_hook_event("grok", event, params)
 
 
 def part(**kw: Any) -> Participant:
@@ -143,20 +147,26 @@ def test_only_a_permission_prompt_notification_is_an_approval() -> None:
         assert not a.asks_approval(as_broker_reads(name)), name
 
 
-def test_a_cancelled_turn_is_a_stop_that_is_never_held_and_an_old_one_is_ignored() -> None:
-    """StopCancelled and StopFailure end a turn: they are Stops to the broker (idle), never held. Grok reports
-    a cancelled turn off its command loop, so it can come after the next turn's UserPromptSubmit: a Stop
-    naming another prompt than the session's current one is an old turn's and is not the session's
-    (``other_thread``). Fails if a late cancel turns a busy session idle, or a current Stop is ignored."""
+def test_a_cancelled_turn_is_a_stop_that_is_never_held_and_an_old_one_is_dropped() -> None:
+    """StopCancelled and StopFailure end a turn: they are Stops to the broker (idle), never held, and marked
+    ``aborted``. Grok reports a cancelled turn off its command loop, so it can come after the next turn's
+    UserPromptSubmit: a turn's end naming another prompt than the session's current one is an old turn's and
+    is dropped (``stale_hook``), never read as a subagent's (``other_thread``), whose path ends an approval
+    hold (§11). Fails if a late cancel is the session's, or is routed through ``other_thread``."""
     assert agent_http.GROK_EVENTS["StopCancelled"] == agent_http.GROK_EVENTS["StopFailure"] == "Stop"
     a = HttpsGrokAdapter(CFG)
     cancelled = as_broker_reads("StopCancelled_permission.json")
-    assert cancelled.ev == "Stop" and cancelled.gen == payload("StopCancelled_permission.json")["promptId"]
-    assert a.other_thread(part(gen="a-newer-prompt"), cancelled)
-    assert not a.other_thread(part(gen=cancelled.gen), cancelled)
-    assert not a.other_thread(part(gen=None), cancelled)  # no turn known yet: nothing to compare
+    assert cancelled.ev == "Stop" and cancelled.aborted
+    assert cancelled.gen == payload("StopCancelled_permission.json")["promptId"]
+    assert not as_broker_reads("Stop.json").aborted
+    for ev in (cancelled, as_broker_reads("Stop.json"), as_broker_reads("Stop_continuation.json")):
+        assert a.stale_hook(part(gen="a-newer-prompt"), ev)
+        assert not a.other_thread(part(gen="a-newer-prompt"), ev)
+        assert not a.stale_hook(part(gen=ev.gen), ev)
+        assert not a.stale_hook(part(gen=None), ev)  # no turn known yet: nothing to compare
     tool = as_broker_reads("PostToolUse_mcp.json")
-    assert tool.gen is None and not a.other_thread(part(gen="p"), tool)  # Grok's tool hooks carry no prompt
+    assert tool.gen is None and not a.stale_hook(part(gen="p"), tool)  # Grok's tool hooks carry no prompt
+    assert not a.other_thread(part(gen="p"), tool)
 
 
 def test_the_turn_that_joined_is_anchored_by_its_completed_stop() -> None:
@@ -182,6 +192,20 @@ def test_a_follow_up_is_confirmed_by_the_turn_it_continued_and_lost_to_a_typed_p
     assert a.continue_verdict(p, True, as_broker_reads("UserPromptSubmit.json")) == "human_prompt"
     assert a.continue_verdict(p, False, as_broker_reads("UserPromptSubmit.json")) == "human_prompt"
     assert a.continue_verdict(p, True, as_broker_reads("SessionEnd.json")) == "session_end"
+
+
+def test_a_follow_up_whose_turn_was_cancelled_or_failed_first_goes_back_to_pending() -> None:
+    """A Stop block continues the turn; if the next thing the session reports is that turn's StopCancelled
+    (the person pressed Esc, or declined a prompt) or StopFailure (the model's request failed), the model
+    never worked on the follow-up, so it goes back to pending (``turn_aborted``) for the next held Stop.
+    Before #928's
+    review both were read as a plain Stop, which confirmed it: a message nobody saw, marked delivered."""
+    a = HttpsGrokAdapter(CFG)
+    p = part()
+    cancelled = as_broker_reads("StopCancelled_permission.json")
+    assert a.continue_verdict(p, True, cancelled) == "turn_aborted"
+    assert a.continue_verdict(p, False, cancelled) == "turn_aborted"
+    assert a.continue_verdict(p, True, as_broker_reads("Stop_continuation.json")) == "confirm"
 
 
 def test_the_hook_table_answers_grok_only_after_a_tool_and_at_stop() -> None:

@@ -199,6 +199,12 @@ class Adapter:
         """Whether this hook belongs to a subagent sharing the session ID."""
         return False
 
+    def stale_hook(self, p: Participant, ev: HookEvent) -> bool:
+        """True if this hook reports a turn of the session that is already over (Grok Build's late end of an
+        older prompt, §49.15): the engine drops it with no state change at all. Unlike ``other_thread``, it
+        never ends an approval hold, since it says nothing about the session's current turn (§11)."""
+        return False
+
     def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
         """Whether a tool hook can identify the current turn when its prompt preceded join."""
         return False

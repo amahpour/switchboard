@@ -372,16 +372,25 @@ class HttpsGrokAdapter(Listening):
     def asks_approval(self, ev: HookEvent) -> bool:
         return ev.ev == "Notification" and ev.notification == GROK_APPROVAL_NOTIFICATION
 
-    def other_thread(self, p: Participant, ev: HookEvent) -> bool:
-        # Grok reports a cancelled or failed turn off its command loop, so that report (a Stop here) can
-        # arrive after the next turn's UserPromptSubmit (its own docs, 1.0.89): a Stop of another prompt than
-        # the current one is an old turn's, and must not make a busy session idle. Only UserPromptSubmit and a
+    def stale_hook(self, p: Participant, ev: HookEvent) -> bool:
+        # Grok reports a cancelled or failed turn off its command loop, so that report (a Stop, StopCancelled
+        # or StopFailure, all a Stop here) can arrive after the next turn's UserPromptSubmit (its own docs,
+        # 1.0.89): a turn's end naming another prompt than the current one is an old turn's, and is dropped.
+        # Never ``other_thread``, whose subagent path ends an approval hold (§11). Only UserPromptSubmit and a
         # turn's end carry the prompt's id; tool hooks carry none.
         return ev.ev == "Stop" and bool(ev.gen) and bool(p.gen) and (ev.gen or "")[:128] != p.gen
 
     def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
         # The prompt that joined came before the session was in a room: its turn's completed Stop names it.
         return ev.ev == "Stop" and ev.reason == "end_turn"
+
+    def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
+        # A continued turn that ended cancelled or failed (StopCancelled, StopFailure) before any other hook
+        # never ran its follow-up: the model was stopped, or its request failed. Back to pending, for the
+        # next held Stop (§49.15). Any later hook first (a tool) confirmed it already.
+        if ev.ev == "Stop" and ev.aborted:
+            return "turn_aborted"
+        return super().continue_verdict(p, acked, ev)
 
     def prompt_verdict(self, acked: bool) -> str | None:
         # A Stop block continues the turn with no UserPromptSubmit (measured, 1.0.89), so one before the

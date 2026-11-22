@@ -169,7 +169,8 @@ OPENCODE_STATUS_EVENTS = {
 OPENCODE_WAKE_EVENTS = frozenset({"wake.queued", "wake.dropped"})
 # What Grok Build's plugin reports at /mcp/event (§49.15), by the name Grok gives each event
 # (``hook_event_name``), and the event the broker reads it as. Nothing else is taken. A turn that ended
-# cancelled or failed is a Stop that is never held: only Grok's own Stop may wait for a message.
+# cancelled or failed is a Stop that is never held (only Grok's own Stop may wait for a message), marked
+# ``aborted`` so a follow-up it ended goes back to pending (§49.15).
 GROK_EVENTS = {
     "SessionStart": "SessionStart",
     "UserPromptSubmit": "UserPromptSubmit",
@@ -1445,12 +1446,14 @@ class CommandHook:
                 )
             await _reply(send, 200, {})
             return
+        aborted = False
         if harness == "grok":
             if event not in GROK_EVENTS:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
             if GROK_EVENTS[event] == "Stop" and event != "Stop":
                 body = {k: v for k, v in body.items() if k != "wait_s"}  # a cancelled turn is never held
+                aborted = True  # and stays a cancel or a failure up to its verdict (§49.15)
             event = GROK_EVENTS[event]
         ev = canonical_event(event)
         allowed = {
@@ -1489,9 +1492,22 @@ class CommandHook:
             return
         agents: Any = self.tools.state.agents
         conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
-        res = await agents.http_hook(
-            conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
-        )
+        params = hook_params(event, fields, self.tools.state.clock.now())
+        if aborted:
+            params["aborted"] = True
+
+        async def gone() -> None:
+            # the hook's process went away while its Stop was held (Grok dropped it, Cursor quit): so does the
+            # park, at once, so no message is handed to a request nobody reads (as the listener's route)
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            agents.run(self.tools.state.engine.close_conn_sinks(conn.id))
+
+        watch = asyncio.create_task(gone())
+        try:
+            res = await agents.http_hook(conn, harness, ev, params)
+        finally:
+            watch.cancel()
         if res.get("ended") == "restarting":
             await _reply(
                 send,
