@@ -3,10 +3,12 @@
 Grok Build runs with a **temp $HOME** of its own (``grok-home``, mode 0700), so the person's own ``~/.grok``
 (config, plugins, hooks, trusted folders, sessions) is never read or written. Grok works in the scratch
 repository ``<home>/ws``, a subfolder of that home, and the copy of the login is ``<home>/.grok/auth.json``,
-outside ``ws``: no tool call or workspace snapshot of Grok's can read it (#928's review, F8, F12). A folder
-under the home is how the run avoids Grok's first-run trust question without accepting it: the run passes no
-``--trust``, writes no ``trusted_folders``, and never answers a trust question; if Grok asks one anyway, the
-run fails and says so. In the temp home, ``.grok/plugins/switchboard`` is a copy of this checkout's
+outside ``ws``: no tool call or workspace snapshot of Grok's can read it (#928's review, F8, F12). Grok
+Build 1.0.92 asks once whether to trust ``ws`` (1.0.89 didn't); the driver answers ``y`` for that folder only,
+in the private tmux, as it answers Claude Code's trust dialog for its own scratch folder (the maintainer's yes
+of 2026-11-22). Grok keeps that answer in the temp home, never the person's. The run passes no ``--trust`` and
+writes no ``trusted_folders`` itself, and a trust question about any other folder, or one after start-up,
+fails the run unanswered. In the temp home, ``.grok/plugins/switchboard`` is a copy of this checkout's
 ``plugins/grok`` and ``.grok/config.toml`` enables it, starts in ask mode, and allows switchboard's tools
 (``MCPTool(switchboard__*)``) and the scratch script (``Bash(sh hold.sh *)``) and nothing else, as the Cursor
 profile does; any other prompt is declined, never approved. It also turns off what Grok sends xAI besides
@@ -41,9 +43,9 @@ ASK = ["Bash(touch approval-was-given)"]
 
 
 TRUST_FAIL = (
-    "Grok asked whether to trust a folder. The live run never answers that (no key, no --trust, no"
-    " trusted_folders): the workspace is meant to be a folder under the temp HOME, which Grok should not ask"
-    " about. Look at what Grok asked:\n"
+    "Grok asked whether to trust a folder the live run doesn't own, or asked it after start-up. The run"
+    " answers only the start-up question for its own scratch folder, and never answers this one. What Grok"
+    " asked:\n"
 )
 
 
@@ -76,7 +78,7 @@ class GrokRun(Run):
     input_marker = "❯"
 
     def workspace(self) -> Path:
-        """``<home>/ws``: under the temp HOME, so Grok asks no trust question, and beside its ``.grok``."""
+        """``<home>/ws``: under the temp HOME, beside its ``.grok`` and outside it."""
         return self.base / "grok-home" / "ws"
 
     def prepare(self) -> None:
@@ -118,7 +120,11 @@ class GrokRun(Run):
 
     def ready_step(self, screen: str) -> bool:
         assert not screens.quota_exhausted(screen), "Grok's usage limit is hit:\n" + screen
-        assert not screens.grok_trust_prompt(screen), TRUST_FAIL + screen
+        key = screens.grok_dialog(screen, {str(self.ws), str(self.ws.resolve())})
+        assert key != "FAIL", TRUST_FAIL + screen
+        if key:
+            self.tmux.key(self.session, key)
+            return False
         return "❯" in screen and ("Shift+Tab:mode" in screen or "ctrl+q" in screen.lower())
 
     def type(self, text: str) -> None:
@@ -131,8 +137,8 @@ class GrokRun(Run):
 
     def decline_stray_prompt(self) -> None:
         """Grok's prompt takes Esc as "scrollback", not a decline: Ctrl+C cancels it (the turn ends with
-        StopCancelled), and never approves anything. A trust question is not a tool's prompt: it is never
-        answered, not even declined, and the run fails."""
+        StopCancelled), and never approves anything. A trust question after start-up is not a tool's prompt:
+        it is never answered, not even declined, and the run fails."""
         screen = self.tmux.capture(self.session)
         assert not screens.grok_trust_prompt(screen), TRUST_FAIL + screen
         if screens.approval_open(self.harness, screen):

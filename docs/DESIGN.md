@@ -29,7 +29,7 @@ The build runs unattended, so nothing may block on a human. Anything that needs 
   - no `--dangerously-*` and no `--approve-for-me`;
   - no MCP servers or hooks other than switchboard's: the stand-ins of §12.4 keep the user's out, and a preflight that walks the CLI's process tree aborts the test if another MCP server runs under it;
   - scratch repos with no git remote.
-- **tmux is for the test harness only.** Use private `-L sb-live-<harness>-<pid>` sockets and an `env -i` clean env; the product never types into a terminal. The live driver may answer only the workspace-trust dialog of Claude Code for its own scratch folder. If a prompt appears it declines it with Esc, and it never approves one.
+- **tmux is for the test harness only.** Use private `-L sb-live-<harness>-<pid>` sockets and an `env -i` clean env; the product never types into a terminal. The live driver may answer only the workspace-trust dialog of Claude Code, and Grok Build's start-up trust question (the maintainer's yes of 2026-11-22, #928), for its own scratch folder. If a prompt appears it declines it with Esc, and it never approves one.
 - **Devin must run outside the Claude Code Bash sandbox** (found in the M0 Devin runs). If the build session can't manage that, mark the Devin live tests "not run: sandbox" and move on. Never send Esc Esc then Enter to an idle Devin REPL: that opens the revert picker (F§11).
 
 **Tooling and records**

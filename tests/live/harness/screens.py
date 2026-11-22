@@ -118,16 +118,33 @@ def claude_input_text(screen: str) -> str:
     return " ".join(screen.splitlines()[rows[-2] + 1 : rows[-1]]).strip()
 
 
-# Grok's first-run question about a folder's trust, in the phrasings it may use: the run never answers it
+# Grok's first-run question about a folder's trust, in the phrasings it may use
 _GROK_TRUST = re.compile(
     r"Do you trust|trust (?:this|the) (?:folder|directory|workspace)|Trust (?:folder|workspace)", re.I
 )
+# its "yes" row, with the key that picks it (Grok Build 1.0.92: "Yes, proceed   y")
+_GROK_TRUST_YES = re.compile(r"^\s*(?:❯\s*)?Yes, proceed\s+y\s*$", re.M)
 
 
 def grok_trust_prompt(screen: str) -> bool:
-    """Whether Grok is asking whether to trust a folder. The live run never answers that question, with a key
-    or a setting: it fails instead (#928's review, F12)."""
+    """Whether Grok is asking whether to trust a folder."""
     return bool(_GROK_TRUST.search(screen))
+
+
+def grok_dialog(screen: str, workspaces: set[str]) -> str | None:
+    """What the driver does at Grok Build's start-up trust question: the key to press, or None.
+
+    Only the question for the run's own scratch folder is answered, as for Claude Code (``claude_dialog``),
+    with the maintainer's yes of 2026-11-22 (#928): ``y`` on "Yes, proceed" when the folder it names, on a
+    line of its own, is one of ``workspaces`` (the scratch folder's path as given and resolved). Any other
+    trust question, or one whose rows don't read as expected, is ``FAIL``: the caller fails the run and
+    answers nothing."""
+    if not grok_trust_prompt(screen):
+        return None
+    named = {line.strip() for line in screen.splitlines()}
+    if named & workspaces and _GROK_TRUST_YES.search(screen):
+        return "y"
+    return "FAIL"
 
 
 def grok_input_text(screen: str) -> str:

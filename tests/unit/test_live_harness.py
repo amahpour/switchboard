@@ -101,11 +101,11 @@ def test_grok_s_login_copy_is_kept_outside_the_folder_it_works_in_and_uploads_ar
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#928's review (F8, F12): the live run gives Grok a temp HOME of its own and works in ``<home>/ws``, a
-    subfolder of it, so Grok asks no first-run trust question and none is accepted; the copy of the person's
-    login is ``<home>/.grok/auth.json``, outside ``ws``, so no tool call or workspace snapshot of Grok's can
-    read it; and its config turns telemetry and trace uploads off. Nothing writes ``trusted_folders`` or
-    passes ``--trust``. Fails if the workspace is beside the home (as on dc5df42a: ``<run>/ws`` and
-    ``<run>/grok-home``), if the login is under the workspace, or if a setting is missing."""
+    subfolder of it; the copy of the person's login is ``<home>/.grok/auth.json``, outside ``ws``, so no
+    tool call or workspace snapshot of Grok's can read it; and its config turns telemetry and trace uploads
+    off. The harness itself writes no ``trusted_folders`` and passes no ``--trust``. Fails if the workspace
+    is beside the home (as on dc5df42a: ``<run>/ws`` and ``<run>/grok-home``), if the login is under the
+    workspace, or if a setting is missing."""
     real = tmp_path / "real-home"
     (real / ".grok").mkdir(parents=True)
     (real / ".grok" / "auth.json").write_text('{"synthetic": true}')
@@ -139,22 +139,61 @@ def test_grok_s_login_copy_is_kept_outside_the_folder_it_works_in_and_uploads_ar
     assert not auth.exists()
 
 
-def test_grok_s_trust_question_fails_the_run_and_is_never_answered() -> None:
-    """F12: a trust question on Grok's screen fails the run with a clear message, at start and later, and no
-    key is sent for it (not even the Ctrl+C that declines a tool's prompt). Fails if the run answers or
-    declines it, or reads it as ready."""
-    screen = "Do you trust the contents of this folder?\n ❯ Yes, trust this folder\n   No, exit\n"
-    assert screens.grok_trust_prompt(screen)
-    assert not screens.grok_trust_prompt("❯ \nShift+Tab:mode")
+# Grok Build 1.0.92's start-up question, as a live run saw it (the run's temp folder)
+GROK_TRUST_SCREEN = """
+  ~/ws
+
+                                                       Do you trust the contents of this directory?
+                                                          /tmp/sb-live-grok-hrvjdgzt/grok-home/ws
+
+                                                 Grok Build may run or modify contents in this directory,
+                                                                  posing security risks.
+
+                                                              Yes, proceed                 y
+                                                              No, quit                     n
+"""
+GROK_WS = "/tmp/sb-live-grok-hrvjdgzt/grok-home/ws"
+
+
+def _grok_run_with_keys(screen: str) -> tuple[grok.GrokRun, list[str]]:
     r = object.__new__(grok.GrokRun)
-    with pytest.raises(AssertionError, match="never answers"):
-        r.ready_step(screen)
     sent: list[str] = []
     r.session = "s"
     r.harness = "grok"
     r.stray_declined = 0
+    r.ws = Path(GROK_WS)
     r.tmux = type("T", (), {"capture": lambda self, s: screen, "key": lambda self, s, k: sent.append(k)})()
-    with pytest.raises(AssertionError, match="never answers"):
+    return r, sent
+
+
+def test_grok_s_start_up_trust_question_is_answered_only_for_the_run_s_own_folder() -> None:
+    """#928, with the maintainer's yes of 2026-11-22: at start-up the driver presses ``y`` on Grok's trust
+    question when the folder it names is the run's own scratch folder, and the screen is not yet ready. The
+    same question about any other folder (the person's home, a parent, a longer path), or with rows that
+    don't read as Grok's, fails the run with nothing pressed. Fails if the run answers for another folder,
+    answers a malformed question, or never answers its own (the 1.0.92 run stopped there)."""
+    assert screens.grok_dialog(GROK_TRUST_SCREEN, {GROK_WS}) == "y"
+    assert screens.grok_dialog("❯ \nShift+Tab:mode", {GROK_WS}) is None
+    for other in ("/tmp/sb-live-grok-hrvjdgzt/grok-home", "/home/someone", GROK_WS + "/sub"):
+        assert screens.grok_dialog(GROK_TRUST_SCREEN.replace(GROK_WS, other), {GROK_WS}) == "FAIL"
+    no_yes_row = GROK_TRUST_SCREEN.replace("Yes, proceed                 y", "Yes, proceed")
+    assert screens.grok_dialog(no_yes_row, {GROK_WS}) == "FAIL"
+
+    r, sent = _grok_run_with_keys(GROK_TRUST_SCREEN)
+    assert r.ready_step(GROK_TRUST_SCREEN) is False and sent == ["y"]
+    elsewhere = GROK_TRUST_SCREEN.replace(GROK_WS, "/home/someone")
+    r, sent = _grok_run_with_keys(elsewhere)
+    with pytest.raises(AssertionError, match="never answers this one"):
+        r.ready_step(elsewhere)
+    assert sent == []
+
+
+def test_grok_s_trust_question_after_start_up_fails_the_run_and_is_never_answered() -> None:
+    """F12: a trust question once the run is under way fails it with a clear message, and no key is sent for
+    it (not even the Ctrl+C that declines a tool's prompt), even for the run's own folder. Fails if the run
+    answers or declines it."""
+    r, sent = _grok_run_with_keys(GROK_TRUST_SCREEN)
+    with pytest.raises(AssertionError, match="never answers this one"):
         r.decline_stray_prompt()
     assert sent == []
 
