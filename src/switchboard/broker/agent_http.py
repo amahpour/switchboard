@@ -659,7 +659,9 @@ class HttpTools:
         session of the call it precedes; every other event goes to the session it names (§49.4),
         and the answer is the hook's reply, checked (``reply_for``)."""
         c = self._served()
-        if c is None or c.harness == "opencode":
+        if c is None or c.harness in ("opencode", "grok"):
+            # neither reports through this tool: OpenCode posts to /mcp/status, Grok Build's command hooks to
+            # /mcp/event (§49.15), so a call of it from either is the model's, and does nothing
             return "{}"
         event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
         if c.harness == "claude" and c.key is not None and sid:

@@ -159,6 +159,10 @@ def test_a_grok_session_joins_with_its_session_header_and_one_without_it_is_refu
     two = Grok(broker, token, sid=OTHER).start()
     assert two.call("join", room="#build", screen_name="grok-2")["ok"]
     assert row(broker, "grok-2")["harness"] == "grok"
+    # Grok's hooks are commands at /mcp/event: the hidden hook tool, called over its MCP connection (by the
+    # model, say), does nothing, not even a held Stop
+    assert g.call("hook", event="Stop", session_id=SID, wait_s="600") == {}
+    assert not parked(broker)
     none = Grok(broker, token, sid=None).start()
     refused = none.call("join", room="#build", screen_name="grok-3")
     assert refused["ok"] is False and "X-Switchboard-Session" in refused["error"], refused
