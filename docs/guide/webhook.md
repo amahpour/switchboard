@@ -54,7 +54,7 @@ During them nothing is sent, first or second alert, except the kinds you tick un
 ## What it will not do
 
 - It only posts to **public** addresses, at every send, so it cannot be pointed at a server on the broker's own network. An operator running switchboard on a home network can allow private addresses with `[notify] allow_private_webhooks = true` in `config.toml`.
-- It does not follow redirects, waits 5 seconds at most, and sends at most 12 posts an hour, both addresses together.
+- It does not follow redirects, gives a post 5 seconds in all (finding the address, connecting and the answer together), and sends at most 12 posts an hour, both addresses together. A post is made once: if its answer fails, it is not posted again to another of the address's servers, and it counts toward the 12.
 - A room message or an agent can never set or change your webhook. Only you can, in Settings.
 - It never approves anything. It says something is waiting; you answer in the room or in the agent's own window.
 

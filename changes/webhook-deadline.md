@@ -1,0 +1,3 @@
+### Fixed
+
+- **A webhook post now takes 5 seconds at most in all, and is posted once (#927).** The 5 seconds was per step: the address lookup ran outside it, and an address with several servers gave each a fresh 5 seconds, so one slow post could hold up the next person's for much longer. A post whose answer failed after it was sent was also posted again to the address's next server without counting toward the 12 an hour, so a receiver could get two of one alert. Now the lookup, connecting and the answer share one 5 second deadline, and a post that may have reached the receiver is never posted again.

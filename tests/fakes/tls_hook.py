@@ -1,8 +1,11 @@
 """A webhook receiver for the webhook tests (#723, DESIGN.md §62): an HTTPS server on 127.0.0.1 with a
 self-signed certificate for ``hook.example.com``, that records every POST it gets and answers with the status
-the test sets (a 302 sends a Location the test can see was not followed), or a status of its own for one path
+the test sets, with ``answer`` as its body (a 302 sends a Location the test can see was not followed), or a status of its own for one path
 (``status_of``). ``hold`` keeps a POST to one path open until the test lets it go (``arrived`` is set when it
-is there), so a test can act while a send is out. ``context`` trusts its certificate, for the notifier's
+is there), so a test can act while a send is out. ``drop`` reads a POST and closes without answering, a
+response that failed after the request went out; ``drip`` is called before the answer, which then goes in two
+writes (its first byte, then the rest), so a client needs two reads after it: a receiver that answers slowly
+(#927). ``context`` trusts its certificate, for the notifier's
 client side."""
 
 from __future__ import annotations
@@ -31,6 +34,9 @@ class TlsHook:
         self.status = 200
         self.status_of: dict[str, int] = {}  # a path's own status, over ``status``
         self.hold: str | None = None  # a path whose POST waits for ``release``
+        self.drop = False  # read each POST, then close with no answer
+        self.drip: Any = None  # called before an answer sent in two writes
+        self.answer = b""  # the body of each answer to a POST (HTTP/1.0, so it ends the connection)
         self.arrived = threading.Event()
         self.release = threading.Event()
         key = ec.generate_private_key(ec.SECP256R1())
@@ -71,12 +77,22 @@ class TlsHook:
                 if self.path == outer.hold:
                     outer.arrived.set()
                     outer.release.wait(30)
+                if outer.drop:
+                    self.close_connection = True
+                    return
                 status = outer.status_of.get(self.path, outer.status)
+                if outer.drip is not None:
+                    answer = f"HTTP/1.1 {status} OK\r\nContent-Length: 0\r\n\r\n".encode()
+                    outer.drip()
+                    self.wfile.write(answer[:1])
+                    self.wfile.write(answer[1:])
+                    return
                 self.send_response(status)
                 if 300 <= status < 400:
                     self.send_header("Location", "/followed")
-                self.send_header("Content-Length", "0")
+                self.send_header("Content-Length", str(len(outer.answer)))
                 self.end_headers()
+                self.wfile.write(outer.answer)
 
             def do_GET(self) -> None:
                 outer.hits.append(self.path)
