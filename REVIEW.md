@@ -12,7 +12,7 @@ Start each finding's title with its level, so the author and whoever merges know
 
 The author contests a Nit it won't fix, and a Pre-existing finding, while its card is still raised, with the reason (for a Pre-existing one, where the pull request lists it); for a card it has already conceded, it says the same in the room. Then drop it, or defer it to an issue, instead of insisting: insist only on an Important one. Confirm a fixed Nit when the fix is sound, rather than reopen it for more polish. When it isn't, reopen it and then drop or defer it, since what is left still doesn't block; a regression the fix caused is a new Important finding. Only the raiser or a person can drop, defer or confirm a card, so a Nit holds up the board until its raiser settles it. After two rounds, drop or defer your Nit and Pre-existing cards that are still open, and confirm the sound fixes, so only Important cards stay open.
 
-A round is one review of a new head. After two rounds, raise only Important findings, and check the fixes of the ones you raised. Past round two, one finding in four was a bug a user could hit; the rest were in code the review itself had asked for, wording and test setup. #896 ran 13 rounds, and rounds 8 to 13 were nearly all fixes of earlier fixes.
+A round is one review of a new head. After two rounds, raise only Important findings (after one, for a pull request that changes only tests or tooling: `tests/`, `scripts/`, `.github/`), and check the fixes of the ones you raised. Past round two, one finding in four was a bug a user could hit; the rest were in code the review itself had asked for, wording and test setup. #896 ran 13 rounds, and rounds 8 to 13 were nearly all fixes of earlier fixes.
 
 ## Flag
 
