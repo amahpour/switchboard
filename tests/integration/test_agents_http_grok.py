@@ -449,6 +449,39 @@ def test_an_old_turn_s_end_leaves_a_session_waiting_on_approval_alone(joined: An
     assert m["status"] == "waiting-approval" and m["queued"] == 1, m
 
 
+@pytest.mark.parametrize("end", ["StopCancelled", "StopFailure", "Stop"])
+def test_a_session_that_joined_mid_turn_keeps_its_approval_hold_against_an_old_turn_s_end(
+    broker: InProcBroker, tmp_path: Path, end: str
+) -> None:
+    """F1, second round (§49.15, §11): a session that joins mid-turn has no current prompt id (its pre-join
+    UserPromptSubmit was not a member's, and no completed Stop has named its turn yet). The joining turn
+    opens an approval prompt, and an older turn's end arrives late (Grok reports a cancel or failure off its
+    command loop). With nothing to tell it from the joining turn's own end, it is stale and dropped: the
+    session still waits on its person, and a mention stays queued. Fails if an end is taken whenever no prompt
+    is known, as on dc5df42a, which turned waiting-approval to idle."""
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker)
+    data = tmp_path / "plugin-data"
+    g = Grok(broker, token).start()
+    hook(broker, token, data, payload("UserPromptSubmit.json", promptId="prompt-joining"))  # not a member yet
+    assert g.call("join", room="#build", screen_name="grok-1")["ok"]
+    hook(broker, token, data, payload("Notification_permission_prompt.json"))
+    assert row(broker, "grok-1")["status"] == "waiting-approval"
+    broker.call("human.say", {"room": "#build", "text": "@grok-1 are you there"})
+    late = payload("StopCancelled_permission.json", promptId="prompt-old", hook_event_name=end)
+    if end == "Stop":
+        late = payload("Stop.json", promptId="prompt-old")
+    started = time.monotonic()
+    assert hook(broker, token, data, late) == ""
+    assert time.monotonic() - started < 10 and not parked(broker)
+    m = row(broker, "grok-1")
+    assert m["status"] == "waiting-approval" and m["queued"] == 1, m
+    # the approved tool's hook ends the hold, and only then is the message context
+    printed = json.loads(hook(broker, token, data, payload("PostToolUse_bash.json")))
+    assert "are you there" in printed["hookSpecificOutput"]["additionalContext"]
+    assert row(broker, "grok-1")["status"] == "busy"
+
+
 @pytest.mark.parametrize("end", ["StopCancelled", "StopFailure"])
 def test_a_wake_whose_continued_turn_is_cancelled_or_fails_first_goes_back_to_pending(
     joined: Any, end: str
@@ -541,6 +574,38 @@ def test_the_script_follows_no_redirect_so_the_token_reaches_no_other_address(
     assert second.seen == [], second.seen
 
 
+@pytest.mark.parametrize("name", ["PostToolUse_bash.json", "Stop.json"])
+def test_the_script_uses_no_proxy_of_its_environment_so_the_token_goes_only_to_switchboard_url(
+    tmp_path: Path, name: str
+) -> None:
+    """F11: the script's request carries the token. With ``http_proxy`` and ``https_proxy`` (both spellings)
+    set to a second listener and no ``NO_PROXY``, the request still goes to ``SWITCHBOARD_URL`` directly:
+    the second listener sees nothing, and the first sees the token. Fails if the opener takes the
+    environment's proxies (urllib's ``ProxyHandler()``), which sends the token to the proxy."""
+    proxy = StandIn(lambda path, raw: (200, {"content-type": "application/json"}, b"{}"))
+    target = StandIn(lambda path, raw: (200, {"content-type": "application/json"}, b"{}"))
+    proxies = {k: proxy.url for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy")}
+    try:
+        r = subprocess.run(
+            [str(SCRIPT)],
+            input=json.dumps(payload(name)).encode(),
+            capture_output=True,
+            timeout=30,
+            env=child_env(
+                SWITCHBOARD_URL=target.url,
+                SWITCHBOARD_AGENT_TOKEN="sbat_synthetic",
+                GROK_PLUGIN_DATA=str(tmp_path),
+                **proxies,
+            ),
+        )
+    finally:
+        proxy.close()
+        target.close()
+    assert r.returncode == 0, r.stderr
+    assert proxy.seen == [], proxy.seen
+    assert target.seen and target.seen[0][1].get("Authorization") == "Bearer sbat_synthetic"
+
+
 def blocks_any_stop(path: str, raw: bytes) -> tuple[int, dict[str, str], bytes]:
     body = json.loads(raw)
     if body["event"] == "Stop" and "wait_s" in body:
@@ -571,18 +636,37 @@ def test_a_wake_count_that_cannot_be_kept_means_the_hook_does_not_park(joined: A
     assert "look at the build" in json.loads(stop.result())["reason"]
 
 
-@pytest.mark.parametrize("stored", ["[1]", "3", "null", '"wakes"', '{"prompt_id": "P", "wakes": "2"}'])
-def test_a_stored_wake_count_that_is_not_a_count_is_the_cap(tmp_path: Path, stored: str) -> None:
-    """F5: a count file that holds valid JSON that is not a count (not an object, or a bad number) is the cap
+@pytest.mark.parametrize(
+    "stored",
+    [
+        "[1]",
+        "3",
+        "null",
+        '"wakes"',
+        '{"prompt_id": "P", "wakes": "2"}',
+        # F5, second round: a continuing Stop whose count is missing, or not this prompt's, is unknown
+        None,
+        '{"wakes": 2}',
+        '{"prompt_id": 5, "wakes": 2}',
+        '{"prompt_id": "another-prompt", "wakes": 2}',
+        '{"prompt_id": "P"}',
+    ],
+)
+def test_a_stored_wake_count_that_is_not_a_count_is_the_cap(tmp_path: Path, stored: str | None) -> None:
+    """F5: during a continuing Stop (``stop_hook_active``) the count is known only from a file the hook wrote
+    for this prompt. A file that is missing (``None``), holds valid JSON that is not a count (not an object,
+    a bad number), or is an object without this prompt's id and a count is unknown, and unknown is the cap
     reached: the hook does not park, so it takes no message, and reports a plain Stop. Fails if a file that
-    isn't an object reads as no wakes yet, as before: the hook parks and is handed a message."""
+    isn't an object reads as no wakes yet (round one), or if a missing file or another prompt's count reads as
+    zero, as on dc5df42a: the hook parks and is handed a message."""
     import hashlib
 
     p = payload("Stop_continuation.json")
     sid, prompt_id = p["session_id"], p["promptId"]
     wakes = tmp_path / "wakes"
     wakes.mkdir()
-    (wakes / hashlib.sha256(sid.encode()).hexdigest()[:32]).write_text(stored.replace("P", prompt_id))
+    if stored is not None:
+        (wakes / hashlib.sha256(sid.encode()).hexdigest()[:32]).write_text(stored.replace("P", prompt_id))
     server = StandIn(blocks_any_stop)
     try:
         r = run_script(server.url, tmp_path, json.dumps(p))
@@ -591,6 +675,50 @@ def test_a_stored_wake_count_that_is_not_a_count_is_the_cap(tmp_path: Path, stor
     assert r.returncode == 0 and r.stdout == b"", r.stderr
     [(_path, _headers, raw)] = server.seen
     assert "wait_s" not in json.loads(raw)  # a plain Stop: nothing is held, nothing handed out
+
+
+def test_a_continuing_stop_with_no_prompt_id_is_the_cap(tmp_path: Path) -> None:
+    """F5, second round: a continuing Stop that names no prompt can't be matched to any count, so it is the
+    cap: no park, a plain Stop. Fails if a count of a prompt-less turn reads as zero."""
+    p = payload("Stop_continuation.json")
+    del p["promptId"]
+    server = StandIn(blocks_any_stop)
+    try:
+        r = run_script(server.url, tmp_path, json.dumps(p))
+    finally:
+        server.close()
+    assert r.returncode == 0 and r.stdout == b"", r.stderr
+    [(_path, _headers, raw)] = server.seen
+    assert "wait_s" not in json.loads(raw)
+
+
+@pytest.mark.parametrize("stored", [None, "[1]", '{"prompt_id": "another-prompt", "wakes": 7}'])
+def test_a_fresh_turn_s_first_stop_starts_at_zero_whatever_is_stored(
+    tmp_path: Path, stored: str | None
+) -> None:
+    """F5, second round: a turn's first Stop (``stop_hook_active`` false) starts the count at zero, whether
+    the file is missing, broken or another prompt's, so a new turn always listens. It parks, prints the block
+    it is handed, and writes this prompt's count of 1. Fails if the stricter continuing rule is applied to the
+    first Stop too, and a session never listens again after a broken file."""
+    import hashlib
+
+    p = payload("Stop.json")
+    sid, prompt_id = p["session_id"], p["promptId"]
+    wakes = tmp_path / "wakes"
+    wakes.mkdir()
+    count = wakes / hashlib.sha256(sid.encode()).hexdigest()[:32]
+    if stored is not None:
+        count.write_text(stored)
+    server = StandIn(blocks_any_stop)
+    try:
+        r = run_script(server.url, tmp_path, json.dumps(p))
+    finally:
+        server.close()
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {"decision": "block", "reason": "a message"}
+    [(_path, _headers, raw)] = server.seen
+    assert "wait_s" in json.loads(raw)
+    assert json.loads(count.read_text()) == {"prompt_id": prompt_id, "wakes": 1}
 
 
 def test_the_script_reads_no_stdin_past_its_cap(tmp_path: Path) -> None:
