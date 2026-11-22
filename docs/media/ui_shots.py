@@ -55,6 +55,8 @@ settings-agents-signin-light (the sign-in listed beside a token, with Revoke),
 opencode-upload-after-{light,dark} and -{log,members}-phone-light (the same room with an admin's uploaded
 OpenCode images, #518), opencode-upload-settings-{light,dark,phone-light} (OpenCode's card in Agent icons),
 opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and the Inspector, #518),
+grok-{members,inspector}-{light,dark} and grok-members-phone-light (a Grok Build session in Members and the
+Inspector, #851; ``--only grok``),
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
@@ -457,6 +459,57 @@ def shoot_opencode_avatar(browser: Any, out: Path, world: Any, stem: str = "open
     world.agent_say("#opencode", "open-1", "Parser done: tests pass.", reply_to=first)
     world.set_member_harness("#opencode", "open-1", "opencode")
     shoot_opencode_room(browser, out, world.broker, stem)
+
+
+def shoot_grok(browser: Any, out: Path, world: Any) -> None:
+    """#851: a Grok Build session in a room beside a Claude Code one: Members (its GK monogram) and the
+    Inspector (``Grok Build``, the ``grok:https`` tier and its note), in light, dark and on a phone (the
+    Members sheet). ``grok-{members,inspector}-{light,dark}``, ``grok-members-phone-light``."""
+    from playwright.sync_api import expect
+    from ui_world import wait_js
+
+    room = "#grok"
+    world.create_room(room)
+    world.add_agents(room, ("grok-1", "claude-1"))
+    first = world.agent_say(room, "grok-1", "Joined from Grok Build. Looking at the failing test now.")
+    world.agent_say(room, "claude-1", "Thanks: the fixture is in tests/unit.", reply_to=first)
+    world.set_member_harness(room, "grok-1", "grok", tier=True)
+    world.set_member_harness(room, "claude-1", "claude", tier=True)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for size, scheme, tag in (
+        (DESKTOP, "light", "light"),
+        (DESKTOP, "dark", "dark"),
+        (PHONE, "light", "phone-light"),
+    ):
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("grok", timeout=WAIT_MS)
+            if page.locator("#app.nav-open").count():
+                page.keyboard.press("Escape")
+            wait_js(
+                page, "() => document.querySelectorAll('#log .line.k-chat').length >= 2", timeout_ms=WAIT_MS
+            )
+            expect(page.locator('#buddy-list .member[data-name="grok-1"]')).to_have_count(1, timeout=WAIT_MS)
+            if size is PHONE:
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                settle(page)
+                shot(page, out, f"grok-members-{tag}.png")
+            else:
+                settle(page)
+                shot(page, out, f"grok-members-{tag}.png")
+                inspect(page, "grok-1")
+                settle(page)
+                shot(page, out, f"grok-inspector-{tag}.png")
+        finally:
+            ctx.close()
 
 
 def shoot_opencode_room(browser: Any, out: Path, b: Any, stem: str) -> None:
@@ -4997,6 +5050,7 @@ ONLY: dict[str, Any] = {
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
     "not_connected": shoot_not_connected,
+    "grok": shoot_grok,
     "notifications": shoot_notifications,
     "webhook": shoot_webhook,
     "real_names": shoot_real_names,
