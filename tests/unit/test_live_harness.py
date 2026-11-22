@@ -100,11 +100,12 @@ def test_grok_s_input_box_is_read_between_its_borders() -> None:
 def test_grok_s_login_copy_is_kept_outside_the_folder_it_works_in_and_uploads_are_off(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#928's review (F8): the live run copies the person's Grok login into a temp home of its own, beside the
-    scratch repository Grok works in and never under it, so no tool call or workspace snapshot of Grok's can
-    read it; and its config turns telemetry and trace uploads off. Fails if the temp home is the workspace
-    (as before: ``HOME`` was the scratch repository, the login at ``ws/.grok/auth.json``), or a setting is
-    missing."""
+    """#928's review (F8, F12): the live run gives Grok a temp HOME of its own and works in ``<home>/ws``, a
+    subfolder of it, so Grok asks no first-run trust question and none is accepted; the copy of the person's
+    login is ``<home>/.grok/auth.json``, outside ``ws``, so no tool call or workspace snapshot of Grok's can
+    read it; and its config turns telemetry and trace uploads off. Nothing writes ``trusted_folders`` or
+    passes ``--trust``. Fails if the workspace is beside the home (as on dc5df42a: ``<run>/ws`` and
+    ``<run>/grok-home``), if the login is under the workspace, or if a setting is missing."""
     real = tmp_path / "real-home"
     (real / ".grok").mkdir(parents=True)
     (real / ".grok" / "auth.json").write_text('{"synthetic": true}')
@@ -113,25 +114,49 @@ def test_grok_s_login_copy_is_kept_outside_the_folder_it_works_in_and_uploads_ar
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     r = object.__new__(grok.GrokRun)
     r.base = tmp_path / "run"
-    r.ws = r.base / "ws"
-    r.ws.mkdir(parents=True)
+    r.ws = r.workspace()
+    r.ws.mkdir(parents=True)  # as ``Run.start`` makes it, before ``prepare``
     r.token = "sbat_synthetic"
     r.broker = type("B", (), {"url": "http://switchboard.localhost:1"})()
     r.prepare()
     home = Path(r.env()["HOME"]).resolve()
     ws = r.ws.resolve()
     auth = home / ".grok" / "auth.json"
+    assert ws == home / "ws" and ws.is_relative_to(home)  # the workspace is under HOME
+    assert (home.stat().st_mode & 0o777) == 0o700
     assert auth.read_text() == '{"synthetic": true}' and (auth.stat().st_mode & 0o777) == 0o600
-    assert not home.is_relative_to(ws) and not auth.resolve().is_relative_to(ws)
-    assert not ws.is_relative_to(home)
+    assert not auth.resolve().is_relative_to(ws)  # the login is not under the workspace
     assert not list(ws.rglob("auth.json")) and not (ws / ".grok").exists()
+    assert not [f for f in home.rglob("*") if "trust" in f.name.lower()]  # no trusted_folders written
+    assert not [a for a in r.argv(False) + r.argv(True) if "trust" in a.lower()]
     config = tomllib.loads((home / ".grok" / "config.toml").read_text())
     assert config["features"]["telemetry"] is False
     assert config["telemetry"]["trace_upload"] is False
     assert config["plugins"]["enabled"] == ["switchboard"]
+    assert "trust" not in json.dumps(config).lower()
     r.standin = None
     r.scrub()
     assert not auth.exists()
+
+
+def test_grok_s_trust_question_fails_the_run_and_is_never_answered() -> None:
+    """F12: a trust question on Grok's screen fails the run with a clear message, at start and later, and no
+    key is sent for it (not even the Ctrl+C that declines a tool's prompt). Fails if the run answers or
+    declines it, or reads it as ready."""
+    screen = "Do you trust the contents of this folder?\n ❯ Yes, trust this folder\n   No, exit\n"
+    assert screens.grok_trust_prompt(screen)
+    assert not screens.grok_trust_prompt("❯ \nShift+Tab:mode")
+    r = object.__new__(grok.GrokRun)
+    with pytest.raises(AssertionError, match="never answers"):
+        r.ready_step(screen)
+    sent: list[str] = []
+    r.session = "s"
+    r.harness = "grok"
+    r.stray_declined = 0
+    r.tmux = type("T", (), {"capture": lambda self, s: screen, "key": lambda self, s, k: sent.append(k)})()
+    with pytest.raises(AssertionError, match="never answers"):
+        r.decline_stray_prompt()
+    assert sent == []
 
 
 def test_claudes_start_up_dialogs_get_only_the_answers_this_run_owns() -> None:

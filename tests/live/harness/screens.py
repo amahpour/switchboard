@@ -118,6 +118,18 @@ def claude_input_text(screen: str) -> str:
     return " ".join(screen.splitlines()[rows[-2] + 1 : rows[-1]]).strip()
 
 
+# Grok's first-run question about a folder's trust, in the phrasings it may use: the run never answers it
+_GROK_TRUST = re.compile(
+    r"Do you trust|trust (?:this|the) (?:folder|directory|workspace)|Trust (?:folder|workspace)", re.I
+)
+
+
+def grok_trust_prompt(screen: str) -> bool:
+    """Whether Grok is asking whether to trust a folder. The live run never answers that question, with a key
+    or a setting: it fails instead (#928's review, F12)."""
+    return bool(_GROK_TRUST.search(screen))
+
+
 def grok_input_text(screen: str) -> str:
     """What is in Grok Build's input box: the rows between its last ``╭`` and ``╰`` borders, without the
     side borders and the ``❯`` it starts with, joined. Empty when the box can't be found."""
