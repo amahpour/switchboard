@@ -30,12 +30,15 @@ ssh-agent, so it either removes nothing or misses a user). No file state tells a
 restarting from one that stopped either (#922's fourth round: an old, unlocked ``run/broker.lock``
 and ``logs/broker.out`` are both there in each case), so none is read.
 
-**A broker that is starting.** ``daemon.start()`` returns only once the new broker's socket
-answers, which is after the daemon holds ``run/broker.lock``, and the CLI process that runs it
-holds the home's test lock the whole time (``SubprocBroker.cli`` and every test that runs
-``switchboard start`` pass it, ``pass_fds``). So the handoff from the CLI's lock to the broker's is
-covered on a first start and on a restart alike. The bounded exception: a daemon whose CLI is
-killed before the daemon takes its broker lock belongs to a dead run, and its home may be swept.
+**A broker that is starting.** Who holds the home while ``switchboard start`` hands it to a
+daemon: the process that called ``make_tmp_home()`` holds the test lock for the home's whole life,
+until ``remove_home()``; and the CLI process that runs ``start`` is given that lock too
+(``SubprocBroker.cli`` and every test that runs ``switchboard start`` pass it, ``pass_fds``) and holds
+it until ``start`` returns, whether ``start`` succeeded (``daemon.start()`` returns only once the new
+broker's socket answers, after the daemon holds ``run/broker.lock``) or gave up after its 8 s wait with
+the daemon still starting. So a starting daemon's home is held while its run is alive, on a first
+start and on a restart alike. It can lose its home only when every holder is gone: the run itself
+killed, and its CLI killed or past ``start``'s wait. Such a daemon belongs to a dead run.
 
 A home is a candidate with both the lock file and the marker, as regular files, in a real
 directory (not a symlink) owned by this user, directly under the root and named ``yk-*``. A
@@ -50,10 +53,15 @@ its name alone.
 It is opened through the root's fd with ``O_NOFOLLOW | O_CREAT``, mode 0600, and used only if
 ``fstat`` says it is a regular file owned by this euid (``_open_sweep_lock``, the same check on
 every side). The sweep holds ``LOCK_EX | LOCK_NB`` on it for its whole pass, and skips the run if
-it is held or unusable. ``make_locked_home()`` holds ``LOCK_SH`` on it from before ``mkdtemp``
-until the marker is written; ``remove_home()`` holds ``LOCK_SH`` from before its first unlink until
-its ``rmdir``. If the lock is unusable, creation and removal go on without it, and the sweep (which
-makes the same check) skips, so a sweep never runs uncoordinated. While a sweep runs, then, no
+it is held, unusable, or can't be taken for any other reason. ``make_locked_home()`` holds
+``LOCK_SH`` on it from before ``mkdtemp`` until the marker is written; ``remove_home()`` holds
+``LOCK_SH`` from before its first unlink until its ``rmdir``. Only a lock object that is unusable for
+every process of this user lets creation and removal go on without it (``SweepLockUnusable``): the
+open fails with ELOOP (a symlink, ``O_NOFOLLOW``), EISDIR or ENOTDIR, or EACCES or EPERM, or
+``fstat`` finds a non-regular file or another uid's. Then the sweep, which makes the same check,
+can't run either, so a sweep never runs uncoordinated. Any other error (EMFILE, ENFILE, ENOMEM, EIO,
+ENOSPC, a failed ``flock``) is this process's, not the file's, and another process may still sweep:
+``make_locked_home()`` and ``remove_home()`` raise it before touching any home. While a sweep runs, then, no
 coordinated code is part way through making or removing a home, and whatever such a state the
 sweep finds was left by a process that died.
 
@@ -138,38 +146,51 @@ def _rmdir_at(name: str, dir_fd: int) -> None:
     os.rmdir(name, dir_fd=dir_fd)
 
 
-def _open_sweep_lock(root_fd: int) -> int | None:
-    """An fd on the root's ``SWEEP_LOCK``, or None if it is unusable: it can't be opened (a symlink,
-    a directory at its name) or ``fstat`` says it isn't a regular file owned by this euid. The one
-    check creation, removal and the sweep all make (module docstring)."""
+class SweepLockUnusable(Exception):
+    """``SWEEP_LOCK`` can't be used by any process of this user, the sweep included (module
+    docstring, "Creation, removal and the sweep take one per-user lock")."""
+
+
+# What os.open answers for a sweep lock no process of this user can use: a symlink (O_NOFOLLOW), a
+# directory or a non-directory in the path, a file this user may not open. Any other errno (EMFILE,
+# ENFILE, ENOMEM, EIO, ENOSPC, ...) is this process's trouble, not the file's: another process of
+# this user may still take the lock and sweep, so making or removing a home without it is refused.
+_UNUSABLE_ERRNOS = frozenset({errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.EACCES, errno.EPERM})
+
+
+def _open_sweep_lock(root_fd: int) -> int:
+    """An fd on the root's ``SWEEP_LOCK``. Raises ``SweepLockUnusable`` if it is unusable for every
+    process of this user: the open fails with one of ``_UNUSABLE_ERRNOS``, or ``fstat`` says it isn't
+    a regular file owned by this euid. Any other error is raised as it is. The one check creation,
+    removal and the sweep all make (module docstring)."""
     try:
         fd = os.open(SWEEP_LOCK, _OPEN_SWEEP_LOCK, 0o600, dir_fd=root_fd)
-    except OSError:
-        return None
+    except OSError as e:
+        if e.errno in _UNUSABLE_ERRNOS:
+            raise SweepLockUnusable(f"{SWEEP_LOCK}: {e.strerror}") from e
+        raise
     try:
         st = os.fstat(fd)
-    except OSError:
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
+            raise SweepLockUnusable(f"{SWEEP_LOCK}: not a regular file of this user's")
+    except BaseException:
         os.close(fd)
-        return None
-    if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid():
-        os.close(fd)
-        return None
+        raise
     return fd
 
 
 def _shared_sweep_lock(root: Path) -> int | None:
     """``LOCK_SH`` on ``root``'s sweep lock, held until the fd returned is closed, so no sweep runs
-    while this process makes or removes a home; None (go on without it) if it is unusable."""
-    try:
-        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    except OSError:
-        return None
+    while this process makes or removes a home. None (go on without it) only if the lock is unusable
+    for every process of this user (``SweepLockUnusable``), so no sweep can run either; any other
+    error (the root can't be opened, EMFILE, a failed flock) is raised, before any home is touched."""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         fd = _open_sweep_lock(root_fd)
+    except SweepLockUnusable:
+        return None
     finally:
         os.close(root_fd)
-    if fd is None:
-        return None
     try:
         fcntl.flock(fd, fcntl.LOCK_SH)
     except BaseException:
@@ -270,8 +291,10 @@ def _rmdir_if_same(root_fd: int, name: str, before: os.stat_result) -> None:
 
 def remove_home(home: Path) -> None:
     """Remove a ``make_locked_home`` home in place, through its own fd, the marker and the lock file
-    last, then close this process's lock, all under ``LOCK_SH`` on the root's sweep lock. An error
-    part way is not raised, as the ``shutil.rmtree(..., ignore_errors=True)`` this replaces did not;
+    last, then close this process's lock, all under ``LOCK_SH`` on the root's sweep lock. If that
+    lock can't be taken for any reason but an unusable lock object (``_shared_sweep_lock``), the error
+    is raised and the home is left whole, still locked by this process. An error part way through
+    the removal is not raised, as the ``shutil.rmtree(..., ignore_errors=True)`` this replaces did not;
     it leaves the home under its own name with the marker and the lock file (or the lock file alone),
     where ``no_homes_left_behind`` finds it and fails the run, and a later sweep removes it. A
     ``home`` that is not a real directory of this user's (a symlink a test left) is not touched."""
@@ -305,7 +328,7 @@ class SweepResult:
     removed: list[Path] = field(default_factory=list)
     in_use: list[Path] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)
-    skipped: bool = False  # SWEEP_LOCK was held (another sweep, or a home being made or removed)
+    skipped: bool = False  # SWEEP_LOCK was held (another sweep, or a home being made or removed) or failed
     unusable: bool = False  # SWEEP_LOCK is not a regular file of this user's: skipped too
 
     def line(self) -> str:
@@ -313,6 +336,11 @@ class SweepResult:
             return (
                 f"switchboard test homes: skipped, {self.root / SWEEP_LOCK} is not a regular file "
                 "of this user's, nothing removed (#922)"
+            )
+        if self.skipped and self.failed:
+            return (
+                f"switchboard test homes: skipped, {self.root / SWEEP_LOCK} could not be taken "
+                f"({self.failed[0]}), nothing removed (#922)"
             )
         if self.skipped:
             return (
@@ -483,12 +511,10 @@ def _sweep_lock_only(
     return True
 
 
-def _take_sweep_lock(root_fd: int) -> int | None:
+def _take_sweep_lock(root_fd: int) -> int:
     """An fd holding ``LOCK_EX`` on the root's ``SWEEP_LOCK``. Raises ``BlockingIOError`` if it is
-    held, ``PermissionError`` if it is unusable (``_open_sweep_lock``)."""
+    held, ``SweepLockUnusable`` if it is unusable (``_open_sweep_lock``), and any other error as it is."""
     fd = _open_sweep_lock(root_fd)
-    if fd is None:
-        raise PermissionError(errno.EPERM, "not a regular file of this user's", SWEEP_LOCK)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd
@@ -514,8 +540,12 @@ def sweep_killed_homes(root: Path = TMP_HOME_ROOT) -> SweepResult:
         except BlockingIOError:
             result.skipped = True
             return result
-        except PermissionError:
+        except SweepLockUnusable:
             result.skipped = result.unusable = True
+            return result
+        except Exception as e:  # any other error taking it: skip, never sweep uncoordinated
+            result.skipped = True
+            result.failed.append(f"{type(e).__name__}: {e}")
             return result
         try:
             homes = _entries(root_fd)

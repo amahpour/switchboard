@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import json
 import os
 import select
 import shutil
@@ -330,6 +331,59 @@ def test_a_restarting_brokers_home_is_kept_while_its_cli_holds_the_test_lock(roo
     finally:
         _stop(p)
     assert sweep_killed_homes(root).removed == [home]
+
+
+# A second run's session-start sweep, in a process of its own: prints what it removed and kept.
+_SWEEP_ELSEWHERE = f"""
+import json, sys
+from pathlib import Path
+sys.path.insert(0, {str(_TESTS_DIR)!r})
+import tmp_homes
+r = tmp_homes.sweep_killed_homes(Path(sys.argv[1]))
+print(json.dumps({{"removed": [str(h) for h in r.removed], "in_use": [str(h) for h in r.in_use],
+                  "failed": r.failed, "skipped": r.skipped}}))
+"""
+
+
+def _sweep_elsewhere(root: Path) -> dict[str, object]:
+    """The sweep as a second run makes it: another process, bounded (``PIPE_TIMEOUT_S``)."""
+    done = subprocess.run(
+        [sys.executable, "-c", _SWEEP_ELSEWHERE, str(root)],
+        capture_output=True,
+        timeout=PIPE_TIMEOUT_S,
+        check=True,
+    )
+    return json.loads(done.stdout)
+
+
+def test_a_starting_daemons_home_is_kept_while_its_maker_holds_it_after_the_cli_is_gone(
+    root: Path,
+) -> None:
+    """Who holds a home while a daemon starts (module docstring, "A broker that is starting"): the
+    process that made it, for the home's whole life, and the CLI until ``start`` returns. Here the
+    daemon is still starting (an old, unlocked ``run/broker.lock``, no socket) and its CLI, given
+    the lock, has exited, as after ``start``'s 8 s wait gives up; this process, the maker, still holds
+    its test lock. A sweep in another process, as a second run's, keeps the home; once the maker
+    lets go (its run is dead) the next one removes it. Fails if the sweep ignores the maker's lock
+    (only a CLI's or a broker's counting)."""
+    home = tmp_homes.make_locked_home(root)
+    (home / BROKER_LOCK[0]).mkdir()
+    home.joinpath(*BROKER_LOCK).touch()
+    p, line = _start([sys.executable, "-c", _GIVEN_LOCK], pass_fds=tmp_homes.lock_fds_for(home))
+    try:
+        assert line == "ready"
+        assert p.stdin is not None
+        p.stdin.close()  # the CLI is gone: start returned, the daemon still starting
+        _wait_dead(p)
+    finally:
+        _stop(p)
+    assert _held(home)  # by this process alone now
+    seen = _sweep_elsewhere(root)
+    assert seen == {"removed": [], "in_use": [str(home)], "failed": [], "skipped": False}
+    assert (home / TEST_MARKER).is_file() and home.joinpath(*BROKER_LOCK).is_file()
+    tmp_homes.release_home(home)  # the run that made it is gone
+    assert _sweep_elsewhere(root)["removed"] == [str(home)]
+    assert not os.path.lexists(home)
 
 
 def test_waiting_for_a_death_fails_at_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -652,6 +706,65 @@ def test_an_unusable_sweep_lock_skips_the_sweep_and_homes_still_work(root: Path,
     remove_home(home)
     assert not os.path.lexists(home)
     assert (root / SWEEP_LOCK).is_dir() if kind == "directory" else (root / SWEEP_LOCK).is_symlink()
+
+
+def _sweep_lock_open_fails(m: pytest.MonkeyPatch, err: int) -> None:
+    """``os.open`` of the sweep lock, and only that, fails with ``err``."""
+    real_open = os.open
+
+    def fake(path: str | Path, *args: object, **kwargs: object) -> int:
+        if os.fspath(path) == SWEEP_LOCK:
+            raise OSError(err, os.strerror(err), SWEEP_LOCK)
+        return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    m.setattr(tmp_homes.os, "open", fake)
+
+
+def test_a_sweep_lock_error_that_isnt_the_files_stops_make_and_remove(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EMFILE (or ENFILE, ENOMEM, EIO, ...) opening the sweep lock is this process's trouble, not the
+    lock file's: another process may still take it and sweep, so making or removing a home without
+    it could race that sweep. ``make_locked_home`` raises and leaves no directory and nothing in
+    ``_LOCKS``; ``remove_home`` raises and leaves the home whole, still locked by this process; the
+    sweep skips and says why. Fails if every open error counts as "unusable" (make and remove go on
+    unlocked: a directory is made, the home is removed)."""
+    home = tmp_homes.make_locked_home(root)
+    before = set(os.listdir(root))
+    with monkeypatch.context() as m:
+        _sweep_lock_open_fails(m, errno.EMFILE)
+        with pytest.raises(OSError) as made:
+            tmp_homes.make_locked_home(root)
+        assert made.value.errno == errno.EMFILE
+        assert set(os.listdir(root)) == before
+        assert [d for d in tmp_homes._LOCKS if d.parent == root] == [home]
+        with pytest.raises(OSError) as removed:
+            remove_home(home)
+        assert removed.value.errno == errno.EMFILE
+        assert (home / TEST_MARKER).is_file() and (home / LOCK_NAME).is_file()
+        assert home in tmp_homes._LOCKS and _held(home)
+        result = sweep_killed_homes(root)
+        assert result.skipped and not result.unusable and not result.removed
+        assert result.line().startswith(
+            f"switchboard test homes: skipped, {root / SWEEP_LOCK} could not be taken (OSError: "
+        ), result.line()
+    remove_home(home)
+    assert not os.path.lexists(home) and home not in tmp_homes._LOCKS
+
+
+def test_a_symlinked_sweep_lock_lets_make_and_remove_go_on(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ELOOP opening the sweep lock (a symlink at its name, refused by ``O_NOFOLLOW``) means no process
+    of this user can use it, the sweep included: making and removing a home go on without it. Fails
+    if every open error is raised (no home can be made while the lock is a symlink)."""
+    with monkeypatch.context() as m:
+        _sweep_lock_open_fails(m, errno.ELOOP)
+        home = tmp_homes.make_locked_home(root)
+        assert (home / TEST_MARKER).is_file() and _held(home)
+        assert sweep_killed_homes(root).unusable
+        remove_home(home)
+    assert not os.path.lexists(home) and home not in tmp_homes._LOCKS
 
 
 def test_a_home_being_made_or_removed_makes_the_sweep_skip(

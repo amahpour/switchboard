@@ -1226,8 +1226,9 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                    no_homes_left_behind: session autouse; fails the run, naming each, if a home make_tmp_home() made in
                      this process (each xdist worker) is still there after every fixture's teardown
                    pytest_sessionstart: the controller sweeps the /tmp homes a killed run left (tmp_homes.py): a
-                     home goes only if nobody holds its flock (its maker and the children given it, pass_fds: the
-                     CLI running `switchboard start` holds it until the daemon answers, holding run/broker.lock) nor
+                     home goes only if nobody holds its flock (its maker, for the home's whole life, and the children
+                     given it, pass_fds: the CLI running `switchboard start` holds it until start returns, the daemon
+                     answering with run/broker.lock held or start's 8 s wait over with it still starting) nor
                      its broker's run/broker.lock (a daemonized broker), no Unix socket under it answers and all of
                      it could be read; one without both the lock file and the marker is no candidate, whatever its
                      name, except one whose only entry is an unlocked lock file. It is checked and removed in place
@@ -1235,11 +1236,15 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                      entry, then the marker, then the lock file, then rmdir; tmp_home's teardown removes the same way
                      (remove_home(), and the leak check sees what it leaves). Making, removing and sweeping share
                      /tmp/yk-sweep-<euid>.lock (regular, this euid's, O_NOFOLLOW): the sweep holds it LOCK_EX|LOCK_NB
-                     for its pass or skips (held or unusable); make_tmp_home() holds LOCK_SH from before mkdtemp to
-                     the marker, remove_home() from its first unlink to its rmdir. Bounded exceptions: an empty yk-*
-                     directory (a removal killed after the lock file; a test's own shutil.rmtree may still need to
-                     rmdir it) is never removed, a daemon whose CLI died before it took its lock may lose its home,
-                     and the stat-to-rmdir gap costs at most one empty directory (sticky /tmp, rmdir takes only empty)
+                     for its pass or skips (held, unusable or any error); make_tmp_home() holds LOCK_SH from before
+                     mkdtemp to the marker, remove_home() from its first unlink to its rmdir. Only a lock unusable for
+                     every process of the user (ELOOP, EISDIR/ENOTDIR, EACCES/EPERM, not regular, another uid's) lets
+                     those two go on unlocked; any other error (EMFILE, EIO, ...) makes them raise, touching no home.
+                     A starting daemon's home is held while its run is alive; it can lose it only once every holder
+                     is gone (the run killed, its CLI killed or past start's wait): a daemon of a dead run. Bounded
+                     exceptions: an empty yk-* directory (a removal killed after the lock file; a test's own
+                     shutil.rmtree may still need to rmdir it) is never removed, and the stat-to-rmdir gap costs at
+                     most one empty directory (sticky /tmp, rmdir takes only empty)
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),
                    web_client (httpx, base_url http://switchboard.localhost:<p>, logged in via the test token)
 engine_world.py    a store, an engine and a FakeClock with no broker; engine_agents.py builds the sessions over HTTPS

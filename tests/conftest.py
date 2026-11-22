@@ -16,8 +16,9 @@
 - ``tmp_home``: a short /tmp home with the ``.switchboard-test`` marker, locked by this process
   for its life (``tmp_homes.py``, #922).
 - ``pytest_sessionstart``: the controller sweeps the homes a killed run left (``tmp_homes.py``),
-  under ``/tmp``, or under ``SWITCHBOARD_TEST_SWEEP_ROOT`` when that is set: a variable only this
-  hook reads, so a test's nested run sweeps a root the test owns, never the real /tmp.
+  under ``/tmp``, or under ``SWITCHBOARD_TEST_SWEEP_ROOT`` when that is set. The variable is read
+  once, when this conftest loads, and moves ``make_tmp_home()``'s homes there too: a test's nested
+  run makes, abandons and sweeps homes in a root the test owns, never in the real /tmp.
 - ``no_homes_left_behind`` (session, autouse): fails the run, naming them, if any home
   ``make_tmp_home()`` made in this process is still there once every fixture is torn down (#919).
 - ``broker``: an in-process broker (uvicorn in a thread, AllowAllHumans, test mode).
@@ -111,7 +112,8 @@ def sanitize_env(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempP
     # `start`'s container settings (issue #34): a broker listens on loopback unless a test says so
     for k in ("SWITCHBOARD_PORT", "SWITCHBOARD_LISTEN", "SWITCHBOARD_PUBLIC_URL"):
         monkeypatch.delenv(k, raising=False)
-    # the sweep's root (pytest_sessionstart): a nested run sweeps /tmp unless its test says otherwise
+    # the homes' and the sweep's root, read once at import (TMP_HOME_ROOT): a test's own nested run
+    # gets it from its test, never from the shell
     monkeypatch.delenv("SWITCHBOARD_TEST_SWEEP_ROOT", raising=False)
     # the meeting bot's address (#591), how many calls it follows (#607) and the model it transcribes with
     # (#617): a machine that has any set must not give a test a meeting server, or a limit or model the test
@@ -271,7 +273,9 @@ def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
     )
 
 
-TMP_HOME_ROOT = tmp_homes.TMP_HOME_ROOT
+# Where make_tmp_home() makes homes and the session-start sweep looks: /tmp, or a nested run's own
+# root (SWITCHBOARD_TEST_SWEEP_ROOT, read here once; clean_env unsets it for each test afterwards).
+TMP_HOME_ROOT = Path(os.environ.get("SWITCHBOARD_TEST_SWEEP_ROOT") or tmp_homes.TMP_HOME_ROOT)
 TMP_HOME_PREFIX = tmp_homes.TMP_HOME_PREFIX
 assert tmp_homes.TEST_MARKER == TEST_MARKER
 # The broker's own home lock, which the sweep takes too (tmp_homes.py imports nothing of src).
@@ -336,10 +340,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     except Exception:
         reporter = None
     write = reporter.write_line if reporter is not None else (lambda line: print(line, file=sys.stderr))
-    root = os.environ.get("SWITCHBOARD_TEST_SWEEP_ROOT")
-    tmp_homes.sweep_at_session_start(
-        not hasattr(session.config, "workerinput"), write, Path(root) if root else TMP_HOME_ROOT
-    )
+    tmp_homes.sweep_at_session_start(not hasattr(session.config, "workerinput"), write, TMP_HOME_ROOT)
 
 
 class FakeClock:
