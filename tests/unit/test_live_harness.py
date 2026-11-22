@@ -188,6 +188,60 @@ def test_grok_s_start_up_trust_question_is_answered_only_for_the_run_s_own_folde
     assert sent == []
 
 
+QUESTION = "Do you trust the contents of this directory?"
+YES_ROW = "Yes, proceed                 y"
+NO_ROW = "No, quit                     n"
+
+
+def test_grok_s_trust_answer_reads_the_recorded_dialog_and_skips_the_header() -> None:
+    """F12: the recorded 1.0.92 screen is answered ``y``. Its top line ``~/ws`` is Grok's header, above the
+    question, and is not read as a path inside the dialog. Fails if the header counts, or if the dialog's
+    own rows (question, folder, warning, the two choices) stop reading as one dialog."""
+    assert screens.grok_dialog(GROK_TRUST_SCREEN, {GROK_WS}) == "y"
+    assert GROK_TRUST_SCREEN.lstrip().startswith("~/ws")
+    selected = GROK_TRUST_SCREEN.replace(YES_ROW, "❯ " + YES_ROW)
+    assert screens.grok_dialog(selected, {GROK_WS}) == "y"
+
+
+def test_grok_s_trust_answer_ignores_the_workspace_on_a_row_outside_the_dialog() -> None:
+    """F12: the workspace's path on an unrelated row (the header, a line of output) while the dialog names
+    another folder is ``FAIL``. aa90d3fc's parser took any line equal to the workspace, anywhere on the
+    pane, and answered ``y`` for the other folder."""
+    for where in ("header", "below"):
+        screen = GROK_TRUST_SCREEN.replace(GROK_WS, "/home/someone")
+        screen = f"{GROK_WS}\n{screen}" if where == "header" else f"{screen}\n{GROK_WS}\n"
+        assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL", where
+
+
+def test_grok_s_trust_answer_fails_on_two_trust_questions() -> None:
+    """F12: two lines asking the trust question (two dialogs, or one drawn over another) is ``FAIL``, even
+    when both name the run's folder. aa90d3fc's parser answered ``y``."""
+    dialog = f"{QUESTION}\n{GROK_WS}\n"
+    screen = GROK_TRUST_SCREEN.replace(QUESTION, f"{QUESTION}\n{GROK_WS}\n\n{QUESTION}", 1)
+    assert screen.count(QUESTION) == 2 and dialog in screen
+    assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL"
+
+
+def test_grok_s_trust_answer_fails_on_a_path_between_the_folder_and_the_choices() -> None:
+    """F12: between the folder and the choices only the warning text may stand; a line that looks like a
+    path (``/`` or ``~``) there means the dialog names more than the one folder, and is ``FAIL``.
+    aa90d3fc's parser answered ``y``."""
+    for path in ("/home/someone", "~/elsewhere"):
+        screen = GROK_TRUST_SCREEN.replace("posing security risks.", f"posing security risks.\n{path}")
+        assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL", path
+
+
+def test_grok_s_trust_answer_fails_when_the_choices_are_out_of_order_or_missing() -> None:
+    """F12: the two rows after the warning must be exactly "Yes, proceed  y" then "No, quit  n". Swapped,
+    with the "No" row gone, or with another row between them is ``FAIL``. aa90d3fc's parser answered ``y``
+    to each, since it only looked for a "Yes" row anywhere."""
+    swapped = GROK_TRUST_SCREEN.replace(YES_ROW, "@@").replace(NO_ROW, YES_ROW).replace("@@", NO_ROW)
+    no_quit = GROK_TRUST_SCREEN.replace(NO_ROW, "")
+    between = GROK_TRUST_SCREEN.replace(YES_ROW, f"{YES_ROW}\nYes, always    a")
+    for name, screen in (("swapped", swapped), ("no quit row", no_quit), ("a row between", between)):
+        assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL", name
+
+
 def test_grok_is_told_to_run_the_scratch_script_as_given_from_its_folder() -> None:
     """The first real-login run: Grok searched the disk for ``hold.sh`` before running it, a command no rule
     allows, so the turn ended at a declined prompt. Its join prompt keeps the shared one and adds that the

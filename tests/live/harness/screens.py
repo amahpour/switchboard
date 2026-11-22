@@ -122,8 +122,10 @@ def claude_input_text(screen: str) -> str:
 _GROK_TRUST = re.compile(
     r"Do you trust|trust (?:this|the) (?:folder|directory|workspace)|Trust (?:folder|workspace)", re.I
 )
-# its "yes" row, with the key that picks it (Grok Build 1.0.92: "Yes, proceed   y")
-_GROK_TRUST_YES = re.compile(r"^\s*(?:❯\s*)?Yes, proceed\s+y\s*$", re.M)
+# its two choice rows, in order, each with the key that picks it (Grok Build 1.0.92: "Yes, proceed   y")
+_GROK_TRUST_YES = re.compile(r"^(?:❯\s*)?Yes, proceed\s+y$")
+_GROK_TRUST_NO = re.compile(r"^(?:❯\s*)?No, quit\s+n$")
+_GROK_CHOICE = re.compile(r"^(?:❯\s*)?(?:Yes|No)\b")
 
 
 def grok_trust_prompt(screen: str) -> bool:
@@ -135,16 +137,30 @@ def grok_dialog(screen: str, workspaces: set[str]) -> str | None:
     """What the driver does at Grok Build's start-up trust question: the key to press, or None.
 
     Only the question for the run's own scratch folder is answered, as for Claude Code (``claude_dialog``),
-    with the maintainer's yes of 2026-11-22 (#928): ``y`` on "Yes, proceed" when the folder it names, on a
-    line of its own, is one of ``workspaces`` (the scratch folder's path as given and resolved). Any other
-    trust question, or one whose rows don't read as expected, is ``FAIL``: the caller fails the run and
-    answers nothing."""
+    with the maintainer's yes of 2026-11-22 (#928): ``y`` on "Yes, proceed". The answer reads one dialog,
+    never the whole pane (F12): exactly one line asks the question; the next non-empty line is the folder,
+    one of ``workspaces`` (the scratch folder's path as given and resolved); then only the warning text, with
+    no other line that looks like a path (starting with ``/`` or ``~``); then the next two non-empty rows
+    are exactly "Yes, proceed  y" and "No, quit  n", in that order. What is above the question (Grok's
+    header, whose ``~/ws`` is the folder's short name) is not read. Anything else is ``FAIL``: the caller
+    fails the run and answers nothing."""
     if not grok_trust_prompt(screen):
         return None
-    named = {line.strip() for line in screen.splitlines()}
-    if named & workspaces and _GROK_TRUST_YES.search(screen):
-        return "y"
-    return "FAIL"
+    lines = [line.strip() for line in screen.splitlines()]
+    asks = [i for i, line in enumerate(lines) if _GROK_TRUST.search(line)]
+    if len(asks) != 1:
+        return "FAIL"
+    after = [line for line in lines[asks[0] + 1 :] if line]
+    if not after or after[0] not in workspaces:
+        return "FAIL"
+    rest = after[1:]
+    choices = next((i for i, line in enumerate(rest) if _GROK_CHOICE.match(line)), None)
+    if choices is None or any(line.startswith(("/", "~")) for line in rest[:choices]):
+        return "FAIL"
+    pair = rest[choices : choices + 2]
+    if len(pair) != 2 or not _GROK_TRUST_YES.match(pair[0]) or not _GROK_TRUST_NO.match(pair[1]):
+        return "FAIL"
+    return "y"
 
 
 def grok_input_text(screen: str) -> str:
