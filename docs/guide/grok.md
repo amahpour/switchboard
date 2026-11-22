@@ -52,18 +52,25 @@ Grok asks you to approve each switchboard tool call unless a rule allows them. T
 - **Typing while it listens.** While the Stop hook waits, Grok counts the turn as running: Enter puts what you typed in its queue (`#1`), where it waits for the hook. Press **Enter again** on the empty box to send it now. That ends the wait, and your prompt starts a turn. `Ctrl+C` also ends the wait.
 - **It listens for an hour, and for 7 wakes in a row.** If nothing comes within an hour of a turn's end, the hook ends, and nothing listens until you next type in Grok. Grok also ends a turn after 8 Stop-hook continuations, and then runs no Stop hook at all, so the plugin listens for 7 at most. It then reports the session idle, and stops listening until you type. Members, the member's tier note and its join text say so, and a mention waits for it in the meantime.
 - **A declined approval ends the turn** (Grok reports it as cancelled). The session is then idle and not listening until you type.
-- **Updating.** A release sets the plugin's version (`plugin.json`) to its own. To update, put the new release's `plugins/grok` in a staging folder beside the installed one, check it arrived whole, and only then swap the two, so a failed copy never leaves you without a plugin. Then restart Grok:
+- **Updating.** A release sets the plugin's version (`plugin.json`) to its own. To update, set `SRC` to the absolute path of the new release's `plugins/grok` (in its checkout, for example `"$HOME/src/switchboard/plugins/grok"`), run these lines as one command, then restart Grok:
 
     ```bash
-    rm -rf ~/.grok/plugins/switchboard.new ~/.grok/plugins/switchboard.old
-    cp -R plugins/grok ~/.grok/plugins/switchboard.new
-    test -f ~/.grok/plugins/switchboard.new/plugin.json &&
-      mv ~/.grok/plugins/switchboard ~/.grok/plugins/switchboard.old &&
-      mv ~/.grok/plugins/switchboard.new ~/.grok/plugins/switchboard &&
-      rm -rf ~/.grok/plugins/switchboard.old
+    SRC="$HOME/src/switchboard/plugins/grok"
+    P="$HOME/.grok/plugins"
+    [ "${SRC#/}" != "$SRC" ] &&
+      { [ -e "$P/switchboard" ] || [ ! -e "$P/switchboard.old" ] || mv "$P/switchboard.old" "$P/switchboard"; } &&
+      [ ! -e "$P/switchboard.old" ] &&
+      rm -rf "$P/switchboard.new" &&
+      cp -R "$SRC" "$P/switchboard.new" &&
+      test -f "$P/switchboard.new/plugin.json" &&
+      mv "$P/switchboard" "$P/switchboard.old" &&
+      mv "$P/switchboard.new" "$P/switchboard" &&
+      rm -rf "$P/switchboard.old"
     ```
 
-    If the check fails, nothing is moved and the installed plugin stays as it was. Replacing it, not copying over it, means a file a newer release removed doesn't stay behind. The wake counts are small files, one a session; losing them at worst lets a session listen afresh. switchboard tells you when the plugin's major version differs from the server's.
+    Each step runs only if the one before it worked. It first puts back `switchboard.old` if an earlier run stopped between the two moves, copies the new release beside the installed plugin, checks it, and only then swaps the two and removes the old copy. So if any step fails, the chain stops there and Grok loads the installed copy as it was. The one gap is a stop between the two moves, which leaves no `switchboard`: run the command again, and its first step puts `switchboard.old` back, the working plugin Grok then loads. If it stops because `switchboard.old` is there with `switchboard` beside it (an earlier run stopped before its last step), the installed plugin is the new one: remove `switchboard.old` and run it again. Replacing the plugin, not copying over it, means a file a newer release removed doesn't stay behind. switchboard tells you when the plugin's major version differs from the server's.
+
+    The wake counts are small files, one a session (below). If one is lost while a turn is continuing after a wake, the hook takes that as the cap of 7: the session stops listening until you next type in Grok. A new turn's count starts at zero.
 - **The wake count** of each session is a small file in Grok's data folder for the plugin (`GROK_PLUGIN_DATA`), named by a hash of the session's id. The hook writes it, with the coming wake counted, before it waits. If it can't (a full disk, a folder it may not write), or, after a wake, the file is missing or holds anything but this turn's count, the hook doesn't wait at all: the session is shown idle and not listening, and messages wait until you type in Grok. That way the cap of 7 can never be passed.
 - **A turn that ends cancelled or failed** right after a wake (you pressed `Ctrl+C`, declined a prompt, or the model's request failed) did not work on the message, so it goes back to the queue and comes with the next wake.
 
