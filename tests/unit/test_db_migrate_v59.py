@@ -15,8 +15,9 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 INDEX = "SELECT name, tbl_name, sql FROM sqlite_master WHERE name='messages_addressed'"
 OTHERS = (
     "SELECT type, name, sql FROM sqlite_master"
-    " WHERE name NOT IN ('messages_addressed', 'webhooks', 'webhook_sent') ORDER BY type, name"
-)  # 60 adds the webhook tables (#923), tested in test_db_migrate_v60.py
+    " WHERE name NOT IN ('messages_addressed', 'webhooks', 'webhook_sent', 'sqlite_autoindex_webhooks_1')"
+    " ORDER BY type, name"
+)  # 60 adds the webhook tables and webhooks' UNIQUE(person) index (#923), tested in test_db_migrate_v60.py
 
 
 def at_58(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
