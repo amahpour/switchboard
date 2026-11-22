@@ -6,11 +6,13 @@ Read this and the nearest `REVIEW.md` of each changed file (`plugins/`, `deploy/
 
 Start each finding's title with its level, so the author and whoever merges know what blocks:
 
-- **Important:** a bug a user would hit, data loss, a change to the security model, a guard that loosens. It blocks the merge.
-- **Nit:** wording, naming, a comment, a test's setup. It doesn't block: the author fixes it if that is cheap, or drops it with a reason.
-- **Pre-existing:** there before this change. It doesn't block: the author lists it in the pull request.
+- **Important:** a bug a user would hit, data loss, a change to the security model, a guard that loosens, or any rule under "Flag" below that the change breaks, such as a test that passes without the change or a doc that says something the code doesn't do. It blocks the merge.
+- **Nit:** optional polish: wording that is right but could read better, naming, a comment, a test's setup that works. It doesn't block.
+- **Pre-existing:** there before this change. It doesn't block.
 
-A round is one review of a new head. After two rounds, raise only Important findings, and check the fixes of the ones you raised. Past two rounds, most findings were in code the review itself had asked for: #896 ran 13 rounds, and rounds 8 to 13 were nearly all fixes of earlier fixes.
+The author contests a Nit it won't fix, and a Pre-existing finding, with the reason (for a Pre-existing one, where the pull request lists it). Then drop it, or defer it to an issue, instead of insisting: insist only on an Important one. Only the raiser or a person can drop or defer a card, so an open Nit holds up the board until its raiser settles it. After two rounds, drop your Nits that are still open.
+
+A round is one review of a new head. After two rounds, raise only Important findings, and check the fixes of the ones you raised. Past round two, one finding in four was a bug a user could hit; the rest were in code the review itself had asked for, wording and test setup. #896 ran 13 rounds, and rounds 8 to 13 were nearly all fixes of earlier fixes.
 
 ## Flag
 

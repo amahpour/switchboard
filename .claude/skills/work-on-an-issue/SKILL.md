@@ -12,7 +12,7 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
 
 2. **Branch.** `git fetch origin && git switch -c <type>/<name> origin/main`, where `<type>` is the title's Conventional Commits type (`fix`, `feat`, `docs`, `ci`, `test`, `refactor`, `chore`). In a shared checkout, a worktree: `git worktree add .worktrees/<name> -b <type>/<name> origin/main`.
 
-3. **Build it, with its tests.** Write what each test checks and why before its body, then see it fail without the change: for a bug, the test first. Only this issue; anything else becomes an issue of its own. Commit as you go, files by name, never `--no-verify`.
+3. **Build it, with its tests.** Write what each test checks and why before its body, then see it fail without the change: for a bug, the test first. Only this issue. Something else you find follows CLAUDE.md's step 3: an issue for an Important one, a line in the pull request for anything smaller. Commit as you go, files by name, never `--no-verify`.
 
 4. **Run lint, security reports and the suite.** `uv run python scripts/lint.py` (or `--fix` while editing), `uv run python scripts/security_scan.py` (findings are report-only), then `uv run pytest -q -n auto`. Then what the change calls for:
 
@@ -36,6 +36,6 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
 
 8. **Watch CI.** `gh pr checks <pr> --watch`. On red: `gh run view <run> --log-failed`, fix with a new commit, push, watch again. A test that fails sometimes is never waved through, even one the diff can't have touched: fix it (step 4). Re-run (`gh run rerun <run> --failed`) only to unblock this pull request while that fix is open, and say so.
 
-9. **Answer the review.** Each finding has a level (the root `REVIEW.md`, "Levels"). Fix the Important ones. For each, look for the same problem everywhere the change reaches, not only the line named, and list every place you checked in the proof, so one pass can confirm it. Fix a Nit if that is cheap, or drop it with a reason; list a Pre-existing one in the pull request. A fix that needs a new mechanism (a lock, a migration, a file format, a new state) stops here: say so, and ask the maintainer, because the design is moving and a review round is the wrong place to build it. After two rounds only Important findings stay open.
+9. **Answer the review.** Each finding has a level (the root `REVIEW.md`, "Levels"). Fix the Important ones. For each, look for the same problem everywhere the change reaches, not only the line named, and list every place you checked in the proof, so one pass can confirm it. Fix a Nit if that is cheap; otherwise contest its card with the reason. List a Pre-existing one in the pull request, and contest its card saying where. The raiser drops or defers what it accepts: only the raiser or a person can. A fix that needs a new mechanism (a lock, a migration, a file format, a new state) stops here: say so, and ask the maintainer, because the design is moving and a review round is the wrong place to build it. After two rounds only Important findings stay open.
 
 10. **Stop.** Report the link, what it does in two sentences, the evidence, and any assumption. Don't merge. After the maintainer merges: `git worktree remove .worktrees/<name>` if there was one, and `git branch -d <branch>`.
