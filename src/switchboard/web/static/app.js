@@ -4621,7 +4621,7 @@
       status.textContent = text;
       status.classList.toggle('bad', !!bad);
     }
-    function show() {
+    let show = function () {
       const cur = w();
       url.value = '';
       url.placeholder = cur.set ? 'Set. Paste a new address to replace it.' : 'https://…';
@@ -4637,14 +4637,16 @@
         status.textContent = '';
         status.classList.remove('bad');
       }
-    }
+    };
+    // while a request is out every button of the webhook section waits; afterwards show() sets them again
     async function call(method, path, body) {
-      for (const b of [save, test, remove]) b.disabled = true;
+      const buttons = Array.from(box.querySelectorAll('button[id^="settings-webhook-"]'));
+      const was = buttons.map(function (b) { return b.disabled; });
+      for (const b of buttons) b.disabled = true;
       try {
-        const res = await api(method, path, body);
-        return res;
+        return await api(method, path, body);
       } finally {
-        for (const b of [save, test, remove]) b.disabled = false;
+        buttons.forEach(function (b, i) { b.disabled = was[i]; });
       }
     }
     save.addEventListener('click', async function () {
@@ -4662,7 +4664,11 @@
         const res = await call('POST', '/api/me/webhook/test', {});
         state.me.webhook = res.webhook;
         show();
-        say(res.ok ? 'The test went through.' : 'The test failed: ' + res.error, !res.ok);
+        const two = res.second;
+        if (!two) say(res.ok ? 'The test went through.' : 'The test failed: ' + res.error, !res.ok);
+        else if (res.ok && two.ok) say('The test went through to both addresses.', false);
+        else if (!res.ok) say('The test failed: ' + res.error, true);
+        else say('The test went through to the first address. At the second it failed: ' + two.error, true);
       } catch (e) { say(String(e.message || e), true); }
     });
     remove.addEventListener('click', async function () {
@@ -4672,7 +4678,186 @@
         say('Removed.', false);
       } catch (e) { say(String(e.message || e), true); }
     });
+    const showAll = function () { show(); };
+    const second = buildWebhookSecond(box, w, call, showAll);
+    const quiet = buildWebhookQuiet(box, w, call, showAll);
+    const showFirst = show;
+    show = function () { showFirst(); second.show(); quiet.show(); };
     show();
+  }
+
+  // Webhook → Second alert (#923, DESIGN.md §62.4): another address, posted once if the item still waits a set time
+  // after the first alert. The same rules as the first address: https, public, never shown back (its host only).
+  function buildWebhookSecond(box, w, call, showAll) {
+    box.append(el('h4', 'settings-sub', 'Second alert'),
+      el('p', 'fine', 'If something still needs you this long after the first alert, switchboard posts once more, to a'
+        + ' second address: an ntfy topic at top priority, or a flow that texts you or rings your phone. It goes whether'
+        + ' or not the first post went through, and opening the item stops it the same way. Both addresses share the'
+        + ' limit of 12 posts an hour.'));
+    const urlLabel = el('label', 'settings-label', 'Second address');
+    urlLabel.setAttribute('for', 'settings-webhook-second-url');
+    const url = el('input');
+    url.type = 'text';
+    url.id = 'settings-webhook-second-url';
+    url.autocomplete = 'off';
+    url.spellcheck = false;
+    url.maxLength = 500;
+    url.autocapitalize = 'none';
+    const afterLabel = el('label', 'settings-label', 'Minutes after the first alert');
+    afterLabel.setAttribute('for', 'settings-webhook-second-after');
+    const after = el('input');
+    after.type = 'number';
+    after.id = 'settings-webhook-second-after';
+    after.min = '5';
+    after.max = '240';
+    after.step = '1';
+    const note = el('p', 'fine');
+    note.id = 'settings-webhook-second-note';
+    const status = el('p', 'fine');
+    status.id = 'settings-webhook-second-status';
+    status.setAttribute('role', 'status');
+    const save = btn('btn', 'Save second alert');
+    save.id = 'settings-webhook-second-save';
+    const remove = btn('btn', 'Remove second alert');
+    remove.id = 'settings-webhook-second-remove';
+    const bar = el('div', 'settings-actions');
+    bar.append(save, remove);
+    box.append(urlLabel, url, afterLabel, after, note, bar, status);
+    function say(text, bad) {
+      status.textContent = text;
+      status.classList.toggle('bad', !!bad);
+    }
+    function show() {
+      const cur = w();
+      const two = cur.second || { set: false, after_min: 20, last: null };
+      url.value = '';
+      url.placeholder = two.set ? 'Set. Paste a new address to replace it.' : 'https://…';
+      after.value = String(two.after_min || 20);
+      url.disabled = after.disabled = save.disabled = !cur.set;
+      remove.disabled = !cur.set || !two.set;
+      if (!cur.set) note.textContent = 'Save a webhook address above first.';
+      else if (two.set) note.textContent = 'Second alert to ' + two.host + ' (the rest of the address is kept secret).';
+      else note.textContent = 'No second alert.';
+      const last = two.set ? two.last : null;
+      if (last) say(last.ok ? 'The last second alert went through.' : 'The last second alert failed: ' + last.error, !last.ok);
+      else say('', false);
+    }
+    save.addEventListener('click', async function () {
+      const body = { second_after_min: Number(after.value) };
+      if (url.value.trim()) body.second_url = url.value.trim();
+      else if (!(w().second || {}).set) { say('Paste the second address.', true); return; }
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', body);
+        showAll();
+        say('Second alert saved.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    remove.addEventListener('click', async function () {
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', { second_url: null });
+        showAll();
+        say('Second alert removed.', false);
+        save.focus();
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    return { show: show };
+  }
+
+  // Webhook → Quiet hours (#923, DESIGN.md §62.4): a span in the person's own time zone when nothing is sent but the
+  // kinds they mark. The zone is proposed from the browser and kept as its IANA name; the server refuses one it does
+  // not know.
+  function buildWebhookQuiet(box, w, call, showAll) {
+    const kinds = [['approval', 'An agent waiting for your approval'], ['question', 'A message to you'],
+      ['board', 'A review that needs your call']];
+    box.append(el('h4', 'settings-sub', 'Quiet hours'),
+      el('p', 'fine', 'Between these times nothing is sent, first or second alert, except what you tick below. What waited'
+        + ' is sent when they end, if it still needs you. Send a test always goes.'));
+    const times = el('div', 'settings-quiet-times');
+    function timeField(id, text) {
+      const wrap = el('div', 'settings-quiet-time');
+      const label = el('label', 'settings-label', text);
+      label.setAttribute('for', id);
+      const input = el('input');
+      input.type = 'time';
+      input.id = id;
+      wrap.append(label, input);
+      times.append(wrap);
+      return input;
+    }
+    const from = timeField('settings-webhook-quiet-from', 'From');
+    const to = timeField('settings-webhook-quiet-to', 'To');
+    const tzLabel = el('label', 'settings-label', 'Time zone');
+    tzLabel.setAttribute('for', 'settings-webhook-quiet-tz');
+    const tz = el('input');
+    tz.type = 'text';
+    tz.id = 'settings-webhook-quiet-tz';
+    tz.autocomplete = 'off';
+    tz.spellcheck = false;
+    tz.maxLength = 64;
+    tz.autocapitalize = 'none';
+    const group = el('fieldset', 'settings-quiet-always');
+    group.append(el('legend', 'settings-label', 'Sent anyway'));
+    const boxes = {};
+    for (const [kind, text] of kinds) {
+      const row = el('label', 'check-row');
+      const c = el('input');
+      c.type = 'checkbox';
+      c.id = 'settings-webhook-quiet-always-' + kind;
+      boxes[kind] = c;
+      row.append(c, el('span', null, text));
+      group.append(row);
+    }
+    const note = el('p', 'fine');
+    note.id = 'settings-webhook-quiet-note';
+    const status = el('p', 'fine');
+    status.id = 'settings-webhook-quiet-status';
+    status.setAttribute('role', 'status');
+    const save = btn('btn', 'Save quiet hours');
+    save.id = 'settings-webhook-quiet-save';
+    const remove = btn('btn', 'Turn off quiet hours');
+    remove.id = 'settings-webhook-quiet-remove';
+    const bar = el('div', 'settings-actions');
+    bar.append(save, remove);
+    box.append(times, tzLabel, tz, group, note, bar, status);
+    function browserZone() {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) { return ''; }
+    }
+    function say(text, bad) {
+      status.textContent = text;
+      status.classList.toggle('bad', !!bad);
+    }
+    function show() {
+      const cur = w();
+      const q = cur.quiet || { set: false, from: '22:00', to: '07:00', tz: null, always: ['approval'] };
+      from.value = q.from || '22:00';
+      to.value = q.to || '07:00';
+      tz.value = q.tz || browserZone();
+      for (const [kind] of kinds) boxes[kind].checked = (q.always || []).indexOf(kind) >= 0;
+      for (const f of [from, to, tz, save].concat(Object.values(boxes))) f.disabled = !cur.set;
+      remove.disabled = !cur.set || !q.set;
+      if (!cur.set) note.textContent = 'Save a webhook address above first.';
+      else if (q.set) note.textContent = 'Quiet from ' + q.from + ' to ' + q.to + ', ' + q.tz + '.';
+      else note.textContent = 'No quiet hours.';
+    }
+    save.addEventListener('click', async function () {
+      if (!from.value || !to.value) { say('Give a start and an end time.', true); return; }
+      const always = kinds.map(function (k) { return k[0]; }).filter(function (k) { return boxes[k].checked; });
+      const body = { quiet: { from: from.value.slice(0, 5), to: to.value.slice(0, 5), tz: tz.value.trim(), always: always } };
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', body);
+        showAll();
+        say('Quiet hours saved.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    remove.addEventListener('click', async function () {
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', { quiet: null });
+        showAll();
+        say('Quiet hours turned off.', false);
+        save.focus();
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    return { show: show };
   }
 
   function buildSettingsAppearance(panel) {

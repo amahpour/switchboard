@@ -157,6 +157,14 @@ def test_the_form_fits_in_light_dark_and_on_a_phone(ui: UI, hook: TlsHook) -> No
             "#settings-webhook-save",
             "#settings-webhook-test",
             "#settings-webhook-remove",
+            "#settings-webhook-second-url",
+            "#settings-webhook-second-save",
+            "#settings-webhook-second-remove",
+            "#settings-webhook-quiet-from",
+            "#settings-webhook-quiet-to",
+            "#settings-webhook-quiet-tz",
+            "#settings-webhook-quiet-save",
+            "#settings-webhook-quiet-remove",
         ):
             box = page.locator(sel).bounding_box()
             assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= width + 1, (
@@ -164,3 +172,75 @@ def test_the_form_fits_in_light_dark_and_on_a_phone(ui: UI, hook: TlsHook) -> No
                 box,
                 width,
             )
+
+
+def second_url(hook: TlsHook) -> str:
+    return hook.url.replace("secretsecret", "loudloud")
+
+
+def test_the_second_alert_and_quiet_hours_save_show_and_remove(ui: UI, hook: TlsHook) -> None:
+    """#923: with a webhook saved, a second address and quiet hours save, show only the host and the hours (the
+    zone proposed from the browser's own), last through a reload, and remove. Fails if either part does not
+    reach the server, the second address shows back, or the browser's zone is not proposed."""
+    page = open_settings(ui, timezone_id="America/New_York")
+    expect(page.locator("#settings-webhook-second-save")).to_be_disabled()
+    expect(page.locator("#settings-webhook-quiet-save")).to_be_disabled()
+    page.fill("#settings-webhook-url", hook.url)
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    expect(page.locator("#settings-webhook-quiet-tz")).to_have_value("America/New_York")
+    expect(page.locator("#settings-webhook-quiet-always-approval")).to_be_checked()
+    expect(page.locator("#settings-webhook-quiet-always-question")).not_to_be_checked()
+    page.fill("#settings-webhook-second-url", second_url(hook))
+    page.fill("#settings-webhook-second-after", "30")
+    page.click("#settings-webhook-second-save")
+    expect(page.locator("#settings-webhook-second-status")).to_have_text("Second alert saved.")
+    expect(page.locator("#settings-webhook-second-note")).to_contain_text(HOST)
+    expect(page.locator("#settings-webhook-second-url")).to_have_value("")
+    page.fill("#settings-webhook-quiet-from", "21:30")
+    page.fill("#settings-webhook-quiet-to", "06:45")
+    page.check("#settings-webhook-quiet-always-board")
+    page.click("#settings-webhook-quiet-save")
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+    expect(page.locator("#settings-webhook-quiet-note")).to_have_text(
+        "Quiet from 21:30 to 06:45, America/New_York."
+    )
+    assert "loudloud" not in page.content() and "s3cr3t" not in page.content()
+    page.click("#settings-webhook-test")
+    expect(page.locator("#settings-webhook-status")).to_have_text("The test went through to both addresses.")
+    assert [p["body"].get("alert") for p in hook.posts] == [None, "second"]
+    page.reload()
+    page = open_settings(ui)
+    expect(page.locator("#settings-webhook-second-after")).to_have_value("30")
+    expect(page.locator("#settings-webhook-quiet-from")).to_have_value("21:30")
+    expect(page.locator("#settings-webhook-quiet-always-board")).to_be_checked()
+    page.click("#settings-webhook-second-remove")
+    expect(page.locator("#settings-webhook-second-status")).to_have_text("Second alert removed.")
+    expect(page.locator("#settings-webhook-second-note")).to_have_text("No second alert.")
+    expect(page.locator("#settings-webhook-second-save")).to_be_focused()
+    page.click("#settings-webhook-quiet-remove")
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours turned off.")
+    expect(page.locator("#settings-webhook-quiet-note")).to_have_text("No quiet hours.")
+    expect(page.locator("#settings-webhook-quiet-remove")).to_be_disabled()
+
+
+def test_an_unknown_zone_and_an_internal_second_address_are_refused_in_settings(ui: UI, hook: TlsHook) -> None:
+    """#923: a time zone the server does not know and a second address on the loopback (private addresses
+    off) are refused, each saying why in its own part. Fails if either is saved or silent."""
+    page = open_settings(ui)
+    page.fill("#settings-webhook-url", hook.url)
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    page.fill("#settings-webhook-quiet-tz", "Mars/Olympus_Mons")
+    page.click("#settings-webhook-quiet-save")
+    status = page.locator("#settings-webhook-quiet-status")
+    expect(status).to_have_text("That time zone is not one this switchboard knows.")
+    expect(status).to_have_class("fine bad")
+    hook.arm(False)  # type: ignore[attr-defined]
+    page.fill("#settings-webhook-second-url", f"https://127.0.0.1:{hook.port}/x")
+    page.click("#settings-webhook-second-save")
+    expect(page.locator("#settings-webhook-second-status")).to_contain_text("The second address")
+    expect(page.locator("#settings-webhook-second-note")).to_have_text("No second alert.")
+    refused = [p for p in ui.problems if "400 (Bad Request)" in p and "/api/me/webhook" in p]
+    assert len(refused) == 2, ui.problems
+    ui.problems[:] = [p for p in ui.problems if p not in refused]

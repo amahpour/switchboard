@@ -3030,6 +3030,12 @@ body.login {
 }
 .settings-row > .ic:last-child { flex-shrink: 0; color: var(--muted); }
 .settings-label { font-size: calc(12px * var(--text-scale)); font-weight: 600; }
+.settings-sub { margin: 12px 0 0; font-size: calc(14px * var(--text-scale)); }  /* the webhook's parts, #923 */
+.settings-quiet-times { display: flex; flex-wrap: wrap; gap: 12px; }
+.settings-quiet-time { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.settings-quiet-always { display: flex; flex-direction: column; gap: 0; margin: 0; padding: 0; border: 0; min-width: 0; }
+.settings-quiet-always legend { padding: 0; margin-bottom: 6px; }
+.settings-quiet-always .check-row { display: flex; align-items: center; gap: 8px; }
 .settings-theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .settings-text-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .settings-theme-option {

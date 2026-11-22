@@ -60,6 +60,8 @@ bubble with its name written under it, #62), inspector-device-light, inspector-d
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
 agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
 webhook-{empty,set,failed}-{light,dark,phone-light} (Settings → Profile → Webhook, #723; ``--only webhook``),
+webhook-alerts-{light,dark,phone-light} and webhook-quiet-{light,dark,phone-light} (its Second alert and
+Quiet hours saved, #923; ``--only webhook``),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
 merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
@@ -716,7 +718,8 @@ def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
 
 
 def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
-    """#723: Settings, Profile, Webhook: empty, saved (only the host is shown back), and a failed test. The
+    """#723: Settings, Profile, Webhook: empty, saved (only the host is shown back), its second alert and quiet
+    hours saved (#923), and a failed test. The
     receiver is a local HTTPS server (``tests/fakes/tls_hook.py``) the broker is told to trust; its address and
     secret path are made up."""
     from fakes.tls_hook import TlsHook
@@ -763,6 +766,26 @@ def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
                 expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
                 settle(page)
                 shot(page, out, f"webhook-set-{theme}.png")
+                page.fill("#settings-webhook-second-url", hook.url.replace("secretsecret", "loudloud"))
+                page.fill("#settings-webhook-second-after", "20")
+                page.click("#settings-webhook-second-save")
+                expect(page.locator("#settings-webhook-second-status")).to_have_text("Second alert saved.")
+                page.fill("#settings-webhook-quiet-from", "22:00")
+                page.fill("#settings-webhook-quiet-to", "07:00")
+                page.fill("#settings-webhook-quiet-tz", "America/New_York")
+                page.click("#settings-webhook-quiet-save")
+                expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+                page.locator("#settings-webhook-second-url").scroll_into_view_if_needed()
+                page.evaluate(
+                    "document.querySelector('#settings-webhook-second-url')"
+                    ".closest('.settings-panel-content').scrollBy(0, -80)"
+                )
+                settle(page)
+                shot(page, out, f"webhook-alerts-{theme}.png")
+                page.locator("#settings-webhook-quiet-remove").scroll_into_view_if_needed()
+                settle(page)
+                shot(page, out, f"webhook-quiet-{theme}.png")
+                page.locator("#settings-webhook-test").scroll_into_view_if_needed()
                 hook.status = 500
                 page.click("#settings-webhook-test")
                 expect(page.locator("#settings-webhook-status")).to_contain_text("The test failed")
