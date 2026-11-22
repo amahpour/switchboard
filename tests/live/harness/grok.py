@@ -1,18 +1,22 @@
 """Live Grok Build over HTTPS (DESIGN.md §12.4, §49.15). Test-only; the product never writes these files.
 
-Grok Build runs with a **temp $HOME**, the run's scratch repository itself, so the person's own ``~/.grok``
-(config, plugins, hooks, trusted folders, sessions) is never read or written, and Grok asks for no folder
-trust: it trusts the home folder without asking, so the run passes no ``--trust`` and writes no
-``trusted_folders.toml``. In it, ``.grok/plugins/switchboard`` is a copy of this checkout's ``plugins/grok``
-and ``.grok/config.toml`` enables it, starts in ask mode, and allows switchboard's tools
+Grok Build runs with a **temp $HOME** of its own (``grok-home``, mode 0700, beside the run's scratch
+repository and never inside it), so the person's own ``~/.grok`` (config, plugins, hooks, trusted folders,
+sessions) is never read or written. Grok works in the scratch repository, a separate folder: nothing in
+the temp home, the copy of the login above all, is under the folder Grok works in, so no tool call or
+workspace snapshot of Grok's can read it (#928's review). The run passes no ``--trust`` and writes no
+``trusted_folders.toml``. In the temp home, ``.grok/plugins/switchboard`` is a copy of this checkout's
+``plugins/grok`` and ``.grok/config.toml`` enables it, starts in ask mode, and allows switchboard's tools
 (``MCPTool(switchboard__*)``) and the scratch script (``Bash(sh hold.sh *)``) and nothing else, as the Cursor
-profile does; any other prompt is declined with Esc, never approved. The address and the token reach the
+profile does; any other prompt is declined, never approved. It also turns off what Grok sends xAI besides
+model calls: ``[features] telemetry`` and ``[telemetry] trace_upload``. The address and the token reach the
 plugin through the child's environment only.
 
-The model is the person's real Grok login by default: a copy of ``~/.grok/auth.json`` (mode 0600, deleted
-first when the run ends), or ``XAI_API_KEY`` if it is set. With ``SWITCHBOARD_GROK_BASE_URL`` set, the model
-is that chat-completions server instead (Grok's ``[model.<id>] base_url``); ``standin`` starts the scripted
-one in ``tests/fakes/grok_model.py``, which needs no login and spends nothing.
+The model is the person's real Grok login by default: a copy of ``~/.grok/auth.json`` into the temp home
+(mode 0600, deleted first when the run ends), or ``XAI_API_KEY`` if it is set. With
+``SWITCHBOARD_GROK_BASE_URL`` set, the model is that chat-completions server instead (Grok's
+``[model.<id>] base_url``); ``standin`` starts the scripted one in ``tests/fakes/grok_model.py``, which
+needs no login and spends nothing.
 """
 
 from __future__ import annotations
@@ -40,13 +44,14 @@ def plugin_dir() -> Path:
 
 
 def config_toml(base_url: str | None) -> str:
-    """The temp home's ``.grok/config.toml``: the plugin on, ask mode, the run's allow rules, and the stand-in
-    model when there is one."""
+    """The temp home's ``.grok/config.toml``: the plugin on, ask mode, the run's allow rules, telemetry and
+    trace uploads off, and the stand-in model when there is one."""
     allow = ", ".join(f'"{rule}"' for rule in ALLOW)
     ask = ", ".join(f'"{rule}"' for rule in ASK)
     text = (
         f'[plugins]\nenabled = ["switchboard"]\n\n[permission]\nallow = [{allow}]\nask = [{ask}]\n\n'
-        '[ui]\npermission_mode = "ask"\n'
+        '[ui]\npermission_mode = "ask"\n\n'
+        "[features]\ntelemetry = false\n\n[telemetry]\ntrace_upload = false\n"
     )
     if base_url:
         text += (
@@ -72,7 +77,9 @@ class GrokRun(Run):
             self.standin = GrokModel().start()
             base_url = self.standin.url
         self.base_url = base_url
-        grok = self.ws / ".grok"
+        self.grok_home = self.base / "grok-home"
+        self.grok_home.mkdir(mode=0o700)
+        grok = self.grok_home / ".grok"
         shutil.copytree(plugin_dir(), grok / "plugins" / "switchboard")
         (grok / "config.toml").write_text(config_toml(base_url))
         if not base_url:
@@ -82,7 +89,7 @@ class GrokRun(Run):
 
     def env(self) -> dict[str, str]:
         env = {
-            "HOME": str(self.ws),
+            "HOME": str(self.grok_home),
             "SWITCHBOARD_URL": self.broker.url,
             "SWITCHBOARD_AGENT_TOKEN": self.token,
             "NO_PROXY": "switchboard.localhost,localhost,127.0.0.1",
@@ -132,6 +139,8 @@ class GrokRun(Run):
 
     def scrub(self) -> None:
         """Delete the copy of the login first, before anything can fail; stop the stand-in."""
-        (self.ws / ".grok" / "auth.json").unlink(missing_ok=True)
+        home = getattr(self, "grok_home", None)
+        if home is not None:
+            (home / ".grok" / "auth.json").unlink(missing_ok=True)
         if getattr(self, "standin", None) is not None:
             self.standin.stop()

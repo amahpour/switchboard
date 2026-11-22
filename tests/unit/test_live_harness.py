@@ -32,6 +32,7 @@ from harness import (  # noqa: E402
     cursor,
     devin,
     drift,
+    grok,
     preflight,
     scenarios,
     screens,
@@ -94,6 +95,43 @@ def test_grok_s_input_box_is_read_between_its_borders() -> None:
     assert screens.grok_input_text(screen) == "Use the switchboard tools. Call join with room #build"
     assert screens.grok_input_text("╭──╮\n│ ❯ │\n╰──╯\n") == ""
     assert screens.grok_input_text("no box at all") == ""
+
+
+def test_grok_s_login_copy_is_kept_outside_the_folder_it_works_in_and_uploads_are_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#928's review (F8): the live run copies the person's Grok login into a temp home of its own, beside the
+    scratch repository Grok works in and never under it, so no tool call or workspace snapshot of Grok's can
+    read it; and its config turns telemetry and trace uploads off. Fails if the temp home is the workspace
+    (as before: ``HOME`` was the scratch repository, the login at ``ws/.grok/auth.json``), or a setting is
+    missing."""
+    real = tmp_path / "real-home"
+    (real / ".grok").mkdir(parents=True)
+    (real / ".grok" / "auth.json").write_text('{"synthetic": true}')
+    monkeypatch.setattr(grok, "REAL_HOME", str(real))
+    monkeypatch.delenv("SWITCHBOARD_GROK_BASE_URL", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    r = object.__new__(grok.GrokRun)
+    r.base = tmp_path / "run"
+    r.ws = r.base / "ws"
+    r.ws.mkdir(parents=True)
+    r.token = "sbat_synthetic"
+    r.broker = type("B", (), {"url": "http://switchboard.localhost:1"})()
+    r.prepare()
+    home = Path(r.env()["HOME"]).resolve()
+    ws = r.ws.resolve()
+    auth = home / ".grok" / "auth.json"
+    assert auth.read_text() == '{"synthetic": true}' and (auth.stat().st_mode & 0o777) == 0o600
+    assert not home.is_relative_to(ws) and not auth.resolve().is_relative_to(ws)
+    assert not ws.is_relative_to(home)
+    assert not list(ws.rglob("auth.json")) and not (ws / ".grok").exists()
+    config = tomllib.loads((home / ".grok" / "config.toml").read_text())
+    assert config["features"]["telemetry"] is False
+    assert config["telemetry"]["trace_upload"] is False
+    assert config["plugins"]["enabled"] == ["switchboard"]
+    r.standin = None
+    r.scrub()
+    assert not auth.exists()
 
 
 def test_claudes_start_up_dialogs_get_only_the_answers_this_run_owns() -> None:
