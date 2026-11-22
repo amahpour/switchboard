@@ -17,6 +17,7 @@ from switchboard.adapters import (
     HTTPS_CODEX,
     HTTPS_CURSOR,
     HTTPS_DEVIN,
+    HTTPS_GROK,
     HTTPS_OPENCODE,
     adapter_for,
     build_adapters,
@@ -396,6 +397,7 @@ def test_the_engine_builds_one_adapter_per_https_harness_and_the_test_agent() ->
         HTTPS_CODEX,
         HTTPS_CURSOR,
         HTTPS_DEVIN,
+        HTTPS_GROK,
         HTTPS_OPENCODE,
         "unknown",
         "test",
@@ -409,11 +411,12 @@ def test_a_session_is_served_by_the_adapter_of_its_harness() -> None:
     ads = build_adapters(CFG)
     assert adapter_for(ads, "claude") is ads[HTTPS_CLAUDE]
     assert adapter_for(ads, "devin") is ads[HTTPS_DEVIN]
+    assert adapter_for(ads, "grok") is ads[HTTPS_GROK]
     assert adapter_for(ads, "test") is ads["test"]
     assert adapter_for(ads, "gemini") is ads["unknown"]
 
 
-@pytest.mark.parametrize("harness", ["claude", "codex", "cursor"])
+@pytest.mark.parametrize("harness", ["claude", "codex", "cursor", "grok"])
 def test_catchups_session_id_is_the_one_the_sessions_key_carries(harness: str) -> None:
     """/catchup (§26) names a session by the harness's own id: for a session over HTTPS, the id its
     calls name, which is in its session key. Fails if a session's row and key disagree and the id is

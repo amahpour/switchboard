@@ -1,0 +1,72 @@
+{
+  "_source": "grok 1.0.89 (28be5bb1bf65) on Linux, headless -p; a personal hook in ~/.grok/hooks copied stdin; the model was a local stub chat-completions endpoint ([model.*] base_url) and MCP servers local stubs or a throwaway broker, so no xAI login (spike #902); a throwaway switchboard 1.12.0 broker over /mcp with an agent token; the broker does not know the client",
+  "_unverified": false,
+  "hookEventName": "post_tool_use",
+  "sessionId": "00000000-0000-4000-8000-0000000a1005",
+  "cwd": "/ws",
+  "workspaceRoot": "/ws",
+  "timestamp": "2026-11-20T16:08:58.968864437+00:00",
+  "transcriptPath": "/grok-home/sessions/%2Fws/00000000-0000-4000-8000-0000000a1005/updates.jsonl",
+  "permissionMode": "default",
+  "toolName": "switchboard__join",
+  "toolUseId": "call_2",
+  "toolInput": {
+    "tool_name": "switchboard__join",
+    "tool_input": {
+      "room": "#build",
+      "screen_name": "grok-1"
+    }
+  },
+  "toolResult": {
+    "type": "MCP",
+    "tool_name": "join",
+    "server_name": "switchboard",
+    "output": {
+      "OkayOutput": "{\"ok\":false,\"error\":\"switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor and Devin\",\"code\":\"unsupported\"}"
+    },
+    "_meta": {
+      "fastmcp": {
+        "wrap_result": true
+      },
+      "io.modelcontextprotocol/serverInfo": {
+        "name": "switchboard",
+        "version": "1.12.0"
+      }
+    }
+  },
+  "toolInputTruncated": false,
+  "toolResultTruncated": false,
+  "durationMs": 8,
+  "isBackgrounded": false,
+  "hook_event_name": "PostToolUse",
+  "session_id": "00000000-0000-4000-8000-0000000a1005",
+  "transcript_path": "/grok-home/sessions/%2Fws/00000000-0000-4000-8000-0000000a1005/updates.jsonl",
+  "permission_mode": "default",
+  "tool_name": "switchboard__join",
+  "tool_input": {
+    "tool_name": "switchboard__join",
+    "tool_input": {
+      "room": "#build",
+      "screen_name": "grok-1"
+    }
+  },
+  "tool_response": {
+    "type": "MCP",
+    "tool_name": "join",
+    "server_name": "switchboard",
+    "output": {
+      "OkayOutput": "{\"ok\":false,\"error\":\"switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor and Devin\",\"code\":\"unsupported\"}"
+    },
+    "_meta": {
+      "fastmcp": {
+        "wrap_result": true
+      },
+      "io.modelcontextprotocol/serverInfo": {
+        "name": "switchboard",
+        "version": "1.12.0"
+      }
+    }
+  },
+  "tool_use_id": "call_2",
+  "duration_ms": 8
+}

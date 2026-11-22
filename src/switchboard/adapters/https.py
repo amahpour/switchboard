@@ -14,6 +14,10 @@ hook, which waits on the broker (a park, as Cursor's stop hook does, §9.4) unti
   Codex shows "Working" meanwhile, up to a day, and the person presses Esc to type (#380's
   decision 2).
 
+Grok Build (§49.15) holds its Stop hook open the same way, a command hook of its plugin posting to
+``/mcp/event``, and the answer is ``decision: block`` with the message. Grok allows 8 such blocks in one
+turn and then ends it without another Stop, so the plugin stops listening after 7 and reports a plain Stop.
+
 OpenCode V2 uses the same listener path from its plugin, and queues the broker's exact wake text
 as its next turn (§49.12). Its busy sessions pull through read()/wait()/say() only.
 
@@ -58,6 +62,7 @@ APPROVAL_REQUEST = "PermissionRequest"
 CLAUDE_TIER = "claude:https"
 CODEX_TIER = "codex:https"
 CURSOR_TIER = "cursor:https"
+GROK_TIER = "grok:https"
 DEVIN_TIER = "devin:https"
 OPENCODE_TIER = "opencode:https"
 # how Devin names the tools of the plugin's HTTPS server in its hooks (``mcp__<server>__<tool>``)
@@ -97,6 +102,26 @@ CURSOR_PARK_LIMIT = (
     ", for up to 1 hour after your turn ends (10 minutes with an older plugin copy). After that, later"
     " mentions stay queued until your user types in Cursor (any message starts a new wait)"
 )
+
+
+# Grok Build's Stop hook is held about an hour (the plugin's ``wait_s`` 3630 less ``PARK_MARGIN_S``), and its
+# plugin stops listening after 7 wakes in one turn (Grok ends a turn after 8 Stop blocks and fires no Stop for
+# the last, measured 1.0.89, #851). Either way nothing listens until the person's next prompt, as with Cursor.
+GROK_NOTE = "over HTTPS: woken at stop, for up to 1 hour and 7 wakes a turn; then type in Grok"
+GROK_IDLE_WHY = (
+    "not listening: no Stop hook waiting (Grok's lasts up to 1 hour after a turn ends, and stops after 7"
+    " wakes in a row); type in Grok to start listening again"
+)
+GROK_PARK_LIMIT = (
+    ", for up to 1 hour after your turn ends and at most 7 times before your user next types. After that,"
+    " later mentions stay queued until your user types in Grok"
+)
+GROK_NO_SESSION = (
+    "this Grok Build call has no X-Switchboard-Session header: use switchboard's Grok plugin, whose MCP"
+    " entry sends {{session_id}} (docs/guide/grok.md)"
+)
+# Grok Build's Notification type of an open tool approval prompt (recorded, 1.0.89, #851)
+GROK_APPROVAL_NOTIFICATION = "permission_prompt"
 
 
 def _held(secs: float) -> str:
@@ -315,6 +340,54 @@ class HttpsCursorAdapter(Listening):
         if not thread_id:
             raise ValueError("this Cursor call has no verified conversation ID")
         return session_key("cursor", host, thread_id)
+
+
+class HttpsGrokAdapter(Listening):
+    """Grok Build over HTTPS (§49.15), keyed by the session id its MCP entry sends on every call
+    (``X-Switchboard-Session: {{session_id}}``, Grok's own header template) and its hooks report.
+
+    Its plugin's Stop hook is held about an hour; the answer is ``decision: block`` with the message, which
+    Grok shows the model as Stop hook feedback and continues the turn with. Grok ends a turn after 8 such
+    blocks with no Stop for the last, so the plugin listens for at most 7 and then reports a plain Stop: the
+    session is idle and not listening until its person types, which the tier note, the join text and the
+    parked reason say. A tool's approval prompt is a ``Notification`` of type ``permission_prompt``; its next
+    hook says it was answered (§7.4, §49.9). A subagent runs under its own session id, and the plugin
+    reports none of its hooks."""
+
+    idle_why = GROK_IDLE_WHY
+    park_limit = GROK_PARK_LIMIT
+    long_wait_note = LONG_WAIT_NOTE
+
+    def __init__(self, cfg: Config):
+        super().__init__("grok", cfg)
+
+    def tier(self, p: Participant | None) -> tuple[str, str | None]:
+        return GROK_TIER, GROK_NOTE
+
+    def session_key(self, host: str, thread_id: str | None, *, test_session: str | None = None) -> str:
+        if not thread_id:
+            raise ValueError(GROK_NO_SESSION)
+        return session_key("grok", host, thread_id)
+
+    def asks_approval(self, ev: HookEvent) -> bool:
+        return ev.ev == "Notification" and ev.notification == GROK_APPROVAL_NOTIFICATION
+
+    def other_thread(self, p: Participant, ev: HookEvent) -> bool:
+        # Grok reports a cancelled or failed turn off its command loop, so that report (a Stop here) can
+        # arrive after the next turn's UserPromptSubmit (its own docs, 1.0.89): a Stop of another prompt than
+        # the current one is an old turn's, and must not make a busy session idle. Only UserPromptSubmit and a
+        # turn's end carry the prompt's id; tool hooks carry none.
+        return ev.ev == "Stop" and bool(ev.gen) and bool(p.gen) and (ev.gen or "")[:128] != p.gen
+
+    def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
+        # The prompt that joined came before the session was in a room: its turn's completed Stop names it.
+        return ev.ev == "Stop" and ev.reason == "end_turn"
+
+    def prompt_verdict(self, acked: bool) -> str | None:
+        # A Stop block continues the turn with no UserPromptSubmit (measured, 1.0.89), so one before the
+        # follow-up's next hook is the person's own prompt: they sent it while the hook waited, which ends the
+        # hook, and the follow-up did not run. It goes back to pending.
+        return "human_prompt"
 
 
 class HttpsOpenCodeAdapter(Listening):

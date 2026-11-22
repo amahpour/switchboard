@@ -149,6 +149,19 @@ HOOK_EVENTS: dict[str, frozenset[str]] = {
     "cursor": frozenset(
         {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
     ),
+    # Grok Build (§49.15): its plugin's command hooks. A turn that ended cancelled or failed (StopCancelled,
+    # StopFailure) arrives as a plain Stop: a declined approval prompt ends the turn so (§7.4).
+    "grok": frozenset(
+        {
+            "SessionStart",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "Stop",
+            "SessionEnd",
+        }
+    ),
     "devin": frozenset(
         {
             "SessionStart",

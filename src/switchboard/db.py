@@ -58,7 +58,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 59
+SCHEMA_VERSION = 60
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -81,7 +81,8 @@ CREATE TABLE rooms(
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
-  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','opencode','test','unknown')),
+  harness TEXT NOT NULL
+    CHECK(harness IN ('claude','codex','cursor','devin','opencode','grok','test','unknown')),
   session_key TEXT NOT NULL,
   session_id TEXT,
   status TEXT NOT NULL DEFAULT 'starting'
@@ -1183,6 +1184,19 @@ ADDRESSED_DDL = (
 )
 V58_TO_V59 = (*ADDRESSED_DDL, "UPDATE meta SET value='59' WHERE key='schema_version'")
 
+# v59 -> v60 (#851, DESIGN.md §49.15): only the participants CHECK gains a harness, Grok Build. The same
+# schema-text edit as v33 -> v34, with the same checks: _migrate brackets this step with schema editing,
+# verifies the new CHECK is in the table's text (or fails closed and rolls back), advances SQLite's schema
+# cookie and checks integrity. Rows are untouched. The needle is the whole list, which only the CHECK on
+# participants.harness holds.
+V59_TO_V60 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'',''test'',''unknown''',"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'',''grok'',''test'',''unknown''')"
+    " WHERE type='table' AND name='participants'",
+    "UPDATE meta SET value='60' WHERE key='schema_version'",
+)
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1457,6 +1471,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         56: MigrationStep(57, V56_TO_V57, (), (("reviews", "'none', 'blocked'"),)),
         57: MigrationStep(58, V57_TO_V58, ("mcp_sessions",)),
         58: MigrationStep(59, V58_TO_V59, ()),
+        59: MigrationStep(60, V59_TO_V60, (), (("participants", "'opencode','grok','test'"),)),
     }
     out = []
     v = frm

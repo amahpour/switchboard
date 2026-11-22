@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "switchboard": {
+      "type": "http",
+      "url": "${SWITCHBOARD_URL}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${SWITCHBOARD_AGENT_TOKEN}",
+        "X-Switchboard-Session": "{{session_id}}"
+      }
+    }
+  }
+}

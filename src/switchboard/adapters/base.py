@@ -26,6 +26,9 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
     "codex": frozenset({"PostToolUse"}),
     "devin": frozenset({"PostToolUse"}),
     "cursor": frozenset({"PostToolUse", "PostToolUseFailure"}),
+    # Grok Build: only a tool hook's additionalContext reaches the model; SessionStart's and
+    # UserPromptSubmit's output never does (measured with a stand-in model, 1.0.89, #851)
+    "grok": frozenset({"PostToolUse", "PostToolUseFailure"}),
     "opencode": frozenset(),  # V2 status reports never inject tool context (§49.12)
     # synthetic hook events from scripted test agents (test mode only)
     "test": frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"}),
@@ -67,6 +70,9 @@ CLIENT_WAIT_LIMIT_S: dict[str, int] = {
     "cursor": 55,
     "devin": 100,
     "opencode": 50,
+    # Grok Build ends an MCP call at its tool_timeout_sec, 6000 s by default (its own docs, 1.0.89); held to
+    # Claude Code's 600, which was measured, since a longer wait is not needed with a Stop listener (#851)
+    "grok": 600,
     "test": 50,  # the scripted test agent (§9.6) has no client: the old default
 }
 # A harness that is not in the table gets the lowest cap there is: an unrecognized value fails closed.
@@ -87,6 +93,7 @@ def waits_over_client_limit(cfg: Config) -> list[tuple[str, int, int]]:
         "codex": cfg.codex.wait_cap_s,
         "cursor": cfg.cursor.wait_cap_s,
         "opencode": cfg.opencode.wait_cap_s,
+        "grok": cfg.grok.wait_cap_s,
     }
     return [(h, v, client_wait_limit(h)) for h, v in sections.items() if v > client_wait_limit(h)]
 
@@ -128,6 +135,7 @@ class Adapter:
             "cursor": (c.cursor.ctx_max_chars, c.cursor.wait_cap_s),
             "devin": (c.devin.ctx_max_chars, c.devin.wait_cap_s),
             "opencode": (c.delivery.batch_max_chars, c.opencode.wait_cap_s),
+            "grok": (c.grok.ctx_max_chars, c.grok.wait_cap_s),
         }
         ctx, wait = table.get(self.harness, (c.delivery.batch_max_chars, UNKNOWN_WAIT_LIMIT_S))
         wait = min(wait, client_wait_limit(self.harness))  # never past what the harness's client allows

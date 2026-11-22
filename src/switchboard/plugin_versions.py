@@ -1,11 +1,11 @@
 """Which plugin version a session runs, and whether its major matches this server's (DESIGN.md §49.13).
 
 Every harness's plugin sends its own version in ``X-Switchboard-Plugin-Version``: Claude Code's and
-Codex's on their MCP connection, Cursor's and Devin's hooks and OpenCode's listener on the requests they
-make (#887). It is a claim from outside: cut to ``HEADER_MAX`` characters and parsed strictly (``parse``),
-and anything that isn't ``X.Y.Z`` of digits is no version at all. Nothing here decides what a session may do;
-it only lets ``/who``, the Inspector and ``join`` say that a plugin's major differs, with the command that
-updates it when the plugin is the older major.
+Codex's on their MCP connection, Cursor's, Devin's and Grok Build's hooks and OpenCode's listener on the
+requests they make (#887, #851). It is a claim from outside: cut to ``HEADER_MAX`` characters and parsed
+strictly (``parse``), and anything that isn't ``X.Y.Z`` of digits is no version at all. Nothing here
+decides what a session may do; it only lets ``/who``, the Inspector and ``join`` say that a plugin's major
+differs, with the command that updates it when the plugin is the older major.
 
 A plugin's version is the release's: ``release.py`` sets every plugin manifest to the release's own version at
 each release (#841), so the plugin of switchboard X.Y.Z is X.Y.Z, and a session's plugin is compared with this
@@ -25,7 +25,7 @@ HEADER_MAX = 32  # a longer value is no version: nothing past it is looked at
 VERSION_RE = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 
 # the version of each plugin this server expects: its own (derived, so a release cannot leave it behind)
-PINNED = dict.fromkeys(("claude", "codex", "cursor", "devin", "opencode"), __version__)
+PINNED = dict.fromkeys(("claude", "codex", "cursor", "devin", "opencode", "grok"), __version__)
 
 # how a person updates each plugin (DESIGN.md §49.5), the same words everywhere
 UPDATE = {
@@ -49,12 +49,17 @@ UPDATE = {
         "update switchboard's checkout (git pull, or fetch the release's tag), copy plugins/opencode over"
         " .opencode-switchboard/, then restart OpenCode"
     ),
+    "grok": (
+        "update switchboard's checkout (git pull, or fetch the release's tag), copy plugins/grok over"
+        " ~/.grok/plugins/switchboard/, then restart Grok Build"
+    ),
 }
 
-# Cursor's and Devin's hooks and OpenCode's listener send the header on their own requests, but their MCP
-# connection is configured by the person (a file with no version in it), so a call over MCP carries none. For
-# these an empty header says nothing: it never replaces a version a hook or the listener reported.
-HEADER_NOT_ON_MCP = frozenset({"cursor", "devin", "opencode"})
+# Cursor's, Devin's and Grok Build's hooks and OpenCode's listener send the header on their own requests, but
+# their MCP connection is a static file with no version in it (Grok's is the plugin's .mcp.json, whose headers
+# a release does not stamp), so a call over MCP carries none. For these an empty header says nothing: it never
+# replaces a version a hook or the listener reported.
+HEADER_NOT_ON_MCP = frozenset({"cursor", "devin", "opencode", "grok"})
 
 
 def parse(raw: object) -> str | None:

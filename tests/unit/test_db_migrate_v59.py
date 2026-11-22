@@ -39,11 +39,14 @@ def test_a_schema_58_database_gains_the_index_and_nothing_else(
         counts = db.row_counts(before, db.TABLES)
         others = [tuple(r) for r in before.execute(OTHERS)]
         messages = [tuple(r) for r in before.execute("SELECT * FROM messages ORDER BY id")]
-    con = db.open_db(path)
+    with monkeypatch.context() as mp:
+        mp.setattr(db, "SCHEMA_VERSION", 59)  # this step alone: 60 edits the participants CHECK (#851)
+        db.open_db(path).close()
+    con = db.connect(path)
     backup = db.connect(db.backup_path_for(path, 58), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 59
+        assert db.schema_version(con) == 59
         assert db.schema_version(backup) == 58
         assert backup.execute(INDEX).fetchone() is None
         assert [tuple(r) for r in con.execute(INDEX)] == [tuple(r) for r in fresh.execute(INDEX)]
@@ -67,7 +70,7 @@ def test_a_schema_59_database_opens_unchanged(tmp_path: Path) -> None:
     con.close()
     again = db.open_db(path)
     try:
-        assert db.schema_version(again) == 59
+        assert db.schema_version(again) == db.SCHEMA_VERSION
         assert sorted(tuple(r) for r in again.execute("SELECT type, name, sql FROM sqlite_master")) == schema
         assert not list(tmp_path.glob("now.db.v*.bak*"))
     finally:
