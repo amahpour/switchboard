@@ -1,6 +1,7 @@
-"""Schema 61 admits Grok Build as a harness (DESIGN.md §49.15, #851). The step from 60 (#923's webhook tables)
-only edits the CHECK on ``participants.harness``: no table, no row, no foreign key and no other object
-changes. It runs on ``v1_14_0.sql``, a real schema-60 database 1.14.0 wrote (``tests/fixtures/db/README.md``)."""
+"""Schema 61 admits Grok Build as a harness (DESIGN.md §49.15, #851). The step from 60 (#923's webhook
+tables) only edits the CHECK on ``participants.harness``: no table, no row, no foreign key and no other
+object changes. It runs on ``v1_14_0.sql``, a real schema-60 database 1.14.0 wrote
+(``tests/fixtures/db/README.md``)."""
 
 from __future__ import annotations
 
@@ -27,10 +28,11 @@ def at_60(path: Path) -> None:
 
 
 def test_a_schema_60_database_admits_grok_and_nothing_else_changes(tmp_path: Path) -> None:
-    """A real 1.14.0 database (schema 60, a member of every harness it knew, a webhook) refuses a Grok member; after the step it takes one, with the CHECK a
-    fresh database has, and still refuses a harness nobody knows. Every other object's SQL, every row and
-    every foreign key is as it was, and the backup is schema 60 without Grok. Fails if the CHECK is only
-    edited in the fresh schema, the step edits something else, or it loosens the CHECK to anything."""
+    """A real 1.14.0 database (schema 60, a member of every harness it knew, a webhook) refuses a Grok
+    member; after the step it takes one, with the CHECK a fresh database has, and still refuses a harness
+    nobody knows. Every other object's SQL, every row (the webhook's too) and every foreign key is as it
+    was, the search index still finds a line, and the backup is schema 60 without Grok. Fails if the CHECK is
+    only edited in the fresh schema, the step edits something else, or it loosens the CHECK to anything."""
     path = tmp_path / "old.db"
     at_60(path)
     with sqlite3.connect(path) as before:
@@ -53,7 +55,8 @@ def test_a_schema_60_database_admits_grok_and_nothing_else_changes(tmp_path: Pat
         assert db.row_counts(con, db.TABLES) == counts
         assert [tuple(r) for r in con.execute(OTHERS)] == others
         assert list(con.execute("PRAGMA foreign_key_check")) == []
-        assert con.execute("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'green'").fetchone()[0] == 2
+        found = con.execute("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'green'").fetchone()
+        assert found[0] == 2
         assert con.execute("PRAGMA writable_schema").fetchone()[0] == 0
         con.execute(INSERT, ("grok", "grok@laptop:s1"))
         with pytest.raises(sqlite3.IntegrityError):
