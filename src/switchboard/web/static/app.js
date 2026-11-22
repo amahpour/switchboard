@@ -4621,23 +4621,21 @@
       status.textContent = text;
       status.classList.toggle('bad', !!bad);
     }
-    let show = function () {
+    // full: the form is filled again from what is saved, and the status is the last post's; otherwise only
+    // the labels and what can be pressed, so a draft typed here survives a save in another section (#923)
+    function showFirst(full) {
       const cur = w();
-      url.value = '';
       url.placeholder = cur.set ? 'Set. Paste a new address to replace it.' : 'https://…';
-      wait.value = String(cur.wait_min || 5);
       note.textContent = cur.set ? 'Posting to ' + cur.host + ' (the rest of the address is kept secret).'
         : 'No webhook yet.';
       test.disabled = remove.disabled = !cur.set;
+      if (!full) return;
+      url.value = '';
+      wait.value = String(cur.wait_min || 5);
       const last = cur.last;
-      if (last) {
-        status.textContent = last.ok ? 'The last post went through.' : 'The last post failed: ' + last.error;
-        status.classList.toggle('bad', !last.ok);
-      } else {
-        status.textContent = '';
-        status.classList.remove('bad');
-      }
-    };
+      if (last) say(last.ok ? 'The last post went through.' : 'The last post failed: ' + last.error, !last.ok);
+      else say('', false);
+    }
     // while a request is out every button of the webhook section waits; afterwards show() sets them again
     async function call(method, path, body) {
       const buttons = Array.from(box.querySelectorAll('button[id^="settings-webhook-"]'));
@@ -4655,40 +4653,47 @@
       else if (!w().set) { say('Paste the address to post to.', true); return; }
       try {
         state.me.webhook = await call('PUT', '/api/me/webhook', body);
-        show();
+        refresh('first');
         say('Saved.', false);
       } catch (e) { say(String(e.message || e), true); }
     });
+    // each address's result is shown in its own section, from this answer, never from a stored status (#923)
     test.addEventListener('click', async function () {
       try {
         const res = await call('POST', '/api/me/webhook/test', {});
         state.me.webhook = res.webhook;
-        show();
+        refresh(null);
         const two = res.second;
         if (!two) say(res.ok ? 'The test went through.' : 'The test failed: ' + res.error, !res.ok);
-        else if (res.ok && two.ok) say('The test went through to both addresses.', false);
-        else if (!res.ok) say('The test failed: ' + res.error, true);
-        else say('The test went through to the first address. At the second it failed: ' + two.error, true);
+        else {
+          say(res.ok ? 'The test went through to the first address.'
+            : 'The test failed at the first address: ' + res.error, !res.ok);
+          second.say(two.ok ? 'The test went through to the second address.'
+            : 'The test failed at the second address: ' + two.error, !two.ok);
+        }
       } catch (e) { say(String(e.message || e), true); }
     });
     remove.addEventListener('click', async function () {
       try {
         state.me.webhook = await call('DELETE', '/api/me/webhook');
-        show();
+        refresh('all');
         say('Removed.', false);
       } catch (e) { say(String(e.message || e), true); }
     });
-    const showAll = function () { show(); };
-    const second = buildWebhookSecond(box, w, call, showAll);
-    const quiet = buildWebhookQuiet(box, w, call, showAll);
-    const showFirst = show;
-    show = function () { showFirst(); second.show(); quiet.show(); };
-    show();
+    // after a save only that section is filled again; the others get their labels (#923)
+    function refresh(which) {
+      showFirst(which === 'first' || which === 'all');
+      second.show(which === 'second' || which === 'all');
+      quiet.show(which === 'quiet' || which === 'all');
+    }
+    const second = buildWebhookSecond(box, w, call, refresh);
+    const quiet = buildWebhookQuiet(box, w, call, refresh);
+    refresh('all');
   }
 
   // Webhook → Second alert (#923, DESIGN.md §62.4): another address, posted once if the item still waits a set time
   // after the first alert. The same rules as the first address: https, public, never shown back (its host only).
-  function buildWebhookSecond(box, w, call, showAll) {
+  function buildWebhookSecond(box, w, call, refresh) {
     box.append(el('h4', 'settings-sub', 'Second alert'),
       el('p', 'fine', 'If something still needs you this long after the first alert, switchboard posts once more, to a'
         + ' second address: an ntfy topic at top priority, or a flow that texts you or rings your phone. It goes whether'
@@ -4727,17 +4732,18 @@
       status.textContent = text;
       status.classList.toggle('bad', !!bad);
     }
-    function show() {
+    function show(full) {
       const cur = w();
       const two = cur.second || { set: false, after_min: 20, last: null };
-      url.value = '';
       url.placeholder = two.set ? 'Set. Paste a new address to replace it.' : 'https://…';
-      after.value = String(two.after_min || 20);
       url.disabled = after.disabled = save.disabled = !cur.set;
       remove.disabled = !cur.set || !two.set;
       if (!cur.set) note.textContent = 'Save a webhook address above first.';
       else if (two.set) note.textContent = 'Second alert to ' + two.host + ' (the rest of the address is kept secret).';
       else note.textContent = 'No second alert.';
+      if (!full) return;
+      url.value = '';
+      after.value = String(two.after_min || 20);
       const last = two.set ? two.last : null;
       if (last) say(last.ok ? 'The last second alert went through.' : 'The last second alert failed: ' + last.error, !last.ok);
       else say('', false);
@@ -4748,25 +4754,25 @@
       else if (!(w().second || {}).set) { say('Paste the second address.', true); return; }
       try {
         state.me.webhook = await call('PUT', '/api/me/webhook', body);
-        showAll();
+        refresh('second');
         say('Second alert saved.', false);
       } catch (e) { say(String(e.message || e), true); }
     });
     remove.addEventListener('click', async function () {
       try {
         state.me.webhook = await call('PUT', '/api/me/webhook', { second_url: null });
-        showAll();
+        refresh('second');
         say('Second alert removed.', false);
         save.focus();
       } catch (e) { say(String(e.message || e), true); }
     });
-    return { show: show };
+    return { show: show, say: say };
   }
 
   // Webhook → Quiet hours (#923, DESIGN.md §62.4): a span in the person's own time zone when nothing is sent but the
   // kinds they mark. The zone is proposed from the browser and kept as its IANA name; the server refuses one it does
   // not know.
-  function buildWebhookQuiet(box, w, call, showAll) {
+  function buildWebhookQuiet(box, w, call, refresh) {
     const kinds = [['approval', 'An agent waiting for your approval'], ['question', 'A message to you'],
       ['board', 'A review that needs your call']];
     box.append(el('h4', 'settings-sub', 'Quiet hours'),
@@ -4826,13 +4832,15 @@
       status.textContent = text;
       status.classList.toggle('bad', !!bad);
     }
-    function show() {
+    function show(full) {
       const cur = w();
       const q = cur.quiet || { set: false, from: '22:00', to: '07:00', tz: null, always: ['approval'] };
-      from.value = q.from || '22:00';
-      to.value = q.to || '07:00';
-      tz.value = q.tz || browserZone();
-      for (const [kind] of kinds) boxes[kind].checked = (q.always || []).indexOf(kind) >= 0;
+      if (full) {
+        from.value = q.from || '22:00';
+        to.value = q.to || '07:00';
+        tz.value = q.tz || browserZone();
+        for (const [kind] of kinds) boxes[kind].checked = (q.always || []).indexOf(kind) >= 0;
+      }
       for (const f of [from, to, tz, save].concat(Object.values(boxes))) f.disabled = !cur.set;
       remove.disabled = !cur.set || !q.set;
       if (!cur.set) note.textContent = 'Save a webhook address above first.';
@@ -4845,14 +4853,14 @@
       const body = { quiet: { from: from.value.slice(0, 5), to: to.value.slice(0, 5), tz: tz.value.trim(), always: always } };
       try {
         state.me.webhook = await call('PUT', '/api/me/webhook', body);
-        showAll();
+        refresh('quiet');
         say('Quiet hours saved.', false);
       } catch (e) { say(String(e.message || e), true); }
     });
     remove.addEventListener('click', async function () {
       try {
         state.me.webhook = await call('PUT', '/api/me/webhook', { quiet: null });
-        showAll();
+        refresh('quiet');
         say('Quiet hours turned off.', false);
         save.focus();
       } catch (e) { say(String(e.message || e), true); }

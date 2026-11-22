@@ -19,6 +19,7 @@ from playwright.sync_api import Browser, Page, expect
 from test_web_ui import PHONE, UI
 from ui_world import UIWorld
 
+from switchboard import notify
 from switchboard.config import NotifyCfg
 
 pytestmark = pytest.mark.e2e
@@ -51,7 +52,12 @@ def hook(world: UIWorld) -> Iterator[TlsHook]:
         yield h
     finally:
         h.stop()
-        world.broker.on_loop(lambda: st.notifier.forget(0))
+
+        def reset() -> None:
+            st.notifier.forget(0)
+            st.notifier._limit.pop(0, None)  # the next test starts with the hour's posts unspent
+
+        world.broker.on_loop(reset)
         web = world.broker.web_client()
         try:
             web.delete("/api/me/webhook", headers=world.broker.write_headers())
@@ -207,7 +213,12 @@ def test_the_second_alert_and_quiet_hours_save_show_and_remove(ui: UI, hook: Tls
     )
     assert "loudloud" not in page.content() and "s3cr3t" not in page.content()
     page.click("#settings-webhook-test")
-    expect(page.locator("#settings-webhook-status")).to_have_text("The test went through to both addresses.")
+    expect(page.locator("#settings-webhook-status")).to_have_text(
+        "The test went through to the first address."
+    )
+    expect(page.locator("#settings-webhook-second-status")).to_have_text(
+        "The test went through to the second address."
+    )
     assert [p["body"].get("alert") for p in hook.posts] == [None, "second"]
     page.reload()
     page = open_settings(ui)
@@ -246,3 +257,74 @@ def test_an_unknown_zone_and_an_internal_second_address_are_refused_in_settings(
     refused = [p for p in ui.problems if "400 (Bad Request)" in p and "/api/me/webhook" in p]
     assert len(refused) == 2, ui.problems
     ui.problems[:] = [p for p in ui.problems if p not in refused]
+
+
+def save_both(page: Page, hook: TlsHook) -> None:
+    page.fill("#settings-webhook-url", hook.url)
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    page.fill("#settings-webhook-second-url", second_url(hook))
+    page.click("#settings-webhook-second-save")
+    expect(page.locator("#settings-webhook-second-status")).to_have_text("Second alert saved.")
+
+
+def test_send_a_test_shows_each_addresses_own_result_from_the_answer(ui: UI, hook: TlsHook) -> None:
+    """#923 (F7): with the first address failing and the second working, Send a test says the first failed in
+    its section and the second went through in its own; later, with the hour's posts spent, the second section
+    says it was capped, not the stored "went through" of the last try. Fails if the first failure hides the
+    second result, or the second section shows a stored status instead of this test's."""
+    page = open_settings(ui)
+    save_both(page, hook)
+    first, second = page.locator("#settings-webhook-status"), page.locator("#settings-webhook-second-status")
+    hook.status_of["/services/T000/B000/secretsecret?token=s3cr3t"] = 500
+    page.click("#settings-webhook-test")
+    expect(first).to_have_text("The test failed at the first address: The webhook answered with an error.")
+    expect(first).to_have_class("fine bad")
+    expect(second).to_have_text("The test went through to the second address.")
+    expect(second).to_have_class("fine")
+    hook.status_of.clear()
+    for _ in range(notify.MAX_PER_HOUR // 2 - 1):  # the rest of the hour's posts
+        page.click("#settings-webhook-test")
+        expect(second).to_have_text("The test went through to the second address.")
+    page.click("#settings-webhook-test")
+    capped = "The test failed at the second address: " + notify.fail_reason("limit")
+    expect(second).to_have_text(capped)
+    expect(second).to_have_class("fine bad")
+    expect(first).to_have_text("The test failed at the first address: " + notify.fail_reason("limit"))
+    assert len(hook.posts) == notify.MAX_PER_HOUR
+
+
+def test_a_save_keeps_what_is_typed_in_the_other_sections(ui: UI, hook: TlsHook) -> None:
+    """#923 (F8): a save fills again only its own section; what is typed, unsaved, in the others stays, and
+    their labels follow (the second and quiet parts open up once there is an address). Fails if any save
+    redraws all three forms and clears a draft."""
+    page = open_settings(ui)
+    page.fill("#settings-webhook-url", hook.url)
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    expect(page.locator("#settings-webhook-second-save")).to_be_enabled()
+    expect(page.locator("#settings-webhook-second-note")).to_have_text("No second alert.")
+    page.fill("#settings-webhook-second-url", second_url(hook))
+    page.fill("#settings-webhook-second-after", "45")
+    page.fill("#settings-webhook-quiet-from", "23:30")
+    page.fill("#settings-webhook-wait", "7")
+    page.click("#settings-webhook-save")
+    expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+    expect(page.locator("#settings-webhook-wait")).to_have_value("7")
+    expect(page.locator("#settings-webhook-second-url")).to_have_value(second_url(hook))
+    expect(page.locator("#settings-webhook-second-after")).to_have_value("45")
+    expect(page.locator("#settings-webhook-quiet-from")).to_have_value("23:30")
+    page.fill("#settings-webhook-url", "https://draft.example.com/x")
+    page.click("#settings-webhook-quiet-save")
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+    expect(page.locator("#settings-webhook-url")).to_have_value("https://draft.example.com/x")
+    expect(page.locator("#settings-webhook-second-url")).to_have_value(second_url(hook))
+    expect(page.locator("#settings-webhook-second-after")).to_have_value("45")
+    page.click("#settings-webhook-second-save")
+    expect(page.locator("#settings-webhook-second-status")).to_have_text("Second alert saved.")
+    expect(page.locator("#settings-webhook-second-url")).to_have_value("")
+    expect(page.locator("#settings-webhook-second-note")).to_contain_text(HOST)
+    expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+    expect(page.locator("#settings-webhook-quiet-from")).to_have_value("23:30")
+    expect(page.locator("#settings-webhook-url")).to_have_value("https://draft.example.com/x")
+    assert "loudloud" not in page.content()

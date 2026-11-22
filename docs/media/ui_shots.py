@@ -61,7 +61,8 @@ room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone
 agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
 webhook-{empty,set,failed}-{light,dark,phone-light} (Settings → Profile → Webhook, #723; ``--only webhook``),
 webhook-alerts-{light,dark,phone-light} and webhook-quiet-{light,dark,phone-light} (its Second alert and
-Quiet hours saved, #923; ``--only webhook``),
+Quiet hours saved, #923; ``--only webhook``), webhook-tested-{light,dark,phone-light} (Send a test with the first
+address failing and the second working, each said in its own section, #923),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
 past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
 merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
@@ -785,6 +786,18 @@ def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
                 page.locator("#settings-webhook-quiet-remove").scroll_into_view_if_needed()
                 settle(page)
                 shot(page, out, f"webhook-quiet-{theme}.png")
+                page.locator("#settings-webhook-test").scroll_into_view_if_needed()
+                hook.status_of[hook.url.split(str(hook.port), 1)[1]] = 500  # the first fails, the second goes
+                page.click("#settings-webhook-test")
+                expect(page.locator("#settings-webhook-second-status")).to_have_text(
+                    "The test went through to the second address."
+                )
+                page.evaluate(  # the first result at the top, the second's below it
+                    "document.querySelector('#settings-webhook-status').scrollIntoView({block: 'start'})"
+                )
+                settle(page)
+                shot(page, out, f"webhook-tested-{theme}.png")
+                hook.status_of.clear()
                 page.locator("#settings-webhook-test").scroll_into_view_if_needed()
                 hook.status = 500
                 page.click("#settings-webhook-test")
