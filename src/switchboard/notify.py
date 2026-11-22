@@ -15,16 +15,25 @@ The rules, in short:
   ``MAX_PER_HOUR`` posts an hour. Anything this module does not understand (a need list it could not read,
   a wait outside its bounds) sends nothing.
 - A POST says who and where, with a link, and never the message's text (``payload``).
+- A **second alert** (#923, §62.4), when the person set a second address: an item that still needs them
+  ``after_s`` after its first alert was due is posted once more, there, whether or not the first post went
+  through. It is stopped by the same "got it", and both addresses share the hourly cap.
+- **Quiet hours** (``Quiet``): from a start to an end in the person's own zone (an IANA name, read with
+  ``zoneinfo``, so a daylight-saving change is the zone's), nothing is sent, first or second alert, but the
+  kinds they marked as always sent. A held item goes when they end, if it still needs them, and the second
+  alert's clock starts then. A zone this server does not know holds everything.
 """
 
 from __future__ import annotations
 
+import datetime
 import ipaddress
 import re
 import urllib.parse
+import zoneinfo
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 WAIT_DEFAULT_S = 300.0  # five minutes (#723)
 WAIT_MIN_S = 60.0
@@ -37,6 +46,13 @@ URL_MAX = 500
 HOUR_S = 3600.0
 
 KINDS = ("question", "board", "approval")
+
+SECOND_DEFAULT_S = 1200.0  # twenty minutes after the first alert was due (#923)
+SECOND_MIN_S = 300.0
+SECOND_MAX_S = 14400.0
+DAY_MIN = 1440
+TZ_MAX = 64
+QUIET_ALWAYS_DEFAULT = ("approval",)  # a stuck agent costs the most; a question and a board can wait
 
 
 @dataclass(frozen=True)
@@ -52,20 +68,116 @@ class Need:
     at: float
 
 
+@dataclass(frozen=True)
+class Quiet:
+    """Quiet hours: ``start`` and ``end`` are minutes after local midnight in the zone ``tz`` (``end`` before
+    ``start`` spans midnight), and ``always`` the kinds sent anyway. Made through ``quiet_problem`` first."""
+
+    start: int
+    end: int
+    tz: str
+    always: frozenset[str] = field(default_factory=lambda: frozenset(QUIET_ALWAYS_DEFAULT))
+
+
+def zone_of(name: object) -> zoneinfo.ZoneInfo | None:
+    """The zone called ``name``, or None when it is not a name this server knows."""
+    if not isinstance(name, str) or not name or len(name) > TZ_MAX:
+        return None
+    try:
+        return zoneinfo.ZoneInfo(name)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        return None
+
+
+def quiet_problem(start: object, end: object, tz: object, always: object) -> str | None:
+    """Why these cannot be quiet hours, or None."""
+    for m in (start, end):
+        if isinstance(m, bool) or not isinstance(m, int) or not 0 <= m < DAY_MIN:
+            return "Quiet hours need a start and an end time."
+    if start == end:
+        return "Quiet hours start and end at the same time."
+    if zone_of(tz) is None:
+        return "That time zone is not one this switchboard knows."
+    if (
+        not isinstance(always, (list, tuple, frozenset, set))
+        or len(always) > len(KINDS)
+        or any(k not in KINDS for k in always)
+    ):
+        return "Those are not kinds of alert."
+    return None
+
+
+def parse_hhmm(raw: object) -> int | None:
+    """``"22:00"`` as minutes after midnight, or None. Only ``HH:MM``, 00:00 to 23:59."""
+    if not isinstance(raw, str) or not re.fullmatch(r"([01][0-9]|2[0-3]):[0-5][0-9]", raw):
+        return None
+    return int(raw[:2]) * 60 + int(raw[3:])
+
+
+def hhmm(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def in_quiet(q: Quiet, now: float) -> bool:
+    """Whether ``now`` is inside the quiet hours, by the wall clock of their zone at that instant. A zone
+    that cannot be read is always quiet (it fails closed)."""
+    z = zone_of(q.tz)
+    if z is None:
+        return True
+    local = datetime.datetime.fromtimestamp(now, z)
+    m = local.hour * 60 + local.minute
+    if q.start < q.end:
+        return q.start <= m < q.end
+    return m >= q.start or m < q.end
+
+
+def holds(q: Quiet | None, kind: str, now: float) -> bool:
+    """Whether quiet hours hold an alert of ``kind`` now: inside them, and not a kind sent anyway."""
+    return q is not None and kind not in q.always and in_quiet(q, now)
+
+
 @dataclass
-class _Track:
-    first_seen: float
+class _Try:
+    """One alert's sends: done when it went, else counted failures."""
+
     done: bool = False
     attempts: int = 0
     last_try: float = 0.0
 
+    def blocked(self, now: float) -> bool:
+        return (
+            self.done
+            or self.attempts >= MAX_ATTEMPTS
+            or bool(self.attempts and now - self.last_try < RETRY_S)
+        )
+
+    def record(self, now: float, ok: bool) -> None:
+        self.attempts += 1
+        self.last_try = now
+        if ok:
+            self.done = True
+
+
+@dataclass
+class _Track:
+    first_seen: float
+    first: _Try = field(default_factory=_Try)
+    second: _Try = field(default_factory=_Try)
+    released: float | None = None  # when its first alert was due: waited, not got, not held by quiet hours
+
 
 class Policy:
     """When one person's webhook fires. State is the items it has seen, which of them it already sent
-    (``sent``, kept by the caller across restarts), and the rooms the person opened and when."""
+    (``sent``, and ``sent_second`` for second alerts, kept by the caller across restarts), and the rooms the
+    person opened and when."""
 
-    def __init__(self, sent: Iterable[str] = ()) -> None:
-        self._tracks: dict[str, _Track] = {k: _Track(first_seen=0.0, done=True) for k in sent}
+    def __init__(self, sent: Iterable[str] = (), sent_second: Iterable[str] = ()) -> None:
+        self._tracks: dict[str, _Track] = {}
+        for k in sent:
+            self._tracks.setdefault(k, _Track(first_seen=0.0)).first.done = True
+        for k in sent_second:
+            t = self._tracks.setdefault(k, _Track(first_seen=0.0))
+            t.first.done = t.second.done = True
         self._opened: dict[str, float] = {}
 
     def ack_room(self, slug: str, at: float) -> None:
@@ -74,12 +186,21 @@ class Policy:
             self._opened[slug] = at
 
     def sent_keys(self) -> list[str]:
-        return sorted(k for k, t in self._tracks.items() if t.done)
+        return sorted(k for k, t in self._tracks.items() if t.first.done)
 
-    def due(self, needs: list[Need] | None, now: float, wait_s: float) -> list[Need]:
-        """What to send now, oldest first, at most ``MAX_ITEMS``. ``needs`` None (not worked out) or a
-        wait outside its bounds sends nothing and forgets nothing. An item that is no longer a need is
-        dropped: it was got, and if it comes back it is new."""
+    def sent_second_keys(self) -> list[str]:
+        return sorted(k for k, t in self._tracks.items() if t.second.done)
+
+    def _got(self, n: Need) -> bool:
+        return n.at <= self._opened.get(n.slug, float("-inf"))  # they opened the room after this began
+
+    def due(
+        self, needs: list[Need] | None, now: float, wait_s: float, quiet: Quiet | None = None
+    ) -> list[Need]:
+        """The first alerts to send now, oldest first, at most ``MAX_ITEMS``. ``needs`` None (not worked out)
+        or a wait outside its bounds sends nothing and forgets nothing. An item that is no longer a need is
+        dropped: it was got, and if it comes back it is new. An item quiet hours hold waits for their end,
+        and the moment it is no longer held is when its first alert was due (``released``), sent or not."""
         if needs is None or not WAIT_MIN_S <= wait_s <= WAIT_MAX_S:
             return []
         live = {n.key for n in needs}
@@ -90,25 +211,45 @@ class Policy:
             t = self._tracks.get(n.key)
             if t is None:
                 t = self._tracks[n.key] = _Track(first_seen=now)
-            if t.done or now - t.first_seen < wait_s:
+            if now - t.first_seen < wait_s or self._got(n) or holds(quiet, n.kind, now):
                 continue
-            if n.at <= self._opened.get(n.slug, float("-inf")):
-                continue  # got it: they opened the room after this began
-            if t.attempts >= MAX_ATTEMPTS or (t.attempts and now - t.last_try < RETRY_S):
+            if t.released is None:
+                t.released = now
+            if t.first.blocked(now):
+                continue
+            out.append(n)
+        return out[:MAX_ITEMS]
+
+    def due_second(
+        self, needs: list[Need] | None, now: float, after_s: float, quiet: Quiet | None = None
+    ) -> list[Need]:
+        """The second alerts to send now: items still needing the person ``after_s`` after their first
+        alert was due, whether or not it went, not got and not held by quiet hours. Call it after ``due``
+        in the same tick, which keeps ``released``. Unknown needs or an ``after_s`` outside its bounds send
+        nothing."""
+        if needs is None or not SECOND_MIN_S <= after_s <= SECOND_MAX_S:
+            return []
+        out: list[Need] = []
+        for n in sorted(needs, key=lambda n: (n.at, n.key)):
+            t = self._tracks.get(n.key)
+            if t is None or t.released is None or now - t.released < after_s:
+                continue
+            if self._got(n) or holds(quiet, n.kind, now) or t.second.blocked(now):
                 continue
             out.append(n)
         return out[:MAX_ITEMS]
 
     def sent(self, items: Iterable[Need], now: float, ok: bool) -> None:
-        """Record a try: done when it went, else a counted failure to try again later."""
+        """Record a try of first alerts: done when it went, else a counted failure to try again later."""
         for n in items:
-            t = self._tracks.get(n.key)
-            if t is None:
-                continue
-            t.attempts += 1
-            t.last_try = now
-            if ok:
-                t.done = True
+            if (t := self._tracks.get(n.key)) is not None:
+                t.first.record(now, ok)
+
+    def sent_second(self, items: Iterable[Need], now: float, ok: bool) -> None:
+        """Record a try of second alerts, as ``sent`` does."""
+        for n in items:
+            if (t := self._tracks.get(n.key)) is not None:
+                t.second.record(now, ok)
 
 
 class Limiter:
@@ -145,25 +286,34 @@ def link_for(base: str, slug: str) -> str:
     return f"{base.rstrip('/')}/#{urllib.parse.quote(slug, safe='')}"
 
 
-def payload(items: list[Need], base: str) -> dict[str, object]:
+def payload(items: list[Need], base: str, second: bool = False) -> dict[str, object]:
     """The JSON that is posted: who and where, and a link, and never what a message said. ``text`` is what
-    a Slack incoming webhook posts and ``content`` what Discord does; ntfy takes the whole body."""
+    a Slack incoming webhook posts and ``content`` what Discord does; ntfy takes the whole body. A second
+    alert has one more field, ``"alert": "second"``, so a flow can route it; the first's is unchanged."""
     items = items[:MAX_ITEMS]
     lines = [f"{_line(n)}: {link_for(base, n.slug)}" for n in items]
-    text = "switchboard: " + (
+    head = "switchboard, second alert: " if second else "switchboard: "
+    text = head + (
         "\n".join(lines) if len(lines) == 1 else f"{len(lines)} things need you\n" + "\n".join(lines)
     )
-    return {
+    body: dict[str, object] = {
         "text": text,
         "content": text,
         "items": [
             {"kind": n.kind, "room": n.room, "who": n.who, "url": link_for(base, n.slug)} for n in items
         ],
     }
+    if second:
+        body["alert"] = "second"
+    return body
 
 
-def test_payload(base: str) -> dict[str, object]:
-    """What "Send a test" posts: the same shape, saying it is a test."""
+def test_payload(base: str, second: bool = False) -> dict[str, object]:
+    """What "Send a test" posts: the same shape, saying it is a test (and, to the second address, that it is
+    the second alert's)."""
+    if second:
+        text = f"switchboard, second alert: this is a test, your second address works. {base.rstrip('/')}/"
+        return {"text": text, "content": text, "items": [], "alert": "second"}
     text = f"switchboard: this is a test, your webhook works. {base.rstrip('/')}/"
     return {"text": text, "content": text, "items": []}
 

@@ -218,3 +218,228 @@ def test_known_cloud_metadata_addresses_are_never_allowed(ip: str, allow: bool) 
 def test_a_failure_reason_is_a_fixed_sentence() -> None:
     assert notify.fail_reason("tls") == "The webhook's certificate was not trusted."
     assert notify.fail_reason("whatever https://secret") == notify.fail_reason("error")
+
+
+# ------------------------------------------------------------------ the second alert and quiet hours (#923)
+def _at(tz: str, *ymdhm: int) -> float:
+    """The instant of a wall-clock time in a zone."""
+    import datetime
+    import zoneinfo
+
+    return datetime.datetime(*ymdhm, tzinfo=zoneinfo.ZoneInfo(tz)).timestamp()
+
+
+def tick(p: Policy, needs: list[Need], now: float, quiet: notify.Quiet | None = None) -> tuple[list, list]:
+    """One notifier tick: the first alerts, then the second, as ``Notifier._one`` asks for them."""
+    first = p.due(needs, now, 300, quiet)
+    p.sent(first, now, True)
+    second = p.due_second(needs, now, 1200, quiet)
+    p.sent_second(second, now, True)
+    return first, second
+
+
+def test_the_second_alert_fires_its_delay_after_the_first_was_due_and_only_once() -> None:
+    """The first alert goes after the wait; the second, 20 minutes after that, once. Fails if the second
+    comes with the first, before its delay, or again on a later tick."""
+    clock, p, n = FakeClock(), Policy(), need()
+    assert tick(p, [n], clock.now()) == ([], [])
+    clock.advance(300)
+    assert tick(p, [n], clock.now()) == ([n], [])
+    clock.advance(1199)
+    assert tick(p, [n], clock.now()) == ([], [])
+    clock.advance(1)
+    assert tick(p, [n], clock.now()) == ([], [n])
+    clock.advance(5000)
+    assert tick(p, [n], clock.now()) == ([], [])
+
+
+def test_the_second_alert_fires_when_the_first_post_failed() -> None:
+    """It is about the person not having looked, not the first channel working: a first alert that failed
+    every try still gets a second alert on time. Fails if the second waits for the first to succeed."""
+    p, n, t = Policy(), need(), 0.0
+    p.due([n], t, 300)
+    t = 300.0
+    p.sent(p.due([n], t, 300), t, False)
+    for _ in range(4):
+        t += notify.RETRY_S
+        p.sent(p.due([n], t, 300), t, False)
+    t = 300.0 + 1200
+    p.due([n], t, 300)
+    assert p.due_second([n], t, 1200) == [n]
+
+
+def test_got_it_stops_the_second_alert() -> None:
+    """Opening the room, or the item no longer needing them, after the first alert stops the second. Fails
+    if a second alert goes to someone who already looked."""
+    p, n = Policy(), need(at=0)
+    tick(p, [n], 0)
+    tick(p, [n], 300)
+    p.ack_room("build", 600)
+    assert tick(p, [n], 2000) == ([], [])
+    q, m = Policy(), need("q:build:9", at=0)
+    tick(q, [m], 0)
+    tick(q, [m], 300)
+    assert tick(q, [], 1000) == ([], [])
+    assert tick(q, [m], 1600) == ([], [])  # back again: a new item, its wait starts over
+
+
+def test_a_sent_second_alert_survives_a_restart_and_old_kept_lists_still_load() -> None:
+    """The second alerts sent are kept apart from the first, so a restart does not send one again; a kept
+    list from before #923 still means "first sent". Fails if either sends again after a restart."""
+    p, n = Policy(), need()
+    tick(p, [n], 0)
+    tick(p, [n], 300)
+    tick(p, [n], 1500)
+    assert p.sent_keys() == [n.key] and p.sent_second_keys() == [n.key]
+    again = Policy(p.sent_keys(), p.sent_second_keys())
+    for t in (0, 300, 2000, 90_000):
+        assert tick(again, [n], t) == ([], []), t
+    only_first = Policy(p.sent_keys())  # the second alert had not gone before the restart: it still goes
+    assert [tick(only_first, [n], t) for t in (0, 300, 1500)] == [([], []), ([], []), ([], [n])]
+    old = Policy([n.key])
+    assert old.due([n], 0, 300) == []
+
+
+def test_a_second_delay_outside_its_bounds_or_unknown_needs_send_no_second_alert() -> None:
+    p, n = Policy(), need()
+    tick(p, [n], 0)
+    tick(p, [n], 300)
+    p.due([n], 99_999, 300)
+    assert p.due_second([n], 99_999, notify.SECOND_MIN_S - 1) == []
+    assert p.due_second([n], 99_999, notify.SECOND_MAX_S + 1) == []
+    assert p.due_second([n], 99_999, float("nan")) == []
+    assert p.due_second(None, 99_999, 1200) == []
+    assert p.due_second([n], 99_999, 1200) == [n]
+
+
+NY = "America/New_York"
+
+
+def quiet(start: str = "22:00", end: str = "07:00", always: tuple[str, ...] = ("approval",)) -> notify.Quiet:
+    s, e = notify.parse_hhmm(start), notify.parse_hhmm(end)
+    assert s is not None and e is not None
+    assert notify.quiet_problem(s, e, NY, list(always)) is None
+    return notify.Quiet(s, e, NY, frozenset(always))
+
+
+def test_quiet_hours_hold_a_question_and_a_board_but_not_an_approval() -> None:
+    """Inside quiet hours only the kinds marked always sent go (an approval by default). Fails if a question
+    or a board is posted at night, or a stuck agent is held."""
+    q, night = quiet(), _at(NY, 2026, 6, 10, 23, 0)
+    p = Policy()
+    items = [need("q:build:1"), need("b:build:x", "board"), need("a:1:1", "approval")]
+    p.due(items, night - 600, 300, q)
+    assert [n.kind for n in p.due(items, night, 300, q)] == ["approval"]
+    loud = quiet(always=())
+    p2 = Policy()
+    p2.due(items, night - 600, 300, loud)
+    assert p2.due(items, night, 300, loud) == []
+
+
+def test_a_held_item_goes_when_quiet_hours_end_and_its_second_alert_counts_from_then() -> None:
+    """A question that came at 23:00 goes at 07:00 if it still needs them, and its second alert 20 minutes
+    after 07:00, not 20 minutes after it first waited. Fails if it is dropped, sent early, or its second
+    alert's clock started in the night."""
+    q, p, n = quiet(), Policy(), need()
+    t = _at(NY, 2026, 6, 10, 23, 0)
+    for _ in range(int(8 * 3600 / 600) - 1):
+        assert tick(p, [n], t, q) == ([], [])
+        t += 600
+    end = _at(NY, 2026, 6, 11, 7, 0)
+    assert tick(p, [n], end - 1, q) == ([], [])
+    assert tick(p, [n], end, q) == ([n], [])
+    assert tick(p, [n], end + 1199, q) == ([], [])
+    assert tick(p, [n], end + 1200, q) == ([], [n])
+
+
+def test_a_second_alert_that_falls_in_quiet_hours_waits_for_their_end() -> None:
+    q, p, n = quiet(), Policy(), need()
+    t = _at(NY, 2026, 6, 10, 21, 50)
+    tick(p, [n], t, q)
+    assert tick(p, [n], t + 300, q) == ([n], [])  # 21:55, before quiet hours
+    assert tick(p, [n], t + 300 + 1200, q) == ([], [])  # 22:15, held
+    assert tick(p, [n], _at(NY, 2026, 6, 11, 7, 0), q) == ([], [n])
+
+
+def test_quiet_hours_within_one_day_and_across_midnight() -> None:
+    day = quiet("09:00", "17:00")
+    assert notify.in_quiet(day, _at(NY, 2026, 6, 10, 12, 0))
+    assert not notify.in_quiet(day, _at(NY, 2026, 6, 10, 17, 0))
+    assert not notify.in_quiet(day, _at(NY, 2026, 6, 10, 8, 59))
+    night = quiet("22:00", "07:00")
+    for hm in ((22, 0), (23, 59), (0, 0), (6, 59)):
+        assert notify.in_quiet(night, _at(NY, 2026, 6, 10, *hm)), hm
+    for hm in ((7, 0), (12, 0), (21, 59)):
+        assert not notify.in_quiet(night, _at(NY, 2026, 6, 10, *hm)), hm
+
+
+def test_quiet_hours_follow_the_zone_on_a_spring_forward_day() -> None:
+    """On 2026-03-08 New York goes from UTC-5 to UTC-4 at 02:00. 07:00 that morning is 11:00 UTC, so 11:30 UTC
+    is after quiet hours. Fails if the offset of the night before (or a fixed one) is used."""
+    q = quiet()
+    utc = _at("UTC", 2026, 3, 8, 11, 30)
+    assert not notify.in_quiet(q, utc)
+    assert notify.in_quiet(q, _at("UTC", 2026, 3, 8, 10, 59))
+    assert notify.in_quiet(q, _at("UTC", 2026, 3, 8, 6, 30))  # 02:30 does not exist; 01:30 EST is quiet
+
+
+def test_quiet_hours_follow_the_zone_on_a_fall_back_day() -> None:
+    """On 2026-11-01 New York goes from UTC-4 to UTC-5 at 02:00. 07:00 that morning is 12:00 UTC, so 11:30 UTC
+    is still quiet. Fails if the summer offset is kept."""
+    q = quiet()
+    assert notify.in_quiet(q, _at("UTC", 2026, 11, 1, 11, 30))
+    assert not notify.in_quiet(q, _at("UTC", 2026, 11, 1, 12, 0))
+    assert notify.in_quiet(q, _at("UTC", 2026, 11, 1, 5, 30)) and notify.in_quiet(
+        q, _at("UTC", 2026, 11, 1, 6, 30)
+    )  # 01:30 happens twice; both are quiet
+
+
+@pytest.mark.parametrize(
+    "start,end,tz,always",
+    [
+        (1320, 1320, NY, []),  # the same time
+        (-1, 420, NY, []),
+        (1320, 1440, NY, []),
+        (True, 420, NY, []),
+        ("22:00", 420, NY, []),
+        (1320, 420, "Mars/Olympus_Mons", []),
+        (1320, 420, "../../etc/passwd", []),
+        (1320, 420, "", []),
+        (1320, 420, None, []),
+        (1320, 420, "A" * 100, []),
+        (1320, 420, NY, ["approval", "everything"]),
+        (1320, 420, NY, "approval"),
+        (1320, 420, NY, ["approval"] * 4),
+    ],
+)
+def test_quiet_hours_that_cannot_be_read_are_refused(start: object, end: object, tz: object, always: object) -> None:
+    """A zone the server does not know, a time that is not one, an unknown kind: refused when saved."""
+    assert notify.quiet_problem(start, end, tz, always) is not None
+
+
+def test_a_zone_that_cannot_be_read_holds_everything() -> None:
+    """Fails closed: quiet hours whose zone is gone (a row from another server) hold every kind but those
+    always sent, at every hour. Fails if an unknown zone means "not quiet"."""
+    q = notify.Quiet(1320, 420, "Mars/Olympus_Mons", frozenset())
+    assert notify.in_quiet(q, _at("UTC", 2026, 6, 10, 12, 0))
+    assert notify.holds(q, "question", 0.0) and notify.holds(q, "approval", 0.0)
+
+
+def test_times_read_only_as_hh_mm() -> None:
+    assert notify.parse_hhmm("22:00") == 1320 and notify.parse_hhmm("00:00") == 0
+    assert notify.parse_hhmm("23:59") == 1439 and notify.hhmm(1439) == "23:59" and notify.hhmm(7) == "00:07"
+    for bad in ("24:00", "7:00", "07:60", "07:00:00", " 07:00", "", None, 420):
+        assert notify.parse_hhmm(bad) is None, bad
+
+
+def test_the_second_alert_says_so_and_the_first_is_unchanged() -> None:
+    """A second alert carries ``"alert": "second"`` and says it is one; the first alert has exactly its old
+    three fields. Fails if a receiver parsing the first alert would see a new field."""
+    first = notify.payload([need()], BASE)
+    second = notify.payload([need()], BASE, second=True)
+    assert set(first) == {"text", "content", "items"}
+    assert second["alert"] == "second" and set(second) == {"text", "content", "items", "alert"}
+    assert str(second["text"]).startswith("switchboard, second alert: scout has a message for you in #build")
+    assert second["items"] == first["items"]
+    assert notify.test_payload(BASE, second=True)["alert"] == "second"
+    assert "alert" not in notify.test_payload(BASE)

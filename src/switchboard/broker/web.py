@@ -1811,8 +1811,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     @app.put("/api/me/webhook")
     async def set_webhook(request: Request) -> Response:
         """Set the signed-in person's webhook: ``url`` (https, a public address unless the operator allows
-        more) and ``wait_min`` (1 to 120). Either may be left out once there is one (a new wait for the
-        address they have)."""
+        more) and ``wait_min`` (1 to 120); the second alert (#923, §62.4): ``second_url`` (the same checks,
+        or null to remove it) and ``second_after_min`` (5 to 240); and ``quiet``, ``{from, to, tz, always}``
+        or null to turn quiet hours off. Any may be left out once there is an address (a change to the rest
+        keeps the address they have)."""
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
@@ -1820,8 +1822,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             body = await _json_body(request)
         except ServiceError as e:
             return _svc_err(e)
-        if not body or not set(body) <= {"url", "wait_min"}:
-            return _err(400, "bad_request", "give url, wait_min, or both")
+        fields = {"url", "wait_min", "second_url", "second_after_min", "quiet"}
+        if not body or not set(body) <= fields:
+            return _err(400, "bad_request", "give url, wait_min, second_url, second_after_min or quiet")
         key = state.service.person_key(w.person_id)
         old = webhook.load(state, key)
         wait_s = old["wait_s"] if old else notify.WAIT_DEFAULT_S
@@ -1837,9 +1840,48 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         url = body.get("url", old["url"] if old else None)
         if url is None:
             return _err(400, "bad_request", "give the url first")
+        second: dict[str, Any] | None = old["second"] if old else None
+        new_second_url = body.get("second_url")
+        if "second_url" in body:
+            if new_second_url is None:
+                second = None
+            else:
+                second = {
+                    "url": new_second_url,
+                    "after_s": second["after_s"] if second else notify.SECOND_DEFAULT_S,
+                }
+        if "second_after_min" in body:
+            m = body["second_after_min"]
+            if (
+                isinstance(m, bool)
+                or not isinstance(m, int)
+                or not notify.SECOND_MIN_S <= m * 60 <= notify.SECOND_MAX_S
+            ):
+                return _err(400, "bad_request", "second_after_min is a whole number of minutes, 5 to 240")
+            if second is None:
+                return _err(400, "bad_request", "give the second address first")
+            second = {**second, "after_s": m * 60.0}
+        quiet = old["quiet"] if old else None
+        if "quiet" in body:
+            q = body["quiet"]
+            if q is None:
+                quiet = None
+            elif not isinstance(q, dict) or set(q) != {"from", "to", "tz", "always"}:
+                return _err(400, "bad_request", "quiet is {from, to, tz, always} or null")
+            else:
+                start, end = notify.parse_hhmm(q["from"]), notify.parse_hhmm(q["to"])
+                if start is None or end is None:
+                    return _err(400, "bad_quiet", "Quiet hours need a start and an end time, as HH:MM.")
+                if (why := notify.quiet_problem(start, end, q["tz"], q["always"])) is not None:
+                    return _err(400, "bad_quiet", why)
+                quiet = notify.Quiet(start, end, q["tz"], frozenset(q["always"]))
         if "url" in body and (why := await webhook.check_for_save(state, url)) is not None:
             return _err(400, "bad_webhook", why)
-        webhook.save(state, key, url, wait_s)
+        if new_second_url is not None and (why := await webhook.check_for_save(state, new_second_url)):
+            return _err(400, "bad_webhook", "The second address: " + why)
+        if (why := webhook.too_long(second)) is not None:
+            return _err(400, "bad_webhook", "The second address: " + why)
+        webhook.save(state, key, url, wait_s, second, quiet)
         if state.notifier is not None and "url" in body:
             state.notifier.forget(key)
         return _ok(webhook.public(state, key))
@@ -1854,19 +1896,26 @@ def install(app: FastAPI, state: "BrokerState") -> None:
 
     @app.post("/api/me/webhook/test")
     async def test_webhook(request: Request) -> Response:
-        """Post a test line to the signed-in person's webhook now, so they can see it works. It goes through
-        the same checks and the same hourly cap as a real one; the answer says how it went."""
+        """Post a test line to the signed-in person's webhook now, and to their second address when there is
+        one, so they can see both work. It goes through the same checks and the same hourly cap as a real
+        one, ignores quiet hours, and the answer says how each went."""
         w = who(request)
         if w is None or w.must_reset:
             return unauthorized()
         key = state.service.person_key(w.person_id)
-        if state.notifier is None or webhook.load(state, key) is None:
+        hook = webhook.load(state, key)
+        if state.notifier is None or hook is None:
             return _err(400, "bad_request", "set a webhook first")
         code = await state.notifier.post(key, notify.test_payload(state.web_origin.origin))
+        second: dict[str, Any] | None = None
+        if hook["second"] is not None:
+            code2 = await state.notifier.post(key, notify.test_payload(state.web_origin.origin, True), True)
+            second = {"ok": code2 is None, "error": None if code2 is None else notify.fail_reason(code2)}
         return _ok(
             {
                 "ok": code is None,
                 "error": None if code is None else notify.fail_reason(code),
+                "second": second,
                 "webhook": webhook.public(state, key),
             }
         )

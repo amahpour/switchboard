@@ -4,6 +4,10 @@
 ``broker_settings`` row each, never a room message), working out what needs them (``home.needs``), and the
 one outbound POST, which is the only request the broker makes on a person's behalf.
 
+A person may also give a second address for a louder second alert, and quiet hours (#923, §62.4). Each is a
+row of its own beside the first (``webhook_second:``, ``webhook_quiet:``), since a settings value is at most
+200 characters; the second address has exactly the first one's checks and is the same kind of secret.
+
 The address is a secret. It is never returned in full (``public`` gives the host), never logged, never in a
 room, and a failure is kept as a fixed sentence, never an exception's text, which can carry the address.
 
@@ -141,45 +145,123 @@ def cfg_key(person_key: int) -> str:
     return f"webhook:{person_key}"
 
 
-def status_key(person_key: int) -> str:
-    return f"webhook_status:{person_key}"
+def status_key(person_key: int, second: bool = False) -> str:
+    return f"webhook_status2:{person_key}" if second else f"webhook_status:{person_key}"
 
 
-def sent_key(person_key: int) -> str:
-    return f"webhook_sent:{person_key}"
+def sent_key(person_key: int, second: bool = False) -> str:
+    return f"webhook_sent2:{person_key}" if second else f"webhook_sent:{person_key}"
+
+
+def second_key(person_key: int) -> str:
+    return f"webhook_second:{person_key}"
+
+
+def quiet_key(person_key: int) -> str:
+    return f"webhook_quiet:{person_key}"
+
+
+VALUE_MAX = 200  # broker_settings.value's CHECK (db.py)
 
 
 def load(state: Any, person_key: int) -> dict[str, Any] | None:
-    """The person's webhook, ``{"url": str, "wait_s": float}``, or None. A row that does not parse or does
-    not pass the checks is no webhook (it fails closed)."""
-    raw = state.store.setting_get(cfg_key(person_key))
+    """The person's webhook, ``{"url": str, "wait_s": float, "second": {"url", "after_s"} | None, "quiet":
+    notify.Quiet | None}``, or None. A row that does not parse or does not pass the checks, the second
+    address's and the quiet hours' included, is no webhook (it fails closed). A webhook of before #923, with
+    neither of those rows, is one with no second alert and no quiet hours."""
+    store = state.store
+    raw = store.setting_get(cfg_key(person_key))
     if raw is None:
         return None
     try:
         d = json.loads(raw)
         url, wait = d["url"], float(d["wait_s"])
-    except (ValueError, KeyError, TypeError):
+        second = _second_of(store.setting_get(second_key(person_key)))
+        quiet = _quiet_of(store.setting_get(quiet_key(person_key)))
+    except (ValueError, KeyError, TypeError, AttributeError):
         return None
     if notify.url_problem(url) is not None or not notify.WAIT_MIN_S <= wait <= notify.WAIT_MAX_S:
         return None
-    return {"url": url, "wait_s": wait}
+    return {"url": url, "wait_s": wait, "second": second, "quiet": quiet}
 
 
-def save(state: Any, person_key: int, url: str, wait_s: float) -> None:
-    state.store.setting_set(cfg_key(person_key), json.dumps({"url": url, "wait_s": wait_s}))
-    state.store.setting_set(status_key(person_key), "")  # an old failure is not about this address
+def _second_of(raw: str | None) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    d = json.loads(raw)
+    url, after = d["url"], float(d["after_s"])
+    if notify.url_problem(url) is not None or not notify.SECOND_MIN_S <= after <= notify.SECOND_MAX_S:
+        raise ValueError("second")
+    return {"url": url, "after_s": after}
+
+
+def _quiet_of(raw: str | None) -> notify.Quiet | None:
+    if raw is None:
+        return None
+    d = json.loads(raw)
+    start, end, tz, always = d["start"], d["end"], d["tz"], d["always"]
+    if notify.quiet_problem(start, end, tz, always) is not None:
+        raise ValueError("quiet")
+    return notify.Quiet(start, end, tz, frozenset(always))
+
+
+def _second_row(second: dict[str, Any]) -> str:
+    return json.dumps({"url": second["url"], "after_s": second["after_s"]})
+
+
+def _quiet_row(q: notify.Quiet) -> str:
+    return json.dumps({"start": q.start, "end": q.end, "tz": q.tz, "always": sorted(q.always)})
+
+
+def too_long(second: dict[str, Any] | None) -> str | None:
+    """Why the second address cannot be kept, or None: a settings value holds at most ``VALUE_MAX``
+    characters, the address and its delay included."""
+    if second is not None and len(_second_row(second)) > VALUE_MAX:
+        return "That address is too long to keep. Use a shorter one."
+    return None
+
+
+def save(
+    state: Any,
+    person_key: int,
+    url: str,
+    wait_s: float,
+    second: dict[str, Any] | None = None,
+    quiet: notify.Quiet | None = None,
+) -> None:
+    """Keep the person's webhook. ``second`` and ``quiet`` None remove those rows. Check ``too_long`` first."""
+    store = state.store
+    store.setting_set(cfg_key(person_key), json.dumps({"url": url, "wait_s": wait_s}))
+    if second is None:
+        store.setting_delete(second_key(person_key))
+    else:
+        store.setting_set(second_key(person_key), _second_row(second))
+    if quiet is None:
+        store.setting_delete(quiet_key(person_key))
+    else:
+        store.setting_set(quiet_key(person_key), _quiet_row(quiet))
+    for k in (status_key(person_key), status_key(person_key, True)):
+        store.setting_set(k, "")  # an old failure is not about these addresses
 
 
 def remove(state: Any, person_key: int) -> None:
-    for key in (cfg_key(person_key), status_key(person_key), sent_key(person_key)):
+    for key in (
+        cfg_key(person_key),
+        second_key(person_key),
+        quiet_key(person_key),
+        status_key(person_key),
+        status_key(person_key, True),
+        sent_key(person_key),
+        sent_key(person_key, True),
+    ):
         state.store.setting_delete(key)
     n = getattr(state, "notifier", None)
     if n is not None:
         n.forget(person_key)
 
 
-def last_status(state: Any, person_key: int) -> dict[str, Any] | None:
-    raw = state.store.setting_get(status_key(person_key))
+def last_status(state: Any, person_key: int, second: bool = False) -> dict[str, Any] | None:
+    raw = state.store.setting_get(status_key(person_key, second))
     if not raw:
         return None
     try:
@@ -189,27 +271,63 @@ def last_status(state: Any, person_key: int) -> dict[str, Any] | None:
         return None
 
 
-def _record(state: Any, person_key: int, now: float, code: str | None) -> None:
+def _record(state: Any, person_key: int, now: float, code: str | None, second: bool = False) -> None:
     state.store.setting_set(
-        status_key(person_key),
+        status_key(person_key, second),
         json.dumps(
             {"at": now, "ok": code is None, "error": None if code is None else notify.fail_reason(code)}
         ),
     )
 
 
+def _host(url: str) -> str:
+    return urllib.parse.urlsplit(url).hostname or ""
+
+
 def public(state: Any, person_key: int) -> dict[str, Any]:
     """What ``/api/me`` says of a person's webhook: whether there is one, its host (never the path or query,
-    which is where the secret is), the wait, and how the last post went."""
+    which is where the secret is), the wait, how the last post went, and the same of the second address,
+    and the quiet hours."""
     w = load(state, person_key)
+    no_second = {"set": False, "after_min": round(notify.SECOND_DEFAULT_S / 60), "last": None}
+    no_quiet = {
+        "set": False,
+        "from": "22:00",
+        "to": "07:00",
+        "tz": None,
+        "always": list(notify.QUIET_ALWAYS_DEFAULT),
+    }
     if w is None:
-        return {"set": False, "wait_min": round(notify.WAIT_DEFAULT_S / 60), "last": None}
-    host = urllib.parse.urlsplit(w["url"]).hostname or ""
+        return {
+            "set": False,
+            "wait_min": round(notify.WAIT_DEFAULT_S / 60),
+            "last": None,
+            "second": no_second,
+            "quiet": no_quiet,
+        }
+    s, q = w["second"], w["quiet"]
     return {
         "set": True,
-        "host": host,
+        "host": _host(w["url"]),
         "wait_min": round(w["wait_s"] / 60),
         "last": last_status(state, person_key),
+        "second": no_second
+        if s is None
+        else {
+            "set": True,
+            "host": _host(s["url"]),
+            "after_min": round(s["after_s"] / 60),
+            "last": last_status(state, person_key, True),
+        },
+        "quiet": no_quiet
+        if q is None
+        else {
+            "set": True,
+            "from": notify.hhmm(q.start),
+            "to": notify.hhmm(q.end),
+            "tz": q.tz,
+            "always": sorted(q.always),
+        },
     }
 
 
@@ -244,16 +362,18 @@ class Notifier:
     def forget(self, person_key: int) -> None:
         self._policy.pop(person_key, None)
 
+    def _kept(self, person_key: int, second: bool) -> list[str]:
+        try:
+            raw = self.state.store.setting_get(sent_key(person_key, second)) or "[]"
+            return [str(k) for k in json.loads(raw)]
+        except (ValueError, TypeError):
+            return []
+
     def _policy_of(self, person_key: int) -> notify.Policy:
         if person_key not in self._policy:
-            kept: list[str] = []
-            try:
-                kept = [
-                    str(k) for k in json.loads(self.state.store.setting_get(sent_key(person_key)) or "[]")
-                ]
-            except (ValueError, TypeError):
-                kept = []
-            self._policy[person_key] = notify.Policy(kept)
+            self._policy[person_key] = notify.Policy(
+                self._kept(person_key, False), self._kept(person_key, True)
+            )
         return self._policy[person_key]
 
     def _limiter(self, person_key: int) -> notify.Limiter:
@@ -264,13 +384,15 @@ class Notifier:
         if load(self.state, person_key) is not None:
             self._policy_of(person_key).ack_room(slug, self.state.clock.now())
 
-    async def post(self, person_key: int, body: dict[str, Any]) -> str | None:
-        """Send ``body`` to the person's webhook now. None when it went, else a failure code. Counts toward
-        the hourly cap, and records how it went where the person's settings show it."""
+    async def post(self, person_key: int, body: dict[str, Any], second: bool = False) -> str | None:
+        """Send ``body`` to the person's webhook now (``second``: to their second address). None when it
+        went, else a failure code. Both addresses count toward the one hourly cap, and how it went is
+        recorded where the person's settings show it."""
         now = self.state.clock.now()
         w = load(self.state, person_key)
-        if w is None:
+        if w is None or (second and w["second"] is None):
             return "error"
+        url = w["second"]["url"] if second else w["url"]
         lim = self._limiter(person_key)
         if not lim.allow(now):
             return "limit"
@@ -279,7 +401,7 @@ class Notifier:
         try:
             await asyncio.to_thread(
                 post_blocking,
-                w["url"],
+                url,
                 json.dumps(body).encode(),
                 allow_private=self.state.cfg.notify.allow_private_webhooks,
                 resolve=self.resolve,
@@ -290,7 +412,7 @@ class Notifier:
         except Exception:
             log.warning("a webhook post failed unexpectedly")  # nothing of the address
             code = "error"
-        _record(self.state, person_key, now, code)
+        _record(self.state, person_key, now, code, second)
         return code
 
     async def tick(self) -> None:
@@ -317,24 +439,27 @@ class Notifier:
             needs: list[notify.Need] | None = home.needs(st, name, None if person_key == 0 else person_key)
         except Exception:
             needs = None  # could not tell what needs them: send nothing
-        due = pol.due(needs, now, w["wait_s"])
-        if not due:
-            self._keep(person_key, pol)
-            return
-        if not self._limiter(person_key).allow(now):
-            return
-        code = await self.post(person_key, notify.payload(due, st.web_origin.origin))
-        pol.sent(due, now, code is None)
+        quiet = w["quiet"]
+        due = pol.due(needs, now, w["wait_s"], quiet)
+        second = [] if w["second"] is None else pol.due_second(needs, now, w["second"]["after_s"], quiet)
+        lim = self._limiter(person_key)
+        if due and lim.allow(now):
+            code = await self.post(person_key, notify.payload(due, st.web_origin.origin))
+            pol.sent(due, now, code is None)
+        if second and lim.allow(now):
+            code = await self.post(person_key, notify.payload(second, st.web_origin.origin, True), True)
+            pol.sent_second(second, now, code is None)
         self._keep(person_key, pol)
 
     def _keep(self, person_key: int, pol: notify.Policy) -> None:
-        raw = json.dumps(pol.sent_keys())
-        if st_get := self.state.store.setting_get(sent_key(person_key)):
-            if st_get == raw:
-                return
-        elif raw == "[]":
-            return
-        self.state.store.setting_set(sent_key(person_key), raw)
+        for second, keys in ((False, pol.sent_keys()), (True, pol.sent_second_keys())):
+            raw, row = json.dumps(keys), sent_key(person_key, second)
+            if st_get := self.state.store.setting_get(row):
+                if st_get == raw:
+                    continue
+            elif raw == "[]":
+                continue
+            self.state.store.setting_set(row, raw)
 
     async def run(self) -> None:
         while True:

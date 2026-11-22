@@ -319,3 +319,243 @@ def test_a_removed_person_takes_their_webhook_with_them(world: Any, hook: TlsHoo
     r = alice.post(f"/api/people/{p.id}/remove", {})
     assert r.status_code == 200, r.text
     assert b.state.store.setting_get(f"webhook:{p.id}") is None
+
+
+# ------------------------------------------------------------------ the second alert and quiet hours (#923)
+def loud(hook: TlsHook) -> str:
+    return hook.url.replace("secretsecret", "loudloud")
+
+
+LOUD_PATH = "/services/T000/B000/loudloud?token=s3cr3t"
+FIRST_PATH = "/services/T000/B000/secretsecret?token=s3cr3t"
+
+
+def test_a_second_alert_goes_to_the_second_address_when_the_item_still_waits(world: Any, hook: TlsHook) -> None:
+    """The first alert goes to the first address after the wait; if the question still needs alice the set
+    time after that, one post goes to the second address, marked as the second alert, with no message text.
+    Fails if it never goes, goes to the first address, repeats, or carries the text."""
+    b, clock, alice, _ = world
+    r = put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 5, "second_url": loud(hook)})
+    assert r.status_code == 200, r.text
+    assert put(alice, "/api/me/webhook", {"second_after_min": 10}).status_code == 200
+    agent_asks(b, "@alice the password is hunter2, deploy?", ["alice"])
+    tick(b)
+    clock.advance(301)
+    tick(b)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    clock.advance(599)
+    tick(b)
+    assert len(hook.posts) == 1
+    clock.advance(2)
+    tick(b)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH, LOUD_PATH]
+    second = hook.posts[1]["body"]
+    assert second["alert"] == "second" and "alert" not in hook.posts[0]["body"]
+    assert second["items"][0]["url"] == "https://sb.example.com/#build"
+    assert "hunter2" not in str(second)
+    clock.advance(7200)
+    tick(b)
+    assert len(hook.posts) == 2
+    assert me(alice)["webhook"]["second"]["last"]["ok"] is True
+
+
+def test_no_second_alert_once_the_person_looked_or_without_a_second_address(world: Any, hook: TlsHook) -> None:
+    """Opening the room after the first alert stops the second; a webhook with no second address only ever
+    posts once. Fails if a second alert reaches someone who looked, or appears from nowhere."""
+    b, clock, alice, _ = world
+    put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 5, "second_url": loud(hook)})
+    q = agent_asks(b, "@alice ship it?", ["alice"])
+    tick(b)
+    clock.advance(301)
+    tick(b)
+    assert len(hook.posts) == 1
+    assert alice.post("/api/rooms/build/seen", {"id": q}).status_code == 200
+    clock.advance(3600)
+    tick(b)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    assert put(alice, "/api/me/webhook", {"second_url": None}).status_code == 200
+    assert me(alice)["webhook"]["second"]["set"] is False
+    agent_asks(b, "@alice and this?", ["alice"])
+    tick(b)
+    clock.advance(301)
+    tick(b)
+    clock.advance(14_400)
+    tick(b)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH, FIRST_PATH]
+
+
+def test_a_second_alert_goes_even_when_the_first_address_fails(world: Any, hook: TlsHook) -> None:
+    """The first post failing (a 500) does not stop the second alert. Fails if the second waits on the first
+    channel working."""
+    b, clock, alice, _ = world
+    put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 5, "second_url": loud(hook)})
+    agent_asks(b, "@alice help?", ["alice"])
+    tick(b)
+    clock.advance(301)
+    hook.status = 500
+    tick(b)
+    assert me(alice)["webhook"]["last"]["ok"] is False
+    hook.status = 200
+    clock.advance(1201)
+    tick(b)
+    assert LOUD_PATH in [p["path"] for p in hook.posts]
+
+
+def _quiet_now(clock: FakeClock, before_min: int, after_min: int) -> dict[str, Any]:
+    import datetime
+
+    now = datetime.datetime.fromtimestamp(clock.now(), datetime.UTC)
+    m = now.hour * 60 + now.minute
+    return {
+        "from": notify.hhmm((m - before_min) % 1440),
+        "to": notify.hhmm((m + after_min) % 1440),
+        "tz": "UTC",
+        "always": ["approval"],
+    }
+
+
+def test_quiet_hours_hold_a_question_but_not_an_approval_and_the_question_goes_at_their_end(
+    world: Any, hook: TlsHook
+) -> None:
+    """In quiet hours a question to alice is held and an agent of hers waiting on an approval is sent; when
+    they end, the question goes if it still needs her. Fails if a question is posted at night, an approval is
+    held, or the held one is lost."""
+    b, clock, alice, _ = world
+    r = put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 1, "quiet": _quiet_now(clock, 10, 30)})
+    assert r.status_code == 200, r.text
+    assert me(alice)["webhook"]["quiet"]["set"] is True
+    agent_asks(b, "@alice later is fine", ["alice"])
+
+    def wait() -> None:
+        st = b.state.store
+        p = st.upsert_participant("test", session_key("test", "", "claude-1"), host="")
+        st.set_status(p.id, "waiting-approval", "test")
+        b.state.service.agent_owner = lambda host, room=None: "alice"  # type: ignore[method-assign]
+
+    b.on_loop(wait)
+    tick(b)
+    clock.advance(61)
+    tick(b)
+    assert [i["kind"] for p in hook.posts for i in p["body"]["items"]] == ["approval"]
+    clock.advance(30 * 60)
+    tick(b)
+    assert [i["kind"] for p in hook.posts for i in p["body"]["items"]] == ["approval", "question"]
+
+
+def test_send_a_test_ignores_quiet_hours_and_reaches_both_addresses(world: Any, hook: TlsHook) -> None:
+    """A test goes at any hour, to the first and the second address, each counted in the one hourly cap.
+    Fails if quiet hours stop it, the second address is skipped, or the two have a cap each."""
+    _, clock, alice, _ = world
+    body = {"url": hook.url, "second_url": loud(hook), "quiet": _quiet_now(clock, 10, 60)}
+    assert put(alice, "/api/me/webhook", body).status_code == 200
+    r = alice.post("/api/me/webhook/test", {}).json()
+    assert r["ok"] is True and r["second"] == {"ok": True, "error": None}
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH, LOUD_PATH]
+    assert hook.posts[1]["body"]["alert"] == "second"
+    for _ in range(notify.MAX_PER_HOUR // 2 - 1):
+        alice.post("/api/me/webhook/test", {})
+    assert len(hook.posts) == notify.MAX_PER_HOUR
+    r = alice.post("/api/me/webhook/test", {}).json()
+    assert r["ok"] is False and r["second"]["error"] == notify.fail_reason("limit")
+    assert len(hook.posts) == notify.MAX_PER_HOUR
+
+
+def test_the_second_address_is_never_shown_back_and_has_the_first_ones_checks(
+    world: Any, hook: TlsHook
+) -> None:
+    """``/api/me`` gives the second address's host only; an internal or non-https second address is refused
+    at save, and one that comes to point inside is refused at send. Fails if the secret shows, or the second
+    address skips a check the first one has."""
+    b, _, alice, _ = world
+    r = put(alice, "/api/me/webhook", {"url": hook.url, "second_url": loud(hook), "second_after_min": 30})
+    assert r.status_code == 200
+    for text in (r.text, alice.get("/api/me").text):
+        assert "loudloud" not in text and "s3cr3t" not in text
+    s = me(alice)["webhook"]["second"]
+    assert (s["set"], s["host"], s["after_min"]) == (True, HOST, 30)
+    b.on_loop(lambda: setattr(b.state, "cfg", b.state.cfg.replace(notify=NotifyCfg())))
+    for bad in ("http://hooks.example.com/x", f"https://127.0.0.1:{hook.port}/x", "https://169.254.169.254/x"):
+        r = put(alice, "/api/me/webhook", {"second_url": bad})
+        assert r.status_code == 400, (bad, r.text)
+        assert r.json()["message"].startswith("The second address")
+    assert me(alice)["webhook"]["second"]["host"] == HOST  # unchanged by the refusals
+    b.state.notifier.resolve = lambda host, port: ["93.184.216.34"]
+    assert put(alice, "/api/me/webhook", {"second_url": loud(hook)}).status_code == 200
+    b.state.notifier.resolve = hook.resolve  # the name now points at 127.0.0.1 (DNS rebinding)
+    r2 = alice.post("/api/me/webhook/test", {}).json()
+    assert r2["second"] == {"ok": False, "error": notify.fail_reason("blocked")}
+    assert hook.hits == []
+    assert me(alice)["webhook"]["second"]["last"]["error"] == notify.fail_reason("blocked")
+
+
+def test_bad_second_alert_and_quiet_hours_bodies_are_refused(world: Any, hook: TlsHook) -> None:
+    """A delay outside 5 to 240, a delay with no second address, an unknown zone, a time that is not HH:MM, an
+    unknown kind, or a quiet object with other fields: all 400, nothing saved. Fails if any is stored."""
+    _, _, alice, _ = world
+    assert put(alice, "/api/me/webhook", {"url": hook.url}).status_code == 200
+    q = {"from": "22:00", "to": "07:00", "tz": "UTC", "always": []}
+    for body in (
+        {"second_after_min": 10},  # no second address
+        {"second_url": loud(hook), "second_after_min": 4},
+        {"second_url": loud(hook), "second_after_min": 241},
+        {"second_url": loud(hook), "second_after_min": True},
+        {"second_url": 5},
+        {"quiet": {**q, "tz": "Mars/Olympus_Mons"}},
+        {"quiet": {**q, "tz": "../../../etc/passwd"}},
+        {"quiet": {**q, "from": "7am"}},
+        {"quiet": {**q, "to": "22:00"}},
+        {"quiet": {**q, "always": ["everything"]}},
+        {"quiet": {**q, "extra": 1}},
+        {"quiet": "22-07"},
+    ):
+        r = put(alice, "/api/me/webhook", body)
+        assert r.status_code == 400, (body, r.text)
+    w = me(alice)["webhook"]
+    assert w["second"]["set"] is False and w["quiet"]["set"] is False
+    assert put(alice, "/api/me/webhook", {"quiet": q}).status_code == 200
+    assert me(alice)["webhook"]["quiet"] == {"set": True, "from": "22:00", "to": "07:00", "tz": "UTC", "always": []}
+    assert put(alice, "/api/me/webhook", {"quiet": None}).status_code == 200
+    assert me(alice)["webhook"]["quiet"]["set"] is False
+
+
+def test_an_old_row_still_loads_and_a_row_that_does_not_parse_is_no_webhook(world: Any, hook: TlsHook) -> None:
+    """A webhook from before #923 (only its ``webhook:`` row) has no second alert and no quiet hours; a second
+    address or quiet hours row that does not pass the checks makes it no webhook at all. Fails if an old row
+    stops working, or a broken part is read as "none" and the rest still posts."""
+    import json
+
+    b, _, alice, _ = world
+    st = b.state.store
+    st.setting_set("webhook:0", json.dumps({"url": hook.url, "wait_s": 300}))
+    w = me(alice)["webhook"]
+    assert w["set"] is True and w["second"]["set"] is False and w["quiet"]["set"] is False
+    for row, value in (
+        ("webhook_second:0", {"url": "http://hooks.example.com/x", "after_s": 1200}),
+        ("webhook_second:0", {"url": loud(hook), "after_s": 10}),
+        ("webhook_second:0", "yes"),
+        ("webhook_quiet:0", {"start": 1320, "end": 420, "tz": "Mars/Olympus_Mons", "always": []}),
+        ("webhook_quiet:0", {"start": 1320, "end": 1320, "tz": "UTC", "always": []}),
+        ("webhook_quiet:0", [1, 2]),
+    ):
+        st.setting_set(row, json.dumps(value))
+        assert me(alice)["webhook"]["set"] is False, (row, value)
+        st.setting_delete(row)
+    assert me(alice)["webhook"]["set"] is True
+
+
+def test_a_second_address_too_long_to_keep_is_refused_not_an_error(world: Any, hook: TlsHook) -> None:
+    """A settings value holds 200 characters: a longer second address is a 400 with a sentence, and nothing
+    of it is kept. Fails if it is a server error or a half-saved row."""
+    _, _, alice, _ = world
+    put(alice, "/api/me/webhook", {"url": hook.url})
+    r = put(alice, "/api/me/webhook", {"second_url": loud(hook) + "&pad=" + "x" * 150})
+    assert r.status_code == 400 and "too long" in r.text
+    assert me(alice)["webhook"]["second"]["set"] is False
+
+
+def test_removing_the_webhook_removes_its_second_alert_and_quiet_hours(world: Any, hook: TlsHook) -> None:
+    b, _, alice, _ = world
+    q = {"from": "22:00", "to": "07:00", "tz": "UTC", "always": ["approval"]}
+    put(alice, "/api/me/webhook", {"url": hook.url, "second_url": loud(hook), "quiet": q})
+    assert delete(alice, "/api/me/webhook").status_code == 200
+    assert b.state.store.settings_with_prefix("webhook") == []
