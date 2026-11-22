@@ -1888,6 +1888,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if s_url is not None and (why := await webhook.check_for_save(state, s_url)) is not None:
             return _err(400, "bad_webhook", "The second address: " + why)
         done = webhook.save(state, key, changes)
+        if done == "gone":  # removed while the addresses were checked: nothing was written (#923, F14)
+            return unauthorized()
         if done == "none":
             return _err(409, "conflict", "There is no webhook now: it was removed. Save an address first.")
         if done == "no_second":

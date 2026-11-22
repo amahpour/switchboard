@@ -44,7 +44,9 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
@@ -1189,8 +1191,12 @@ V58_TO_V59 = (*ADDRESSED_DDL, "UPDATE meta SET value='59' WHERE key='schema_vers
 # ``broker_settings`` rows, whose value holds 200 characters: a long address could not be saved (#926), the
 # sent keys overflowed (#923), and the settings were three rows written one after another. Each CHECK is
 # ``notify.py``'s limit (``URL_MAX``, the wait bounds, ``HH:MM``, ``TZ_MAX``, ``KINDS``), so a row that got
-# past the code still could not hold what the code would refuse. Both fresh databases and the migration use
-# these statements.
+# past the code still could not hold what the code would refuse. ``id`` is new each time a webhook is made
+# (AUTOINCREMENT never reuses one), and ``first_gen`` and ``second_gen`` count each lane's address changes:
+# what a POST writes when it is back (its status, its sent keys) names the webhook and the address it was
+# sent for, so it lands nowhere once either changed (#923, F4, F10). Sent keys belong to the webhook's id,
+# so a webhook removed and made again starts clean. Both fresh databases and the migration use these
+# statements.
 _HHMM = "GLOB '[01][0-9]:[0-5][0-9]' OR {c} GLOB '2[0-3]:[0-5][0-9]'"
 QUIET_ALWAYS_VALUES = (
     "",
@@ -1214,7 +1220,8 @@ def _hhmm(c: str) -> str:
 
 WEBHOOKS_DDL = (
     "CREATE TABLE webhooks("
-    " person INTEGER PRIMARY KEY CHECK(person >= 0),"
+    " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " person INTEGER UNIQUE NOT NULL CHECK(person >= 0),"
     f" url TEXT NOT NULL CHECK({_https('url')}),"
     " wait_s REAL NOT NULL DEFAULT 300 CHECK(wait_s BETWEEN 60 AND 7200),"
     f" second_url TEXT CHECK(second_url IS NULL OR ({_https('second_url')})),"
@@ -1231,6 +1238,8 @@ WEBHOOKS_DDL = (
     " second_at REAL,"
     " second_ok INTEGER CHECK(second_ok IS NULL OR second_ok IN (0, 1)),"
     " second_error TEXT CHECK(second_error IS NULL OR length(second_error) <= 200),"
+    " first_gen INTEGER NOT NULL DEFAULT 0,"
+    " second_gen INTEGER NOT NULL DEFAULT 0,"
     " CHECK((second_url IS NULL) = (second_after_s IS NULL)),"
     " CHECK((quiet_from IS NULL) = (quiet_to IS NULL) AND (quiet_to IS NULL) = (quiet_tz IS NULL)"
     " AND (quiet_tz IS NULL) = (quiet_always IS NULL)),"
@@ -1238,11 +1247,11 @@ WEBHOOKS_DDL = (
     " CHECK((first_at IS NULL) = (first_ok IS NULL) AND (first_ok = 1) <= (first_error IS NULL)),"
     " CHECK((second_at IS NULL) = (second_ok IS NULL) AND (second_ok = 1) <= (second_error IS NULL)))",
     "CREATE TABLE webhook_sent("
-    " person INTEGER NOT NULL REFERENCES webhooks(person) ON DELETE CASCADE,"
+    " webhook INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,"
     " lane TEXT NOT NULL CHECK(lane IN ('first','second')),"
     " key TEXT NOT NULL CHECK(length(key) BETWEEN 1 AND 1000),"
     " at REAL NOT NULL,"
-    " PRIMARY KEY(person, lane, key)) WITHOUT ROWID",
+    " PRIMARY KEY(webhook, lane, key)) WITHOUT ROWID",
 )
 # v59 -> v60 (#923, #926, DESIGN.md §62.4): the tables, then ``move_webhook_rows`` moves the old rows in.
 V59_TO_V60 = (*WEBHOOKS_DDL, "UPDATE meta SET value='60' WHERE key='schema_version'")
@@ -1469,7 +1478,7 @@ _WEBHOOK_ROWS = (
 )
 
 
-def _old_webhook(rows: dict[str, str], p: int) -> dict[str, object] | None:
+def _old_webhook(rows: dict[str, str], p: str) -> dict[str, object] | None:
     """Person ``p``'s webhook from its old rows, as ``webhook.load`` read them: the address, the second one
     and the quiet hours, each through ``notify``'s checks, or None when any of them does not pass."""
     from switchboard import notify  # pure; imported here so the schema does not need it
@@ -1505,15 +1514,40 @@ def _old_webhook(rows: dict[str, str], p: int) -> dict[str, object] | None:
         return None
 
 
+STATUS_AT_MAX = 32_503_680_000.0  # 3000-01-01 UTC: a status time past it is no time this broker wrote
+ERROR_MAX = 200  # the error columns' CHECK
+_KEY_RE = re.compile(r"[1-9][0-9]{0,18}")
+_INT64_MAX = 2**63 - 1
+
+
+def _old_person(tail: str) -> int | None:
+    """The person key a pre-60 row name ends in, or None: only the canonical form ``str(int)`` wrote, ``0``
+    (the owner) or digits with no leading zero, ASCII only (``isdigit`` and ``int`` take other scripts'
+    digits and ``²``), and within SQLite's signed 64 bits. Another form is not a key this broker wrote (#923,
+    F11)."""
+    if tail == "0":
+        return 0
+    if not (tail.isascii() and _KEY_RE.fullmatch(tail)):
+        return None
+    p = int(tail)
+    return p if p <= _INT64_MAX else None
+
+
 def _old_status(raw: str | None) -> tuple[float, int, str | None] | None:
+    """A pre-60 status row, or None when it does not parse or its time is not one a broker wrote: not a
+    finite number, not after 1970, or past the year 3000 (NaN is stored as NULL, which the row's CHECK
+    refuses, so one bad time would stop the whole upgrade, #923, F11). The error is cut to its column."""
     if not raw:
         return None
     try:
         d = json.loads(raw)
         ok = bool(d["ok"])
-        error = None if ok or not d["error"] else str(d["error"])[:200]
-        return float(d["at"]), int(ok), error
-    except (ValueError, KeyError, TypeError, AttributeError):
+        at = float(d["at"])
+        if not (math.isfinite(at) and 0 < at < STATUS_AT_MAX):
+            return None
+        error = None if ok or not d["error"] else str(d["error"])[:ERROR_MAX]
+        return at, int(ok), error
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
         return None
 
 
@@ -1530,38 +1564,39 @@ def _old_sent(raw: str | None) -> list[str]:
 def move_webhook_rows(con: sqlite3.Connection) -> dict[str, int]:
     """Move every person's webhook out of ``broker_settings`` into ``webhooks`` and ``webhook_sent`` (#923,
     #926, §62.4), and delete the old rows. A webhook whose rows do not parse or pass the checks is dropped,
-    with its status and sent keys: it was no webhook (``load`` read it as none), and stays none. Returns how
-    many rows each table gained (a negative number: lost)."""
+    with its status and sent keys: it was no webhook (``load`` read it as none), and stays none. So is a row
+    whose person key is not one a broker wrote (``_old_person``); a status whose time or text cannot be kept
+    is dropped and the webhook still moves. One malformed row never stops the upgrade (#923, F11). Returns
+    how many rows each table gained (a negative number: lost)."""
     rows: dict[str, str] = {}
     for prefix in _WEBHOOK_ROWS:
         for k, v in con.execute(
             "SELECT key, value FROM broker_settings WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
         ):
             rows[str(k)] = str(v)
-    people: set[int] = set()
+    people: dict[int, str] = {}
     for k in rows:
-        tail = k.split(":", 1)[1]
-        if k.startswith("webhook:") and tail.isdigit():
-            people.add(int(tail))
+        if k.startswith("webhook:") and (p := _old_person(k.split(":", 1)[1])) is not None:
+            people[p] = str(p)
     made = sent = 0
-    for p in sorted(people):
-        w = _old_webhook(rows, p)
+    for p, tail in sorted(people.items()):
+        w = _old_webhook(rows, tail)
         if w is None:
             continue
         cols = {"person": p, **w}
-        for lane, key in (("first", f"webhook_status:{p}"), ("second", f"webhook_status2:{p}")):
+        for lane, key in (("first", f"webhook_status:{tail}"), ("second", f"webhook_status2:{tail}")):
             st = _old_status(rows.get(key))
             if st is not None and (lane == "first" or "second_url" in w):
                 cols |= {f"{lane}_at": st[0], f"{lane}_ok": st[1], f"{lane}_error": st[2]}
         names = ", ".join(cols)
-        con.execute(
+        wid = con.execute(
             f"INSERT INTO webhooks({names}) VALUES({', '.join('?' for _ in cols)})", tuple(cols.values())
-        )
+        ).lastrowid
         made += 1
-        for lane, key in (("first", f"webhook_sent:{p}"), ("second", f"webhook_sent2:{p}")):
+        for lane, key in (("first", f"webhook_sent:{tail}"), ("second", f"webhook_sent2:{tail}")):
             for item in _old_sent(rows.get(key)):
                 con.execute(
-                    "INSERT INTO webhook_sent(person, lane, key, at) VALUES(?, ?, ?, 0)", (p, lane, item)
+                    "INSERT INTO webhook_sent(webhook, lane, key, at) VALUES(?, ?, ?, 0)", (wid, lane, item)
                 )
                 sent += 1
     for k in rows:

@@ -25,12 +25,12 @@ NEW = ("webhooks", "webhook_sent")
 
 
 def at_59(path: Path, extra: dict[str, object] | None = None) -> None:
-    """The 1.13.0 database at ``path``, with ``extra`` settings rows added as #923's pre-release builds kept
-    them (values as JSON)."""
+    """The 1.13.0 database at ``path``, with ``extra`` settings rows added (or put in place of the fixture's)
+    as #923's pre-release builds kept them (values as JSON)."""
     with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
         for k, v in (extra or {}).items():
-            old.execute("INSERT INTO broker_settings(key, value) VALUES(?, ?)", (k, json.dumps(v)))
+            old.execute("INSERT OR REPLACE INTO broker_settings(key, value) VALUES(?, ?)", (k, json.dumps(v)))
     with sqlite3.connect(path) as check:
         assert db.schema_version(check) == 59
 
@@ -58,7 +58,7 @@ def test_a_1_13_0_database_moves_its_webhooks_and_drops_the_one_that_does_not_pa
             "SELECT type, name, sql FROM sqlite_master"
             " WHERE tbl_name IN ('webhooks', 'webhook_sent') ORDER BY name"
         )
-        assert rows(con, q) == rows(fresh, q) and len(rows(con, q)) == 2
+        assert rows(con, q) == rows(fresh, q) and len(rows(con, q)) == 3  # and the UNIQUE(person) index
         assert rows(
             con, "SELECT person, url, wait_s, second_url, quiet_from FROM webhooks ORDER BY person"
         ) == [
@@ -69,7 +69,9 @@ def test_a_1_13_0_database_moves_its_webhooks_and_drops_the_one_that_does_not_pa
             (0, T0, 1, None),
             (1, T0 + 5, 0, notify.fail_reason("status")),
         ]
-        assert rows(con, "SELECT person, lane, key FROM webhook_sent") == [(0, "first", "q:build:12")]
+        assert rows(
+            con, "SELECT w.person, s.lane, s.key FROM webhook_sent s JOIN webhooks w ON w.id = s.webhook"
+        ) == [(0, "first", "q:build:12")]
         assert rows(con, "SELECT key, value FROM broker_settings") == [("notify_text:0", "0")]
         assert len(rows(backup, "SELECT key FROM broker_settings WHERE key LIKE 'webhook%'")) == 8
         state = SimpleNamespace(store=Store(con))
@@ -86,7 +88,9 @@ def test_a_1_13_0_database_moves_its_webhooks_and_drops_the_one_that_does_not_pa
             "error": notify.fail_reason("status"),
         }
         assert webhook.load(state, 7) is None
-        assert state.store.webhook_sent_keys(0, "first") == ["q:build:12"]
+        owner = state.store.webhook_get(0)
+        assert owner is not None and (owner["first_gen"], owner["second_gen"]) == (0, 0)
+        assert state.store.webhook_sent_keys(owner["id"], "first") == ["q:build:12"]
         assert db.integrity_ok(con) is None
     finally:
         fresh.close()
@@ -140,6 +144,108 @@ def test_the_pre_release_rows_of_923_move_too_and_a_quiet_zone_that_fails_drops_
         w = webhook.load(SimpleNamespace(store=Store(con)), 0)
         assert w is not None and w["second"] == {"url": LOUD_URL, "after_s": 900.0}
         assert w["quiet"] == notify.Quiet(1320, 420, "UTC", frozenset({"question", "approval"}))
+    finally:
+        con.close()
+
+
+def moved_people(con: sqlite3.Connection) -> list[tuple[object, ...]]:
+    return rows(con, "SELECT person, url FROM webhooks ORDER BY person")
+
+
+CLEAN = [(0, OWNER_URL), (1, BOB_URL)]
+
+
+@pytest.mark.parametrize(
+    "at",
+    [float("nan"), float("inf"), float("-inf"), -5.0, 0.0, 1e300, 32_503_680_000.0],
+    ids=["nan", "inf", "-inf", "negative", "zero", "huge", "year-3000"],
+)
+def test_a_status_time_no_broker_wrote_is_dropped_and_the_upgrade_commits(tmp_path: Path, at: float) -> None:
+    """bob's last status has a time that is not a finite number after 1970 and before the year 3000. His
+    webhook still moves, with no status, beside the owner's, and the upgrade commits. Fails if the time is
+    kept: NaN is stored as NULL, which the row's CHECK refuses, so the whole upgrade stopped; an infinite,
+    negative or huge time was moved as if a post had been made then (#923, F11)."""
+    path = tmp_path / "old.db"
+    at_59(path, {"webhook_status:1": {"at": at, "ok": False, "error": notify.fail_reason("status")}})
+    con = db.open_db(path)
+    try:
+        assert db.schema_version(con) == 60
+        assert moved_people(con) == CLEAN
+        assert rows(con, "SELECT first_at, first_ok, first_error FROM webhooks WHERE person=1") == [
+            (None, None, None)
+        ]
+        assert rows(con, "SELECT first_at, first_ok FROM webhooks WHERE person=0") == [(T0, 1)]
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "00012",
+        "012",
+        "00",
+        "+12",
+        "-1",
+        " 12",
+        "\u0661\u0662",
+        "\u00b2",
+        "\uff11",
+        "9223372036854775808",
+        "9999999999999999999999",
+        "",
+    ],
+    ids=[
+        "zeros",
+        "zero",
+        "double-zero",
+        "plus",
+        "minus",
+        "space",
+        "arabic-indic",
+        "superscript",
+        "fullwidth",
+        "int64-max-plus-1",
+        "huge",
+        "empty",
+    ],
+)
+def test_a_person_key_no_broker_wrote_is_skipped_and_the_upgrade_commits(tmp_path: Path, tail: str) -> None:
+    """A webhook row (with its status and sent keys) whose person key is not the canonical form a broker
+    wrote (digits with no leading zero, ASCII only, within SQLite's 64 bits, or ``0``) is skipped like one
+    that does not parse, and its rows deleted; the owner's and bob's move as they are and the upgrade
+    commits. Fails if the key is read with ``isdigit`` and ``int``: ``²`` is a digit to ``isdigit`` and not
+    to ``int`` (a ValueError stopped the upgrade), a key past 64 bits stopped it at the insert, and other
+    scripts' digits or a leading zero named someone else (#923, F11)."""
+    path = tmp_path / "old.db"
+    hook = {"url": "https://hooks.example.com/services/T000/B000/other?token=t9", "wait_s": 300.0}
+    at_59(
+        path,
+        {
+            f"webhook:{tail}": hook,
+            f"webhook_status:{tail}": {"at": T0, "ok": True, "error": None},
+            f"webhook_sent:{tail}": ["q:build:77"],
+        },
+    )
+    con = db.open_db(path)
+    try:
+        assert db.schema_version(con) == 60
+        assert moved_people(con) == CLEAN
+        assert rows(con, "SELECT key FROM webhook_sent") == [("q:build:12",)]
+        assert rows(con, "SELECT key FROM broker_settings") == [("notify_text:0",)]
+    finally:
+        con.close()
+
+
+def test_the_largest_canonical_person_key_moves(tmp_path: Path) -> None:
+    """The largest key SQLite holds is a key like any other: its webhook moves. Fails if the range check is
+    off by one."""
+    path = tmp_path / "old.db"
+    big = 2**63 - 1
+    at_59(path, {f"webhook:{big}": {"url": LOUD_URL, "wait_s": 300.0}})
+    con = db.open_db(path)
+    try:
+        assert moved_people(con) == [*CLEAN, (big, LOUD_URL)]
     finally:
         con.close()
 
@@ -202,20 +308,34 @@ def test_the_kinds_the_table_takes_are_every_set_of_notifys_kinds() -> None:
 
 
 def test_a_sent_key_goes_with_its_webhook_and_needs_one(tmp_path: Path) -> None:
-    """A sent key is a row of a person who has a webhook: removing the webhook removes its keys, and a key
-    for nobody's webhook is not kept. Fails if keys outlive the webhook they were sent on."""
+    """A sent key is a row of a webhook, by its id: removing the webhook removes its keys, a key for no
+    webhook, or for a lane whose address changed since (an older generation), is not kept, and a webhook
+    made again has a new id and none of the old one's keys. Fails if keys outlive the webhook they were sent
+    on, or land on its successor (#923, F10)."""
     con = db.open_db(tmp_path / "x.db")
     store = Store(con)
     try:
         assert store.webhook_set(0, {"url": OWNER_URL}, second_default_s=1200.0) == "ok"
-        store.webhook_keep_sent(0, "first", ["q:build:1", "b:build:" + "u" * 900], T0)
-        store.webhook_keep_sent(3, "first", ["q:build:1"], T0)
-        assert store.webhook_sent_keys(0, "first") == ["b:build:" + "u" * 900, "q:build:1"]
-        assert store.webhook_sent_keys(3, "first") == []
-        store.webhook_keep_sent(0, "first", ["q:build:1"], T0 + 1)  # pruned to what still needs them
-        assert store.webhook_sent_keys(0, "first") == ["q:build:1"]
+        w = store.webhook_get(0)
+        assert w is not None and w["first_gen"] == 0
+        wid = w["id"]
+        store.webhook_keep_sent(wid, "first", 0, ["q:build:1", "b:build:" + "u" * 900], T0)
+        store.webhook_keep_sent(wid + 1, "first", 0, ["q:build:1"], T0)
+        assert store.webhook_set(0, {"url": OWNER_URL + "&v=2"}, second_default_s=1200.0) == "ok"
+        assert store.webhook_get(0)["first_gen"] == 1  # type: ignore[index]
+        store.webhook_keep_sent(wid, "first", 0, ["q:build:2"], T0)  # read before the address was replaced
+        assert store.webhook_sent_keys(wid, "first") == ["b:build:" + "u" * 900, "q:build:1"]
+        assert store.webhook_sent_keys(wid + 1, "first") == []
+        store.webhook_keep_sent(wid, "first", 1, ["q:build:1"], T0 + 1)  # pruned to what still needs them
+        assert store.webhook_sent_keys(wid, "first") == ["q:build:1"]
         store.webhook_remove(0)
         assert rows(con, "SELECT count(*) FROM webhook_sent") == [(0,)]
+        assert store.webhook_set(0, {"url": OWNER_URL}, second_default_s=1200.0) == "ok"
+        again = store.webhook_get(0)
+        assert again is not None and again["id"] != wid
+        store.webhook_keep_sent(wid, "first", 1, ["q:build:1"], T0 + 2)  # the old webhook's tick, late
+        store.webhook_keep_sent(again["id"], "first", 1, ["q:build:1"], T0 + 2)  # its own gen is 0
+        assert store.webhook_sent_keys(again["id"], "first") == []
     finally:
         con.close()
 

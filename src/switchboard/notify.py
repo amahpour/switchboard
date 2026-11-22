@@ -22,7 +22,10 @@ The rules, in short:
   ``zoneinfo``, so a daylight-saving change is the zone's), nothing is sent, first or second alert, but the
   kinds they marked as always sent. A held item goes when they end, if it still needs them, and the second
   alert's clock starts then. A zone this server cannot read is always quiet here (``in_quiet``), and a
-  stored one makes the whole webhook none (``webhook.load``), so nothing is sent at all.
+  stored one makes the whole webhook none for sending (``webhook.load``), so nothing is sent at all; its
+  owner still sees it, unusable and why, to fix or remove (``webhook.public``, #923, F12).
+- A failed try is kept by lane and by the generation of that lane's address (``Policy.see``): a new address
+  starts with every try, and a result for the old one, back after the change, counts for nothing (F4).
 """
 
 from __future__ import annotations
@@ -139,68 +142,72 @@ def holds(q: Quiet | None, kind: str, now: float) -> bool:
 
 @dataclass
 class _Try:
-    """One alert's sends: done when it went, else counted failures."""
+    """One alert's failed sends to one address."""
 
-    done: bool = False
     attempts: int = 0
     last_try: float = 0.0
 
     def blocked(self, now: float) -> bool:
-        return (
-            self.done
-            or self.attempts >= MAX_ATTEMPTS
-            or bool(self.attempts and now - self.last_try < RETRY_S)
-        )
+        return self.attempts >= MAX_ATTEMPTS or bool(self.attempts and now - self.last_try < RETRY_S)
 
-    def record(self, now: float, ok: bool) -> None:
+    def record(self, now: float) -> None:
         self.attempts += 1
         self.last_try = now
-        if ok:
-            self.done = True
 
 
 @dataclass
 class _Track:
     first_seen: float
-    first: _Try = field(default_factory=_Try)
-    second: _Try = field(default_factory=_Try)
+    sent: set[str] = field(default_factory=set)  # the lanes it went out on, whatever address they had since
+    tries: dict[tuple[str, int], _Try] = field(default_factory=dict)  # by lane and address generation
     released: float | None = None  # when its first alert was due: waited, not got, not held by quiet hours
 
 
 class Policy:
-    """When one person's webhook fires. State is the items it has seen, which of them it already sent
-    (``sent``, and ``sent_second`` for second alerts, kept by the caller across restarts), and the rooms the
-    person opened and when."""
+    """When one webhook fires. State is the items it has seen, which of them it already sent on each lane
+    (``sent``, and ``sent_second`` for second alerts, kept by the caller across restarts), the rooms the
+    person opened and when, and each item's failed tries, kept by lane and by the generation of the lane's
+    address (``see``): a new address starts with every try, and a result for the old one, back late, is kept
+    where nothing reads it (#923, F4)."""
 
     def __init__(self, sent: Iterable[str] = (), sent_second: Iterable[str] = ()) -> None:
         self._tracks: dict[str, _Track] = {}
         for k in sent:
-            self._tracks.setdefault(k, _Track(first_seen=0.0)).first.done = True
+            self._tracks.setdefault(k, _Track(first_seen=0.0)).sent.add("first")
         for k in sent_second:
-            t = self._tracks.setdefault(k, _Track(first_seen=0.0))
-            t.first.done = t.second.done = True
+            self._tracks.setdefault(k, _Track(first_seen=0.0)).sent |= {"first", "second"}
         self._opened: dict[str, float] = {}
+        self._gen = {"first": 0, "second": 0}
+
+    def see(self, first_gen: int, second_gen: int) -> None:
+        """The lanes' address generations as stored now. The tries of any other generation are dropped."""
+        self._gen = {"first": first_gen, "second": second_gen}
+        for t in self._tracks.values():
+            for k in [k for k in t.tries if k[1] != self._gen[k[0]]]:
+                del t.tries[k]
+
+    def gen(self, lane: str) -> int:
+        return self._gen[lane]
 
     def ack_room(self, slug: str, at: float) -> None:
         """The person opened this room at ``at``: whatever needed them in it since before then is got."""
         if at > self._opened.get(slug, float("-inf")):
             self._opened[slug] = at
 
-    def new_second(self) -> None:
-        """The second address was replaced: a second alert that failed there may be tried at the new one,
-        from the start. What was sent, and what the person got, stay (#923)."""
-        for t in self._tracks.values():
-            if not t.second.done:
-                t.second = _Try()
-
     def sent_keys(self) -> list[str]:
-        return sorted(k for k, t in self._tracks.items() if t.first.done)
+        return sorted(k for k, t in self._tracks.items() if "first" in t.sent)
 
     def sent_second_keys(self) -> list[str]:
-        return sorted(k for k, t in self._tracks.items() if t.second.done)
+        return sorted(k for k, t in self._tracks.items() if "second" in t.sent)
 
     def _got(self, n: Need) -> bool:
         return n.at <= self._opened.get(n.slug, float("-inf"))  # they opened the room after this began
+
+    def _blocked(self, t: _Track, lane: str, now: float) -> bool:
+        if lane in t.sent:
+            return True
+        tr = t.tries.get((lane, self._gen[lane]))
+        return tr is not None and tr.blocked(now)
 
     def due(
         self, needs: list[Need] | None, now: float, wait_s: float, quiet: Quiet | None = None
@@ -223,7 +230,7 @@ class Policy:
                 continue
             if t.released is None:
                 t.released = now
-            if t.first.blocked(now):
+            if self._blocked(t, "first", now):
                 continue
             out.append(n)
         return out[:MAX_ITEMS]
@@ -242,22 +249,30 @@ class Policy:
             t = self._tracks.get(n.key)
             if t is None or t.released is None or now - t.released < after_s:
                 continue
-            if self._got(n) or holds(quiet, n.kind, now) or t.second.blocked(now):
+            if self._got(n) or holds(quiet, n.kind, now) or self._blocked(t, "second", now):
                 continue
             out.append(n)
         return out[:MAX_ITEMS]
 
-    def sent(self, items: Iterable[Need], now: float, ok: bool) -> None:
-        """Record a try of first alerts: done when it went, else a counted failure to try again later."""
+    def _record(self, lane: str, items: Iterable[Need], now: float, ok: bool, gen: int | None) -> None:
+        g = self._gen[lane] if gen is None else gen
         for n in items:
-            if (t := self._tracks.get(n.key)) is not None:
-                t.first.record(now, ok)
+            if (t := self._tracks.get(n.key)) is None:
+                continue
+            if not ok:  # kept by the address it was for: one replaced since is read by nobody, and pruned
+                t.tries.setdefault((lane, g), _Try()).record(now)
+            elif g == self._gen[lane]:
+                t.sent.add(lane)
 
-    def sent_second(self, items: Iterable[Need], now: float, ok: bool) -> None:
+    def sent(self, items: Iterable[Need], now: float, ok: bool, gen: int | None = None) -> None:
+        """Record a try of first alerts to the address of generation ``gen`` (the current one when None):
+        sent when it went, else a counted failure to try again later. A try of an address that has since
+        been replaced counts for nothing on the current one."""
+        self._record("first", items, now, ok, gen)
+
+    def sent_second(self, items: Iterable[Need], now: float, ok: bool, gen: int | None = None) -> None:
         """Record a try of second alerts, as ``sent`` does."""
-        for n in items:
-            if (t := self._tracks.get(n.key)) is not None:
-                t.second.record(now, ok)
+        self._record("second", items, now, ok, gen)
 
 
 class Limiter:

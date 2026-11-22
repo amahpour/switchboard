@@ -269,9 +269,9 @@ def test_the_second_alert_fires_when_the_first_post_failed() -> None:
 
 
 def test_a_new_second_address_starts_its_tries_over_and_keeps_what_was_sent_and_got() -> None:
-    """A second alert that failed every try at the old address is tried at a new one (``new_second``); one
-    that went is not sent again, and a room the person opened stays got. Fails if the new address inherits
-    the spent tries (#923, F4), or the reset forgets what was sent or got."""
+    """A second alert that failed every try at the old address is tried at a new one (a new generation,
+    ``see``); one that went is not sent again, and a room the person opened stays got. Fails if the new
+    address inherits the spent tries (#923, F4), or the new generation forgets what was sent or got."""
     p, n, done, got = Policy(), need(), need("q:build:8"), need("q:other:3", slug="other")
     t = 0.0
     p.due([n, done, got], t, 300)
@@ -287,9 +287,31 @@ def test_a_new_second_address_starts_its_tries_over_and_keeps_what_was_sent_and_
         t += notify.RETRY_S
     p.due([n, done, got], t, 300)
     assert p.due_second([n, done, got], t, 1200) == []
-    p.new_second()
+    p.see(0, 1)
     assert p.due_second([n, done, got], t, 1200) == [n]
     assert p.sent_second_keys() == [done.key]
+
+
+def test_a_late_result_for_a_replaced_address_counts_for_nothing_on_the_new_one() -> None:
+    """A second alert is out to the old address (generation 0) when the address is replaced (1); the old
+    post then fails, or goes. The new address's first try is due at once and has every try, and a late
+    success is not "sent". Fails if a result is recorded by item alone, whatever address it was for (#923,
+    F4: the new address's first try waited ``RETRY_S`` with one try spent)."""
+    for ok in (False, True):
+        p, n = Policy(), need(at=0)
+        p.due([n], 0, 300)
+        p.due([n], 300, 300)
+        t = 300.0 + 1200
+        p.due([n], t, 300)
+        assert p.due_second([n], t, 1200) == [n]  # sent to generation 0 ...
+        p.see(0, 1)  # ... the address is replaced while it is out ...
+        p.sent_second([n], t, ok, 0)  # ... and its result is back
+        assert p.sent_second_keys() == []
+        for _ in range(notify.MAX_ATTEMPTS):
+            assert p.due_second([n], t, 1200) == [n], ok
+            p.sent_second([n], t, False, 1)
+            t += notify.RETRY_S
+        assert p.due_second([n], t, 1200) == []
 
 
 def test_got_it_stops_the_second_alert() -> None:

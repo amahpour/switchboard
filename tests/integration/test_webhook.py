@@ -540,9 +540,9 @@ def test_bad_second_alert_and_quiet_hours_bodies_are_refused(world: Any, hook: T
 
 def test_a_stored_row_that_does_not_pass_the_checks_is_no_webhook(world: Any, hook: TlsHook) -> None:
     """A row the table's CHECKs let through but a save would refuse (a second address with a space, quiet
-    hours in a zone this server cannot read, as after a tzdata update dropped it) is no webhook at all:
-    nothing is posted, not even an approval, a kind sent anyway (§62.4). Fails if a broken part is read as
-    "none" and the rest still posts."""
+    hours in a zone this server cannot read, as after a tzdata update dropped it) is no webhook to send to:
+    nothing is posted, not even an approval, a kind sent anyway (§62.4); its owner still sees it is there and
+    why it is not used (F12). Fails if a broken part is read as "none" and the rest still posts."""
     b, _, alice, _ = world
     q = {"from": "22:00", "to": "07:00", "tz": "UTC", "always": ["approval"]}
     assert (
@@ -550,13 +550,18 @@ def test_a_stored_row_that_does_not_pass_the_checks_is_no_webhook(world: Any, ho
         == 200
     )
     con = b.state.store.con
-    for col, value in (("second_url", "https://hook.example.com/a b"), ("quiet_tz", "Mars/Olympus_Mons")):
+    for col, value, problem in (
+        ("second_url", "https://hook.example.com/a b", "second_address"),
+        ("quiet_tz", "Mars/Olympus_Mons", "zone"),
+    ):
         good = b.state.store.webhook_get(0)[col]
         con.execute(f"UPDATE webhooks SET {col}=? WHERE person=0", (value,))
-        assert me(alice)["webhook"]["set"] is False, col
+        w = me(alice)["webhook"]
+        assert (w["set"], w["usable"], w["problem"]) == (True, False, problem), col
         assert b.state.notifier is not None and webhook.load(b.state, 0) is None
         con.execute(f"UPDATE webhooks SET {col}=? WHERE person=0", (good,))
-    assert me(alice)["webhook"]["set"] is True
+    w = me(alice)["webhook"]
+    assert (w["set"], w["usable"], w["problem"]) == (True, True, None)
 
 
 def long_url(url: str, n: int) -> str:
@@ -605,11 +610,11 @@ def test_removing_the_webhook_removes_its_second_alert_and_quiet_hours(world: An
 
 
 # ------------------------------------------------------------------ review findings of #925
-def tick_holding(b: InProcBroker, hook: TlsHook, during: Any) -> None:
-    """Tick with the receiver holding the POST to the first address open, and run ``during`` while it is
-    out; then let it go and wait for the tick to finish."""
+def tick_holding(b: InProcBroker, hook: TlsHook, during: Any, path: str = FIRST_PATH) -> None:
+    """Tick with the receiver holding the POST to ``path`` (the first address) open, and run ``during``
+    while it is out; then let it go and wait for the tick to finish."""
     assert b.loop is not None
-    hook.hold, hook.arrived, hook.release = FIRST_PATH, threading.Event(), threading.Event()
+    hook.hold, hook.arrived, hook.release = path, threading.Event(), threading.Event()
     fut = asyncio.run_coroutine_threadsafe(b.state.notifier.tick(), b.loop)
     try:
         assert hook.arrived.wait(20), "the first post never reached the receiver"
@@ -719,15 +724,16 @@ def test_what_was_sent_is_not_sent_again_after_a_restart_on_either_lane(
     tick(b)
     assert [p["path"] for p in hook.posts] == [FIRST_PATH, LOUD_PATH]
     keys = sorted(n.key for n in needs)
-    assert b.state.store.webhook_sent_keys(0, "first") == keys
-    assert b.state.store.webhook_sent_keys(0, "second") == keys
+    wid = b.state.store.webhook_get(0)["id"]
+    assert b.state.store.webhook_sent_keys(wid, "first") == keys
+    assert b.state.store.webhook_sent_keys(wid, "second") == keys
 
 
 def put_while_validating(
-    b: InProcBroker, hook: TlsHook, alice: Browser, body: dict[str, Any], during: Any
+    b: InProcBroker, hook: TlsHook, who: Browser, body: dict[str, Any], during: Any
 ) -> Any:
-    """PUT ``body`` with the address check held at its DNS lookup, run ``during`` while it waits, then let it
-    go; the PUT's response."""
+    """``who`` PUTs ``body`` with the address check held at its DNS lookup, run ``during`` while it waits,
+    then let it go; the PUT's response."""
     entered, gate = threading.Event(), threading.Event()
 
     def slow(host: str, port: int) -> list[str]:
@@ -737,7 +743,7 @@ def put_while_validating(
 
     b.state.notifier.resolve = slow
     out: list[Any] = []
-    t = threading.Thread(target=lambda: out.append(put(alice, "/api/me/webhook", body)))
+    t = threading.Thread(target=lambda: out.append(put(who, "/api/me/webhook", body)))
     t.start()
     try:
         assert entered.wait(20), "the save never reached its address check"
@@ -801,3 +807,144 @@ def test_a_new_second_address_gets_its_own_tries(world: Any, hook: TlsHook) -> N
     assert hook.posts[-1]["path"] == "/services/T000/B000/louder?token=s3cr3t"
     assert hook.posts[-1]["body"]["alert"] == "second"
     assert [p["path"] for p in hook.posts].count(FIRST_PATH) == 1
+
+
+# ------------------------------------------------------------------ the third review round of #925
+NEWER_PATH = "/services/T000/B000/louder?token=s3cr3t"
+
+
+def test_a_webhook_removed_and_made_again_while_a_post_is_out_starts_clean(
+    world: Any, hook: TlsHook, slow_sends: None
+) -> None:
+    """A first alert is out to alice's webhook when she removes it and makes a new one with the same address.
+    When the old post is back (it went), nothing of it lands on the new webhook: no last status and no sent
+    key, and the new one sends the item after its own wait. Fails if a post's results are written by person
+    (or by address) rather than by the webhook's id: the old post's sent key landed on the new webhook,
+    which then never sent the item (#923, F10)."""
+    b, clock, alice, _ = world
+    assert put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 5}).status_code == 200
+    old_id = b.state.store.webhook_get(0).get("id")
+    agent_asks(b, "@alice ship it?", ["alice"])
+    tick(b)
+    clock.advance(301)
+
+    def remake() -> None:
+        assert delete(alice, "/api/me/webhook").status_code == 200
+        assert put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 5}).status_code == 200
+
+    tick_holding(b, hook, remake)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    assert me(alice)["webhook"]["last"] is None
+    tick(b)
+    clock.advance(301)
+    tick(b)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH, FIRST_PATH]
+    new = b.state.store.webhook_get(0)
+    assert new is not None and new["id"] != old_id
+    assert len(b.state.store.webhook_sent_keys(new["id"], "first")) == 1
+
+
+def test_a_second_address_replaced_while_its_post_is_out_gets_every_try_at_once(
+    world: Any, hook: TlsHook, slow_sends: None
+) -> None:
+    """A second alert is out to the second address when alice replaces it; the old post then fails. The new
+    address's first try goes on the next tick, not ``RETRY_S`` later, and it gets all ``MAX_ATTEMPTS`` tries.
+    Fails if the late failure is counted on the new address (#923, F4: it waited out a retry with a try
+    already spent)."""
+    b, clock, alice, _ = world
+    body = {"url": hook.url, "wait_min": 5, "second_url": loud(hook), "second_after_min": 5}
+    assert put(alice, "/api/me/webhook", body).status_code == 200
+    agent_asks(b, "@alice still there?", ["alice"])
+    tick(b)
+    clock.advance(301)
+    tick(b)
+    clock.advance(301)
+    hook.status_of[LOUD_PATH] = 500
+    hook.status_of[NEWER_PATH] = 500
+    newer = hook.url.replace("secretsecret", "louder")
+
+    def replace() -> None:
+        assert put(alice, "/api/me/webhook", {"second_url": newer}).status_code == 200
+
+    tick_holding(b, hook, replace, LOUD_PATH)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH, LOUD_PATH]
+    assert me(alice)["webhook"]["second"]["last"] is None  # the old post's failure is not the new address's
+    tick(b)
+    assert [p["path"] for p in hook.posts][-1] == NEWER_PATH
+    for _ in range(4):
+        clock.advance(301)
+        tick(b)
+    assert [p["path"] for p in hook.posts].count(NEWER_PATH) == notify.MAX_ATTEMPTS
+    assert [p["path"] for p in hook.posts].count(FIRST_PATH) == 1
+
+
+def test_a_stored_webhook_in_an_unknown_zone_is_shown_unusable_and_can_be_fixed_or_removed(
+    world: Any, hook: TlsHook
+) -> None:
+    """Alice's quiet hours name a zone this server cannot read (its tzdata lost it since the save). Nothing
+    is sent (F6), but GET says the webhook is there: set, not usable, ``problem`` "zone", its host and the
+    stored quiet hours. Saving a zone it knows makes it usable; so does turning quiet hours off, and the next
+    need is posted; DELETE removes it. Fails if such a row reads as no webhook, so the page had nothing to
+    fix or remove (#923, F12), or if a save is refused on it."""
+    b, clock, alice, _ = world
+    q = {"from": "22:00", "to": "07:00", "tz": "UTC", "always": ["approval"]}
+    assert put(alice, "/api/me/webhook", {"url": hook.url, "wait_min": 1, "quiet": q}).status_code == 200
+    con = b.state.store.con
+
+    def lose_zone() -> None:
+        con.execute("UPDATE webhooks SET quiet_tz='Mars/Olympus_Mons' WHERE person=0")
+
+    lose_zone()
+    w = me(alice)["webhook"]
+    assert w["set"] is True
+    assert (w["usable"], w["problem"], w["host"]) == (False, "zone", HOST)
+    assert w["quiet"] == {
+        "set": True,
+        "from": "22:00",
+        "to": "07:00",
+        "tz": "Mars/Olympus_Mons",
+        "always": ["approval"],
+    }
+    agent_asks(b, "@alice look?", ["alice"])
+    for _ in range(3):
+        tick(b)
+        clock.advance(61)
+    assert hook.posts == []
+    assert alice.post("/api/me/webhook/test", {}).status_code == 400  # nothing is sent, not even a test
+    r = put(alice, "/api/me/webhook", {"quiet": {**q, "tz": "Europe/Paris"}})
+    assert r.status_code == 200, r.text
+    assert (r.json()["usable"], r.json()["problem"]) == (True, None)
+    lose_zone()
+    r = put(alice, "/api/me/webhook", {"quiet": None})
+    assert r.status_code == 200, r.text
+    assert (r.json()["usable"], r.json()["quiet"]["set"]) == (True, False)
+    tick(b)
+    clock.advance(61)
+    tick(b)
+    assert [p["path"] for p in hook.posts] == [FIRST_PATH]
+    put(alice, "/api/me/webhook", {"quiet": q})
+    lose_zone()
+    assert delete(alice, "/api/me/webhook").status_code == 200
+    assert b.state.store.webhook_get(0) is None
+    assert me(alice)["webhook"]["set"] is False
+
+
+def test_a_save_that_outlives_its_account_writes_nothing(world: Any, hook: TlsHook) -> None:
+    """Bob saves an address; while it is checked at its DNS lookup, alice (the admin) removes his account.
+    The save writes nothing: no webhook row and the address nowhere in the database, and it is answered as
+    an expired session is. Fails if the write trusts the person read before the check, which made a webhook
+    for a removed account after its removal had cleared it (#923, F14). (alice is the owner, who cannot be
+    removed, so bob is the one removed.)"""
+    b, _, alice, bob = world
+    p = b.state.store.person_named("bob")
+    assert p is not None
+
+    def remove_bob() -> None:
+        assert alice.post(f"/api/people/{p.id}/remove", {}).status_code == 200
+
+    r = put_while_validating(b, hook, bob, {"url": hook.url}, remove_bob)
+    assert r.status_code == 401, r.text
+    assert b.state.store.webhook_get(p.id) is None
+    con = b.state.store.con
+    assert con.execute("SELECT count(*) FROM webhooks").fetchone()[0] == 0
+    assert not any("secretsecret" in line for line in con.iterdump())
