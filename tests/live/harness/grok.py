@@ -114,6 +114,16 @@ class GrokRun(Run):
             env["XAI_API_KEY"] = os.environ["XAI_API_KEY"]
         return env
 
+    def join_prompt(self) -> str:
+        """The shared prompt, and where the scratch script is. With a real login (Grok 4.7, 2026-11-22) Grok
+        went looking for ``hold.sh`` across the disk before running it: a command no rule allows, so its
+        prompt was declined, the turn ended and the mid-task scenario never started. Telling it the script
+        is in its folder, to run as given, keeps that run on the command its rule allows."""
+        return super().join_prompt() + (
+            " A shell command alice asks for runs from your current folder, where its script already is: run"
+            " exactly that command, with no other command before it."
+        )
+
     def argv(self, resume: bool) -> list[str]:
         model = ["-m", MODEL_ID] if self.base_url else []
         return ["grok", *model, *(["-c"] if resume else [])]

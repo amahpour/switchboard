@@ -188,6 +188,19 @@ def test_grok_s_start_up_trust_question_is_answered_only_for_the_run_s_own_folde
     assert sent == []
 
 
+def test_grok_is_told_to_run_the_scratch_script_as_given_from_its_folder() -> None:
+    """The first real-login run: Grok searched the disk for ``hold.sh`` before running it, a command no rule
+    allows, so the turn ended at a declined prompt. Its join prompt keeps the shared one and adds that the
+    script is in its folder, to run exactly as asked. Fails if Grok's prompt loses either."""
+    from harness import run as harness_run
+
+    r = object.__new__(grok.GrokRun)
+    r.name = "grok-1"
+    prompt = r.join_prompt()
+    assert prompt.startswith(harness_run.Run.join_prompt(r))
+    assert "current folder" in prompt and "exactly that command" in prompt
+
+
 def test_grok_s_trust_question_after_start_up_fails_the_run_and_is_never_answered() -> None:
     """F12: a trust question once the run is under way fails it with a clear message, and no key is sent for
     it (not even the Ctrl+C that declines a tool's prompt), even for the run's own folder. Fails if the run
