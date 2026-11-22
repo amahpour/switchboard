@@ -1,6 +1,6 @@
 ---
 name: work-on-an-issue
-description: Take a GitHub issue, or a one-line task, to a pull request that is ready for the maintainer's review - branch from main, build it with its tests, run the suite, review the diff, open the pull request with evidence, see CI pass, and stop. Use when asked to work on, fix, build or implement something in this repo.
+description: Take a GitHub issue, or a one-line task, to a pull request that is ready for the maintainer's review - branch from main, build it with its tests, run the suite, review the diff, open the pull request with evidence, see CI pass, answer its review, and stop. Use when asked to work on, fix, build or implement something in this repo.
 argument-hint: "<issue number, or what to do>"
 ---
 
@@ -36,4 +36,6 @@ The rules are in [CLAUDE.md](../../../CLAUDE.md); this is the order of work. It 
 
 8. **Watch CI.** `gh pr checks <pr> --watch`. On red: `gh run view <run> --log-failed`, fix with a new commit, push, watch again. A test that fails sometimes is never waved through, even one the diff can't have touched: fix it (step 4). Re-run (`gh run rerun <run> --failed`) only to unblock this pull request while that fix is open, and say so.
 
-9. **Stop.** Report the link, what it does in two sentences, the evidence, and any assumption. Don't merge. After the maintainer merges: `git worktree remove .worktrees/<name>` if there was one, and `git branch -d <branch>`.
+9. **Answer the review.** Each finding has a level (the root `REVIEW.md`, "Levels"). Fix the Important ones. For each, look for the same problem everywhere the change reaches, not only the line named, and list every place you checked in the proof, so one pass can confirm it. Fix a Nit if that is cheap, or drop it with a reason; list a Pre-existing one in the pull request. A fix that needs a new mechanism (a lock, a migration, a file format, a new state) stops here: say so, and ask the maintainer, because the design is moving and a review round is the wrong place to build it. After two rounds only Important findings stay open.
+
+10. **Stop.** Report the link, what it does in two sentences, the evidence, and any assumption. Don't merge. After the maintainer merges: `git worktree remove .worktrees/<name>` if there was one, and `git branch -d <branch>`.

@@ -2,8 +2,19 @@
 
 Read this and the nearest `REVIEW.md` of each changed file (`plugins/`, `deploy/joinly/`, `src/switchboard/web/`, `tests/`). [CLAUDE.md](CLAUDE.md) has the full rules; this is what reviews here keep catching or missing.
 
+## Levels
+
+Start each finding's title with its level, so the author and whoever merges know what blocks:
+
+- **Important:** a bug a user would hit, data loss, a change to the security model, a guard that loosens. It blocks the merge.
+- **Nit:** wording, naming, a comment, a test's setup. It doesn't block: the author fixes it if that is cheap, or drops it with a reason.
+- **Pre-existing:** there before this change. It doesn't block: the author lists it in the pull request.
+
+A round is one review of a new head. After two rounds, raise only Important findings, and check the fixes of the ones you raised. Past two rounds, most findings were in code the review itself had asked for: #896 ran 13 rounds, and rounds 8 to 13 were nearly all fixes of earlier fixes.
+
 ## Flag
 
+- **A review fix that adds a new mechanism:** a lock, a migration, a file format, a new state. The design is moving under the review: it is Important, and the maintainer decides it before it is built. #924's third and fourth rounds added a sweep lock and a removal marker, and its review ran to seven rounds.
 - **A change to the security model** ([DESIGN.md §11](docs/DESIGN.md#11-security-model)): something that approves, launches or types into an agent, or delivers to one waiting on an approval; a room message that changes a setting; a hook or plugin that decides a permission (a report-only one outputs no decision); a bind beyond `127.0.0.1` that skips the `--listen` plus `--public-url` pair; a hook answer outside `broker/hook_replies.py`; a secret in a log, a URL or an error. It is a design change and needs an issue.
 - **A guard that loosens.** The coverage floor, `guardrails.py`, the tree scan, an allowlist, the CSP, an opt-in test marker may only tighten. A skipped or deleted failing test, or a new `# pragma: no cover`, needs the maintainer's yes quoted in the pull request.
 - **A new test never seen to fail.** Ask for the failing run without the change. A test that passes either way checks nothing.
