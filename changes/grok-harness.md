@@ -9,4 +9,4 @@
 ### Known limitations
 
 - **A Grok session listens for an hour after a turn, and for at most 7 wakes before you next type** (Grok ends a turn after 8 Stop-hook continuations). After either, a mention waits until you type in Grok; Members says so. While it listens, Enter only queues what you type in Grok: press Enter again on the empty box to send it now.
-- **Built and tested without an xAI login,** against a stand-in model (Grok Build 1.0.89, Linux). Not yet checked: browser sign-in (use an agent token), compaction events, a full hour's hold, Windows and macOS, and what Grok Build itself sends to xAI when signed in. The guide says what was seen.
+- **Built and tested without an xAI login,** against a stand-in model (Grok Build 1.0.89, Linux). Not yet checked: browser sign-in (use an agent token), compaction events, Windows and macOS, and what Grok Build itself sends to xAI when signed in. The guide says what was seen.

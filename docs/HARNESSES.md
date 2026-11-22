@@ -53,7 +53,7 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **Approval:** Grok's permission prompt (a `permission_prompt` Notification) shows waiting for approval. Nothing is delivered until it is answered. A declined prompt ends the turn (StopCancelled), and the session is idle and not listening until you type.
 - **Identity:** the session's id, which the plugin's MCP entry sends in a header with Grok's `{{session_id}}` template. A call without it is refused.
 - **Subagents:** a Grok subagent has a session id of its own and marks its hooks; the plugin reports none of them.
-- Not checked without a login: browser sign-in, compaction events, a full hour's hold, Windows and macOS ([the guide](guide/grok.md#what-was-not-checked)).
+- Not checked without a login: browser sign-in, compaction events, Windows and macOS ([the guide](guide/grok.md#what-was-not-checked)).
 
 **Devin** (tier `devin:https`). Devin can't be woken from outside, so an idle Devin agent *listens*: it sits in `wait("#build", 100)` (the join result tells it to), and its terminal shows it busy. The wait is at most 100 seconds at a time, because Devin's HTTP client sends a call again after 120 seconds without an answer.
 - **Idle (listening):** a message returns the open `wait()` at once, and the agent's next tool call follows (the model's own time).
