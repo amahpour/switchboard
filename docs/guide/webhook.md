@@ -5,7 +5,7 @@ When something needs you and you have not looked, switchboard can send one short
 ## Set it up
 
 1. Settings → Profile → **Webhook**.
-2. Paste the address. It must start with `https://`.
+2. Paste the address. It must start with `https://`, and can be up to 500 characters.
 3. Pick how long to wait (5 minutes to start; 1 to 120). Press **Save**.
 4. Press **Send a test**. If it goes through, your channel shows the line.
 
@@ -43,13 +43,13 @@ If something still needs you that long after its first alert was due, switchboar
  "alert": "second"}
 ```
 
-Both addresses share the 12 posts an hour, so two addresses never mean twice the posts. **Remove second alert** keeps the first.
+Both addresses share the 12 posts an hour, so two addresses never mean twice the posts. **Send a test** posts to both, and says how each went in its own part: the first under the address, the second under **Second alert**. **Remove second alert** keeps the first.
 
 ## Quiet hours
 
 Under **Quiet hours**, set a start and an end time. They are in your own time zone: the page fills in your browser's (such as `America/New_York`), and you can type another. They can span midnight (22:00 to 07:00), and a daylight-saving change is followed.
 
-During them nothing is sent, first or second alert, except the kinds you tick under **Sent anyway**. By default that is an agent waiting for your approval, since a stuck agent costs the most; a message to you and a review can wait. Whatever waited is sent when quiet hours end, if it still needs you, and a second alert counts its minutes from then. **Send a test** always goes. **Turn off quiet hours** removes them. A time zone the switchboard does not know is refused when you save.
+During them nothing is sent, first or second alert, except the kinds you tick under **Sent anyway**. By default that is an agent waiting for your approval, since a stuck agent costs the most; a message to you and a review can wait. Whatever waited is sent when quiet hours end, if it still needs you, and a second alert counts its minutes from then. **Send a test** always goes. **Turn off quiet hours** removes them. A time zone the switchboard does not know is refused when you save. If a zone you saved stops being one it knows (the switchboard moved to another server, or its time zone list was updated), it sends nothing at all, an agent waiting for your approval included, until you save your quiet hours again: it would rather stay silent than guess your night.
 
 ## What it will not do
 
