@@ -179,9 +179,9 @@ def second_url(hook: TlsHook) -> str:
 
 
 def test_the_second_alert_and_quiet_hours_save_show_and_remove(ui: UI, hook: TlsHook) -> None:
-    """#923: with a webhook saved, a second address and quiet hours save, show only the host and the hours (the
-    zone proposed from the browser's own), last through a reload, and remove. Fails if either part does not
-    reach the server, the second address shows back, or the browser's zone is not proposed."""
+    """#923: with a webhook saved, a second address and quiet hours save, show only the host and the hours
+    (the zone proposed from the browser's own), last through a reload, and remove. Fails if either part does
+    not reach the server, the second address shows back, or the browser's zone is not proposed."""
     page = open_settings(ui, timezone_id="America/New_York")
     expect(page.locator("#settings-webhook-second-save")).to_be_disabled()
     expect(page.locator("#settings-webhook-quiet-save")).to_be_disabled()
@@ -224,7 +224,9 @@ def test_the_second_alert_and_quiet_hours_save_show_and_remove(ui: UI, hook: Tls
     expect(page.locator("#settings-webhook-quiet-remove")).to_be_disabled()
 
 
-def test_an_unknown_zone_and_an_internal_second_address_are_refused_in_settings(ui: UI, hook: TlsHook) -> None:
+def test_an_unknown_zone_and_an_internal_second_address_are_refused_in_settings(
+    ui: UI, hook: TlsHook
+) -> None:
     """#923: a time zone the server does not know and a second address on the loopback (private addresses
     off) are refused, each saying why in its own part. Fails if either is saved or silent."""
     page = open_settings(ui)
