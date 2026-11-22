@@ -1,9 +1,9 @@
-"""Grok Build over HTTPS (DESIGN.md §49.15, #851): the adapter, the client name, the hook table and the plugin's
-static shape, from the payloads Grok Build 1.0.89 really sent (``tests/fixtures/payloads/grok/``).
+"""Grok Build over HTTPS (DESIGN.md §49.15, #851): the adapter, the client name, the hook table and the
+plugin's static shape, from the payloads Grok Build 1.0.89 really sent (``tests/fixtures/payloads/grok/``).
 
-Each event is read as the broker reads it: the plugin's script sends Grok's ``hook_event_name`` and a few fields
-to ``/mcp/event``, ``agent_http.hook_params`` cuts them, and ``agents.parse_hook_event`` makes the ``HookEvent``
-the adapter is asked about. The process side (the script itself against a broker) is in
+Each event is read as the broker reads it: the plugin's script sends Grok's ``hook_event_name`` and a few
+fields to ``/mcp/event``, ``agent_http.hook_params`` cuts them, and ``agents.parse_hook_event`` makes the
+``HookEvent`` the adapter is asked about. The process side (the script itself against a broker) is in
 ``tests/integration/test_agents_http_grok.py``."""
 
 from __future__ import annotations
@@ -76,14 +76,15 @@ def part(**kw: Any) -> Participant:
 
 
 def test_the_client_name_grok_sends_is_grok_and_nothing_like_it_is() -> None:
-    """Grok names its MCP client ``grok-shell-<server>`` (recorded in https_mcp.jsonl, both handshakes). Fails if
-    the broker refuses Grok's tools as ``unsupported`` (the spike's finding), or a bare or look-alike name is
-    taken for Grok."""
+    """Grok names its MCP client ``grok-shell-<server>`` (recorded in https_mcp.jsonl, both handshakes). Fails
+    if the broker refuses Grok's tools as ``unsupported`` (the spike's finding), or a bare or look-alike name
+    is taken for Grok."""
     names = set()
     for line in (FIX / "https_mcp.jsonl").read_text().splitlines():
         body = json.loads(line)["body"]
         params = body.get("params") or {}
-        info = params.get("clientInfo") or (params.get("_meta") or {}).get("io.modelcontextprotocol/clientInfo")
+        meta = params.get("_meta") or {}
+        info = params.get("clientInfo") or meta.get("io.modelcontextprotocol/clientInfo")
         if info:
             names.add(info["name"])
     assert names == {"grok-shell-sb"}
@@ -96,8 +97,9 @@ def test_the_client_name_grok_sends_is_grok_and_nothing_like_it_is() -> None:
 
 
 def test_grok_has_its_own_adapter_tier_and_session_key() -> None:
-    """A Grok session is keyed by the id its MCP entry sends (``X-Switchboard-Session``) on the token's device;
-    a call that names none is refused with how to fix it. Fails if Grok gets another harness's rules."""
+    """A Grok session is keyed by the id its MCP entry sends (``X-Switchboard-Session``) on the token's
+    device; a call that names none is refused with how to fix it. Fails if Grok gets another harness's rules.
+    """
     a = build_adapters(CFG)[HTTPS_GROK]
     assert isinstance(a, HttpsGrokAdapter) and a.harness == "grok"
     sid = payload("SessionStart.json")["session_id"]
@@ -112,8 +114,8 @@ def test_grok_has_its_own_adapter_tier_and_session_key() -> None:
 
 def test_a_grok_session_is_woken_at_its_held_stop_and_hears_priority_after_a_tool() -> None:
     """Idle: a wake goes to the held Stop hook (the park). Busy: a priority message is pulled by the next tool
-    hook. Nothing held: nothing, with why, which names Grok's limits. The plugin asks for 3630 s and is held 5 s
-    less; a Stop that asks for nothing (a cancelled turn's report) is never held."""
+    hook. Nothing held: nothing, with why, which names Grok's limits. The plugin asks for 3630 s and is held 5
+    s less; a Stop that asks for nothing (a cancelled turn's report) is never held."""
     a = HttpsGrokAdapter(CFG)
     p = part()
     sink = type("S", (), {"path": "stop_followup", "id": 9})()
@@ -136,15 +138,16 @@ def test_only_a_permission_prompt_notification_is_an_approval() -> None:
     assert a.asks_approval(as_broker_reads("Notification_permission_prompt.json"))
     other = as_broker_reads("Notification_permission_prompt.json", notification_type="idle_prompt")
     assert not a.asks_approval(other)
-    for name in ("Stop.json", "StopCancelled_permission.json", "PostToolUse_mcp.json", "UserPromptSubmit.json"):
+    others = ("Stop.json", "StopCancelled_permission.json", "PostToolUse_mcp.json", "UserPromptSubmit.json")
+    for name in others:
         assert not a.asks_approval(as_broker_reads(name)), name
 
 
 def test_a_cancelled_turn_is_a_stop_that_is_never_held_and_an_old_one_is_ignored() -> None:
-    """StopCancelled and StopFailure end a turn: they are Stops to the broker (idle), never held. Grok reports a
-    cancelled turn off its command loop, so it can come after the next turn's UserPromptSubmit: a Stop naming
-    another prompt than the session's current one is an old turn's and is not the session's (``other_thread``).
-    Fails if a late cancel turns a busy session idle, or a current Stop is ignored."""
+    """StopCancelled and StopFailure end a turn: they are Stops to the broker (idle), never held. Grok reports
+    a cancelled turn off its command loop, so it can come after the next turn's UserPromptSubmit: a Stop
+    naming another prompt than the session's current one is an old turn's and is not the session's
+    (``other_thread``). Fails if a late cancel turns a busy session idle, or a current Stop is ignored."""
     assert agent_http.GROK_EVENTS["StopCancelled"] == agent_http.GROK_EVENTS["StopFailure"] == "Stop"
     a = HttpsGrokAdapter(CFG)
     cancelled = as_broker_reads("StopCancelled_permission.json")
@@ -183,8 +186,8 @@ def test_a_follow_up_is_confirmed_by_the_turn_it_continued_and_lost_to_a_typed_p
 
 def test_the_hook_table_answers_grok_only_after_a_tool_and_at_stop() -> None:
     """Only a tool hook's ``additionalContext`` reaches Grok's model, and a Stop's ``decision: block`` reason
-    (both measured with a stand-in model); SessionStart's and UserPromptSubmit's output never does, so they are
-    never answered. Fails if any other event, or any other shape, can be printed for Grok."""
+    (both measured with a stand-in model); SessionStart's and UserPromptSubmit's output never does, so they
+    are never answered. Fails if any other event, or any other shape, can be printed for Grok."""
     ctx = {"kind": "context", "text": "hello"}
     cont = {"kind": "continue", "text": "wake"}
     for event in ("PostToolUse", "PostToolUseFailure"):

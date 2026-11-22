@@ -102,7 +102,11 @@ def test_every_event_and_fuzzed_reply_answers_nothing_or_an_allowed_shape(harnes
             for k in FORBIDDEN_KEYS - {"decision"}:
                 assert f'"{k}"' not in flat
             if '"decision"' in flat:
-                assert harness in ("devin", "codex", "grok") and event == "Stop" and printed["decision"] == "block"
+                assert (
+                    harness in ("devin", "codex", "grok")
+                    and event == "Stop"
+                    and printed["decision"] == "block"
+                )
             ev = event.lower()
             assert not re.search(r"pre|permission|notification|interrupt|end", ev), (harness, event)
             if "submit" in ev:

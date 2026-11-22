@@ -1,17 +1,18 @@
 """Live Grok Build over HTTPS (DESIGN.md §12.4, §49.15). Test-only; the product never writes these files.
 
 Grok Build runs with a **temp $HOME**, the run's scratch repository itself, so the person's own ``~/.grok``
-(config, plugins, hooks, trusted folders, sessions) is never read or written, and Grok asks for no folder trust:
-it trusts the home folder without asking, so the run passes no ``--trust`` and writes no ``trusted_folders.toml``.
-In it, ``.grok/plugins/switchboard`` is a copy of this checkout's ``plugins/grok`` and ``.grok/config.toml``
-enables it, starts in ask mode, and allows switchboard's tools (``MCPTool(switchboard__*)``) and the scratch
-script (``Bash(sh hold.sh *)``) and nothing else, as the Cursor profile does; any other prompt is declined with
-Esc, never approved. The address and the token reach the plugin through the child's environment only.
+(config, plugins, hooks, trusted folders, sessions) is never read or written, and Grok asks for no folder
+trust: it trusts the home folder without asking, so the run passes no ``--trust`` and writes no
+``trusted_folders.toml``. In it, ``.grok/plugins/switchboard`` is a copy of this checkout's ``plugins/grok``
+and ``.grok/config.toml`` enables it, starts in ask mode, and allows switchboard's tools
+(``MCPTool(switchboard__*)``) and the scratch script (``Bash(sh hold.sh *)``) and nothing else, as the Cursor
+profile does; any other prompt is declined with Esc, never approved. The address and the token reach the
+plugin through the child's environment only.
 
 The model is the person's real Grok login by default: a copy of ``~/.grok/auth.json`` (mode 0600, deleted
-first when the run ends), or ``XAI_API_KEY`` if it is set. With ``SWITCHBOARD_GROK_BASE_URL`` set, the model is
-that chat-completions server instead (Grok's ``[model.<id>] base_url``); ``standin`` starts the scripted one in
-``tests/fakes/grok_model.py``, which needs no login and spends nothing.
+first when the run ends), or ``XAI_API_KEY`` if it is set. With ``SWITCHBOARD_GROK_BASE_URL`` set, the model
+is that chat-completions server instead (Grok's ``[model.<id>] base_url``); ``standin`` starts the scripted
+one in ``tests/fakes/grok_model.py``, which needs no login and spends nothing.
 """
 
 from __future__ import annotations
@@ -102,8 +103,8 @@ class GrokRun(Run):
 
     def type(self, text: str) -> None:
         """While switchboard listens, Grok's turn is still running (its Stop hook is held), so Enter only
-        queues a prompt (``#1``) until the turn ends; Enter again on the empty box sends it now, which ends the
-        held hook. That is what a person does, and the guide says so."""
+        queues a prompt (``#1``) until the turn ends; Enter again on the empty box sends it now, which ends
+        the held hook. That is what a person does, and the guide says so."""
         super().type(text)
         if "Enter:send now" in self.tmux.capture(self.session):
             self.tmux.key(self.session, "Enter")

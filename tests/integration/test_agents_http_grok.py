@@ -1,10 +1,11 @@
 """Grok Build over HTTPS (DESIGN.md §49.15, #851): its MCP client and its plugin's hook script against an
 in-process broker.
 
-The MCP requests are the ones Grok Build 1.0.89 sent (``tests/fixtures/payloads/grok/https_mcp.jsonl``): client
-``grok-shell-<server>``, and the session's id in ``X-Switchboard-Session`` from the plugin's ``{{session_id}}``
-template. The hooks are the plugin's own script (``plugins/grok/bin/hook``), run as Grok runs it, with a
-recorded payload on stdin and the token in its environment; what it prints is what Grok would read."""
+The MCP requests are the ones Grok Build 1.0.89 sent (``tests/fixtures/payloads/grok/https_mcp.jsonl``):
+client ``grok-shell-<server>``, and the session's id in ``X-Switchboard-Session`` from the plugin's
+``{{session_id}}`` template. The hooks are the plugin's own script (``plugins/grok/bin/hook``), run as Grok
+runs it, with a recorded payload on stdin and the token in its environment; what it prints is what Grok would
+read."""
 
 from __future__ import annotations
 
@@ -45,14 +46,17 @@ class Grok:
     """One Grok Build session's MCP client, as it was recorded: the 2025-11-25 handshake, its client name, and
     the session id header the plugin's entry adds to every request."""
 
-    def __init__(self, b: InProcBroker, token: str, sid: str | None = SID, server: str = "switchboard") -> None:
+    def __init__(
+        self, b: InProcBroker, token: str, sid: str | None = SID, server: str = "switchboard"
+    ) -> None:
         self.c = httpx.Client(base_url=b.base, timeout=30.0)
         self.token, self.sid, self.server = token, sid, server
         self.mcp: str | None = None
         self.n = 10
 
     def headers(self, recorded: dict[str, str]) -> dict[str, str]:
-        h = {k: v for k, v in recorded.items() if k not in ("authorization", "x-probe-session", "mcp-session-id")}
+        dropped = ("authorization", "x-probe-session", "mcp-session-id")
+        h = {k: v for k, v in recorded.items() if k not in dropped}
         h["authorization"] = f"Bearer {self.token}"
         if self.sid is not None:
             h["x-switchboard-session"] = self.sid
@@ -138,7 +142,9 @@ def joined(broker: InProcBroker, tmp_path: Path) -> tuple[InProcBroker, str, Gro
     return broker, token, g, tmp_path / "plugin-data"
 
 
-def test_a_grok_session_joins_with_its_session_header_and_one_without_it_is_refused(broker: InProcBroker) -> None:
+def test_a_grok_session_joins_with_its_session_header_and_one_without_it_is_refused(
+    broker: InProcBroker,
+) -> None:
     """Grok's client name is served (before #851 every tool answered ``unsupported``), the session is the one
     its header names, on the token's device, with Grok's tier. A call with no header names no session and is
     refused with what to fix. Two sessions on one device are two members."""
@@ -161,8 +167,8 @@ def test_a_grok_session_joins_with_its_session_header_and_one_without_it_is_refu
 def test_status_follows_the_hooks_and_a_held_stop_wakes_the_session(joined: Any) -> None:
     """SessionStart and a Stop make it idle, UserPromptSubmit busy; an idle session's Stop hook is held, and a
     person's @mention answers it with ``decision: block`` and the message, which the script prints; the
-    continued turn answers in the room and its Stop confirms the wake and is held again. Fails if the script or
-    the broker answers a Stop with anything else, or a held Stop is not filled."""
+    continued turn answers in the room and its Stop confirms the wake and is held again. Fails if the script
+    or the broker answers a Stop with anything else, or a held Stop is not filled."""
     b, token, g, data = joined
     assert hook(b, token, data, payload("SessionStart.json")) == ""
     assert row(b, "grok-1")["status"] == "idle"
@@ -209,8 +215,8 @@ def test_an_open_approval_prompt_holds_the_session_and_nothing_is_delivered_to_i
     """Grok's permission prompt (a Notification of type ``permission_prompt``) shows the session waiting on
     its person, and the script prints nothing for it. A mention then waits: nothing is offered while the
     prompt is open. Declining ends the turn with StopCancelled, a Stop that is never held, so the session is
-    idle and not listening; approving runs the tool, whose hook makes it busy and carries the message. Fails if
-    a session waiting on an approval is woken or given context (§7.4, §11)."""
+    idle and not listening; approving runs the tool, whose hook makes it busy and carries the message. Fails
+    if a session waiting on an approval is woken or given context (§7.4, §11)."""
     b, token, _g, data = joined
     hook(b, token, data, payload("UserPromptSubmit.json"))
     assert hook(b, token, data, payload("Notification_permission_prompt.json")) == ""
@@ -245,8 +251,8 @@ def test_a_late_cancel_of_an_old_turn_leaves_the_new_turn_busy(joined: Any) -> N
 def test_the_listener_wakes_a_turn_seven_times_and_then_reports_idle(joined: Any) -> None:
     """Grok ends a turn after 8 Stop blocks and fires no Stop after the 8th, so a listener that blocked an 8th
     time would leave the session shown busy for good. The script counts the wakes of one turn (its prompt id,
-    reset when ``stopHookActive`` is false): 7 are delivered; at the 8th Stop it is not held, reports idle, and
-    prints nothing. A new turn listens again."""
+    reset when ``stopHookActive`` is false): 7 are delivered; at the 8th Stop it is not held, reports idle,
+    and prints nothing. A new turn listens again."""
     b, token, g, data = joined
     prompt_id = payload("Stop.json")["promptId"]
     hook(b, token, data, payload("UserPromptSubmit.json", promptId=prompt_id))
@@ -353,4 +359,3 @@ def test_the_script_prints_only_the_shapes_grok_may_read_whatever_the_server_say
         flat = json.dumps(body)
         for private in ("/ws", "/grok-home", "echo hi", "Ping the sb server", "probe echo"):
             assert private not in flat, (private, body)
-

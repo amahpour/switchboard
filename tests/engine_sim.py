@@ -645,8 +645,8 @@ class Sim:
             self.run_followup(mem, ack=self.rng.random() < 0.9, defer=True)
 
     def ev_listener(self, mem: Mem) -> None:
-        """Claude Code, Codex, Cursor or Grok Build over HTTPS: a turn of tool calls, then a Stop hook that waits
-        on the broker, and what its answer starts (§49.4)."""
+        """Claude Code, Codex, Cursor or Grok Build over HTTPS: a turn of tool calls, then a Stop hook that
+        waits on the broker, and what its answer starts (§49.4)."""
         r = self.rng
         what = r.choice(
             [
@@ -698,9 +698,9 @@ class Sim:
             self.hook(mem, "SessionStart", source="clear")
 
     def run_followup(self, mem: Mem, *, ack: bool, defer: bool = False) -> bool:
-        """A held Stop hook was answered: it prints the follow-up and acks, and the harness runs
-        it: a new turn (Claude Code, Cursor) or the turn it carries on (Codex's and Grok Build's block).
-        ``defer``: such a follow-up may wait for its next hook, which is then whatever the session does next."""
+        """A held Stop hook was answered: it prints the follow-up and acks, and the harness runs it: a new
+        turn (Claude Code, Cursor) or the turn it carries on (Codex's and Grok Build's block). ``defer``: such
+        a follow-up may wait for its next hook, which is then whatever the session does next."""
         s = self.engine.sinks.get(mem.park) if mem.park is not None else None
         if s is None or s.open or mem.park_used:
             return False

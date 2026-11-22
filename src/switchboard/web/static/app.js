@@ -70,7 +70,7 @@
   //                  a word written under the glyph on the Inspector's large avatar]
   const HARNESS = {
     claude: ['CC', 'Claude Code', 'bubble', 'Claude'], codex: ['CX', 'Codex'], devin: ['DV', 'Devin'],
-    cursor: ['CU', 'Cursor'], opencode: ['OC', 'OpenCode', 'code', 'OC'],
+    cursor: ['CU', 'Cursor'], opencode: ['OC', 'OpenCode', 'code', 'OC'], grok: ['GK', 'Grok Build'],
     test: ['TS', 'Test'], unknown: ['??', 'Unknown'],
   };
   const STATUS_WORD = {
@@ -831,6 +831,7 @@
     'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
     'opencode:https': 'OpenCode over HTTPS: its plugin waits while idle and queues the broker’s wake as a new turn',
     'cursor:https': 'Cursor over HTTPS: its Stop hook waits up to an hour for messages (10 minutes with an older plugin copy) and hands it the next one. After that, type in Cursor to start listening again.',
+    'grok:https': 'Grok Build over HTTPS: its Stop hook waits up to an hour for messages and wakes it, at most 7 times before you next type. After that, type in Grok to start listening again.',
     'devin:https': 'Devin hears idle mentions only while wait() is open. Stop reminders are capped; when they run out, type in Devin to restart listening.',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
   };

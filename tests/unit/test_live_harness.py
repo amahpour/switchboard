@@ -793,8 +793,8 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the thirteen live modules (eleven harness runs, the meeting self-test and its
-    hosted variant, which start containers and join a real call) are collected and skipped, each with the
+    """With no ``SWITCHBOARD_LIVE`` the thirteen live modules (eleven harness runs, the meeting self-test and
+    its hosted variant, which start containers and join a real call) are collected and skipped, each with the
     line that says how to run it, and nothing is run. (The hosted variant imports the self-test, whose skip
     it shares, so that line shows twice.) Fails if a live module starts a broker, a container or a CLI on
     import, or if one is added without the opt-in."""

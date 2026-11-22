@@ -25,10 +25,11 @@ _APPROVAL = {
         r"(?i)(↵ confirm|esc cancel|approve once|switch to bypass|allow (once|always|for)"
         r"|do you want to (run|allow|proceed))"
     ),
-    # Grok Build's permission prompt (1.0.89, seen live): "Yes, proceed", "No, reject", "Always allow: <rule>",
-    # "Never allow: <rule>", and its docs' "Allow once" / "Reject once"
+    # Grok Build's permission prompt (1.0.89, seen live): "Yes, proceed", "No, reject", "Always allow:
+    # <rule>", "Never allow: <rule>", and its docs' "Allow once" / "Reject once"
     "grok": re.compile(
-        r"(?i)(yes, proceed|no, reject|always allow: |never allow: |allow once|reject once|always-approve mode\))"
+        r"(?i)(yes, proceed|no, reject|always allow: |never allow: |allow once|reject once"
+        r"|always-approve mode\))"
     ),
     "cursor": re.compile(
         r"(?i)(run this (mcp tool|command)|run \(once\)|skip \(esc or n\)"
@@ -118,8 +119,8 @@ def claude_input_text(screen: str) -> str:
 
 
 def grok_input_text(screen: str) -> str:
-    """What is in Grok Build's input box: the rows between its last ``╭`` and ``╰`` borders, without the side
-    borders and the ``❯`` it starts with, joined. Empty when the box can't be found."""
+    """What is in Grok Build's input box: the rows between its last ``╭`` and ``╰`` borders, without the
+    side borders and the ``❯`` it starts with, joined. Empty when the box can't be found."""
     lines = screen.splitlines()
     tops = [i for i, x in enumerate(lines) if x.strip().startswith("╭")]
     ends = [i for i, x in enumerate(lines) if x.strip().startswith("╰")]

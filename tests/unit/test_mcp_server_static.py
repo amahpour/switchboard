@@ -240,7 +240,8 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     }
     root = Path(__file__).resolve().parents[2]
     paths = [
-        root / "plugins" / name / "skills" / "board" / "SKILL.md" for name in ("claude", "codex", "cursor", "grok")
+        root / "plugins" / name / "skills" / "board" / "SKILL.md"
+        for name in ("claude", "codex", "cursor", "grok")
     ]
     bodies = [p.read_bytes() for p in paths]
     assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
