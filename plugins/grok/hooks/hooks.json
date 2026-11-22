@@ -66,6 +66,17 @@
         ]
       }
     ],
+    "StopCancelled": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${GROK_PLUGIN_ROOT}/bin/hook\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "StopFailure": [
       {
         "hooks": [

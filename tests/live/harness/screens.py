@@ -25,6 +25,11 @@ _APPROVAL = {
         r"(?i)(↵ confirm|esc cancel|approve once|switch to bypass|allow (once|always|for)"
         r"|do you want to (run|allow|proceed))"
     ),
+    # Grok Build's permission prompt (1.0.89, seen live): "Yes, proceed", "No, reject", "Always allow: <rule>",
+    # "Never allow: <rule>", and its docs' "Allow once" / "Reject once"
+    "grok": re.compile(
+        r"(?i)(yes, proceed|no, reject|always allow: |never allow: |allow once|reject once|always-approve mode\))"
+    ),
     "cursor": re.compile(
         r"(?i)(run this (mcp tool|command)|run \(once\)|skip \(esc or n\)"
         r"|allow .{0,30}(once|always)|\[a\] allow|waiting for approval)"
@@ -110,6 +115,19 @@ def claude_input_text(screen: str) -> str:
     if len(rows) < 2:
         return ""
     return " ".join(screen.splitlines()[rows[-2] + 1 : rows[-1]]).strip()
+
+
+def grok_input_text(screen: str) -> str:
+    """What is in Grok Build's input box: the rows between its last ``╭`` and ``╰`` borders, without the side
+    borders and the ``❯`` it starts with, joined. Empty when the box can't be found."""
+    lines = screen.splitlines()
+    tops = [i for i, x in enumerate(lines) if x.strip().startswith("╭")]
+    ends = [i for i, x in enumerate(lines) if x.strip().startswith("╰")]
+    if not tops or not ends or ends[-1] <= tops[-1]:
+        return ""
+    rows = [x.strip().strip("│").strip() for x in lines[tops[-1] + 1 : ends[-1]]]
+    text = " ".join(r for r in rows if r)
+    return text.removeprefix("❯").strip()
 
 
 def claude_agent_finished(screen: str) -> bool:

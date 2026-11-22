@@ -203,7 +203,8 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
     paths: set[str] = set()
     reasons: set[str] = set()
     events: set[str] = set()
-    for seed in range(30):
+    # 40 seeds: with Grok Build among the kinds (#851) the first to reach the loop guard is seed 33
+    for seed in range(40):
         (tmp_path / str(seed)).mkdir()
         sim = Sim(tmp_path / str(seed), seed)
         for _ in range(sim.rng.randint(40, 160)):
@@ -217,7 +218,7 @@ def test_property_simulation_exercises_every_path_and_rule(tmp_path: Path) -> No
             events.add(kind)
             if kind == "watchdog_escalate":
                 events.add(f"watchdog_escalate:{json.loads(data)['why']}")
-    assert kinds == {"test", "devin", "claude", "cursor", "codex"}
+    assert kinds == {"test", "devin", "claude", "cursor", "codex", "grok"}
     assert paths == {"wait", "read", "say", "hook_ctx", "hook_ups", "stop_followup", "stop_block"}
     assert {
         "no_ack",

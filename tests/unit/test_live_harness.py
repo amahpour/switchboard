@@ -67,6 +67,13 @@ def test_a_quota_is_exhausted_only_at_zero_or_by_its_message() -> None:
             " → Run (once) (y)\n   Allowlist MCP Tool (tab)\n   Reject & propose changes (p)\n"
             "   Skip (esc or n)\n",
         ),
+        # recorded from Grok Build 1.0.89 asking about a shell command in ask mode, 2026-11-22 (#851)
+        (
+            "grok",
+            "  ┃  ›  run what was asked\n  ┃  │ touch approval-was-given\n"
+            "  ┃  1 (○) Always allow: touch approval-was-given\n  ┃  3 (●) Yes, proceed\n"
+            "  ┃  4 (○) No, reject (type to add feedback)\n",
+        ),
     ],
 )
 def test_an_approval_prompt_is_recognised_so_the_driver_declines_it(harness: str, prompt: str) -> None:
@@ -74,6 +81,19 @@ def test_an_approval_prompt_is_recognised_so_the_driver_declines_it(harness: str
     declined with Esc."""
     assert screens.approval_open(harness, prompt)
     assert not screens.approval_open(harness, "● Posted pong to #build\n❯ \n  ⏸ manual mode on")
+
+
+def test_grok_s_input_box_is_read_between_its_borders() -> None:
+    """Grok Build's input is a box: the driver reads the text in it, so a prompt that wrapped onto two rows is
+    still seen, and an empty box (``❯`` alone) is empty. Fails if a typed prompt is never seen as taken."""
+    screen = (
+        "  ❯ an earlier prompt, sent\n"
+        "╭────────────╮\n│ ❯ Use the switchboard tools. Call join │\n│   with room #build │\n"
+        "╰──── switchboard-standin ─╯\n  Enter:send\n"
+    )
+    assert screens.grok_input_text(screen) == "Use the switchboard tools. Call join with room #build"
+    assert screens.grok_input_text("╭──╮\n│ ❯ │\n╰──╯\n") == ""
+    assert screens.grok_input_text("no box at all") == ""
 
 
 def test_claudes_start_up_dialogs_get_only_the_answers_this_run_owns() -> None:
@@ -773,7 +793,7 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the twelve live modules (ten harness runs, the meeting self-test and its
+    """With no ``SWITCHBOARD_LIVE`` the thirteen live modules (eleven harness runs, the meeting self-test and its
     hosted variant, which start containers and join a real call) are collected and skipped, each with the
     line that says how to run it, and nothing is run. (The hosted variant imports the self-test, whose skip
     it shares, so that line shows twice.) Fails if a live module starts a broker, a container or a CLI on
@@ -785,8 +805,8 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "12 skipped" in out and "passed" not in out and "failed" not in out, out
-    for h in ("claude", "codex", "devin", "cursor", "opencode", "meeting"):
+    assert "13 skipped" in out and "passed" not in out and "failed" not in out, out
+    for h in ("claude", "codex", "devin", "cursor", "opencode", "grok", "meeting"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
         "test_live_claude.py",
@@ -797,6 +817,7 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
         "test_live_codex.py",
         "test_live_cursor.py",
         "test_live_devin.py",
+        "test_live_grok.py",
         "test_live_opencode.py",
         "test_live_restart.py",
     ]

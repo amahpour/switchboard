@@ -1,4 +1,4 @@
-"""A seeded random simulation of the five harness kinds around the real delivery
+"""A seeded random simulation of the six harness kinds around the real delivery
 engine, for the M6 property test (DESIGN.md §13): random interleavings of status,
 message, sink and command events, then quiescence, then the invariant.
 
@@ -51,9 +51,9 @@ from switchboard.delivery import rules
 from switchboard.models import WATCHDOG_DONE, Action, HookEvent, HookOut, Notice, Room
 
 WAIT_TOOL = HttpsDevinAdapter.wait_tool
-KINDS = ("test", "devin", "claude", "cursor", "codex")
+KINDS = ("test", "devin", "claude", "cursor", "codex", "grok")
 SINGLE_ROOM = ("test", "devin")  # wait()-based: one open wait() per session, so one room
-LISTENERS = ("claude", "cursor", "codex")  # a Stop hook that the broker holds wakes them (§49.4)
+LISTENERS = ("claude", "cursor", "codex", "grok")  # a Stop hook that the broker holds wakes them (§49.4)
 BIG_BUDGET = 100_000
 
 
@@ -163,7 +163,7 @@ class Sim:
         if kind == "claude":
             mem.mode = r.choice(["prompting", "bypass"])
             self.store.update_participant(p.id, approval_mode=mem.mode)
-        elif kind == "codex":
+        elif kind in ("codex", "grok"):
             self.store.update_participant(p.id, approval_mode="prompting")
         self.members.append(mem)
 
@@ -645,7 +645,7 @@ class Sim:
             self.run_followup(mem, ack=self.rng.random() < 0.9, defer=True)
 
     def ev_listener(self, mem: Mem) -> None:
-        """Claude Code, Codex or Cursor over HTTPS: a turn of tool calls, then a Stop hook that waits
+        """Claude Code, Codex, Cursor or Grok Build over HTTPS: a turn of tool calls, then a Stop hook that waits
         on the broker, and what its answer starts (§49.4)."""
         r = self.rng
         what = r.choice(
@@ -699,8 +699,8 @@ class Sim:
 
     def run_followup(self, mem: Mem, *, ack: bool, defer: bool = False) -> bool:
         """A held Stop hook was answered: it prints the follow-up and acks, and the harness runs
-        it: a new turn (Claude Code, Cursor) or the turn it carries on (Codex's block). ``defer``: a
-        Codex follow-up may wait for its next hook, which is then whatever the session does next."""
+        it: a new turn (Claude Code, Cursor) or the turn it carries on (Codex's and Grok Build's block).
+        ``defer``: such a follow-up may wait for its next hook, which is then whatever the session does next."""
         s = self.engine.sinks.get(mem.park) if mem.park is not None else None
         if s is None or s.open or mem.park_used:
             return False
@@ -711,7 +711,7 @@ class Sim:
         if not ack:
             return True  # the hook died before acking: the harness never runs it
         self.run(self.engine.on_hook_ack(res["batch_id"], res["ack"]))
-        if mem.kind == "codex":
+        if mem.kind in ("codex", "grok"):
             if defer and self.rng.random() < 0.4:
                 mem.deferred = True
                 return True
