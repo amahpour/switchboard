@@ -1225,6 +1225,9 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                    tmp_home (short /tmp path with .switchboard-test marker), FakeClock, cfg_fast (quiet_s=0, max_hold_s=0),
                    no_homes_left_behind: session autouse; fails the run, naming each, if a home make_tmp_home() made in
                      this process (each xdist worker) is still there after every fixture's teardown
+                   pytest_sessionstart: the controller sweeps the /tmp homes a killed run left (tmp_homes.py): a
+                     home goes only if nobody holds its flock (its maker and the children given it, pass_fds) and
+                     no Unix socket under it answers; one with no lock file or no marker is never a candidate
                    broker fixture (in-process create_app with AllowAllHumans + test_mode; uvicorn on port 0 + UDS),
                    web_client (httpx, base_url http://switchboard.localhost:<p>, logged in via the test token)
 engine_world.py    a store, an engine and a FakeClock with no broker; engine_agents.py builds the sessions over HTTPS

@@ -13,7 +13,9 @@
   ``LOGNAME=TEST_HUMAN``, for a child broker's default human name).
 - ``own_color_env()`` clears ``NO_COLOR``, ``FORCE_COLOR`` and ``CLICOLOR_FORCE`` and
   pins ``TERM`` for the colour tests, so a shell that disables colour does not (#650).
-- ``tmp_home``: a short /tmp home with the ``.switchboard-test`` marker.
+- ``tmp_home``: a short /tmp home with the ``.switchboard-test`` marker, locked by this process
+  for its life (``tmp_homes.py``, #922).
+- ``pytest_sessionstart``: the controller sweeps the homes a killed run left (``tmp_homes.py``).
 - ``no_homes_left_behind`` (session, autouse): fails the run, naming them, if any home
   ``make_tmp_home()`` made in this process is still there once every fixture is torn down (#919).
 - ``broker``: an in-process broker (uvicorn in a thread, AllowAllHumans, test mode).
@@ -46,6 +48,11 @@ import pytest
 import switchboard.config
 from switchboard.config import Config
 from switchboard.paths import TEST_MARKER
+
+# tests/ itself, for a conftest loaded from outside it (test_leaked_homes.py's inner runs).
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
+import tmp_homes  # noqa: E402
 
 _STRIP_PREFIXES = ("CLAUDE", "CODEX_", "CURSOR_", "DEVIN_", "CHISEL_", "AI_AGENT")
 _REAL_PATH = os.environ.get("PATH", "/usr/bin:/bin")
@@ -260,8 +267,9 @@ def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
     )
 
 
-TMP_HOME_ROOT = Path("/tmp")
-TMP_HOME_PREFIX = "yk-"
+TMP_HOME_ROOT = tmp_homes.TMP_HOME_ROOT
+TMP_HOME_PREFIX = tmp_homes.TMP_HOME_PREFIX
+assert tmp_homes.TEST_MARKER == TEST_MARKER
 
 # Every home make_tmp_home() made in this process (an xdist worker is a process of its own), for
 # no_homes_left_behind: only these are ever counted, so a home another run made never is (#919). Each
@@ -270,9 +278,9 @@ MADE_HOMES: dict[Path, str] = {}
 
 
 def make_tmp_home() -> Path:
-    # short on purpose: the broker's socket inside it must fit sun_path (paths.SOCK_MAX_BYTES)
-    d = Path(tempfile.mkdtemp(prefix=TMP_HOME_PREFIX, dir=TMP_HOME_ROOT))
-    (d / TEST_MARKER).touch()
+    # Locked (LOCK_SH) before the marker exists, and held until the home is removed, so the
+    # session-start sweep never takes a home that is in use or being made (tmp_homes.py, #922).
+    d = tmp_homes.make_locked_home(TMP_HOME_ROOT)
     MADE_HOMES[d] = os.environ.get("PYTEST_CURRENT_TEST", "outside a test").rsplit(" (", 1)[0]
     return d
 
@@ -292,6 +300,7 @@ def no_homes_left_behind() -> Iterator[None]:
     then is one nothing will remove. An error in this teardown fails the run, under xdist too, and
     names each home. Only this process's homes are checked (``MADE_HOMES``)."""
     yield
+    tmp_homes.release_removed_homes()
     left = homes_left_behind(MADE_HOMES)
     if left:
         names = "\n  ".join(f"{d}  made by {test}" for d, test in left.items())
@@ -309,6 +318,15 @@ def tmp_home() -> Iterator[Path]:
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
+        tmp_homes.release_home(d)
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Sweep the /tmp homes a killed run left and nobody uses, once a run, in the xdist controller
+    (or the only process); nothing it raises reaches the run (tmp_homes.py, #922)."""
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    write = reporter.write_line if reporter is not None else (lambda line: print(line, file=sys.stderr))
+    tmp_homes.sweep_at_session_start(not hasattr(session.config, "workerinput"), write)
 
 
 class FakeClock:
@@ -594,8 +612,14 @@ class SubprocBroker:
             if self.trust:
                 cmd.append("--test-trust-uds")
         self.out = open(self.home / "subproc.out", "ab")
+        # The broker holds the home's lock too, so a broker that outlives pytest keeps its home (#922).
         self.proc = subprocess.Popen(
-            cmd, env=self.env, stdin=subprocess.DEVNULL, stdout=self.out, stderr=self.out
+            cmd,
+            env=self.env,
+            stdin=subprocess.DEVNULL,
+            stdout=self.out,
+            stderr=self.out,
+            pass_fds=tmp_homes.lock_fds_for(self.home),
         )
         deadline = time.monotonic() + self.START_TIMEOUT_S
         while time.monotonic() < deadline:
@@ -630,6 +654,7 @@ class SubprocBroker:
             text=True,
             timeout=timeout,
             start_new_session=True,
+            pass_fds=tmp_homes.lock_fds_for(self.home),  # held until a daemonized broker answers (#922)
         )
 
     def cli_popen(self, *args: str) -> subprocess.Popen[str]:
@@ -642,6 +667,7 @@ class SubprocBroker:
             stderr=subprocess.PIPE,
             text=True,
             preexec_fn=_default_sigint,
+            pass_fds=tmp_homes.lock_fds_for(self.home),
         )
 
     def kill(self) -> None:
