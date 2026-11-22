@@ -164,8 +164,15 @@ def test_a_cancelled_turn_is_a_stop_that_is_never_held_and_an_old_one_is_dropped
         assert not a.other_thread(part(gen="a-newer-prompt"), ev)
         assert not a.stale_hook(part(gen=ev.gen), ev)
         assert not a.stale_hook(part(gen=None), ev)  # no turn known yet: nothing to compare
+        # F1: while an approval is open, only an end naming the current prompt is the session's
+        held = "waiting-approval"
+        assert not a.stale_hook(part(gen=ev.gen, status=held), ev)
+        assert a.stale_hook(part(gen="a-newer-prompt", status=held), ev)
+        assert a.stale_hook(part(gen=None, status=held), ev)  # joined mid-turn: it could be an older turn's
+        assert a.stale_hook(part(gen=ev.gen, status=held), dataclasses.replace(ev, gen=None))
     tool = as_broker_reads("PostToolUse_mcp.json")
     assert tool.gen is None and not a.stale_hook(part(gen="p"), tool)  # Grok's tool hooks carry no prompt
+    assert not a.stale_hook(part(gen=None, status="waiting-approval"), tool)  # only a turn's end is dropped
     assert not a.other_thread(part(gen="p"), tool)
 
 
@@ -177,6 +184,8 @@ def test_the_turn_that_joined_is_anchored_by_its_completed_stop() -> None:
     assert a.anchors_turn(part(), as_broker_reads("Stop_continuation.json"))
     assert not a.anchors_turn(part(), as_broker_reads("StopCancelled_permission.json"))
     assert not a.anchors_turn(part(), as_broker_reads("PostToolUse_bash.json"))
+    # an approval prompt is the current turn's: one that carries its prompt id names it
+    assert a.anchors_turn(part(), as_broker_reads("Notification_permission_prompt.json", prompt_id="p-1"))
 
 
 def test_a_follow_up_is_confirmed_by_the_turn_it_continued_and_lost_to_a_typed_prompt() -> None:

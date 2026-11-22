@@ -378,11 +378,22 @@ class HttpsGrokAdapter(Listening):
         # 1.0.89): a turn's end naming another prompt than the current one is an old turn's, and is dropped.
         # Never ``other_thread``, whose subagent path ends an approval hold (§11). Only UserPromptSubmit and a
         # turn's end carry the prompt's id; tool hooks carry none.
-        return ev.ev == "Stop" and bool(ev.gen) and bool(p.gen) and (ev.gen or "")[:128] != p.gen
+        if ev.ev != "Stop":
+            return False
+        gen = (ev.gen or "")[:128] or None
+        if p.status == "waiting-approval":
+            # An approval hold ends at a turn's end only on positive evidence (§49.15, §11): the end names the
+            # session's current prompt. With no current prompt known (the session joined mid-turn, so its
+            # pre-join UserPromptSubmit was discarded and no completed Stop has named it yet), nothing tells
+            # an older turn's late end from this one's, so every end is taken as stale and dropped. The hold
+            # then ends at the session's next hook of another kind: the approved tool's, or the next prompt.
+            return p.gen is None or gen != p.gen
+        return gen is not None and p.gen is not None and gen != p.gen
 
     def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
-        # The prompt that joined came before the session was in a room: its turn's completed Stop names it.
-        return ev.ev == "Stop" and ev.reason == "end_turn"
+        # The prompt that joined came before the session was in a room: its turn's completed Stop names it,
+        # and so does an approval prompt's Notification if it carries the prompt's id (1.0.89's does not).
+        return (ev.ev == "Stop" and ev.reason == "end_turn") or self.asks_approval(ev)
 
     def continue_verdict(self, p: Participant, acked: bool, ev: HookEvent) -> str | None:
         # A continued turn that ended cancelled or failed (StopCancelled, StopFailure) before any other hook
