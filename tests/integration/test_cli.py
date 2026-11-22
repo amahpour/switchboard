@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 import pytest
+import tmp_homes
 from conftest import SubprocBroker, child_env, stand_in_agent
 
 from switchboard import __version__, build_info
@@ -231,6 +232,9 @@ def test_daemonized_start_and_stop(tmp_home: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        # the home's test lock, held until daemon.start() sees the daemon answer (it holds its broker
+        # lock by then), so a concurrent run's sweep never takes the home in the handoff (#922)
+        pass_fds=tmp_homes.lock_fds_for(tmp_home),
     )
     pid = None
     try:
@@ -251,7 +255,12 @@ def test_daemonized_start_and_stop(tmp_home: Path) -> None:
             assert me.ppid == 1  # daemonized: reparented to launchd
         # starting again reports the running broker
         r2 = subprocess.run(
-            base + ["start", "--test-mode"], env=env, capture_output=True, text=True, timeout=30
+            base + ["start", "--test-mode"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            pass_fds=tmp_homes.lock_fds_for(tmp_home),
         )
         assert r2.returncode == 0 and "already running" in r2.stdout
         r3 = subprocess.run(base + ["stop"], env=env, capture_output=True, text=True, timeout=30)
@@ -277,6 +286,7 @@ def test_test_mode_guards(tmp_path: Path, tmp_home: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        pass_fds=tmp_homes.lock_fds_for(tmp_home),
     )
     assert r.returncode == 2 and "SWITCHBOARD_TEST=1" in r.stderr
     # no marker file
@@ -309,6 +319,7 @@ def test_test_mode_guards(tmp_path: Path, tmp_home: Path) -> None:
         capture_output=True,
         text=True,
         timeout=30,
+        pass_fds=tmp_homes.lock_fds_for(tmp_home),
     )
     assert r.returncode == 2
 
