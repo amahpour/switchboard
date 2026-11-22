@@ -1238,8 +1238,10 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                      /tmp/yk-sweep-<euid>.lock (regular, this euid's, O_NOFOLLOW): the sweep holds it LOCK_EX|LOCK_NB
                      for its pass or skips (held, unusable or any error); make_tmp_home() holds LOCK_SH from before
                      mkdtemp to the marker, remove_home() from its first unlink to its rmdir. Only a lock unusable for
-                     every process of the user (ELOOP, EISDIR/ENOTDIR, EACCES/EPERM, not regular, another uid's) lets
-                     those two go on unlocked; any other error (EMFILE, EIO, ...) makes them raise, touching no home.
+                     every process of the user (ELOOP, EISDIR/ENOTDIR, not regular, another uid's once opened) lets
+                     those two go on unlocked; any other error (EACCES, EPERM, EMFILE, EIO, ...) makes them raise,
+                     naming the lock file, touching no home (a sandbox can refuse one process EACCES or EPERM while
+                     another holds the lock; another user's 0600 file at our name then stops our homes being made).
                      So a starting daemon always holds its home, before run/broker.lock and after, whether or not
                      the run and the CLI that started it are alive (#922's sixth round). Bounded
                      exceptions: an empty yk-* directory (a removal killed after the lock file; a test's own

@@ -219,15 +219,18 @@ def test_homes_left_behind_counts_only_what_is_still_there(tmp_path: Path) -> No
 
 def test_the_inner_runs_specimens_are_never_made_in_tmp(pytester: Pytester, root: Path) -> None:
     """The homes an inner run makes, the one it abandons on purpose included, are made in the root
-    this test owns, and none directly in /tmp, where every other run's sweep looks (it could take a
-    specimen mid-test) and from where a killed outer run would leave it. The outer run's own homes
-    stay in /tmp. Fails if the inner run ignores ``SWITCHBOARD_TEST_SWEEP_ROOT`` (make_tmp_home's
-    root fixed at /tmp), or if ``_run`` doesn't pass it."""
-    assert TMP_HOME_ROOT == Path("/tmp")
+    this test owns, none directly in /tmp, where every other run's sweep looks (it could take a
+    specimen mid-test) and from where a killed outer run would leave it, and none directly in the
+    outer run's own root (``TMP_HOME_ROOT``: /tmp, or the outer run's ``SWITCHBOARD_TEST_SWEEP_ROOT``,
+    whichever it is, #922's seventh round). Fails if the inner run ignores
+    ``SWITCHBOARD_TEST_SWEEP_ROOT`` (make_tmp_home's root fixed at /tmp), or if ``_run`` doesn't
+    pass it."""
+    assert root not in (TMP_HOME_ROOT, Path("/tmp"))
     result, homes = _run(pytester, root, leak=True, workers=2)
     try:
         assert len(homes) == 2, result.stdout.str()
-        assert all(h.parent == root and h.parent != TMP_HOME_ROOT for h in homes), homes
+        assert all(h.parent == root for h in homes), (homes, root)
+        assert not [h for h in homes if h.parent in (TMP_HOME_ROOT, Path("/tmp"))], homes
         assert any(h.exists() for h in homes)  # the abandoned one, in the test's root
     finally:
         _clean(root, homes)

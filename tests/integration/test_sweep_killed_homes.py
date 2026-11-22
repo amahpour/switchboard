@@ -914,6 +914,38 @@ def test_a_sweep_lock_error_that_isnt_the_files_stops_make_and_remove(
     assert not os.path.lexists(home) and home not in tmp_homes._LOCKS
 
 
+@pytest.mark.parametrize("err", [errno.EACCES, errno.EPERM], ids=["EACCES", "EPERM"])
+def test_eacces_or_eperm_on_the_sweep_lock_stops_make_and_remove(
+    root: Path, monkeypatch: pytest.MonkeyPatch, err: int
+) -> None:
+    """EACCES and EPERM opening the sweep lock are ambiguous: a sandbox local to one process can
+    refuse it the open while another process of this user holds or can take the valid lock and
+    sweep (#922's seventh round). So ``make_locked_home`` raises, naming the lock file, and leaves
+    no directory and nothing in ``_LOCKS``; ``remove_home`` raises and leaves the home whole and
+    still locked by this process. Fails if either errno counts as "unusable" (make and remove go on
+    unlocked: a directory is made, the home is removed)."""
+    home = tmp_homes.make_locked_home(root)
+    before = set(os.listdir(root))
+    with monkeypatch.context() as m:
+        _sweep_lock_open_fails(m, err)
+        with pytest.raises(OSError) as made:
+            tmp_homes.make_locked_home(root)
+        assert made.value.errno == err
+        assert str(root / SWEEP_LOCK) in str(made.value)
+        assert set(os.listdir(root)) == before
+        assert [d for d in tmp_homes._LOCKS if d.parent == root] == [home]
+        with pytest.raises(OSError) as removed:
+            remove_home(home)
+        assert removed.value.errno == err
+        assert str(root / SWEEP_LOCK) in str(removed.value)
+        assert (home / TEST_MARKER).is_file() and (home / LOCK_NAME).is_file()
+        assert home in tmp_homes._LOCKS and _held(home)
+        result = sweep_killed_homes(root)
+        assert result.skipped and not result.unusable and not result.removed
+    remove_home(home)
+    assert not os.path.lexists(home) and home not in tmp_homes._LOCKS
+
+
 def test_a_symlinked_sweep_lock_lets_make_and_remove_go_on(
     root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

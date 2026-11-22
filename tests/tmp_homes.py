@@ -61,13 +61,17 @@ it is held, unusable, or can't be taken for any other reason. ``make_locked_home
 ``LOCK_SH`` on it from before ``mkdtemp`` until the marker is written; ``remove_home()`` holds
 ``LOCK_SH`` from before its first unlink until its ``rmdir``. Only a lock object that is unusable for
 every process of this user lets creation and removal go on without it (``SweepLockUnusable``): the
-open fails with ELOOP (a symlink, ``O_NOFOLLOW``), EISDIR or ENOTDIR, or EACCES or EPERM, or
-``fstat`` finds a non-regular file or another uid's. Then the sweep, which makes the same check,
-can't run either, so a sweep never runs uncoordinated. Any other error (EMFILE, ENFILE, ENOMEM, EIO,
-ENOSPC, a failed ``flock``) is this process's, not the file's, and another process may still sweep:
-``make_locked_home()`` and ``remove_home()`` raise it before touching any home. While a sweep runs, then, no
-coordinated code is part way through making or removing a home, and whatever such a state the
-sweep finds was left by a process that died.
+open fails with ELOOP (a symlink, ``O_NOFOLLOW``), EISDIR or ENOTDIR, or it opens and ``fstat``
+finds a non-regular file or another uid's. Then the sweep, which makes the same check, can't run
+either, so a sweep never runs uncoordinated. Any other error is raised by ``make_locked_home()`` and
+``remove_home()`` before touching any home, with the lock file's path: EMFILE, ENFILE, ENOMEM, EIO,
+ENOSPC or a failed ``flock`` are this process's, not the file's, and EACCES and EPERM are ambiguous
+(a sandbox local to one process can refuse it the open while another process of this user holds or
+can take the lock, #922's seventh round), so in each case another process may still sweep. The
+accepted cost: a file another user squats at our per-uid name with mode 0600 (EACCES for us)
+stops our homes being made until it is removed, rather than letting them be made unlocked. While
+a sweep runs, then, no coordinated code is part way through making or removing a home, and
+whatever such a state the sweep finds was left by a process that died.
 
 **One directory, removed in place.** The root is opened once, the home is opened through it with
 ``O_NOFOLLOW`` and its (dev, inode) noted, the locks are opened through the home's own fd, and the
@@ -157,10 +161,12 @@ class SweepLockUnusable(Exception):
 
 
 # What os.open answers for a sweep lock no process of this user can use: a symlink (O_NOFOLLOW), a
-# directory or a non-directory in the path, a file this user may not open. Any other errno (EMFILE,
-# ENFILE, ENOMEM, EIO, ENOSPC, ...) is this process's trouble, not the file's: another process of
-# this user may still take the lock and sweep, so making or removing a home without it is refused.
-_UNUSABLE_ERRNOS = frozenset({errno.ELOOP, errno.EISDIR, errno.ENOTDIR, errno.EACCES, errno.EPERM})
+# directory or a non-directory in the path. Any other errno is raised: EMFILE, ENFILE, ENOMEM, EIO,
+# ENOSPC are this process's trouble, not the file's, and EACCES and EPERM may be too (a sandbox can
+# refuse one process the open while another of this user holds the lock). In each case another
+# process of this user may still take the lock and sweep, so making or removing a home without it
+# is refused.
+_UNUSABLE_ERRNOS = frozenset({errno.ELOOP, errno.EISDIR, errno.ENOTDIR})
 
 
 def _open_sweep_lock(root_fd: int) -> int:
@@ -188,12 +194,16 @@ def _shared_sweep_lock(root: Path) -> int | None:
     """``LOCK_SH`` on ``root``'s sweep lock, held until the fd returned is closed, so no sweep runs
     while this process makes or removes a home. None (go on without it) only if the lock is unusable
     for every process of this user (``SweepLockUnusable``), so no sweep can run either; any other
-    error (the root can't be opened, EMFILE, a failed flock) is raised, before any home is touched."""
+    error (the root can't be opened, EACCES, EPERM, EMFILE, a failed flock) is raised, before any home
+    is touched; an open error names the lock file."""
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         fd = _open_sweep_lock(root_fd)
     except SweepLockUnusable:
         return None
+    except OSError as e:
+        lock = root / SWEEP_LOCK
+        raise OSError(e.errno, f"sweep lock {lock} can't be opened: {e.strerror}", str(lock)) from e
     finally:
         os.close(root_fd)
     try:
