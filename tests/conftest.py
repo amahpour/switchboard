@@ -278,8 +278,9 @@ def node_for_tests() -> tuple[str | None, pytest.MarkDecorator]:
 TMP_HOME_ROOT = Path(os.environ.get("SWITCHBOARD_TEST_SWEEP_ROOT") or tmp_homes.TMP_HOME_ROOT)
 TMP_HOME_PREFIX = tmp_homes.TMP_HOME_PREFIX
 assert tmp_homes.TEST_MARKER == TEST_MARKER
-# The broker's own home lock, which the sweep takes too (tmp_homes.py imports nothing of src).
+# The broker's home locks, which the sweep takes too (tmp_homes.py imports nothing of src).
 assert Paths(Path("/h")).lockfile == Path("/h", *tmp_homes.BROKER_LOCK)
+assert Paths(Path("/h")).out_log == Path("/h", *tmp_homes.BROKER_OUT)
 
 # Every home make_tmp_home() made in this process (an xdist worker is a process of its own), for
 # no_homes_left_behind: only these are ever counted, so a home another run made never is (#919). Each

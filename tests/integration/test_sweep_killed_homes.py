@@ -2,9 +2,9 @@
 
 A killed run (SIGKILL, the OOM killer, a timeout) skips every cleanup and leaves its ``/tmp/yk-*``
 homes; they once filled a RAM-backed /tmp. The sweep removes a home only when nobody holds its test
-lock or its broker lock and no socket under it answers, and removes it in place, the marker and
-the lock file last, holding the root's per-user sweep lock, which making and removing a home take
-too (shared). A killed run is simulated by the real thing: a
+lock or a broker's (``logs/broker.out``, ``run/broker.lock``) and no socket under it answers, and
+removes it in place, the marker and the lock file last, holding the root's per-user sweep lock,
+which making and removing a home take too (shared). A killed run is simulated by the real thing: a
 child process that made a home with ``make_locked_home`` and was SIGKILLed. Every wait here is for
 an event (a line, an EOF, a process exit), bounded, never a sleep: a pipe is read with ``select``
 and ``os.read`` against a deadline, never a buffered read that can block, and a process's death is
@@ -22,6 +22,7 @@ import fcntl
 import json
 import os
 import select
+import shlex
 import shutil
 import signal
 import socket
@@ -35,9 +36,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 import tmp_homes
-from conftest import SubprocBroker, make_tmp_home
+from conftest import SubprocBroker, child_env, make_tmp_home
 from tmp_homes import (
     BROKER_LOCK,
+    BROKER_OUT,
     LOCK_NAME,
     SWEEP_LOCK,
     TEST_MARKER,
@@ -146,15 +148,27 @@ def _read_to_eof(fd: int, what: str) -> bytes:
     return _read(fd, lambda d: False, what)
 
 
+def _killpg_unless_gone(p: subprocess.Popen[bytes]) -> None:
+    """SIGKILL ``p``'s process group, unless nothing in it can be signalled any more. Linux answers
+    ESRCH (ProcessLookupError) for a group whose members are all zombies; macOS answers EPERM
+    (PermissionError): its kernel refuses to signal a zombie rather than saying it is not there
+    (five tests failed on every macOS shard, #924's third and fourth rounds). EPERM counts as gone only
+    if ``p`` has exited (``poll``, which reaps it); a live ``p`` we may not signal is a real error."""
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        if p.poll() is None:
+            raise
+
+
 def _stop(p: subprocess.Popen[bytes]) -> None:
     """Every test's ``finally``: kill ``p``'s whole process group while ``p`` is unreaped (so its
     pid, the group's id, can't have been reused), which takes an orphaned grandchild with it; reap
     ``p``; only then close its pipes."""
     if p.returncode is None:
-        try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        _killpg_unless_gone(p)
         p.wait(PIPE_TIMEOUT_S)
     for f in (p.stdin, p.stdout):
         if f is not None:
@@ -359,13 +373,12 @@ def _sweep_elsewhere(root: Path) -> dict[str, object]:
 def test_a_starting_daemons_home_is_kept_while_its_maker_holds_it_after_the_cli_is_gone(
     root: Path,
 ) -> None:
-    """Who holds a home while a daemon starts (module docstring, "A broker that is starting"): the
-    process that made it, for the home's whole life, and the CLI until ``start`` returns. Here the
-    daemon is still starting (an old, unlocked ``run/broker.lock``, no socket) and its CLI, given
-    the lock, has exited, as after ``start``'s 8 s wait gives up; this process, the maker, still holds
-    its test lock. A sweep in another process, as a second run's, keeps the home; once the maker
-    lets go (its run is dead) the next one removes it. Fails if the sweep ignores the maker's lock
-    (only a CLI's or a broker's counting)."""
+    """One of a home's holders while a daemon starts (tmp_homes.py, "A broker that is starting"):
+    the process that made it, for the home's whole life. Here the home has an old, unlocked
+    ``run/broker.lock`` and no socket, and the child given the lock has exited; this process, the
+    maker, still holds its test lock. A sweep in another process, as a second run's, keeps the
+    home; once the maker lets go (its run is dead) the next one removes it. Fails if the sweep
+    ignores the maker's lock (only a CLI's or a broker's counting)."""
     home = tmp_homes.make_locked_home(root)
     (home / BROKER_LOCK[0]).mkdir()
     home.joinpath(*BROKER_LOCK).touch()
@@ -386,6 +399,122 @@ def test_a_starting_daemons_home_is_kept_while_its_maker_holds_it_after_the_cli_
     assert not os.path.lexists(home)
 
 
+# The interpreter `switchboard start` launches its daemon with (daemon.start() runs sys.executable),
+# stalled: it says its pid (the daemon's: exec keeps it), then blocks opening a FIFO until the test
+# writes to it, and only then execs the real Python. Nothing in src changes; the daemon simply hasn't
+# begun, so it is before run/broker.lock for as long as the test likes, holding what it inherited.
+_STALLED_PYTHON = """#!/bin/sh
+echo $$ > {pid}.tmp && mv {pid}.tmp {pid}
+read _ < {gate}
+exec {python} "$@"
+"""
+
+# The real `switchboard start` CLI (cli.main), told that its interpreter is argv[1].
+_CLI_WITH_INTERPRETER = """
+import sys
+sys.executable = sys.argv[1]
+from switchboard.cli import main
+sys.exit(main(sys.argv[2:]))
+"""
+
+
+def _wait_for(check: Callable[[], object], what: str, timeout: float = PIPE_TIMEOUT_S) -> object:
+    """Poll ``check`` until it returns something truthy, bounded: an event, never "by now"."""
+    deadline = time.monotonic() + timeout
+    while True:
+        got = check()
+        if got:
+            return got
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"{what}: not seen within {timeout}s")
+        time.sleep(KILL_POLL_S)
+
+
+def _free(path: Path) -> bool:
+    """Whether nobody holds a flock on ``path`` (LOCK_EX can be had without waiting)."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _read_pid(path: Path) -> int | None:
+    try:
+        return int(path.read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def test_a_daemon_switchboard_start_launched_holds_its_home_before_its_broker_lock(
+    root: Path, tmp_path: Path
+) -> None:
+    """The real handoff: the real ``switchboard start`` CLI, given the home's test lock, launches a
+    daemon that is stalled before it takes ``run/broker.lock`` (its interpreter waits on a FIFO,
+    ``_STALLED_PYTHON``). The CLI is killed and the maker lets go of its lock, so neither test lock
+    holder is left; a sweep in another process, as a second run's, still keeps the home, because the
+    daemon inherited ``logs/broker.out`` with ``daemon.start()``'s shared flock on it. Once the
+    daemon is gone the next sweep removes the home. Fails without the ``flock`` in ``daemon.start()``
+    (the sweep removes the home while its daemon is starting, #922's sixth round)."""
+    home = tmp_homes.make_locked_home(root)
+    gate, pid_file, stalled = tmp_path / "gate", tmp_path / "daemon.pid", tmp_path / "python"
+    os.mkfifo(gate, 0o600)
+    stalled.write_text(
+        _STALLED_PYTHON.format(
+            pid=shlex.quote(str(pid_file)), gate=shlex.quote(str(gate)), python=shlex.quote(sys.executable)
+        )
+    )
+    stalled.chmod(0o700)
+    cli = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            _CLI_WITH_INTERPRETER,
+            str(stalled),
+            "--home",
+            str(home),
+            "start",
+            "--port",
+            "0",
+            "--test-mode",
+            "--test-trust-uds",
+        ],
+        env=child_env(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        pass_fds=tmp_homes.lock_fds_for(home),
+    )
+    daemon: int | None = None
+    try:
+        daemon = int(_wait_for(lambda: _read_pid(pid_file), "the daemon's pid"))  # type: ignore[arg-type]
+        _kill(cli)  # the CLI is gone, the daemon still starting
+        _stop(cli)
+        tmp_homes.release_home(home)  # and so is the run that made the home
+        assert not _held(home)  # no test lock holder is left
+        assert not home.joinpath(*BROKER_LOCK).exists()  # the daemon hasn't reached its broker lock
+        seen = _sweep_elsewhere(root)
+        assert seen == {"removed": [], "in_use": [str(home)], "failed": [], "skipped": False}
+        assert (home / TEST_MARKER).is_file()
+        os.killpg(daemon, signal.SIGKILL)  # the daemon exits
+        _wait_for(lambda: _free(home.joinpath(*BROKER_OUT)), "the daemon's lock on broker.out let go")
+        assert _sweep_elsewhere(root)["removed"] == [str(home)]
+        assert not os.path.lexists(home)
+    finally:
+        _stop(cli)
+        if daemon is not None:
+            try:
+                os.killpg(daemon, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass  # gone (macOS says EPERM for a group of zombies: _killpg_unless_gone)
+        remove_home(home)
+
+
 def test_waiting_for_a_death_fails_at_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     """``_wait_dead`` polls with ``WNOHANG`` against a deadline: a child that is never reported dead
     (``os.waitid`` patched to say nothing is ready) fails the test naming its pid within the
@@ -403,6 +532,39 @@ def test_waiting_for_a_death_fails_at_its_deadline(monkeypatch: pytest.MonkeyPat
         assert _wait_dead(p).si_code == os.CLD_KILLED  # the control: the real waitid sees it dead
     finally:
         _stop(p)
+
+
+def test_stop_takes_macos_eperm_for_a_dead_group_as_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS answers ``killpg`` with EPERM for a group whose members are all zombies (Linux says
+    ESRCH), which failed five tests on every macOS shard (#924's third and fourth rounds). With
+    ``killpg`` answering as macOS does, ``_stop`` reaps a child that has exited and goes on, and
+    re-raises for one still alive (a live process it may not signal is a real error). Fails without
+    the PermissionError branch in ``_killpg_unless_gone``: the first ``_stop`` raises."""
+
+    def eperm(pgid: int, sig: int) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    p, line = _start([sys.executable, "-c", _GIVEN_LOCK])
+    try:
+        assert line == "ready"
+        _kill(p)  # a zombie now, unreaped: the state macOS answers EPERM for
+        with monkeypatch.context() as m:
+            m.setattr(os, "killpg", eperm)
+            _stop(p)
+        assert p.returncode == -signal.SIGKILL
+    finally:
+        _stop(p)
+    live, line = _start([sys.executable, "-c", _GIVEN_LOCK])
+    try:
+        assert line == "ready"
+        with monkeypatch.context() as m:
+            m.setattr(os, "killpg", eperm)
+            with pytest.raises(PermissionError):
+                _stop(live)
+        assert live.returncode is None
+    finally:
+        _stop(live)
+    assert live.returncode == -signal.SIGKILL
 
 
 def test_a_home_with_a_live_socket_and_no_lock_holder_is_kept(root: Path) -> None:

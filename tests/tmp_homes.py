@@ -14,11 +14,14 @@ dies, and nothing else:
   The kernel drops a flock when the last fd on it closes, which a SIGKILL does. The sweep removes
   a home only if it can take ``LOCK_EX`` without waiting, and holds it while it checks and
   removes, so nobody can join the home meanwhile.
-- **The broker's own lock.** A broker that ``switchboard start`` daemonizes (broker/daemon.py, a
-  new session with ``close_fds``) doesn't inherit the test lock. The daemon takes ``LOCK_EX`` on
-  ``BROKER_LOCK`` (``run/broker.lock``, ``Paths.lockfile``; conftest checks the two agree) right
-  after ``paths.ensure()`` and holds it until it exits. The sweep takes it too, without waiting:
-  held means in use.
+- **The broker's locks.** A broker that ``switchboard start`` daemonizes (broker/daemon.py, a new
+  session with ``close_fds``) doesn't inherit the test lock. ``daemon.start()`` takes ``LOCK_SH`` on
+  ``BROKER_OUT`` (``logs/broker.out``, ``Paths.out_log``) before it launches the daemon, which
+  inherits that open file description as its stdout and stderr and so holds the lock from its
+  first instruction until it exits. The daemon also takes ``LOCK_EX`` on ``BROKER_LOCK``
+  (``run/broker.lock``, ``Paths.lockfile``; conftest checks both paths agree) right after
+  ``paths.ensure()`` and holds it until it exits. The sweep takes both, without waiting, through
+  the home's fd: either held means in use.
 - **Its sockets.** A home with any Unix socket under it that accepts a connection is in use. Only
   "refused" or "gone" counts as dead; any other answer (a full backlog, a timeout) keeps the home,
   and so does any error while looking (a directory it can't read, an entry it can't ``lstat``).
@@ -28,17 +31,18 @@ writes inside existing files and ``run/``), a pid in the marker (the maker isn't
 user), and ``/proc/<pid>/fd`` (refused for a non-dumpable process of the same user, such as
 ssh-agent, so it either removes nothing or misses a user). No file state tells a broker that is
 restarting from one that stopped either (#922's fourth round: an old, unlocked ``run/broker.lock``
-and ``logs/broker.out`` are both there in each case), so none is read.
+and ``logs/broker.out`` are both there in each case), so none is read: only who holds a lock counts.
 
-**A broker that is starting.** Who holds the home while ``switchboard start`` hands it to a
-daemon: the process that called ``make_tmp_home()`` holds the test lock for the home's whole life,
-until ``remove_home()``; and the CLI process that runs ``start`` is given that lock too
-(``SubprocBroker.cli`` and every test that runs ``switchboard start`` pass it, ``pass_fds``) and holds
-it until ``start`` returns, whether ``start`` succeeded (``daemon.start()`` returns only once the new
-broker's socket answers, after the daemon holds ``run/broker.lock``) or gave up after its 8 s wait with
-the daemon still starting. So a starting daemon's home is held while its run is alive, on a first
-start and on a restart alike. It can lose its home only when every holder is gone: the run itself
-killed, and its CLI killed or past ``start``'s wait. Such a daemon belongs to a dead run.
+**A broker that is starting.** A home is held by the process that called ``make_tmp_home()``, for
+its whole life (until ``remove_home()``); by any child given its test lock (``lock_fds_for``,
+``pass_fds``: ``SubprocBroker`` and its ``cli()`` calls, and every test that runs ``switchboard
+start``); and by any broker that ``switchboard start`` launched there, from launch to exit, through
+the lock on ``logs/broker.out`` it inherits; then ``run/broker.lock`` too. So a daemon is never
+without a holder of its home, before ``run/broker.lock`` or after, on a first start or a restart,
+whether or not the run and the CLI that started it are still alive (#922's sixth round: a daemon
+whose pytest and CLI were both gone before it took ``run/broker.lock`` had neither lock). A broker
+started with ``--foreground`` by a test holds the test lock it was given, and its own
+``run/broker.lock``.
 
 A home is a candidate with both the lock file and the marker, as regular files, in a real
 directory (not a symlink) owned by this user, directly under the root and named ``yk-*``. A
@@ -107,6 +111,7 @@ from pathlib import Path
 TEST_MARKER = ".switchboard-test"  # switchboard.paths.TEST_MARKER; this module imports nothing of src
 LOCK_NAME = ".switchboard-test.lock"
 BROKER_LOCK = ("run", "broker.lock")  # switchboard.paths.Paths.lockfile, relative to the home
+BROKER_OUT = ("logs", "broker.out")  # switchboard.paths.Paths.out_log: a started daemon's stdout, LOCK_SH
 TMP_HOME_ROOT = Path("/tmp")
 TMP_HOME_PREFIX = "yk-"
 # A file directly under the root, never a home (homes are directories); one per user (module docstring).
@@ -441,9 +446,9 @@ def _take(fd: int) -> bool:
 
 
 def _sweep_one(root_fd: int, root: Path, name: str) -> bool | None:
-    """Remove the home ``name`` under the open root if nobody holds either lock and no socket under
-    it answers. True if removed, False if kept, None if it isn't a candidate. Any mismatch of the
-    home's identity keeps it."""
+    """Remove the home ``name`` under the open root if nobody holds any of its locks (the test lock,
+    ``BROKER_OUT``, ``BROKER_LOCK``) and no socket under it answers. True if removed, False if kept,
+    None if it isn't a candidate. Any mismatch of the home's identity keeps it."""
     try:
         before = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
         home_fd = os.open(name, _OPEN_DIR, dir_fd=root_fd)
@@ -464,11 +469,12 @@ def _sweep_one(root_fd: int, root: Path, name: str) -> bool | None:
         fds.append(lock)
         if not _take(lock):
             return False  # held: a process uses the home
-        broker = _open_at(BROKER_LOCK, home_fd)
-        if broker is not None:
-            fds.append(broker)
-            if not _take(broker):
-                return False  # a broker runs from the home, daemonized perhaps
+        for path in (BROKER_OUT, BROKER_LOCK):
+            broker = _open_at(path, home_fd)
+            if broker is not None:
+                fds.append(broker)
+                if not _take(broker):
+                    return False  # a broker `switchboard start` launched, or one running, uses the home
         if has_live_socket(home_fd, str(root / name)):
             return False
         try:

@@ -106,7 +106,7 @@ $SWITCHBOARD_HOME/                0700
     broker.lock                         fcntl.flock single-instance lock
     test-login-token              0600  test mode only (§2 test mode)
   logs/broker.log                 0600  rotating 5 MB x 3; ids only, never message text, env or query strings
-  logs/broker.out                 0600  stdout/stderr of a daemonized broker (crash tracebacks)
+  logs/broker.out                 0600  stdout/stderr of a daemonized broker (crash tracebacks); LOCK_SH while it runs
 ```
 
 - **Private dirs.** `paths.ensure_private_dir(d)` runs `mkdir(0o700)`, then `lstat`. The dir must be a real directory (not a symlink), with `st_uid == getuid()` and `mode & 0o077 == 0`; otherwise switchboard refuses to start.
@@ -124,7 +124,7 @@ $SWITCHBOARD_HOME/                0700
 
 **Start, stop, daemonize** (`broker/daemon.py`):
 - **`switchboard start`** pings the UDS and prints the status if a broker is alive. Otherwise it:
-  1. spawns `sys.executable -I -m switchboard start --foreground --home H` with `start_new_session=True`, stdin `/dev/null`, output to `logs/broker.out`, and an env without `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID` or `CLAUDE_CODE_MESSAGING_*`;
+  1. spawns `sys.executable -I -m switchboard start --foreground --home H` with `start_new_session=True`, stdin `/dev/null`, output to `logs/broker.out`, and an env without `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID` or `CLAUDE_CODE_MESSAGING_*`. Before it spawns, it takes `flock(LOCK_SH)` on its fd of `logs/broker.out`; the daemon inherits that open file as its stdout and stderr, so it holds the shared lock from its first instruction until it exits, before it takes `run/broker.lock` and after, while the CLI closes its own copy. It is for the test suite's sweep of a killed run's temp homes (§12, #922), which keeps a home whose `broker.out` is locked; nothing a user sees reads it. A failed `flock` never stops a start;
   2. polls `sys.ping` for up to 8 s (M1: 5 s was tight on a loaded machine);
   3. calls `human.login_link` and prints the URL. If the peer check denies that call, it prints "run `switchboard login` in your own terminal".
 - **`--foreground`**:
@@ -1227,9 +1227,9 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                      this process (each xdist worker) is still there after every fixture's teardown
                    pytest_sessionstart: the controller sweeps the /tmp homes a killed run left (tmp_homes.py): a
                      home goes only if nobody holds its flock (its maker, for the home's whole life, and the children
-                     given it, pass_fds: the CLI running `switchboard start` holds it until start returns, the daemon
-                     answering with run/broker.lock held or start's 8 s wait over with it still starting) nor
-                     its broker's run/broker.lock (a daemonized broker), no Unix socket under it answers and all of
+                     given it, pass_fds) nor its broker's locks: logs/broker.out, which a broker `switchboard start`
+                     launched holds LOCK_SH from launch to exit (inherited as its stdout, §2), and run/broker.lock;
+                     no Unix socket under it answers and all of
                      it could be read; one without both the lock file and the marker is no candidate, whatever its
                      name, except one whose only entry is an unlocked lock file. It is checked and removed in place
                      as one directory (dir fds, identity rechecked after the locks and just before rmdir): every
@@ -1240,8 +1240,8 @@ conftest.py        clean_env(): autouse; strips CLAUDE*, CODEX_*, CURSOR_*, DEVI
                      mkdtemp to the marker, remove_home() from its first unlink to its rmdir. Only a lock unusable for
                      every process of the user (ELOOP, EISDIR/ENOTDIR, EACCES/EPERM, not regular, another uid's) lets
                      those two go on unlocked; any other error (EMFILE, EIO, ...) makes them raise, touching no home.
-                     A starting daemon's home is held while its run is alive; it can lose it only once every holder
-                     is gone (the run killed, its CLI killed or past start's wait): a daemon of a dead run. Bounded
+                     So a starting daemon always holds its home, before run/broker.lock and after, whether or not
+                     the run and the CLI that started it are alive (#922's sixth round). Bounded
                      exceptions: an empty yk-* directory (a removal killed after the lock file; a test's own
                      shutil.rmtree may still need to rmdir it) is never removed, and the stat-to-rmdir gap costs at
                      most one empty directory (sticky /tmp, rmdir takes only empty)
