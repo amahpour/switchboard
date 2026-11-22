@@ -1,7 +1,9 @@
 """A webhook receiver for the webhook tests (#723, DESIGN.md §62): an HTTPS server on 127.0.0.1 with a
 self-signed certificate for ``hook.example.com``, that records every POST it gets and answers with the status
-the test sets (a 302 sends a Location the test can see was not followed). ``context`` trusts its certificate,
-for the notifier's client side."""
+the test sets (a 302 sends a Location the test can see was not followed), or a status of its own for one path
+(``status_of``). ``hold`` keeps a POST to one path open until the test lets it go (``arrived`` is set when it
+is there), so a test can act while a send is out. ``context`` trusts its certificate, for the notifier's
+client side."""
 
 from __future__ import annotations
 
@@ -27,6 +29,10 @@ class TlsHook:
         self.posts: list[dict[str, Any]] = []  # {"path", "body"} for each POST
         self.hits: list[str] = []  # every path requested, of any method
         self.status = 200
+        self.status_of: dict[str, int] = {}  # a path's own status, over ``status``
+        self.hold: str | None = None  # a path whose POST waits for ``release``
+        self.arrived = threading.Event()
+        self.release = threading.Event()
         key = ec.generate_private_key(ec.SECP256R1())
         name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, HOST)])
         now = datetime.datetime.now(datetime.UTC)
@@ -62,8 +68,12 @@ class TlsHook:
                 raw = self.rfile.read(n)
                 outer.hits.append(self.path)
                 outer.posts.append({"path": self.path, "body": json.loads(raw or b"null")})
-                self.send_response(outer.status)
-                if 300 <= outer.status < 400:
+                if self.path == outer.hold:
+                    outer.arrived.set()
+                    outer.release.wait(30)
+                status = outer.status_of.get(self.path, outer.status)
+                self.send_response(status)
+                if 300 <= status < 400:
                     self.send_header("Location", "/followed")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
@@ -94,6 +104,7 @@ class TlsHook:
         return [host] if host.replace(".", "").isdigit() else []  # an address as typed resolves to itself
 
     def stop(self) -> None:
+        self.release.set()
         self.server.shutdown()
         self.server.server_close()
         self._dir.cleanup()
