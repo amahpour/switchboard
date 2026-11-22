@@ -21,7 +21,8 @@ The rules, in short:
 - **Quiet hours** (``Quiet``): from a start to an end in the person's own zone (an IANA name, read with
   ``zoneinfo``, so a daylight-saving change is the zone's), nothing is sent, first or second alert, but the
   kinds they marked as always sent. A held item goes when they end, if it still needs them, and the second
-  alert's clock starts then. A zone this server does not know holds everything.
+  alert's clock starts then. A zone this server cannot read is always quiet here (``in_quiet``), and a
+  stored one makes the whole webhook none (``webhook.load``), so nothing is sent at all.
 """
 
 from __future__ import annotations
@@ -184,6 +185,13 @@ class Policy:
         """The person opened this room at ``at``: whatever needed them in it since before then is got."""
         if at > self._opened.get(slug, float("-inf")):
             self._opened[slug] = at
+
+    def new_second(self) -> None:
+        """The second address was replaced: a second alert that failed there may be tried at the new one,
+        from the start. What was sent, and what the person got, stay (#923)."""
+        for t in self._tracks.values():
+            if not t.second.done:
+                t.second = _Try()
 
     def sent_keys(self) -> list[str]:
         return sorted(k for k, t in self._tracks.items() if t.first.done)

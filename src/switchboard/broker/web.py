@@ -1826,8 +1826,12 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         if not body or not set(body) <= fields:
             return _err(400, "bad_request", "give url, wait_min, second_url, second_after_min or quiet")
         key = state.service.person_key(w.person_id)
-        old = webhook.load(state, key)
-        wait_s = old["wait_s"] if old else notify.WAIT_DEFAULT_S
+        # Only what the body gives is checked and kept, in one statement on the person's row, after the
+        # addresses' checks (which wait on DNS): never a rewrite of the rest from a read made before them,
+        # which would bring back a webhook another tab removed, or undo quiet hours it saved (#923, F3).
+        changes: dict[str, Any] = {}
+        if "url" in body:
+            changes["url"] = body["url"]
         if "wait_min" in body:
             m = body["wait_min"]
             if (
@@ -1836,20 +1840,9 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 or not notify.WAIT_MIN_S <= m * 60 <= notify.WAIT_MAX_S
             ):
                 return _err(400, "bad_request", "wait_min is a whole number of minutes, 1 to 120")
-            wait_s = m * 60.0
-        url = body.get("url", old["url"] if old else None)
-        if url is None:
-            return _err(400, "bad_request", "give the url first")
-        second: dict[str, Any] | None = old["second"] if old else None
-        new_second_url = body.get("second_url")
+            changes["wait_s"] = m * 60.0
         if "second_url" in body:
-            if new_second_url is None:
-                second = None
-            else:
-                second = {
-                    "url": new_second_url,
-                    "after_s": second["after_s"] if second else notify.SECOND_DEFAULT_S,
-                }
+            changes["second_url"] = body["second_url"]
         if "second_after_min" in body:
             m = body["second_after_min"]
             if (
@@ -1858,14 +1851,13 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 or not notify.SECOND_MIN_S <= m * 60 <= notify.SECOND_MAX_S
             ):
                 return _err(400, "bad_request", "second_after_min is a whole number of minutes, 5 to 240")
-            if second is None:
+            if changes.get("second_url", "") is None:
                 return _err(400, "bad_request", "give the second address first")
-            second = {**second, "after_s": m * 60.0}
-        quiet = old["quiet"] if old else None
+            changes["second_after_s"] = m * 60.0
         if "quiet" in body:
             q = body["quiet"]
             if q is None:
-                quiet = None
+                changes["quiet"] = None
             elif not isinstance(q, dict) or set(q) != {"from", "to", "tz", "always"}:
                 return _err(400, "bad_request", "quiet is {from, to, tz, always} or null")
             else:
@@ -1874,16 +1866,32 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                     return _err(400, "bad_quiet", "Quiet hours need a start and an end time, as HH:MM.")
                 if (why := notify.quiet_problem(start, end, q["tz"], q["always"])) is not None:
                     return _err(400, "bad_quiet", why)
-                quiet = notify.Quiet(start, end, q["tz"], frozenset(q["always"]))
-        if "url" in body and (why := await webhook.check_for_save(state, url)) is not None:
+                changes["quiet"] = {
+                    "from": q["from"],
+                    "to": q["to"],
+                    "tz": q["tz"],
+                    "always": set(q["always"]),
+                }
+        # the cheap answers first, before any DNS; the save below still decides, on the row as it is then
+        now = state.store.webhook_get(key)
+        if now is None and "url" not in body:
+            return _err(400, "bad_request", "give the url first")
+        if (
+            "second_after_s" in changes
+            and "second_url" not in changes
+            and (now is None or not now["second_url"])
+        ):
+            return _err(400, "bad_request", "give the second address first")
+        if "url" in changes and (why := await webhook.check_for_save(state, changes["url"])) is not None:
             return _err(400, "bad_webhook", why)
-        if new_second_url is not None and (why := await webhook.check_for_save(state, new_second_url)):
+        s_url = changes.get("second_url")
+        if s_url is not None and (why := await webhook.check_for_save(state, s_url)) is not None:
             return _err(400, "bad_webhook", "The second address: " + why)
-        if (why := webhook.too_long(second)) is not None:
-            return _err(400, "bad_webhook", "The second address: " + why)
-        webhook.save(state, key, url, wait_s, second, quiet)
-        if state.notifier is not None and "url" in body:
-            state.notifier.forget(key)
+        done = webhook.save(state, key, changes)
+        if done == "none":
+            return _err(409, "conflict", "There is no webhook now: it was removed. Save an address first.")
+        if done == "no_second":
+            return _err(409, "conflict", "There is no second address now: it was removed. Save one first.")
         return _ok(webhook.public(state, key))
 
     @app.delete("/api/me/webhook")
@@ -1906,6 +1914,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         hook = webhook.load(state, key)
         if state.notifier is None or hook is None:
             return _err(400, "bad_request", "set a webhook first")
+        # Both addresses are tried, whatever the first one did, and the answer carries both results: the page
+        # shows these, never a stored status, which a capped try does not write (#923, F7).
         code = await state.notifier.post(key, notify.test_payload(state.web_origin.origin))
         second: dict[str, Any] | None = None
         if hook["second"] is not None:

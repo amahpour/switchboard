@@ -268,6 +268,30 @@ def test_the_second_alert_fires_when_the_first_post_failed() -> None:
     assert p.due_second([n], t, 1200) == [n]
 
 
+def test_a_new_second_address_starts_its_tries_over_and_keeps_what_was_sent_and_got() -> None:
+    """A second alert that failed every try at the old address is tried at a new one (``new_second``); one
+    that went is not sent again, and a room the person opened stays got. Fails if the new address inherits
+    the spent tries (#923, F4), or the reset forgets what was sent or got."""
+    p, n, done, got = Policy(), need(), need("q:build:8"), need("q:other:3", slug="other")
+    t = 0.0
+    p.due([n, done, got], t, 300)
+    t = 300.0
+    p.due([n, done, got], t, 300)
+    p.ack_room("other", 400)
+    t = 1500.0
+    p.due([n, done, got], t, 1200)
+    assert p.due_second([n, done, got], t, 1200) == [n, done]
+    p.sent_second([done], t, True)
+    for _ in range(notify.MAX_ATTEMPTS):
+        p.sent_second([n], t, False)
+        t += notify.RETRY_S
+    p.due([n, done, got], t, 300)
+    assert p.due_second([n, done, got], t, 1200) == []
+    p.new_second()
+    assert p.due_second([n, done, got], t, 1200) == [n]
+    assert p.sent_second_keys() == [done.key]
+
+
 def test_got_it_stops_the_second_alert() -> None:
     """Opening the room, or the item no longer needing them, after the first alert stops the second. Fails
     if a second alert goes to someone who already looked."""

@@ -3912,6 +3912,116 @@ class Store:
             for key, value in values.items():
                 self.con.execute("INSERT INTO broker_settings(key, value) VALUES(?, ?)", (key, value))
 
+    # ---------------------------------------------------------------- a person's webhook (§62.4)
+    def webhook_get(self, person: int) -> dict[str, Any] | None:
+        """The person's ``webhooks`` row as a dict, or None."""
+        row = self.con.execute("SELECT * FROM webhooks WHERE person=?", (person,)).fetchone()
+        return None if row is None else dict(row)
+
+    def webhook_people(self) -> list[int]:
+        return [int(r[0]) for r in self.con.execute("SELECT person FROM webhooks ORDER BY person")]
+
+    def webhook_set(self, person: int, changes: dict[str, Any], *, second_default_s: float) -> str:
+        """Apply only the fields in ``changes`` to the person's row, in one transaction (#923, §62.4):
+        ``url``, ``wait_s``, ``second_url`` (None removes the second alert), ``second_after_s``, ``quiet``
+        (``{from, to, tz, always}`` or None). Only a change with ``url`` (the primary save) makes the row:
+        any other on a row that is not there, removed meanwhile in another tab, changes nothing and is
+        ``"none"``. A new address clears its own lane's last status, which was about the old one; a delay
+        with no second address is ``"no_second"``. Checked by the caller first; the CHECKs hold whatever
+        gets past it."""
+        sets: list[str] = []
+        args: list[Any] = []
+        where = "person=?"
+        if "url" in changes:
+            sets += ["url=?", "first_at=NULL", "first_ok=NULL", "first_error=NULL"]
+            args.append(changes["url"])
+        if "wait_s" in changes:
+            sets.append("wait_s=?")
+            args.append(changes["wait_s"])
+        second_url, after = changes.get("second_url"), changes.get("second_after_s")
+        if "second_url" in changes:
+            sets += ["second_at=NULL", "second_ok=NULL", "second_error=NULL"]
+            if second_url is None:
+                sets += ["second_url=NULL", "second_after_s=NULL"]
+            else:
+                sets += ["second_url=?", "second_after_s=COALESCE(?, second_after_s, ?)"]
+                args += [second_url, after, second_default_s]
+        elif "second_after_s" in changes:
+            sets.append("second_after_s=?")
+            args.append(after)
+            where += " AND second_url IS NOT NULL"
+        quiet_cols = ("quiet_from", "quiet_to", "quiet_tz", "quiet_always")
+        if "quiet" in changes:
+            q = changes["quiet"]
+            values = (
+                (None,) * 4 if q is None else (q["from"], q["to"], q["tz"], ",".join(sorted(q["always"])))
+            )
+            sets += [f"{c}=?" for c in quiet_cols]
+            args += values
+        if not sets:
+            return "ok"
+        with db.tx(self.con):
+            cur = self.con.execute(f"UPDATE webhooks SET {', '.join(sets)} WHERE {where}", (*args, person))
+            if cur.rowcount:
+                return "ok"
+            there = self.con.execute("SELECT 1 FROM webhooks WHERE person=?", (person,)).fetchone()
+            if there is not None:
+                return "no_second"
+            if "url" not in changes:
+                return "none"
+            cols: dict[str, Any] = {"person": person, "url": changes["url"]}
+            if "wait_s" in changes:
+                cols["wait_s"] = changes["wait_s"]
+            if second_url is not None:
+                cols |= {"second_url": second_url, "second_after_s": after or second_default_s}
+            if changes.get("quiet") is not None:
+                cols |= dict(zip(quiet_cols, values, strict=True))
+            marks = ", ".join("?" for _ in cols)
+            self.con.execute(f"INSERT INTO webhooks({', '.join(cols)}) VALUES({marks})", tuple(cols.values()))
+            return "ok"
+
+    def webhook_status_set(
+        self, person: int, lane: str, url: str, at: float, ok: bool, error: str | None
+    ) -> None:
+        """How the last post on ``lane`` went, kept only while ``url`` is still that lane's address: a post
+        that was out when the address was replaced is not about the new one."""
+        col = "url" if lane == "first" else "second_url"
+        p = "first" if lane == "first" else "second"
+        with db.tx(self.con):
+            self.con.execute(
+                f"UPDATE webhooks SET {p}_at=?, {p}_ok=?, {p}_error=? WHERE person=? AND {col}=?",
+                (at, int(ok), None if ok else error, person, url),
+            )
+
+    def webhook_sent_keys(self, person: int, lane: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT key FROM webhook_sent WHERE person=? AND lane=? ORDER BY key", (person, lane)
+        )
+        return [str(r[0]) for r in rows]
+
+    def webhook_keep_sent(self, person: int, lane: str, keys: Iterable[str], at: float) -> None:
+        """Make the person's sent keys on ``lane`` exactly ``keys`` (what still needs them, of what was sent),
+        in one transaction: a key no longer kept is deleted, a new one is added at ``at``, only while the
+        webhook is still there. A key longer than the column holds is not kept."""
+        want = {k for k in keys if 1 <= len(k) <= 1000}
+        with db.tx(self.con):
+            have = set(self.webhook_sent_keys(person, lane))
+            for k in sorted(have - want):
+                self.con.execute(
+                    "DELETE FROM webhook_sent WHERE person=? AND lane=? AND key=?", (person, lane, k)
+                )
+            for k in sorted(want - have):
+                self.con.execute(
+                    "INSERT INTO webhook_sent(person, lane, key, at)"
+                    " SELECT ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM webhooks WHERE person=?)",
+                    (person, lane, k, at, person),
+                )
+
+    def webhook_remove(self, person: int) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM webhook_sent WHERE person=?", (person,))
+            self.con.execute("DELETE FROM webhooks WHERE person=?", (person,))
+
     def file_insert(
         self,
         *,

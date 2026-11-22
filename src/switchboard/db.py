@@ -58,7 +58,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 59
+SCHEMA_VERSION = 60
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -396,7 +396,8 @@ V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before 
 V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard (v46)
 V50_TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
 V55_TABLES = (*V50_TABLES, "say_keys")  # schemas 53 through 57, before mcp_sessions (v58)
-TABLES = (*V55_TABLES, "mcp_sessions")
+V59_TABLES = (*V55_TABLES, "mcp_sessions")  # schemas 58 and 59, before the webhook tables (v60)
+TABLES = (*V59_TABLES, "webhooks", "webhook_sent")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -1183,6 +1184,69 @@ ADDRESSED_DDL = (
 )
 V58_TO_V59 = (*ADDRESSED_DDL, "UPDATE meta SET value='59' WHERE key='schema_version'")
 
+# A person's webhook (#923, #926, DESIGN.md §62.4): one row a person (``person`` is ``room_people``'s key, 0
+# the owner), and the items already sent on each lane, kept across restarts. Before 60 these were
+# ``broker_settings`` rows, whose value holds 200 characters: a long address could not be saved (#926), the
+# sent keys overflowed (#923), and the settings were three rows written one after another. Each CHECK is
+# ``notify.py``'s limit (``URL_MAX``, the wait bounds, ``HH:MM``, ``TZ_MAX``, ``KINDS``), so a row that got
+# past the code still could not hold what the code would refuse. Both fresh databases and the migration use
+# these statements.
+_HHMM = "GLOB '[01][0-9]:[0-5][0-9]' OR {c} GLOB '2[0-3]:[0-5][0-9]'"
+QUIET_ALWAYS_VALUES = (
+    "",
+    "approval",
+    "board",
+    "question",
+    "approval,board",
+    "approval,question",
+    "board,question",
+    "approval,board,question",
+)  # every set of notify.KINDS, sorted and joined with commas
+
+
+def _https(c: str) -> str:
+    return f"length({c}) BETWEEN 9 AND 500 AND lower(substr({c}, 1, 8)) = 'https://'"
+
+
+def _hhmm(c: str) -> str:
+    return f"{c} IS NULL OR {c} " + _HHMM.format(c=c)
+
+
+WEBHOOKS_DDL = (
+    "CREATE TABLE webhooks("
+    " person INTEGER PRIMARY KEY CHECK(person >= 0),"
+    f" url TEXT NOT NULL CHECK({_https('url')}),"
+    " wait_s REAL NOT NULL DEFAULT 300 CHECK(wait_s BETWEEN 60 AND 7200),"
+    f" second_url TEXT CHECK(second_url IS NULL OR ({_https('second_url')})),"
+    " second_after_s REAL CHECK(second_after_s IS NULL OR second_after_s BETWEEN 300 AND 14400),"
+    f" quiet_from TEXT CHECK({_hhmm('quiet_from')}),"
+    f" quiet_to TEXT CHECK({_hhmm('quiet_to')}),"
+    " quiet_tz TEXT CHECK(quiet_tz IS NULL OR length(quiet_tz) BETWEEN 1 AND 64),"
+    " quiet_always TEXT CHECK(quiet_always IS NULL OR quiet_always IN ("
+    + ", ".join(f"'{v}'" for v in QUIET_ALWAYS_VALUES)
+    + ")),"
+    " first_at REAL,"
+    " first_ok INTEGER CHECK(first_ok IS NULL OR first_ok IN (0, 1)),"
+    " first_error TEXT CHECK(first_error IS NULL OR length(first_error) <= 200),"
+    " second_at REAL,"
+    " second_ok INTEGER CHECK(second_ok IS NULL OR second_ok IN (0, 1)),"
+    " second_error TEXT CHECK(second_error IS NULL OR length(second_error) <= 200),"
+    " CHECK((second_url IS NULL) = (second_after_s IS NULL)),"
+    " CHECK((quiet_from IS NULL) = (quiet_to IS NULL) AND (quiet_to IS NULL) = (quiet_tz IS NULL)"
+    " AND (quiet_tz IS NULL) = (quiet_always IS NULL)),"
+    " CHECK(quiet_from IS NULL OR quiet_from != quiet_to),"
+    " CHECK((first_at IS NULL) = (first_ok IS NULL) AND (first_ok = 1) <= (first_error IS NULL)),"
+    " CHECK((second_at IS NULL) = (second_ok IS NULL) AND (second_ok = 1) <= (second_error IS NULL)))",
+    "CREATE TABLE webhook_sent("
+    " person INTEGER NOT NULL REFERENCES webhooks(person) ON DELETE CASCADE,"
+    " lane TEXT NOT NULL CHECK(lane IN ('first','second')),"
+    " key TEXT NOT NULL CHECK(length(key) BETWEEN 1 AND 1000),"
+    " at REAL NOT NULL,"
+    " PRIMARY KEY(person, lane, key)) WITHOUT ROWID",
+)
+# v59 -> v60 (#923, #926, DESIGN.md §62.4): the tables, then ``move_webhook_rows`` moves the old rows in.
+V59_TO_V60 = (*WEBHOOKS_DDL, "UPDATE meta SET value='60' WHERE key='schema_version'")
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1387,6 +1451,126 @@ class MigrationStep(NamedTuple):
 REWRITES[55] = clean_review_rows
 REWRITES[56] = clean_whiteboard_rows
 
+# The steps that move rows from one table to another, by the version they migrate to: run inside the
+# migration's transaction after the step's statements, and each says by how many rows it changed each table,
+# so the migration's row-count check still holds every other table to its count (and these to theirs).
+MOVES: dict[int, Callable[[sqlite3.Connection], dict[str, int]]] = {}
+
+# the broker_settings rows a webhook was kept in before 60 (the second, quiet and *2 rows only on #923's
+# pre-release builds), by prefix
+_WEBHOOK_ROWS = (
+    "webhook:",
+    "webhook_second:",
+    "webhook_quiet:",
+    "webhook_status:",
+    "webhook_status2:",
+    "webhook_sent:",
+    "webhook_sent2:",
+)
+
+
+def _old_webhook(rows: dict[str, str], p: int) -> dict[str, object] | None:
+    """Person ``p``'s webhook from its old rows, as ``webhook.load`` read them: the address, the second one
+    and the quiet hours, each through ``notify``'s checks, or None when any of them does not pass."""
+    from switchboard import notify  # pure; imported here so the schema does not need it
+
+    try:
+        d = json.loads(rows[f"webhook:{p}"])
+        url, wait = d["url"], float(d["wait_s"])
+        if notify.url_problem(url) is not None or not notify.WAIT_MIN_S <= wait <= notify.WAIT_MAX_S:
+            return None
+        out: dict[str, object] = {"url": url, "wait_s": wait}
+        if (raw := rows.get(f"webhook_second:{p}")) is not None:
+            s = json.loads(raw)
+            s_url, after = s["url"], float(s["after_s"])
+            if (
+                notify.url_problem(s_url) is not None
+                or not notify.SECOND_MIN_S <= after <= notify.SECOND_MAX_S
+            ):
+                return None
+            out |= {"second_url": s_url, "second_after_s": after}
+        if (raw := rows.get(f"webhook_quiet:{p}")) is not None:
+            q = json.loads(raw)
+            start, end, tz, always = q["start"], q["end"], q["tz"], q["always"]
+            if notify.quiet_problem(start, end, tz, always) is not None:
+                return None
+            out |= {
+                "quiet_from": notify.hhmm(start),
+                "quiet_to": notify.hhmm(end),
+                "quiet_tz": tz,
+                "quiet_always": ",".join(sorted(set(always))),
+            }
+        return out
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _old_status(raw: str | None) -> tuple[float, int, str | None] | None:
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+        ok = bool(d["ok"])
+        error = None if ok or not d["error"] else str(d["error"])[:200]
+        return float(d["at"]), int(ok), error
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _old_sent(raw: str | None) -> list[str]:
+    try:
+        keys = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    if not isinstance(keys, list):
+        return []
+    return sorted({k for k in keys if isinstance(k, str) and 1 <= len(k) <= 1000})
+
+
+def move_webhook_rows(con: sqlite3.Connection) -> dict[str, int]:
+    """Move every person's webhook out of ``broker_settings`` into ``webhooks`` and ``webhook_sent`` (#923,
+    #926, §62.4), and delete the old rows. A webhook whose rows do not parse or pass the checks is dropped,
+    with its status and sent keys: it was no webhook (``load`` read it as none), and stays none. Returns how
+    many rows each table gained (a negative number: lost)."""
+    rows: dict[str, str] = {}
+    for prefix in _WEBHOOK_ROWS:
+        for k, v in con.execute(
+            "SELECT key, value FROM broker_settings WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+        ):
+            rows[str(k)] = str(v)
+    people: set[int] = set()
+    for k in rows:
+        tail = k.split(":", 1)[1]
+        if k.startswith("webhook:") and tail.isdigit():
+            people.add(int(tail))
+    made = sent = 0
+    for p in sorted(people):
+        w = _old_webhook(rows, p)
+        if w is None:
+            continue
+        cols = {"person": p, **w}
+        for lane, key in (("first", f"webhook_status:{p}"), ("second", f"webhook_status2:{p}")):
+            st = _old_status(rows.get(key))
+            if st is not None and (lane == "first" or "second_url" in w):
+                cols |= {f"{lane}_at": st[0], f"{lane}_ok": st[1], f"{lane}_error": st[2]}
+        names = ", ".join(cols)
+        con.execute(
+            f"INSERT INTO webhooks({names}) VALUES({', '.join('?' for _ in cols)})", tuple(cols.values())
+        )
+        made += 1
+        for lane, key in (("first", f"webhook_sent:{p}"), ("second", f"webhook_sent2:{p}")):
+            for item in _old_sent(rows.get(key)):
+                con.execute(
+                    "INSERT INTO webhook_sent(person, lane, key, at) VALUES(?, ?, ?, 0)", (p, lane, item)
+                )
+                sent += 1
+    for k in rows:
+        con.execute("DELETE FROM broker_settings WHERE key=?", (k,))
+    return {"broker_settings": -len(rows), "webhooks": made, "webhook_sent": sent}
+
+
+MOVES[60] = move_webhook_rows
+
 
 def _steps(frm: int) -> list[MigrationStep]:
     """Migration statements, new tables and schema-edit checks, read at run time, never cached."""
@@ -1457,6 +1641,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         56: MigrationStep(57, V56_TO_V57, (), (("reviews", "'none', 'blocked'"),)),
         57: MigrationStep(58, V57_TO_V58, ("mcp_sessions",)),
         58: MigrationStep(59, V58_TO_V59, ()),
+        59: MigrationStep(60, V59_TO_V60, ("webhooks", "webhook_sent")),
     }
     out = []
     v = frm
@@ -1509,6 +1694,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V50_TABLES  # 51 added a column and 52 indexes, no table
     if version <= 57:
         return V55_TABLES  # 54 added a column, 55 and 56 clean text, 57 edits a CHECK: no table
+    if version <= 59:
+        return V59_TABLES  # 59 added an index: no table
     return TABLES
 
 
@@ -1541,7 +1728,14 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL, *MCP_SESSIONS_DDL, *ADDRESSED_DDL]
+SCHEMA_STATEMENTS = [
+    *_statements(SCHEMA),
+    *SEARCH_DDL,
+    *SAY_KEYS_DDL,
+    *MCP_SESSIONS_DDL,
+    *ADDRESSED_DDL,
+    *WEBHOOKS_DDL,
+]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:
@@ -1686,7 +1880,8 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     then every step's statements in one ``BEGIN IMMEDIATE``, then ``integrity_check`` and
     the row counts again: the rows of every old table that is still there are all still there
     (``kept_tables``: a step may drop a table, which the backup still counted) and the new tables
-    are empty. Any failure rolls back and leaves the database as it was."""
+    are empty, but for the rows a step moved from one table to another (``MOVES``), which it
+    counts. Any failure rolls back and leaves the database as it was."""
     if backup_to is None:
         raise SchemaError(
             f"schema version {frm} needs a migration to version {SCHEMA_VERSION}, and a migration"
@@ -1706,6 +1901,7 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         if row_counts(con, old_tables) != counts:
             raise SchemaError("the database changed while its migration backup was made; start again")
         added: list[str] = []
+        moved: dict[str, int] = {}
         for to, stmts, new, schema_edits in _steps(frm):
             if schema_edits:
                 cookie = int(con.execute("PRAGMA schema_version").fetchone()[0])
@@ -1715,6 +1911,9 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
                     con.execute(stmt)
                 if to in REWRITES:
                     log.warning("schema migration to %d rewrote %d stored values", to, REWRITES[to](con))
+                if to in MOVES:
+                    for table, n in MOVES[to](con).items():
+                        moved[table] = moved.get(table, 0) + n
                 for table, required in schema_edits:
                     row = con.execute(
                         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -1735,8 +1934,8 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         survivors = kept_tables(frm)
         after = row_counts(con, survivors)
         made = kept(tuple(added))  # a table made by one step and dropped by a later one is gone
-        empty = {t: 0 for t in made}
-        if after != {t: counts[t] for t in survivors} or row_counts(con, made) != empty:
+        empty = {t: moved.get(t, 0) for t in made}  # a new table holds only what a move put in it
+        if after != {t: counts[t] + moved.get(t, 0) for t in survivors} or row_counts(con, made) != empty:
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")

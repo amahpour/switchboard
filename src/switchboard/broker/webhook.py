@@ -1,12 +1,13 @@
 """A person's webhook: the edge of reaching them when they are needed (DESIGN.md §62, #723).
 
-``notify.py`` is the policy and is pure. This is everything with I/O: the person's own settings (one
-``broker_settings`` row each, never a room message), working out what needs them (``home.needs``), and the
+``notify.py`` is the policy and is pure. This is everything with I/O: the person's own settings (their row
+of ``webhooks``, schema 60, never a room message), working out what needs them (``home.needs``), and the
 one outbound POST, which is the only request the broker makes on a person's behalf.
 
-A person may also give a second address for a louder second alert, and quiet hours (#923, §62.4). Each is a
-row of its own beside the first (``webhook_second:``, ``webhook_quiet:``), since a settings value is at most
-200 characters; the second address has exactly the first one's checks and is the same kind of secret.
+A person may also give a second address for a louder second alert, and quiet hours (#923, §62.4): columns of
+the same row, saved field by field, never by rewriting the rest. The second address has exactly the first
+one's checks and is the same kind of secret. What was sent on each lane is ``webhook_sent``, so a restart
+does not send it again.
 
 The address is a secret. It is never returned in full (``public`` gives the host), never logged, never in a
 room, and a failure is kept as a fixed sentence, never an exception's text, which can carry the address.
@@ -141,143 +142,79 @@ def post_blocking(
 
 
 # ---------------------------------------------------------------- a person's settings
-def cfg_key(person_key: int) -> str:
-    return f"webhook:{person_key}"
-
-
-def status_key(person_key: int, second: bool = False) -> str:
-    return f"webhook_status2:{person_key}" if second else f"webhook_status:{person_key}"
-
-
-def sent_key(person_key: int, second: bool = False) -> str:
-    return f"webhook_sent2:{person_key}" if second else f"webhook_sent:{person_key}"
-
-
-def second_key(person_key: int) -> str:
-    return f"webhook_second:{person_key}"
-
-
-def quiet_key(person_key: int) -> str:
-    return f"webhook_quiet:{person_key}"
-
-
-VALUE_MAX = 200  # broker_settings.value's CHECK (db.py)
+LANES = ("first", "second")
 
 
 def load(state: Any, person_key: int) -> dict[str, Any] | None:
     """The person's webhook, ``{"url": str, "wait_s": float, "second": {"url", "after_s"} | None, "quiet":
-    notify.Quiet | None}``, or None. A row that does not parse or does not pass the checks, the second
-    address's and the quiet hours' included, is no webhook (it fails closed). A webhook of before #923, with
-    neither of those rows, is one with no second alert and no quiet hours."""
-    store = state.store
-    raw = store.setting_get(cfg_key(person_key))
-    if raw is None:
+    notify.Quiet | None}``, or None. Their ``webhooks`` row (schema 60, §62.4), read through the same checks
+    as a save: a row that does not pass them, the second address's and the quiet hours' included, is no
+    webhook (it fails closed). So is quiet hours whose zone this server can no longer read (its tzdata lost
+    the name since the save): nothing is sent then, not even the kinds marked as always sent."""
+    row = state.store.webhook_get(person_key)
+    if row is None:
         return None
     try:
-        d = json.loads(raw)
-        url, wait = d["url"], float(d["wait_s"])
-        second = _second_of(store.setting_get(second_key(person_key)))
-        quiet = _quiet_of(store.setting_get(quiet_key(person_key)))
-    except (ValueError, KeyError, TypeError, AttributeError):
-        return None
-    if notify.url_problem(url) is not None or not notify.WAIT_MIN_S <= wait <= notify.WAIT_MAX_S:
+        url, wait = row["url"], float(row["wait_s"])
+        if notify.url_problem(url) is not None or not notify.WAIT_MIN_S <= wait <= notify.WAIT_MAX_S:
+            return None
+        second = None
+        if row["second_url"] is not None:
+            s_url, after = row["second_url"], float(row["second_after_s"])
+            if (
+                notify.url_problem(s_url) is not None
+                or not notify.SECOND_MIN_S <= after <= notify.SECOND_MAX_S
+            ):
+                return None
+            second = {"url": s_url, "after_s": after}
+        quiet = None
+        if row["quiet_from"] is not None:
+            start, end = notify.parse_hhmm(row["quiet_from"]), notify.parse_hhmm(row["quiet_to"])
+            tz, always = row["quiet_tz"], [k for k in str(row["quiet_always"]).split(",") if k]
+            if start is None or end is None or notify.quiet_problem(start, end, tz, always) is not None:
+                return None
+            quiet = notify.Quiet(start, end, tz, frozenset(always))
+    except (ValueError, KeyError, TypeError):
         return None
     return {"url": url, "wait_s": wait, "second": second, "quiet": quiet}
 
 
-def _second_of(raw: str | None) -> dict[str, Any] | None:
-    if raw is None:
-        return None
-    d = json.loads(raw)
-    url, after = d["url"], float(d["after_s"])
-    if notify.url_problem(url) is not None or not notify.SECOND_MIN_S <= after <= notify.SECOND_MAX_S:
-        raise ValueError("second")
-    return {"url": url, "after_s": after}
-
-
-def _quiet_of(raw: str | None) -> notify.Quiet | None:
-    if raw is None:
-        return None
-    d = json.loads(raw)
-    start, end, tz, always = d["start"], d["end"], d["tz"], d["always"]
-    if notify.quiet_problem(start, end, tz, always) is not None:
-        raise ValueError("quiet")
-    return notify.Quiet(start, end, tz, frozenset(always))
-
-
-def _second_row(second: dict[str, Any]) -> str:
-    return json.dumps({"url": second["url"], "after_s": second["after_s"]})
-
-
-def _quiet_row(q: notify.Quiet) -> str:
-    return json.dumps({"start": q.start, "end": q.end, "tz": q.tz, "always": sorted(q.always)})
-
-
-def too_long(second: dict[str, Any] | None) -> str | None:
-    """Why the second address cannot be kept, or None: a settings value holds at most ``VALUE_MAX``
-    characters, the address and its delay included."""
-    if second is not None and len(_second_row(second)) > VALUE_MAX:
-        return "That address is too long to keep. Use a shorter one."
-    return None
-
-
-def save(
-    state: Any,
-    person_key: int,
-    url: str,
-    wait_s: float,
-    second: dict[str, Any] | None = None,
-    quiet: notify.Quiet | None = None,
-) -> None:
-    """Keep the person's webhook; ``second`` or ``quiet`` None removes that row. Check ``too_long`` first."""
-    store = state.store
-    store.setting_set(cfg_key(person_key), json.dumps({"url": url, "wait_s": wait_s}))
-    if second is None:
-        store.setting_delete(second_key(person_key))
-    else:
-        store.setting_set(second_key(person_key), _second_row(second))
-    if quiet is None:
-        store.setting_delete(quiet_key(person_key))
-    else:
-        store.setting_set(quiet_key(person_key), _quiet_row(quiet))
-    for k in (status_key(person_key), status_key(person_key, True)):
-        store.setting_set(k, "")  # an old failure is not about these addresses
+def save(state: Any, person_key: int, changes: dict[str, Any]) -> str:
+    """Keep only the fields in ``changes`` (``Store.webhook_set``): ``"ok"``, ``"none"`` (there is no webhook
+    to change, and no address to make one) or ``"no_second"``. A new address forgets what the notifier knew
+    of the old one: the first address everything (``Notifier.forget``), the second its failed tries
+    (``Notifier.new_second``), keeping what was sent and what the person got."""
+    out = state.store.webhook_set(person_key, changes, second_default_s=notify.SECOND_DEFAULT_S)
+    n = getattr(state, "notifier", None)
+    if out == "ok" and n is not None:
+        if "url" in changes:
+            n.forget(person_key)
+        elif changes.get("second_url") is not None:
+            n.new_second(person_key)
+    return out
 
 
 def remove(state: Any, person_key: int) -> None:
-    for key in (
-        cfg_key(person_key),
-        second_key(person_key),
-        quiet_key(person_key),
-        status_key(person_key),
-        status_key(person_key, True),
-        sent_key(person_key),
-        sent_key(person_key, True),
-    ):
-        state.store.setting_delete(key)
+    state.store.webhook_remove(person_key)
     n = getattr(state, "notifier", None)
     if n is not None:
         n.forget(person_key)
 
 
 def last_status(state: Any, person_key: int, second: bool = False) -> dict[str, Any] | None:
-    raw = state.store.setting_get(status_key(person_key, second))
-    if not raw:
+    row = state.store.webhook_get(person_key)
+    p = "second" if second else "first"
+    if row is None or row[f"{p}_at"] is None:
         return None
-    try:
-        d = json.loads(raw)
-        return {"at": float(d["at"]), "ok": bool(d["ok"]), "error": str(d["error"]) if d["error"] else None}
-    except (ValueError, KeyError, TypeError):
-        return None
+    ok = bool(row[f"{p}_ok"])
+    return {"at": float(row[f"{p}_at"]), "ok": ok, "error": None if ok else row[f"{p}_error"]}
 
 
-def _record(state: Any, person_key: int, now: float, code: str | None, second: bool = False) -> None:
-    state.store.setting_set(
-        status_key(person_key, second),
-        json.dumps(
-            {"at": now, "ok": code is None, "error": None if code is None else notify.fail_reason(code)}
-        ),
-    )
+def _record(
+    state: Any, person_key: int, url: str, now: float, code: str | None, second: bool = False
+) -> None:
+    error = None if code is None else notify.fail_reason(code)
+    state.store.webhook_status_set(person_key, "second" if second else "first", url, now, code is None, error)
 
 
 def _host(url: str) -> str:
@@ -362,17 +299,16 @@ class Notifier:
     def forget(self, person_key: int) -> None:
         self._policy.pop(person_key, None)
 
-    def _kept(self, person_key: int, second: bool) -> list[str]:
-        try:
-            raw = self.state.store.setting_get(sent_key(person_key, second)) or "[]"
-            return [str(k) for k in json.loads(raw)]
-        except (ValueError, TypeError):
-            return []
+    def new_second(self, person_key: int) -> None:
+        """The second address was replaced: its failed tries were the old address's (#923, F4)."""
+        if (pol := self._policy.get(person_key)) is not None:
+            pol.new_second()
 
     def _policy_of(self, person_key: int) -> notify.Policy:
         if person_key not in self._policy:
+            store = self.state.store
             self._policy[person_key] = notify.Policy(
-                self._kept(person_key, False), self._kept(person_key, True)
+                store.webhook_sent_keys(person_key, "first"), store.webhook_sent_keys(person_key, "second")
             )
         return self._policy[person_key]
 
@@ -412,54 +348,66 @@ class Notifier:
         except Exception:
             log.warning("a webhook post failed unexpectedly")  # nothing of the address
             code = "error"
-        _record(self.state, person_key, now, code, second)
+        _record(self.state, person_key, url, now, code, second)
         return code
 
     async def tick(self) -> None:
-        st = self.state
-        for key, _ in st.store.settings_with_prefix("webhook:"):
-            try:
-                person_key = int(key.split(":", 1)[1])
-            except ValueError:
-                continue
+        for person_key in self.state.store.webhook_people():
             try:
                 await self._one(person_key)
             except Exception:
                 log.warning("a webhook tick failed for person %s", person_key)
 
-    async def _one(self, person_key: int) -> None:
+    def _now_of(self, person_key: int) -> tuple[dict[str, Any], list[notify.Need] | None, float] | None:
+        """The person's webhook, what needs them and the time, read now, or None when they have no webhook
+        (or are gone)."""
         st = self.state
         w = load(st, person_key)
         name = st.service.person_name(person_key)
         if w is None or name is None:
-            return
-        now = st.clock.now()
-        pol = self._policy_of(person_key)
+            return None
         try:
             needs: list[notify.Need] | None = home.needs(st, name, None if person_key == 0 else person_key)
         except Exception:
             needs = None  # could not tell what needs them: send nothing
-        quiet = w["quiet"]
-        due = pol.due(needs, now, w["wait_s"], quiet)
-        second = [] if w["second"] is None else pol.due_second(needs, now, w["second"]["after_s"], quiet)
+        return w, needs, st.clock.now()
+
+    async def _one(self, person_key: int) -> None:
+        st = self.state
+        got = self._now_of(person_key)
+        if got is None:
+            return
+        w, needs, now = got
+        pol = self._policy_of(person_key)
+        due = pol.due(needs, now, w["wait_s"], w["quiet"])
         lim = self._limiter(person_key)
         if due and lim.allow(now):
             code = await self.post(person_key, notify.payload(due, st.web_origin.origin))
             pol.sent(due, now, code is None)
-        if second and lim.allow(now):
-            code = await self.post(person_key, notify.payload(second, st.web_origin.origin, True), True)
-            pol.sent_second(second, now, code is None)
-        self._keep(person_key, pol)
+            self._keep(person_key, pol, now)
+            # The first post took time, and in it the person may have answered, opened the room, lost the
+            # room, saved quiet hours or removed the address (#923, F1): the second alerts are chosen from
+            # what is true once it is back, never from before it.
+            got = self._now_of(person_key)
+            if got is None:
+                return
+            w, needs, now = got
+            pol = self._policy_of(person_key)
+            pol.due(needs, now, w["wait_s"], w["quiet"])  # drops what was got; a new first goes next tick
+        if w["second"] is not None and lim.allow(now):
+            second = pol.due_second(needs, now, w["second"]["after_s"], w["quiet"])
+            if second:
+                code = await self.post(person_key, notify.payload(second, st.web_origin.origin, True), True)
+                pol.sent_second(second, now, code is None)
+        self._keep(person_key, pol, now)
 
-    def _keep(self, person_key: int, pol: notify.Policy) -> None:
-        for second, keys in ((False, pol.sent_keys()), (True, pol.sent_second_keys())):
-            raw, row = json.dumps(keys), sent_key(person_key, second)
-            if st_get := self.state.store.setting_get(row):
-                if st_get == raw:
-                    continue
-            elif raw == "[]":
-                continue
-            self.state.store.setting_set(row, raw)
+    def _keep(self, person_key: int, pol: notify.Policy, now: float) -> None:
+        """Keep what was sent on each lane across a restart (``webhook_sent``), pruned to what still needs
+        the person, as the policy keeps it."""
+        store = self.state.store
+        for lane, keys in (("first", pol.sent_keys()), ("second", pol.sent_second_keys())):
+            if keys != store.webhook_sent_keys(person_key, lane):
+                store.webhook_keep_sent(person_key, lane, keys, now)
 
     async def run(self) -> None:
         while True:

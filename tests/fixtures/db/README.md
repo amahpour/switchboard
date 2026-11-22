@@ -16,5 +16,11 @@
   `tests/unit/test_db_migrate_v4.py` migrates it to schema v4 (DESIGN.md §32.2).
   `make_v0_7_0.py` made it, from the 0.7.0 code (see its docstring).
 
+- `v1_13_0.sql`: a schema-v59 database written by switchboard 1.13.0, holding people's
+  webhooks as it kept them in `broker_settings` rows (an address, an ok and a failed status,
+  a sent key, and one row that does not parse). `tests/unit/test_db_migrate_v60.py` migrates
+  it to schema v60, which moves them into `webhooks` and `webhook_sent` (#923, #926, DESIGN.md
+  §62.4). `make_v1_13_0.py` made it, from the 1.13.0 code (see its docstring).
+
 Nothing here comes from a real session; `tests/unit/test_fixtures_scan.py` checks
 these files like every other fixture.
