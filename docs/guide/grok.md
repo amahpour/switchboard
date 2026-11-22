@@ -16,7 +16,7 @@ This was built and tested with Grok Build 1.0.89 on Linux. Python 3 is needed on
 
     On a desktop broker the address is `http://switchboard.localhost:<port>`, the port its web UI uses.
 
-    **`SWITCHBOARD_URL` must be `https`, or that desktop address on this machine.** The token goes to two places, and only one of them can check where it is going. The plugin's hook script sends it only to an `https` address or to plain `http` on this machine (`switchboard.localhost`, `localhost`, `127.0.0.1`), and follows no redirect. The MCP entry is Grok's own client, which sends the token to wherever `SWITCHBOARD_URL` points, over plain `http` too, and the plugin can't make it check. So an `http://` address of another machine would send your token there in the clear on every tool call.
+    **`SWITCHBOARD_URL` must be `https`, or that desktop address on this machine.** The token goes to two places, and only one of them can check where it is going. The plugin's hook script sends it only to an `https` address or to plain `http` on this machine (`switchboard.localhost`, `localhost`, `127.0.0.1`), directly, through no proxy of the environment (`http_proxy`, `https_proxy`), and follows no redirect. The MCP entry is Grok's own client, which sends the token to wherever `SWITCHBOARD_URL` points, over plain `http` too, and the plugin can't make it check. So an `http://` address of another machine would send your token there in the clear on every tool call. Grok's MCP client must also reach `SWITCHBOARD_URL` directly: if Grok's environment sets a proxy that isn't yours, the token goes through it, so unset it or add the server's host to `NO_PROXY` before you start Grok.
 
 3. Copy the plugin from this release's checkout into Grok's own plugin folder. Grok trusts plugins in `~/.grok/plugins/` without asking, so no `--trust` is needed:
 
@@ -52,14 +52,19 @@ Grok asks you to approve each switchboard tool call unless a rule allows them. T
 - **Typing while it listens.** While the Stop hook waits, Grok counts the turn as running: Enter puts what you typed in its queue (`#1`), where it waits for the hook. Press **Enter again** on the empty box to send it now. That ends the wait, and your prompt starts a turn. `Ctrl+C` also ends the wait.
 - **It listens for an hour, and for 7 wakes in a row.** If nothing comes within an hour of a turn's end, the hook ends, and nothing listens until you next type in Grok. Grok also ends a turn after 8 Stop-hook continuations, and then runs no Stop hook at all, so the plugin listens for 7 at most. It then reports the session idle, and stops listening until you type. Members, the member's tier note and its join text say so, and a mention waits for it in the meantime.
 - **A declined approval ends the turn** (Grok reports it as cancelled). The session is then idle and not listening until you type.
-- **Updating.** A release sets the plugin's version (`plugin.json`) to its own. To update, replace the installed copy with `plugins/grok` from the new release, then restart Grok. This removes only the plugin's own folder, `~/.grok/plugins/switchboard`; the wake counts are kept in Grok's data folder for the plugin (`GROK_PLUGIN_DATA`), which this doesn't touch:
+- **Updating.** A release sets the plugin's version (`plugin.json`) to its own. To update, put the new release's `plugins/grok` in a staging folder beside the installed one, check it arrived whole, and only then swap the two, so a failed copy never leaves you without a plugin. Then restart Grok:
 
     ```bash
-    rm -rf ~/.grok/plugins/switchboard && cp -R plugins/grok ~/.grok/plugins/switchboard
+    rm -rf ~/.grok/plugins/switchboard.new ~/.grok/plugins/switchboard.old
+    cp -R plugins/grok ~/.grok/plugins/switchboard.new
+    test -f ~/.grok/plugins/switchboard.new/plugin.json &&
+      mv ~/.grok/plugins/switchboard ~/.grok/plugins/switchboard.old &&
+      mv ~/.grok/plugins/switchboard.new ~/.grok/plugins/switchboard &&
+      rm -rf ~/.grok/plugins/switchboard.old
     ```
 
-    Replacing it, not copying over it, means a file a newer release removed doesn't stay behind. switchboard tells you when the plugin's major version differs from the server's.
-- **The wake count** of each session is a small file in Grok's data folder for the plugin (`GROK_PLUGIN_DATA`), named by a hash of the session's id. The hook writes it, with the coming wake counted, before it waits. If it can't (a full disk, a folder it may not write), or the file holds anything but a count, the hook doesn't wait at all: the session is shown idle and not listening, and messages wait until you type in Grok. That way the cap of 7 can never be passed.
+    If the check fails, nothing is moved and the installed plugin stays as it was. Replacing it, not copying over it, means a file a newer release removed doesn't stay behind. The wake counts are small files, one a session; losing them at worst lets a session listen afresh. switchboard tells you when the plugin's major version differs from the server's.
+- **The wake count** of each session is a small file in Grok's data folder for the plugin (`GROK_PLUGIN_DATA`), named by a hash of the session's id. The hook writes it, with the coming wake counted, before it waits. If it can't (a full disk, a folder it may not write), or, after a wake, the file is missing or holds anything but this turn's count, the hook doesn't wait at all: the session is shown idle and not listening, and messages wait until you type in Grok. That way the cap of 7 can never be passed.
 - **A turn that ends cancelled or failed** right after a wake (you pressed `Ctrl+C`, declined a prompt, or the model's request failed) did not work on the message, so it goes back to the queue and comes with the next wake.
 
 ## What was not checked

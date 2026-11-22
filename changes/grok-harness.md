@@ -9,5 +9,5 @@
 ### Known limitations
 
 - **A Grok session listens for an hour after a turn, and for at most 7 wakes before you next type** (Grok ends a turn after 8 Stop-hook continuations). After either, a mention waits until you type in Grok; Members says so. While it listens, Enter only queues what you type in Grok: press Enter again on the empty box to send it now.
-- **`SWITCHBOARD_URL` must be `https`, or a desktop broker's address on the same machine.** The plugin's hooks refuse anything else and follow no redirect, but Grok's own MCP client sends the token wherever the address points, and switchboard can't make it check.
+- **`SWITCHBOARD_URL` must be `https`, or a desktop broker's address on the same machine.** The plugin's hooks refuse anything else, use no proxy of the environment and follow no redirect, but Grok's own MCP client sends the token wherever the address points, and switchboard can't make it check; it must reach the address directly too, through no proxy that isn't yours.
 - **Built and tested without an xAI login,** against a stand-in model (Grok Build 1.0.89, Linux). Not yet checked: browser sign-in (use an agent token), compaction events, Windows and macOS, and what Grok Build itself sends to xAI when signed in. The guide says what was seen.
