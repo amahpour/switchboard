@@ -27,10 +27,6 @@ log = logging.getLogger("switchboard.daemon")
 
 START_WAIT_S = 8.0
 STOP_WAIT_S = 10.0
-# How long a cancelled start (Ctrl-C) waits for the broker it launched to exit after SIGTERM, then
-# after SIGKILL (#929).
-REAP_TERM_WAIT_S = 5.0
-REAP_KILL_WAIT_S = 5.0
 # Env vars a daemonized broker must not inherit from the terminal that started it.
 _DROP_ENV_PREFIXES = ("CLAUDE_CODE_MESSAGING_", "CLAUDE_CODE_SESSION_ID")
 _DROP_ENV = frozenset({"CLAUDECODE"})
@@ -328,19 +324,13 @@ def start(
         os.close(fd)
     deadline = time.monotonic() + START_WAIT_S
     info = None
-    try:
-        while time.monotonic() < deadline:
-            info = ping(paths.sock, timeout=1.0)
-            if info:
-                break
-            if child.poll() is not None:
-                break
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        # The person cancelled the start (Ctrl-C), and the broker is in a session of its own, so the
-        # terminal's SIGINT never reached it: stop what this start launched (#929).
-        _reap(paths, child)
-        raise
+    while time.monotonic() < deadline:
+        info = ping(paths.sock, timeout=1.0)
+        if info:
+            break
+        if child.poll() is not None:
+            break
+        time.sleep(0.1)
     if not info and child.poll() is None:
         # Still running, not answering yet: it may be applying a pending restore or creating or
         # migrating a large database (run_foreground does both before it serves the socket). It is
@@ -380,43 +370,6 @@ def start(
         else:
             print(f"switchboard: login link failed: {e.message}", file=sys.stderr)
     return 0
-
-
-def _reap(paths: Paths, child: subprocess.Popen[bytes]) -> bool:
-    """Stop and reap the broker a cancelled start launched (#929, DESIGN.md §2).
-
-    Only for a start the person interrupted: a start that waited out ``START_WAIT_S`` leaves its
-    broker running, since one still restoring or migrating a large database has to be let finish.
-    SIGTERM to its process group (``start_new_session`` made the broker its leader), which a broker
-    that is up answers as ``switchboard stop`` does: it closes its socket, removes its pid file and
-    drops ``run/broker.lock``. Then a bounded wait for it to exit, then SIGKILL and another. The
-    group is signalled only while its leader is unreaped, so its id can't name another process's
-    group. A pid file a killed broker left naming it is removed, as its own exit would have; a dead
-    socket is removed by the next broker (``RpcServer.start``) and the kernel drops both locks with
-    the last fd. True if the child is somehow still running after all that.
-    """
-    for sig, wait_s in ((signal.SIGTERM, REAP_TERM_WAIT_S), (signal.SIGKILL, REAP_KILL_WAIT_S)):
-        if child.poll() is not None:
-            break
-        try:
-            os.killpg(child.pid, sig)
-        except (ProcessLookupError, PermissionError):
-            # ESRCH: the group is gone. EPERM: macOS for a group whose members are all zombies
-            # (#924). Either way the leader has exited, and the wait below reaps it.
-            pass
-        try:
-            child.wait(timeout=wait_s)
-        except subprocess.TimeoutExpired:
-            continue
-    if child.poll() is None:
-        return True
-    pf = read_pidfile(paths)
-    if pf and pf[0] == child.pid:
-        try:
-            paths.pidfile.unlink()
-        except FileNotFoundError:
-            pass
-    return False
 
 
 def _tail(p: Path, n: int = 15) -> str:

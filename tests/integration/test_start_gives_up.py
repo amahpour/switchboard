@@ -3,10 +3,10 @@
 ``daemon.start()`` launches the broker in a session of its own and waits for its socket. A start
 that waits out ``START_WAIT_S`` leaves the broker running and names its pid: it may still be
 applying a restore or migrating a large database, which ``run_foreground`` does before it serves the
-socket, and stopping it there would mean it never comes up. A start the person interrupts (Ctrl-C)
-stops and reaps what it launched, since the terminal's SIGINT never reaches the broker's session.
-These tests run ``daemon.start()`` in-process with ``subprocess.Popen`` wrapped: the wrapper swaps in
-a stand-in broker (or launches the real one), waits for it to say it is ready (the event, never a
+socket, and stopping it there would mean it never comes up. A start the person cancels (Ctrl-C)
+is not handled here: the broker is left running as before #929, and ``switchboard stop`` stops it.
+These tests run ``daemon.start()`` in-process with ``subprocess.Popen`` wrapped: the wrapper swaps
+in a stand-in broker (or launches the real one), waits for it to say it is ready (the event, never a
 sleep), and only then hands it back, so the start's short deadline always passes with the child
 alive. Each stand-in holds the write end of a pipe the test reads, and so does every process it
 starts: EOF on the read end is the event that every one of them has exited.
@@ -37,17 +37,12 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the broker runs
 # A bound for each event, generous enough to hold under `-n auto`; the tests never wait it out.
 EVENT_S = 30.0
 
-# The stand-in broker: never opens the socket. argv: the pipe's write fd, "ignore-term" or "",
-# the pid file to write ("" for none). It starts a grandchild in its own process group (the
-# broker's), which inherits the pipe, then says "ready <grandchild pid>" and waits for a signal.
+# The stand-in broker: never opens the socket. argv: the pipe's write fd. It starts a grandchild in
+# its own process group (the broker's), which inherits the pipe, then says "ready <grandchild pid>"
+# and waits for a signal.
 STAND_IN = r"""
-import os, signal, subprocess, sys, time
+import os, signal, subprocess, sys
 fd = int(sys.argv[1])
-if sys.argv[2] == "ignore-term":
-    signal.signal(signal.SIGTERM, signal.SIG_IGN)
-if sys.argv[3]:
-    with open(sys.argv[3], "w") as f:
-        f.write(f"{os.getpid()} {time.time()!r}\n")
 g = subprocess.Popen([sys.executable, "-c", "import signal\nwhile True: signal.pause()"], pass_fds=(fd,))
 os.write(fd, f"ready {g.pid}\n".encode())
 while True:
@@ -77,15 +72,6 @@ def _eof(fd: int) -> bool:
         r, _, _ = select.select([fd], [], [], left)
         if r and not os.read(fd, 4096):
             return True
-    return False
-
-
-def _reaped(pid: int) -> bool:
-    """True if ``pid`` is no child of this process any more: exited and reaped, not a zombie."""
-    try:
-        os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-        return True
     return False
 
 
@@ -131,21 +117,15 @@ def _stand_in_start(
     monkeypatch: pytest.MonkeyPatch,
     home: Path,
     lx: Launches,
-    *,
-    ignore_term: bool,
-    pidfile: str,
-    interrupt: bool = False,
-) -> tuple[int | None, subprocess.Popen[bytes], int, int]:
-    """Run ``daemon.start()`` on a stand-in broker that never opens its socket: (its return code, or
-    None if it raised KeyboardInterrupt, the child, the grandchild's pid, the pipe's read end).
-    With ``interrupt``, the first ping of the wait (after the launch) raises KeyboardInterrupt, as
-    Ctrl-C there would."""
+) -> tuple[int, subprocess.Popen[bytes], int, int]:
+    """Run ``daemon.start()`` on a stand-in broker that never opens its socket: (its return code, the
+    child, the grandchild's pid, the pipe's read end)."""
     real_popen = subprocess.Popen
     r, w = lx.pipe()
     seen: dict[str, Any] = {}
 
     def popen(cmd: list[str], **kw: Any) -> subprocess.Popen[bytes]:
-        argv = [sys.executable, "-I", "-c", STAND_IN, str(w), "ignore-term" if ignore_term else "", pidfile]
+        argv = [sys.executable, "-I", "-c", STAND_IN, str(w)]
         kw["env"] = child_env()
         kw["pass_fds"] = (w, *tmp_homes.lock_fds_for(home))
         child = real_popen(argv, **kw)
@@ -154,22 +134,9 @@ def _stand_in_start(
         seen["grandchild"] = int(_read_line(r, "ready line").split()[1])
         return child
 
-    def ctrl_c(*a: Any, **k: Any) -> None:
-        if lx.children:  # the "already running?" ping before the launch answers as no broker
-            raise KeyboardInterrupt
-        return None
-
     monkeypatch.setattr(daemon.subprocess, "Popen", popen)
     monkeypatch.setattr(daemon, "START_WAIT_S", 0.2)
-    if interrupt:
-        monkeypatch.setattr(daemon, "ping", ctrl_c)
-    rc: int | None = None
-    try:
-        rc = daemon.start(Paths.from_home(home), port=0, test_mode=True)
-    except KeyboardInterrupt:
-        assert interrupt, "start raised KeyboardInterrupt with no interrupt"
-    else:
-        assert not interrupt, "an interrupted start did not raise KeyboardInterrupt"
+    rc = daemon.start(Paths.from_home(home), port=0, test_mode=True)
     return rc, lx.children[0], seen["grandchild"], r
 
 
@@ -180,11 +147,9 @@ def test_a_timed_out_start_leaves_the_broker_running_and_names_it(
     migrating a large database, and says so with its pid and how to check and stop it. The test
     then stops it itself and sees every process in its group exit.
 
-    Fails on d371feed: the start SIGTERMed and reaped the stand-in (it had a return code), and its
-    message named no pid."""
-    rc, child, _grandchild, r = _stand_in_start(
-        monkeypatch, tmp_home, launches, ignore_term=False, pidfile=""
-    )
+    Fails on origin/main: the start said "the broker did not start" and named no pid, so the
+    assertion on the pid in its message fails."""
+    rc, child, _grandchild, r = _stand_in_start(monkeypatch, tmp_home, launches)
     assert rc == 1
     err = capsys.readouterr().err
     assert f"the broker (pid {child.pid}) did not answer" in err, err
@@ -197,43 +162,6 @@ def test_a_timed_out_start_leaves_the_broker_running_and_names_it(
     assert _eof(r), "a process the broker started is still running"
 
 
-def test_an_interrupted_start_stops_and_reaps_the_broker_it_launched(
-    tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches
-) -> None:
-    """Ctrl-C while start waits stops the broker it launched, and every process in its group, and
-    reaps it, then lets the KeyboardInterrupt through: the broker is in a session of its own, so the
-    terminal's SIGINT never reached it.
-
-    Fails on origin/main: the stand-in and its grandchild kept running after the interrupt."""
-    rc, child, _grandchild, r = _stand_in_start(
-        monkeypatch, tmp_home, launches, ignore_term=False, pidfile="", interrupt=True
-    )
-    assert rc is None
-    assert child.returncode == -signal.SIGTERM, "an interrupted start did not stop and reap its broker"
-    assert _reaped(child.pid)
-    assert _eof(r), "a process the broker started is still running"
-
-
-def test_an_interrupted_start_kills_a_broker_that_ignores_sigterm_and_removes_its_pid_file(
-    tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches
-) -> None:
-    """A child that doesn't exit on SIGTERM gets SIGKILL after a bounded wait, and the pid file
-    it wrote naming itself (which SIGKILL gives it no chance to remove) is removed for it, so the
-    home is as a fresh start expects.
-
-    Fails on origin/main: the stand-in kept running after the interrupt and its pid file stayed."""
-    paths = Paths.from_home(tmp_home)
-    monkeypatch.setattr(daemon, "REAP_TERM_WAIT_S", 0.5, raising=False)  # absent on origin/main
-    rc, child, _grandchild, r = _stand_in_start(
-        monkeypatch, tmp_home, launches, ignore_term=True, pidfile=str(paths.pidfile), interrupt=True
-    )
-    assert rc is None
-    assert child.returncode == -signal.SIGKILL, "start did not kill the broker that ignored SIGTERM"
-    assert _reaped(child.pid)
-    assert _eof(r), "a process the broker started is still running"
-    assert not paths.pidfile.exists()
-
-
 def test_a_broker_up_just_after_the_deadline_stays_up_and_stop_stops_it(
     tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -241,8 +169,8 @@ def test_a_broker_up_just_after_the_deadline_stays_up_and_stop_stops_it(
     is left running: start returns 1 naming its pid, the broker then answers on its socket, and a
     later `switchboard stop` stops it (socket and pid file gone).
 
-    Fails on d371feed: start SIGTERMed the broker that had come up, so it no longer answered.
-    Fails on origin/main: start's message did not name the broker's pid."""
+    Fails on origin/main: start's message did not name the broker's pid ("the broker did not
+    start"), so the assertion on the pid in its message fails."""
     paths = Paths.from_home(tmp_home)
     real_popen = subprocess.Popen
 
