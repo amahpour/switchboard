@@ -13,11 +13,7 @@ from switchboard import db
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 INDEX = "SELECT name, tbl_name, sql FROM sqlite_master WHERE name='messages_addressed'"
-OTHERS = (
-    "SELECT type, name, sql FROM sqlite_master"
-    " WHERE name NOT IN ('messages_addressed', 'webhooks', 'webhook_sent', 'sqlite_autoindex_webhooks_1')"
-    " ORDER BY type, name"
-)  # 60 adds the webhook tables and webhooks' UNIQUE(person) index (#923), tested in test_db_migrate_v60.py
+OTHERS = "SELECT type, name, sql FROM sqlite_master WHERE name!='messages_addressed' ORDER BY type, name"
 
 
 def at_58(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,16 +39,20 @@ def test_a_schema_58_database_gains_the_index_and_nothing_else(
         counts = db.row_counts(before, db.tables_of(58))
         others = [tuple(r) for r in before.execute(OTHERS)]
         messages = [tuple(r) for r in before.execute("SELECT * FROM messages ORDER BY id")]
-    con = db.open_db(path)
+    with monkeypatch.context() as mp:
+        # this step alone: 60 adds the webhook tables (#923), 61 edits the participants CHECK (#851)
+        mp.setattr(db, "SCHEMA_VERSION", 59)
+        db.open_db(path).close()
+    con = db.connect(path)
     backup = db.connect(db.backup_path_for(path, 58), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION
+        assert db.schema_version(con) == 59
         assert db.schema_version(backup) == 58
         assert backup.execute(INDEX).fetchone() is None
         assert [tuple(r) for r in con.execute(INDEX)] == [tuple(r) for r in fresh.execute(INDEX)]
         assert con.execute(INDEX).fetchone() is not None
-        assert db.row_counts(con, db.TABLES) == {**counts, "webhooks": 0, "webhook_sent": 0}
+        assert db.row_counts(con, db.tables_of(59)) == counts
         assert [tuple(r) for r in con.execute(OTHERS)] == others
         assert [tuple(r) for r in con.execute("SELECT * FROM messages ORDER BY id")] == messages
         assert db.integrity_ok(con) is None

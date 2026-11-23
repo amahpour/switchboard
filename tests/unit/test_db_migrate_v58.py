@@ -46,7 +46,7 @@ def test_a_schema_56_database_takes_57s_check_edit_and_gains_mcp_sessions_at_58(
     backup = db.connect(db.backup_path_for(path, 56), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 60
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 61
         assert db.schema_version(backup) == 56
         assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60}
         same_table_as_fresh(con, tmp_path)

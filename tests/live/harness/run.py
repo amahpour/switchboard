@@ -107,8 +107,8 @@ class Run:
         self.base = self.broker.base
         self.broker.start()
         self.credentials()
-        self.ws = self.base / "ws"
-        self.ws.mkdir()
+        self.ws = self.workspace()
+        self.ws.mkdir(parents=True)
         subprocess.run(
             ["git", "init", "-q"], cwd=self.ws, env=clean_env(self.path, HOME=str(self.base)), check=True
         )
@@ -117,6 +117,10 @@ class Run:
         self.results["version"] = self.version()
         self.prepare()
         return self
+
+    def workspace(self) -> Path:
+        """The scratch repository the CLI works in (a subclass may put it elsewhere in the run's temp dir)."""
+        return self.base / "ws"
 
     def credentials(self) -> None:
         """What the agent signs in with: an agent token made through the web API (a subclass whose agent signs

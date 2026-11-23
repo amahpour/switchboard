@@ -19,7 +19,7 @@ SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 VOICE_RE = re.compile(r"[a-z0-9_]{1,32}")
 # Agents may not take a screen name that starts with the human's name, so a login
 # name that prefixes a harness's usual names (claude-1, dev -> devin-1) is not used.
-_AGENT_PREFIXES = ("claude", "codex", "cursor", "devin")
+_AGENT_PREFIXES = ("claude", "codex", "cursor", "devin", "grok")
 FALLBACK_HUMAN_NAME = "me"
 
 
@@ -102,6 +102,13 @@ class CodexCfg:
 @dataclass(frozen=True)
 class CursorCfg:
     wait_cap_s: int = 55
+    ctx_max_chars: int = 8000
+
+
+# Grok Build has a Stop listener too (§49.15), so its wait() default is Claude Code's and Codex's 60 s.
+@dataclass(frozen=True)
+class GrokCfg:
+    wait_cap_s: int = 60
     ctx_max_chars: int = 8000
 
 
@@ -310,6 +317,7 @@ class Config:
     cursor: CursorCfg = field(default_factory=CursorCfg)
     devin: DevinCfg = field(default_factory=DevinCfg)
     opencode: OpenCodeCfg = field(default_factory=OpenCodeCfg)
+    grok: GrokCfg = field(default_factory=GrokCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     meeting: MeetingCfg = field(default_factory=MeetingCfg)
@@ -332,6 +340,7 @@ _SECTIONS = {
     "cursor": CursorCfg,
     "devin": DevinCfg,
     "opencode": OpenCodeCfg,
+    "grok": GrokCfg,
     "review": ReviewCfg,
     "security": SecurityCfg,
     "meeting": MeetingCfg,

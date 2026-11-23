@@ -86,7 +86,8 @@ def test_a_harness_without_a_versioned_plugin_has_no_check() -> None:
 
 def test_every_versioned_harness_has_its_own_update_command() -> None:
     """The note names the command that updates that harness's plugin, not another's."""
-    assert set(pv.PINNED) == set(pv.UPDATE) == {"claude", "codex", "cursor", "devin", "opencode"}
+    assert set(pv.PINNED) == set(pv.UPDATE) == {"claude", "codex", "cursor", "devin", "opencode", "grok"}
+    assert "plugins/grok" in pv.UPDATE["grok"] and "~/.grok/plugins/switchboard" in pv.UPDATE["grok"]
     assert "claude plugin update" in pv.UPDATE["claude"] and "codex plugin" in pv.UPDATE["codex"]
     assert "codex" not in pv.UPDATE["claude"].lower() and "claude" not in pv.UPDATE["codex"].lower()
 

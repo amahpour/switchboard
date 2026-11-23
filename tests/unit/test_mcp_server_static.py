@@ -184,10 +184,10 @@ async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
     root = Path(__file__).resolve().parents[2]
     paths = [
         root / "plugins" / name / "skills" / "review-board" / "SKILL.md"
-        for name in ("claude", "codex", "cursor")
+        for name in ("claude", "codex", "cursor", "grok")
     ]
     bodies = [p.read_bytes() for p in paths]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: review-board" in text
     assert "Markdown" in text and "Mermaid" in text
@@ -240,10 +240,11 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     }
     root = Path(__file__).resolve().parents[2]
     paths = [
-        root / "plugins" / name / "skills" / "board" / "SKILL.md" for name in ("claude", "codex", "cursor")
+        root / "plugins" / name / "skills" / "board" / "SKILL.md"
+        for name in ("claude", "codex", "cursor", "grok")
     ]
     bodies = [p.read_bytes() for p in paths]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: board" in text and "switchboard_board" in text
     for action in ACTIONS:
@@ -427,9 +428,9 @@ def test_the_claim_skill_is_the_same_file_in_the_three_plugins_and_says_what_a_c
     root = Path(__file__).resolve().parents[2]
     bodies = [
         (root / "plugins" / name / "skills" / "claim" / "SKILL.md").read_bytes()
-        for name in ("claude", "codex", "cursor")
+        for name in ("claude", "codex", "cursor", "grok")
     ]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: claim" in text and "switchboard_claim" in text
     assert "advice and nothing more" in text and "does not lock" in text
@@ -444,9 +445,9 @@ def test_the_talk_on_a_call_skill_is_the_same_file_in_the_three_plugins_and_teac
     root = Path(__file__).resolve().parents[2]
     bodies = [
         (root / "plugins" / name / "skills" / "talk-on-a-call" / "SKILL.md").read_bytes()
-        for name in ("claude", "codex", "cursor")
+        for name in ("claude", "codex", "cursor", "grok")
     ]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: talk-on-a-call" in text and "@call" in text
     assert "one or two short sentences" in text.lower() and "normal `say()` without `@call`" in text
@@ -460,7 +461,7 @@ def test_skills_defer_to_the_server_for_what_it_accepts() -> None:
     carries no size or rate numbers that a server states itself when it refuses. A skill that goes back to
     a hard-coded limit, or loses the pointer, would steer agents to what an older server refuses."""
     root = Path(__file__).resolve().parents[2]
-    for name in ("claude", "codex", "cursor"):
+    for name in ("claude", "codex", "cursor", "grok"):
         for skill in ("board", "review-board"):
             text = (root / "plugins" / name / "skills" / skill / "SKILL.md").read_text()
             assert "the server you are on accepts" in text, (name, skill)

@@ -31,8 +31,8 @@ here, so an older copy would stamp an older set. It:
   a minute after the merge; until then an update finds no such tag and keeps the old plugin
   (DESIGN.md §49.5 says when each harness tries again);
 - sets the `version` of every plugin manifest (`PLUGIN_MANIFESTS`: Claude Code's, Codex's, Cursor's,
-  Devin's and OpenCode's) to the release's own, changed or not, so the plugin of switchboard X.Y.Z
-  is always X.Y.Z (#841). Claude Code
+  Devin's, OpenCode's and Grok Build's) to the release's own, changed or not, so the plugin of switchboard
+  X.Y.Z is always X.Y.Z (#841). Claude Code
   and Codex keep an installed plugin by that `version` (§49.5), and a pull request no longer touches
   it. The broker compares a session's plugin with its own version (`plugin_versions.PINNED`), so
   nothing else is rewritten;
@@ -94,6 +94,7 @@ PLUGIN_MANIFESTS = {
     "plugins/cursor": "plugins/cursor/.cursor-plugin/plugin.json",
     "plugins/devin": "plugins/devin/plugin.json",
     "plugins/opencode": "plugins/opencode/package.json",
+    "plugins/grok": "plugins/grok/plugin.json",
 }
 PLUGIN_VERSION_RE = re.compile(r'("version"\s*:\s*")(\d+)\.(\d+)\.(\d+)(")')
 # with the notes files, all a release PR changes

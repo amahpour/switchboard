@@ -1,0 +1,14 @@
+{
+  "_source": "grok 1.0.89 (28be5bb1bf65) on Linux, headless -p; a personal hook in ~/.grok/hooks copied stdin; the model was a local stand-in chat-completions endpoint ([model.*] base_url), so no xAI login (#851); --always-approve, which Grok reports as permissionMode bypassPermissions",
+  "_unverified": false,
+  "hookEventName": "session_start",
+  "sessionId": "00000000-0000-4000-8000-0000000a1101",
+  "cwd": "/ws",
+  "workspaceRoot": "/ws",
+  "timestamp": "2026-11-22T15:17:58.009855006+00:00",
+  "permissionMode": "bypassPermissions",
+  "source": "new",
+  "hook_event_name": "SessionStart",
+  "session_id": "00000000-0000-4000-8000-0000000a1101",
+  "permission_mode": "bypassPermissions"
+}

@@ -11,13 +11,13 @@
 
 **So send them in your place.** Your own agents join your calls and answer aloud, review each other's work and sketch with you on the whiteboard. They bring what a cloud assistant can't: their memory of you, the context of your machine, and any model you choose, including one you run yourself for work that has to stay private. They settle what they can and bring you only what needs you.
 
-**Any agent, from any harness.** Claude Code, Codex, OpenCode, Cursor and Devin work with you and with each other, in one room.
+**Any agent, from any harness.** Claude Code, Codex, OpenCode, Cursor, Devin and Grok Build work with you and with each other, in one room.
 
 **And they stay yours.** Your machines, your models, your data: [bring your own infra](#bring-your-own-infra).
 
 **Docs: [amahpour.github.io/switchboard](https://amahpour.github.io/switchboard/)**, with search. Start with [Install and connect](https://amahpour.github.io/switchboard/INSTALL/), then the guides: [Home](https://amahpour.github.io/switchboard/guide/home/), [Meetings](https://amahpour.github.io/switchboard/guide/meetings/), [Code review on a board](https://amahpour.github.io/switchboard/guide/review-board/) and [A room's whiteboard](https://amahpour.github.io/switchboard/guide/board/).
 
-switchboard is a group chat for you and the coding agents you already run. Your Claude Code, Codex, OpenCode, Cursor and Devin sessions join a room from their own terminals, talk to each other, hand work around and check each other's work, while you steer from a web page. It runs on your own machines, and it never launches, wraps or types into an agent.
+switchboard is a group chat for you and the coding agents you already run. Your Claude Code, Codex, OpenCode, Cursor, Devin and Grok Build sessions join a room from their own terminals, talk to each other, hand work around and check each other's work, while you steer from a web page. It runs on your own machines, and it never launches, wraps or types into an agent.
 
 https://github.com/user-attachments/assets/5d594fdb-63bb-4ede-8731-0ba59c594c24
 
@@ -56,7 +56,7 @@ Then, in each agent's terminal: `join switchboard room #build as claude-1`. Ever
 
 Your data, your machines, your models, and your choice of how you use AI.
 
-- **Your model, your choice.** A frontier model, an open one on your own hardware, or both. Use Claude Code, Codex, OpenCode, Cursor or Devin, and switch when one gets better or cheaper.
+- **Your model, your choice.** A frontier model, an open one on your own hardware, or both. Use Claude Code, Codex, OpenCode, Cursor, Devin or Grok Build, and switch when one gets better or cheaper.
 - **Your data stays yours.** Your code, keys, rooms and history stay on machines you choose. Nothing hosted runs your agents or reads your code.
 - **Every action has an owner.** Every agent connects with a person's token, and every message says who sent it, from which harness and machine.
 

@@ -1,0 +1,18 @@
+{
+  "_source": "grok 1.0.89 (28be5bb1bf65) on Linux, headless -p; a personal hook in ~/.grok/hooks copied stdin; the model was a local stand-in chat-completions endpoint ([model.*] base_url), so no xAI login (#851); a foreground spawn_subagent: the parent's hook, naming the child's id",
+  "_unverified": false,
+  "hookEventName": "subagent_start",
+  "sessionId": "00000000-0000-4000-8000-0000000a1101",
+  "cwd": "/ws",
+  "workspaceRoot": "/ws",
+  "timestamp": "2026-11-22T15:17:58.050210990+00:00",
+  "transcriptPath": "/grok-home/.grok/sessions/%2Fws/00000000-0000-4000-8000-0000000a1101/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "subagentId": "00000000-0000-4000-8000-0000000a1103",
+  "subagentType": "general-purpose",
+  "description": "probe sub",
+  "hook_event_name": "SubagentStart",
+  "session_id": "00000000-0000-4000-8000-0000000a1101",
+  "transcript_path": "/grok-home/.grok/sessions/%2Fws/00000000-0000-4000-8000-0000000a1101/updates.jsonl",
+  "permission_mode": "bypassPermissions"
+}

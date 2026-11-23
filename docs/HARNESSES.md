@@ -8,6 +8,7 @@ Every agent connects to the broker over HTTPS, with an agent token and switchboa
 | Codex | `codex:https` | its Stop hook is held by the broker; a message ends it with the text, and the turn goes on | your messages and @mentions as context after the next tool call |
 | OpenCode V2 | `opencode:https` | its plugin parks on the broker and queues the broker's wake as a new turn | messages through the next `read()`, `wait()` or `say()` |
 | Cursor | `cursor:https` (**provisional**) | its Stop hook is held by the broker for up to an hour after each turn (10 minutes with an older copy of the plugin; then type in Cursor); a message goes back as a follow-up that starts the next turn | context after the next tool call |
+| Grok Build | `grok:https` | its Stop hook is held by the broker for up to an hour after each turn, and for at most 7 wakes before you next type; a message ends it with the text, and the turn goes on | your messages and @mentions as context after the next tool call |
 | Devin | `devin:https` | no true wake: the agent listens in `wait("#build", 100)`, re-armed by a Stop hook | context after the next tool call |
 
 A tier shown under Members as `mcp-only` is a harness switchboard has no adapter for: its agent gets messages through `wait()`, `read()` and `say()` only. An idle member with messages waiting and nothing listening for them shows **Parked: needs a poke** (type something in its terminal). Start a new session after connecting an agent, because hooks don't reload in a running one. `switchboard report` shows the latency of each path.
@@ -43,6 +44,16 @@ A tier shown under Members as `mcp-only` is a harness switchboard has no adapter
 - **Working:** your messages and @mentions arrive as context after the next tool call.
 - **Identity:** the conversation id its hook puts on each call. A missing hook report refuses the call.
 - **After a broker restart:** a held Stop hook retries within its park window and stops after 2 minutes unreachable. Cursor keeps the MCP session id it had, so the broker opens that session again for the same token and the tools keep working; until the broker did that, every switchboard tool failed with "Tool execution error" until Cursor restarted ([#823](https://github.com/amahpour/switchboard/issues/823); not yet run live with this change).
+
+**Grok Build** (tier `grok:https`, tested on 1.0.89 with a stand-in model; [its guide](guide/grok.md) has the setup):
+- **Idle:** when a turn ends, the plugin's Stop hook waits on switchboard for up to an hour (3,625 seconds). A message answers it with `{"decision":"block","reason":…}`, which Grok shows the model as Stop hook feedback, continuing the turn. Grok shows "Running stop hook…" meanwhile.
+- **Typing while it listens:** Grok holds the turn open, so Enter only queues what you type (`#1`). Enter again on the empty box sends it now and ends the wait.
+- **Two limits.** After an hour with nothing, the hook ends. And Grok ends a turn after 8 Stop-hook continuations without running the hook again, so the plugin listens for 7 at most, then reports the session idle. Either way, nothing listens until you type in Grok, and Members, the tier note and the parked reason say so.
+- **Working:** your messages and @mentions arrive as context after the next tool call, any tool's (PostToolUse and PostToolUseFailure; SessionStart's and UserPromptSubmit's output never reaches Grok's model).
+- **Approval:** Grok's permission prompt (a `permission_prompt` Notification) shows waiting for approval. Nothing is delivered until it is answered. A declined prompt ends the turn (StopCancelled), and the session is idle and not listening until you type.
+- **Identity:** the session's id, which the plugin's MCP entry sends in a header with Grok's `{{session_id}}` template. A call without it is refused.
+- **Subagents:** a Grok subagent has a session id of its own and marks its hooks; the plugin reports none of them.
+- Not checked without a login: browser sign-in, compaction events, Windows and macOS ([the guide](guide/grok.md#what-was-not-checked)).
 
 **Devin** (tier `devin:https`). Devin can't be woken from outside, so an idle Devin agent *listens*: it sits in `wait("#build", 100)` (the join result tells it to), and its terminal shows it busy. The wait is at most 100 seconds at a time, because Devin's HTTP client sends a call again after 120 seconds without an answer.
 - **Idle (listening):** a message returns the open `wait()` at once, and the agent's next tool call follows (the model's own time).

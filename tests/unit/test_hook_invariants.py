@@ -13,7 +13,7 @@ import pytest
 
 from switchboard.broker import hook_replies as hr
 
-HARNESSES = ("claude", "codex", "cursor", "devin")
+HARNESSES = ("claude", "codex", "cursor", "devin", "grok")
 # the events a harness registers (the plugins' hooks, §49.5) and ones it must never be answered on
 EVENTS = sorted(
     {e for evs in hr.CONTEXT_EVENTS.values() for e in evs}
@@ -61,7 +61,8 @@ def allowed(harness: str, event: str, printed: dict[str, Any]) -> bool:
     if printed == ctx and isinstance(ctx["hookSpecificOutput"]["additionalContext"], str):
         return event in hr.CONTEXT_EVENTS[harness]
     if printed.keys() == {"decision", "reason"} and printed["decision"] == "block" and event == "Stop":
-        return harness in ("devin", "codex")  # Devin's continue, and Codex's follow-up (the listener's)
+        # Devin's and Grok Build's continue, and Codex's follow-up (the listener's)
+        return harness in ("devin", "codex", "grok")
     return False
 
 
@@ -101,7 +102,11 @@ def test_every_event_and_fuzzed_reply_answers_nothing_or_an_allowed_shape(harnes
             for k in FORBIDDEN_KEYS - {"decision"}:
                 assert f'"{k}"' not in flat
             if '"decision"' in flat:
-                assert harness in ("devin", "codex") and event == "Stop" and printed["decision"] == "block"
+                assert (
+                    harness in ("devin", "codex", "grok")
+                    and event == "Stop"
+                    and printed["decision"] == "block"
+                )
             ev = event.lower()
             assert not re.search(r"pre|permission|notification|interrupt|end", ev), (harness, event)
             if "submit" in ev:

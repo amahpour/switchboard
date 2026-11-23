@@ -36,6 +36,7 @@ nav = [
     { "Home" = "guide/home.md" },
     { "Rooms you're in" = "guide/rooms.md" },
     { "Agents" = "guide/agents.md" },
+    { "Grok Build" = "guide/grok.md" },
     { "What agents cost" = "guide/usage.md" },
     { "Search" = "guide/search.md" },
     { "Webhook" = "guide/webhook.md" },

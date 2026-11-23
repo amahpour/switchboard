@@ -8,6 +8,7 @@ from switchboard.adapters.https import (
     HttpsCodexAdapter,
     HttpsCursorAdapter,
     HttpsDevinAdapter,
+    HttpsGrokAdapter,
     HttpsOpenCodeAdapter,
 )
 from switchboard.adapters.testagent import TestAgentAdapter
@@ -18,18 +19,20 @@ HTTPS_CLAUDE = "claude@https"
 HTTPS_CODEX = "codex@https"
 HTTPS_CURSOR = "cursor@https"
 HTTPS_DEVIN = "devin@https"
+HTTPS_GROK = "grok@https"
 HTTPS_OPENCODE = "opencode@https"
 
 
 def build_adapters(cfg: Config) -> dict[str, Adapter]:
-    """A session over HTTPS is woken by its own Stop hook (Claude Code, Codex, Cursor: §49.4) or its
-    wait loop (Devin, §9.5). ``unknown`` serves a session of no harness, ``test`` the scripted test
+    """A session over HTTPS is woken by its own Stop hook (Claude Code, Codex, Cursor, Grok Build: §49.4)
+    or its wait loop (Devin, §9.5). ``unknown`` serves a session of no harness, ``test`` the scripted test
     agent of a test-mode broker."""
     return {
         HTTPS_CLAUDE: HttpsClaudeAdapter(cfg),
         HTTPS_CODEX: HttpsCodexAdapter(cfg),
         HTTPS_CURSOR: HttpsCursorAdapter(cfg),
         HTTPS_DEVIN: HttpsDevinAdapter(cfg),
+        HTTPS_GROK: HttpsGrokAdapter(cfg),
         HTTPS_OPENCODE: HttpsOpenCodeAdapter(cfg),
         "unknown": PullAdapter("unknown", cfg),
         "test": TestAgentAdapter(cfg),
@@ -48,6 +51,7 @@ __all__ = [
     "HTTPS_CODEX",
     "HTTPS_CURSOR",
     "HTTPS_DEVIN",
+    "HTTPS_GROK",
     "HTTPS_OPENCODE",
     "Adapter",
     "Caps",
@@ -55,6 +59,7 @@ __all__ = [
     "HttpsCodexAdapter",
     "HttpsCursorAdapter",
     "HttpsDevinAdapter",
+    "HttpsGrokAdapter",
     "HttpsOpenCodeAdapter",
     "PullAdapter",
     "TestAgentAdapter",

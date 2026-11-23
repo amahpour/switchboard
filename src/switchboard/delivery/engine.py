@@ -1458,6 +1458,10 @@ class Engine:
         E = ev.ev
         out: list[Action] = []
         adapter = self.adapter(p)
+        if adapter.stale_hook(p, ev):
+            # an older turn's end, reported after the next turn began: nothing of the session changes, not
+            # even an approval hold, which only the session's own next hook ends (§7.4, §11)
+            return None, []
         if adapter.other_thread(p, ev):
             # a subagent's hook must not change or take the session's messages; the one thing a tool that
             # finished in it says is that an approval prompt was answered (#472)
