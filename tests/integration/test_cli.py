@@ -226,6 +226,8 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
 
 # A bound for a daemonized broker to exit once signalled; the tests never wait it out.
 DAEMON_EXIT_S = 30.0
+# A bound for the teardown's `switchboard stop`; when it runs out, the scan by the home still runs.
+STOP_CLI_S = 60.0
 
 
 def _argv(pid: int) -> list[str] | None:
@@ -251,8 +253,9 @@ def _holds_home(pid: int, homes: set[str]) -> bool:
 
 
 def _pids_in_home(homes: set[str]) -> list[int]:
-    """Every process but this one with one of ``homes`` as an argument (the broker runs with
-    ``--home <home>``, and a test's home is a fresh ``/tmp/yk-*`` of its own)."""
+    """Every process but this one with one of ``homes`` as an exact argument (the broker runs with
+    ``--home <home>``). A test's home is a unique temp directory made for that test alone
+    (``make_tmp_home()``), so a process with it as an exact argument is this test's own."""
     if sys.platform.startswith("linux"):
         pids = [int(n) for n in os.listdir("/proc") if n.isdigit()]
     else:
@@ -268,9 +271,9 @@ def _stop_pid_in_home(pid: int, homes: set[str]) -> None:
     exit, each with a bound. On Linux through a pidfd, which names one process for good: the
     argument check is made again once it is open, so a pid reused since the scan is left alone, and
     the signal can only reach the process checked; the pidfd turns readable when it exits. macOS has
-    no pidfd: the arguments are checked again right before each signal, and the process is known by
-    pid and start time, the best it can do (a pid reused between that check and the kill would
-    still be hit)."""
+    no pidfd, so the closest it can get is to check the arguments again right before each signal and
+    know the process by pid and start time (a pid reused between that check and the kill would still
+    be hit)."""
     if hasattr(os, "pidfd_open"):
         try:
             fd = os.pidfd_open(pid)
@@ -289,6 +292,7 @@ def _stop_pid_in_home(pid: int, homes: set[str]) -> None:
             raise AssertionError(f"a process of the test's home (pid {pid}) did not exit")
         finally:
             os.close(fd)
+    # macOS: no pidfd, so the re-check right before each kill is the closest it can get.
     me = proc.info(pid)
     if me is None:
         return
@@ -309,19 +313,36 @@ def _stop_daemon(home: Path) -> None:
     """Every daemonizing test's ``finally``: stop what its `switchboard start` launched in ``home``,
     and see it exit, before ``tmp_home`` is removed, even when the start's ``subprocess.run`` raised
     or an assertion failed first (#929). Found by the home, never by a bare pid: `switchboard stop`
-    first, which checks the pid file's process is this home's broker; then every process still
-    running with this home as an argument (one that never wrote its pid file, say)."""
-    env = child_env()
-    subprocess.run(
-        [sys.executable, "-m", "switchboard", "--home", str(home), "stop"],
-        env=env,
-        capture_output=True,
-        timeout=60,
-    )
+    first, which checks the pid file's process is this home's broker; then, always, even when that
+    stop timed out or failed, every process still running with this home as an exact argument (one
+    that never wrote its pid file, say). The test fails, naming the pids and the home, when one is
+    still running or its exit couldn't be seen: teardown never passes with a process left."""
+    stop_error: BaseException | None = None
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "switchboard", "--home", str(home), "stop"],
+            env=child_env(),
+            capture_output=True,
+            timeout=STOP_CLI_S,
+        )
+    except Exception as e:  # a hung or failed stop must never skip the scan below
+        stop_error = e
+    # The home is a unique temp directory made for this test, so a process with it as an exact
+    # argument is this test's (``_pids_in_home``).
     homes = {str(home), str(home.resolve())}
+    unverified: list[str] = []
     for pid in _pids_in_home(homes):
-        _stop_pid_in_home(pid, homes)
-    assert not _pids_in_home(homes), "a process of the test's home is still running"
+        try:
+            _stop_pid_in_home(pid, homes)
+        except Exception as e:  # every pid is tried, then the test fails naming each
+            unverified.append(f"pid {pid}: {e}")
+    left = _pids_in_home(homes)
+    if left or unverified:
+        raise AssertionError(
+            f"processes of the test's home {home} are still running or their exit couldn't be seen:"
+            f" running {left}, unverified {unverified}"
+            + (f" (`switchboard stop` failed first: {stop_error!r})" if stop_error else "")
+        )
 
 
 def test_daemonized_start_and_stop(tmp_home: Path) -> None:
