@@ -129,6 +129,17 @@ def words_of(text: str) -> list[str]:
     return out
 
 
+def is_edit(before: list[str] | None, now: list[str]) -> bool:
+    """Whether a row's words are only a revision of what it showed when the bot began to speak (#852): no
+    more words than before, and at least half of them were there. Zoom revises an old caption in place (a
+    word's case, punctuation or spelling), and that is not someone speaking over the bot. A row with no
+    baseline (``None``), more words, or a new utterance (fewer words, mostly different ones) is speech."""
+    if before is None or not now or len(now) > len(before):
+        return False
+    shown = set(before)
+    return 2 * sum(1 for w in now if w in shown) >= len(now)
+
+
 def sentences(text: str) -> list[str]:
     """``text`` split after each ``. ? !`` that ends a word (so "3.5" and "e.g.x" stay whole), with the
     stray quotation marks Zoom puts around a caption cut off the ends."""
@@ -467,6 +478,11 @@ class CaptionsTranscriptionController:
         self._bot = ""
         self._playback_active: Callable[[], bool] = lambda: False
         self._anonymous_own: dict[str, str] = {}
+        # what each row showed at the last read, and (while the bot plays) when this line began (#852)
+        self._last_texts: dict[str, list[str]] = {}
+        self._baseline: dict[str, list[str]] = {}
+        self._was_playing = False
+        self._edit_logged = False
         self._task: asyncio.Task[None] | None = None
         self._drain_task: asyncio.Task[None] | None = None
         self._no_speech = asyncio.Event()
@@ -651,31 +667,55 @@ class CaptionsTranscriptionController:
                     redact_markup(row),
                 )
         self._anonymous_own = anonymous_own
+        playing = self._playback_active()
+        if playing and not self._was_playing:  # a new line: what the rows showed just before it is the baseline
+            self._baseline = self._last_texts
+            self._edit_logged = False
+        self._was_playing = playing
+        self._last_texts = {key: words_of(caption) for key, caption in entries}
         self._sample_active(entries)
         finals = self._hold.step(self._rule.feed(entries, now), entries, now)
-        self._update_no_speech(now)
+        self._update_no_speech(now, playing)
         if finals:
             await self._dump_buttons()
             await self._look_up(now, {f.key for f in finals})
         self._emit(finals)
 
-    def _update_no_speech(self, now: float) -> None:
-        rows = self._rule.changing_rows(now, 0.6, self._is_own_key)
-        first = next(rows, None)
-        if first is None:
+    def _update_no_speech(self, now: float, playing: bool = False) -> None:
+        """Clear the no-speech event while a person's row says something new. While the bot plays, a row that
+        only revises what it showed when the line began does not count (#852): see ``is_edit``. Only counts
+        of words are logged, never the words."""
+        rows = []
+        for key, caption in self._rule.changing_rows(now, 0.6, self._is_own_key):
+            if playing:
+                before, words = self._baseline.get(key), words_of(caption)
+                if is_edit(before, words):
+                    if not self._edit_logged:
+                        self._edit_logged = True
+                        logger.info(
+                            "captions: an edit to words already shown, not speech over the bot; "
+                            "words_before=%d words=%d",
+                            len(before or ()),
+                            len(words),
+                        )
+                    continue
+            rows.append((key, caption))
+        if not rows:
             self._no_speech.set()
             return
-        if self._no_speech.is_set() and self._playback_active():
-            for key, caption in (first, *rows):
+        if self._no_speech.is_set() and playing:
+            for key, caption in rows:
                 initials, colour, label, picture = key.split("|", 3)
+                before = self._baseline.get(key)
                 logger.info(
                     "captions: no-speech cleared during playback; "
-                    "initials=%r colour=%r label_length=%d picture=%r words=%d",
+                    "initials=%r colour=%r label_length=%d picture=%r words=%d baseline_words=%s",
                     initials,
                     colour,
                     len(label),
                     picture,
                     len(words_of(caption)),
+                    "none" if before is None else len(before),
                 )
         self._no_speech.clear()
 

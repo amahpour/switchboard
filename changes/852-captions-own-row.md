@@ -1,3 +1,4 @@
 ### Fixed
 
 - **The Zoom meeting bot filters its own early captions during playback.** This prevents a caption that appears before the bot's initials from cutting off its spoken line when Zoom's active tile identifies the bot.
+- **The bot no longer stops its own line when Zoom revises a caption nobody is saying.** While the bot speaks, a person's caption row counts as talking over it only if it says something new: more words than it showed when the line began, a row not shown before, or a different utterance. A revision of the same words (case, punctuation, a corrected word) does not. A person's microphone picking up the bot's voice adds words and can still stop a line. The log says how many words were ignored as an edit, never which. **Operators: re-mount the new `captions.py`** (its sha256 is in the deploy guide) and restart the broker.

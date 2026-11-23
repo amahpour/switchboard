@@ -354,7 +354,10 @@ async def test_playback_interruption_logs_row_metadata_once(caplog: pytest.LogCa
         await c._take([{"i": "AB", "c": "rgb(1, 2, 3)", "t": "private phrase again"}], 1.25)
     assert not c.no_speech_event.is_set()
     assert caplog.text.count("no-speech cleared during playback") == 1
-    assert "initials='AB' colour='rgb(1, 2, 3)' label_length=0 picture='' words=2" in caplog.text
+    assert (
+        "initials='AB' colour='rgb(1, 2, 3)' label_length=0 picture='' words=2 baseline_words=none"
+        in caplog.text
+    )
     assert "private phrase" not in caplog.text
 
 
@@ -640,3 +643,127 @@ async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id
     c._clock, c._transcript, c._events = Clock(), Transcript(), Bus()
     c._emit([cap.Final(seen[0][0][0], "hi", 0.0, 1.0)])
     assert "secret-person" not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+# ------------------------------- a person's row revised during the bot's line (#852, found live)
+
+PIC_ROW = {"i": "", "c": "rgba(0, 0, 0, 0)", "n": "", "p": "137b8afd3423"}
+
+
+class _Line:
+    """Whether the bot is playing a line, as the controller asks it."""
+
+    on = False
+
+    def __call__(self) -> bool:
+        return self.on
+
+
+def _with_line(c: Any) -> _Line:
+    line = _Line()
+    c.attach(c._provider, c._bot, line)
+    return line
+
+
+async def _show(c: Any, text: str, now: float, row: dict[str, Any] | None = None) -> None:
+    await c._take([{**(row or PIC_ROW), "t": text}], now)
+
+
+async def test_a_revision_of_the_same_words_during_a_line_is_not_speech_over_it(joinly_types: None) -> None:
+    """The live cut: the person's last caption was revised by Zoom (case, punctuation) while the bot spoke
+    and nobody talked. Same words as when the line began must leave the no-speech signal set. Fails if any
+    change to a row counts."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester, what's", 1.0)
+    line.on = True
+    await _show(c, "hey tester what's", 2.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_one_word_revised_with_the_same_count_is_an_edit(joinly_types: None) -> None:
+    """Zoom corrects a word in place: the count is the same and most words are as before. Fails if only an
+    identical text is treated as an edit."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's", 1.0)
+    line.on = True
+    await _show(c, "Hey Tester when's", 2.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_a_row_that_gains_a_word_during_a_line_cuts_it_at_once(joinly_types: None) -> None:
+    """Something new said over the bot stops it. Guard: the exemption must end at the first added word."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's", 1.0)
+    line.on = True
+    await _show(c, "Hey Tester what's up", 2.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_picture_person_never_heard_before_cuts_a_line_at_once(joinly_types: None) -> None:
+    """Guard: a person with a profile picture who has not spoken has no baseline, so any words are new. A fix
+    that waited for a name would leave them unable to interrupt (#810)."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    line.on = True
+    await _show(c, "Wait", 1.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_person_with_initials_cuts_a_line(joinly_types: None) -> None:
+    """Guard: a person with initials who says something new stops the line."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    row = {"i": "AB", "c": "rgb(1, 2, 3)"}
+    await _show(c, "Hello", 1.0, row)
+    line.on = True
+    await _show(c, "Hello there everyone", 2.0, row)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_row_replaced_by_a_shorter_different_utterance_cuts_a_line(joinly_types: None) -> None:
+    """Zoom replaces the row's text when a new utterance begins, and it can be shorter than the old one.
+    Fewer words is not an edit unless most of them were there. Guard against a rule that is only a count."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's up now", 1.0)
+    line.on = True
+    await _show(c, "Sure thing", 2.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_each_line_takes_a_fresh_baseline(joinly_types: None) -> None:
+    """Words added between two lines are not new to the second; words during it are. Fails if the baseline
+    is taken once, so the first line's picture of the row is used for the second."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's", 1.0)
+    line.on = True
+    await _show(c, "hey tester whats", 2.0)
+    assert c.no_speech_event.is_set()
+    line.on = False
+    await _show(c, "Hey Tester what's up", 3.0)  # said between the lines
+    line.on = True
+    await _show(c, "hey tester whats up", 4.0)  # an edit of it, in the second line
+    assert c.no_speech_event.is_set()
+    await _show(c, "hey tester whats up with the plan", 5.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_the_logs_hold_counts_and_none_of_the_captions_words(caplog: pytest.LogCaptureFixture) -> None:
+    """What someone said is never logged: the ignored edit gives the word counts before and after, and the
+    cut gives the baseline's count. Fails if a caption's text reaches a log line."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    with caplog.at_level("INFO"):
+        await _show(c, "Hey Tester what's", 1.0)
+        line.on = True
+        await _show(c, "hey tester whats", 2.0)
+        await _show(c, "hey tester whats", 3.0)
+        await _show(c, "hey tester whats up", 4.0)
+    assert "words_before=3 words=3" in caplog.text
+    assert caplog.text.count("an edit to words already shown") == 1
+    assert "words=4 baseline_words=3" in caplog.text
+    assert "tester" not in caplog.text.lower() and "what" not in caplog.text.lower()
