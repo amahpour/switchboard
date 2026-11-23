@@ -10,9 +10,10 @@ runs on the agent's machine.
   token's last use is written at most once a minute.
 - **Who is calling** (``HttpTools.prime``): the token's person and device, the device being the
   host of its agents' sessions (§27.6). The harness is the client's own claim, from its
-  ``clientInfo`` (Codex, Claude Code, OpenCode, Cursor or Devin). The session is the
+  ``clientInfo`` (Codex, Claude Code, OpenCode, Cursor, Devin or Grok Build). The session is the
   harness's own. Codex names its thread on every call (``_meta.threadId``), OpenCode its session
-  (``_meta["ai.opencode/sessionID"]``, §49.12). Claude Code names
+  (``_meta["ai.opencode/sessionID"]``, §49.12), Grok Build its session in a header its MCP entry fills
+  from its own ``{{session_id}}`` template (§49.15). Claude Code names
   the call (``_meta["claudecode/toolUseId"]``), and its PreToolUse hook, a call of the hidden
   ``hook`` tool just before, reports which session made that call (``HookUses``). Cursor's
   command hook injects a checked conversation ID into its call's arguments. Any other client
@@ -103,7 +104,9 @@ CLIENTS = {
     "rmcp": "devin",  # Devin's Rust transport; a matching input hook is still required
     "opencode": "opencode",
 }
-UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor and Devin"
+# Grok Build names its MCP client after the server: ``grok-shell-<server name>`` (recorded, 1.0.89, #851)
+CLIENT_PREFIXES = {"grok-shell-": "grok"}
+UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor, Devin and Grok Build"
 HUNG_UP = "the client closed the request before the wait ended"  # nobody reads it: the line is gone (#559)
 # the scripted test agent (§9.6): a client of this name on a test-mode broker, naming its session and
 # how its answers are confirmed in two headers. A broker that isn't in test mode never serves it.
@@ -131,10 +134,10 @@ HOOK_FIELDS = (
 )
 # a tool of switchboard's own server, by the name a harness gives it: Codex and a hand-made Claude
 # Code server say ``mcp__switchboard__<tool>``, Claude Code's plugin
-# ``mcp__plugin_switchboard_switchboard__<tool>``, Devin ``mcp__switchboard_https__<tool>`` and Cursor
-# ``MCP:switchboard_<tool>``
+# ``mcp__plugin_switchboard_switchboard__<tool>``, Devin ``mcp__switchboard_https__<tool>``, Cursor
+# ``MCP:switchboard_<tool>`` and Grok Build ``switchboard__<tool>`` (its plugin's server is ``switchboard``)
 OWN_TOOL_RE = re.compile(
-    r"mcp__(?:plugin_switchboard_)?switchboard__|mcp__switchboard_https__|MCP:switchboard_"
+    r"mcp__(?:plugin_switchboard_)?switchboard__|mcp__switchboard_https__|MCP:switchboard_|switchboard__"
 )
 LISTEN_PATH = "/mcp/listen"  # Claude Code's and OpenCode's listeners wait here (§49.4, §49.12)
 SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as command hooks (§49.4)
@@ -164,12 +167,28 @@ OPENCODE_STATUS_EVENTS = {
     "tool.execute.failed": "PostToolUseFailure",
 }
 OPENCODE_WAKE_EVENTS = frozenset({"wake.queued", "wake.dropped"})
+# What Grok Build's plugin reports at /mcp/event (§49.15), by the name Grok gives each event
+# (``hook_event_name``), and the event the broker reads it as. Nothing else is taken. A turn that ended
+# cancelled or failed is a Stop that is never held (only Grok's own Stop may wait for a message), marked
+# ``aborted`` so a follow-up it ended goes back to pending (§49.15).
+GROK_EVENTS = {
+    "SessionStart": "SessionStart",
+    "UserPromptSubmit": "UserPromptSubmit",
+    "PostToolUse": "PostToolUse",
+    "PostToolUseFailure": "PostToolUseFailure",
+    "Notification": "Notification",
+    "Stop": "Stop",
+    "StopCancelled": "Stop",
+    "StopFailure": "Stop",
+    "SessionEnd": "SessionEnd",
+}
 OPENCODE_STATUS_FIELDS = frozenset(
     {"event", "session_id", "tool_name", "tool_use_id", "tool_response", "batch_id", "ack"}
 )
 HARNESS_HEADER = b"x-switchboard-harness"  # absent means Claude, as before; OpenCode says so explicitly
 TOKEN_HEADER = b"x-switchboard-token"  # where the plugin sends a typed token: not Authorization (§49.5, #488)
-SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
+# the listener's session id, the only thing it sends; and Grok Build's session on every MCP call (§49.15)
+SESSION_HEADER = b"x-switchboard-session"
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
 RESUME_IDLE_HEADER = b"x-switchboard-resume-idle"  # Claude listener revocable by local hooks
@@ -292,7 +311,7 @@ def _listener_harness(raw: bytes) -> str:
         meta = params.get("_meta")
         info = meta.get(CLIENT_INFO_META_KEY) if isinstance(meta, dict) else None
     name = info.get("name") if isinstance(info, dict) else None
-    harness = CLIENTS.get(name[:80]) if isinstance(name, str) else None
+    harness = harness_of(name[:80]) if isinstance(name, str) else None
     return harness if harness is not None and harness in ("claude", "codex") else "unknown"
 
 
@@ -330,7 +349,18 @@ def _opening(raw: bytes) -> tuple[str, str, str] | None:
 def _classified(name: str) -> str | None:
     """What a session's client name decides (``prime``'s harness and ``InputIdentity``'s Cursor tools, from
     the name as ``client_info`` cuts it): the name itself when it is one the broker knows, else None."""
-    return name if name in CLIENTS or name == TEST_CLIENT else None
+    return name if harness_of(name) is not None or name == TEST_CLIENT else None
+
+
+def harness_of(name: str) -> str | None:
+    """The harness a client's name says it is (a claim): an exact name of ``CLIENTS``, or a name that starts
+    with one of ``CLIENT_PREFIXES`` and has more after it. None for any other name."""
+    if name in CLIENTS:
+        return CLIENTS[name]
+    for prefix, harness in CLIENT_PREFIXES.items():
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return harness
+    return None
 
 
 def _client_text(text: str) -> str:
@@ -549,7 +579,8 @@ class HttpTools:
 
     def _served(self) -> Caller | None:
         c = self._caller.get()
-        return c if c is not None and (c.harness in CLIENTS.values() or c.harness == "test") else None
+        served = {*CLIENTS.values(), *CLIENT_PREFIXES.values(), "test"}
+        return c if c is not None and c.harness in served else None
 
     async def prime(self, ctx: Context | None) -> None:
         try:
@@ -570,7 +601,7 @@ class HttpTools:
                 "ack": _header(scope, TEST_ACK_HEADER) or "",
             }
         else:
-            harness = CLIENTS.get(info.get("name", ""), "unknown")
+            harness = harness_of(info.get("name", "")) or "unknown"
         plugin = (_header(scope, plugin_versions.HEADER) or "")[:PLUGIN_RAW_MAX]
         conn = self.conn_for(token, harness, info, test=test, plugin=plugin)
         if harness == "test":
@@ -582,6 +613,10 @@ class HttpTools:
             thread = await self.uses.session(token.id, use) if use is not None else None
         elif harness == "opencode":
             thread = _id(request_meta(ctx).get(OPENCODE_SESSION_KEY))
+        elif harness == "grok":
+            # Grok Build fills this header from its own {{session_id}} template on every request (§49.15): the
+            # session id its hooks report too. A claim of the client, under the token's device, as Codex's is.
+            thread = _id(_header(scope, SESSION_HEADER))
         else:
             thread = self._thread_of(ctx)
         key = scope.get("state", {}).get("listener_key")
@@ -625,7 +660,9 @@ class HttpTools:
         session of the call it precedes; every other event goes to the session it names (§49.4),
         and the answer is the hook's reply, checked (``reply_for``)."""
         c = self._served()
-        if c is None or c.harness == "opencode":
+        if c is None or c.harness in ("opencode", "grok"):
+            # neither reports through this tool: OpenCode posts to /mcp/status, Grok Build's command hooks to
+            # /mcp/event (§49.15), so a call of it from either is the model's, and does nothing
             return "{}"
         event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
         if c.harness == "claude" and c.key is not None and sid:
@@ -1371,7 +1408,7 @@ class CommandHook:
             body = json.loads(raw)
         except ValueError:
             body = None
-        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin", "codex"):
+        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin", "codex", "grok"):
             await _reply(send, 400, {"error": "bad_request"})
             return
         harness = body["harness"]
@@ -1380,8 +1417,9 @@ class CommandHook:
         if sid is None or not isinstance(event, str):
             await _reply(send, 400, {"error": "bad_request"})
             return
-        if harness == "codex" and scope.get("path") != EVENT_PATH:
-            # Codex's one command hook reports at /mcp/event, and nowhere else
+        if harness in ("codex", "grok") and scope.get("path") != EVENT_PATH:
+            # Codex's one command hook reports at /mcp/event, and nowhere else; so does every one of Grok's,
+            # whose MCP calls name their session themselves (§49.15)
             await _reply(send, 400, {"error": "bad_request"})
             return
         self.auth.touch(row)
@@ -1408,6 +1446,15 @@ class CommandHook:
                 )
             await _reply(send, 200, {})
             return
+        aborted = False
+        if harness == "grok":
+            if event not in GROK_EVENTS:
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+            if GROK_EVENTS[event] == "Stop" and event != "Stop":
+                body = {k: v for k, v in body.items() if k != "wait_s"}  # a cancelled turn is never held
+                aborted = True  # and stays a cancel or a failure up to its verdict (§49.15)
+            event = GROK_EVENTS[event]
         ev = canonical_event(event)
         allowed = {
             "cursor": ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"),
@@ -1420,6 +1467,7 @@ class CommandHook:
                 "SessionEnd",
             ),
             "codex": ("PermissionRequest",),  # its one command hook: the report-only one (§49.9)
+            "grok": tuple(dict.fromkeys(GROK_EVENTS.values())),
         }[harness]
         if ev not in allowed:
             await _reply(send, 400, {"error": "bad_request"})
@@ -1444,9 +1492,22 @@ class CommandHook:
             return
         agents: Any = self.tools.state.agents
         conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
-        res = await agents.http_hook(
-            conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
-        )
+        params = hook_params(event, fields, self.tools.state.clock.now())
+        if aborted:
+            params["aborted"] = True
+
+        async def gone() -> None:
+            # the hook's process went away while its Stop was held (Grok dropped it, Cursor quit): so does the
+            # park, at once, so no message is handed to a request nobody reads (as the listener's route)
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            agents.run(self.tools.state.engine.close_conn_sinks(conn.id))
+
+        watch = asyncio.create_task(gone())
+        try:
+            res = await agents.http_hook(conn, harness, ev, params)
+        finally:
+            watch.cancel()
         if res.get("ended") == "restarting":
             await _reply(
                 send,

@@ -1,0 +1,73 @@
+{
+  "_source": "grok 1.0.89 (28be5bb1bf65) on Linux, headless -p; a personal hook in ~/.grok/hooks copied stdin; the model was a local stand-in chat-completions endpoint ([model.*] base_url), so no xAI login (#851); a tool call inside a subagent: the child's own session id and subagentType",
+  "_unverified": false,
+  "hookEventName": "post_tool_use",
+  "sessionId": "00000000-0000-4000-8000-0000000a1103",
+  "cwd": "/ws",
+  "workspaceRoot": "/ws",
+  "timestamp": "2026-11-22T15:17:58.138801673+00:00",
+  "transcriptPath": "/grok-home/.grok/sessions/%2Fws/00000000-0000-4000-8000-0000000a1103/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "toolName": "run_terminal_command",
+  "toolUseId": "call_1795360678095",
+  "toolInput": {
+    "command": "echo sub",
+    "description": "sub echo"
+  },
+  "toolResult": {
+    "type": "Bash",
+    "output": [
+      115,
+      117,
+      98,
+      10
+    ],
+    "output_for_prompt": "exit: 0\nsub\n",
+    "exit_code": 0,
+    "command": "echo sub",
+    "truncated": false,
+    "signal": null,
+    "timed_out": false,
+    "description": "sub echo",
+    "current_dir": "/ws",
+    "output_file": "/grok-home/.grok/sessions/%2Fws/00000000-0000-4000-8000-0000000a1103/terminal/call_1795360678095.log",
+    "total_bytes": 4,
+    "was_bare_echo": true
+  },
+  "toolInputTruncated": false,
+  "toolResultTruncated": false,
+  "durationMs": 30,
+  "isBackgrounded": false,
+  "subagentType": "general-purpose",
+  "hook_event_name": "PostToolUse",
+  "session_id": "00000000-0000-4000-8000-0000000a1103",
+  "transcript_path": "/grok-home/.grok/sessions/%2Fws/00000000-0000-4000-8000-0000000a1103/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "run_terminal_command",
+  "tool_input": {
+    "command": "echo sub",
+    "description": "sub echo"
+  },
+  "tool_response": {
+    "type": "Bash",
+    "output": [
+      115,
+      117,
+      98,
+      10
+    ],
+    "output_for_prompt": "exit: 0\nsub\n",
+    "exit_code": 0,
+    "command": "echo sub",
+    "truncated": false,
+    "signal": null,
+    "timed_out": false,
+    "description": "sub echo",
+    "current_dir": "/ws",
+    "output_file": "/grok-home/.grok/sessions/%2Fws/00000000-0000-4000-8000-0000000a1103/terminal/call_1795360678095.log",
+    "total_bytes": 4,
+    "was_bare_echo": true
+  },
+  "tool_use_id": "call_1795360678095",
+  "duration_ms": 30
+}

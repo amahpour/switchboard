@@ -149,6 +149,19 @@ HOOK_EVENTS: dict[str, frozenset[str]] = {
     "cursor": frozenset(
         {"SessionStart", "UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"}
     ),
+    # Grok Build (§49.15): its plugin's command hooks. A turn that ended cancelled or failed (StopCancelled,
+    # StopFailure) arrives as a Stop marked ``aborted``: a declined approval prompt ends the turn so (§7.4).
+    "grok": frozenset(
+        {
+            "SessionStart",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Notification",
+            "Stop",
+            "SessionEnd",
+        }
+    ),
     "devin": frozenset(
         {
             "SessionStart",
@@ -1557,4 +1570,5 @@ def parse_hook_event(harness: str, event: str, p: dict[str, Any]) -> HookEvent:
         subagent_bg=p.get("subagent_bg") is True,
         t=float(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else None,
         max_wait_s=float(mw) if isinstance(mw, (int, float)) and not isinstance(mw, bool) else None,
+        aborted=p.get("aborted") is True,
     )

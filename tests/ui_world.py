@@ -505,11 +505,12 @@ class UIWorld:
 
         b.on_loop(update)
 
-    def set_member_harness(self, room: str, name: str, harness: str) -> None:
+    def set_member_harness(self, room: str, name: str, harness: str, *, tier: bool = False) -> None:
         """Make a scripted agent (joined by ``add_agents``) a session of ``harness``, for the screens only, as
         the seeding does for #build's four: its participant row and the harness its messages carry are
-        rewritten, and the Members frame is published again. A test agent's harness never changes in real
-        life, and it makes no more calls under another harness afterwards."""
+        rewritten, and the Members frame is published again. ``tier`` also writes the tier and its note that
+        the harness's adapter gives a session. A test agent's harness never changes in real life, and it makes
+        no more calls under another harness afterwards."""
         b = self.broker
 
         def update() -> None:
@@ -526,6 +527,12 @@ class UIWorld:
                     "UPDATE messages SET sender_harness=? WHERE sender_membership_id=?",
                     (harness, member.membership_id),
                 )
+                if tier:
+                    shown, note = st.engine.adapter_for(harness).tier(None)
+                    s.con.execute(
+                        "UPDATE participants SET tier=?, tier_note=? WHERE id=?",
+                        (shown, note, member.participant_id),
+                    )
             st.hub.members_changed(room)
 
         b.on_loop(update)

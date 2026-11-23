@@ -194,7 +194,7 @@ def test_the_expected_plugin_version_is_the_servers_own() -> None:
     from switchboard import __version__
 
     assert plugin_versions.PINNED == dict.fromkeys(
-        ("claude", "codex", "cursor", "devin", "opencode"), __version__
+        ("claude", "codex", "cursor", "devin", "opencode", "grok"), __version__
     )
 
 

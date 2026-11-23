@@ -32,6 +32,7 @@ from harness import (  # noqa: E402
     cursor,
     devin,
     drift,
+    grok,
     preflight,
     scenarios,
     screens,
@@ -67,6 +68,13 @@ def test_a_quota_is_exhausted_only_at_zero_or_by_its_message() -> None:
             " → Run (once) (y)\n   Allowlist MCP Tool (tab)\n   Reject & propose changes (p)\n"
             "   Skip (esc or n)\n",
         ),
+        # recorded from Grok Build 1.0.89 asking about a shell command in ask mode, 2026-11-22 (#851)
+        (
+            "grok",
+            "  ┃  ›  run what was asked\n  ┃  │ touch approval-was-given\n"
+            "  ┃  1 (○) Always allow: touch approval-was-given\n  ┃  3 (●) Yes, proceed\n"
+            "  ┃  4 (○) No, reject (type to add feedback)\n",
+        ),
     ],
 )
 def test_an_approval_prompt_is_recognised_so_the_driver_declines_it(harness: str, prompt: str) -> None:
@@ -74,6 +82,187 @@ def test_an_approval_prompt_is_recognised_so_the_driver_declines_it(harness: str
     declined with Esc."""
     assert screens.approval_open(harness, prompt)
     assert not screens.approval_open(harness, "● Posted pong to #build\n❯ \n  ⏸ manual mode on")
+
+
+def test_grok_s_input_box_is_read_between_its_borders() -> None:
+    """Grok Build's input is a box: the driver reads the text in it, so a prompt that wrapped onto two rows is
+    still seen, and an empty box (``❯`` alone) is empty. Fails if a typed prompt is never seen as taken."""
+    screen = (
+        "  ❯ an earlier prompt, sent\n"
+        "╭────────────╮\n│ ❯ Use the switchboard tools. Call join │\n│   with room #build │\n"
+        "╰──── switchboard-standin ─╯\n  Enter:send\n"
+    )
+    assert screens.grok_input_text(screen) == "Use the switchboard tools. Call join with room #build"
+    assert screens.grok_input_text("╭──╮\n│ ❯ │\n╰──╯\n") == ""
+    assert screens.grok_input_text("no box at all") == ""
+
+
+def test_grok_s_login_copy_is_kept_outside_the_folder_it_works_in_and_uploads_are_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#928's review (F8, F12): the live run gives Grok a temp HOME of its own and works in ``<home>/ws``, a
+    subfolder of it; the copy of the person's login is ``<home>/.grok/auth.json``, outside ``ws``, so no
+    tool call or workspace snapshot of Grok's can read it; and its config turns telemetry and trace uploads
+    off. The harness itself writes no ``trusted_folders`` and passes no ``--trust``. Fails if the workspace
+    is beside the home (as on dc5df42a: ``<run>/ws`` and ``<run>/grok-home``), if the login is under the
+    workspace, or if a setting is missing."""
+    real = tmp_path / "real-home"
+    (real / ".grok").mkdir(parents=True)
+    (real / ".grok" / "auth.json").write_text('{"synthetic": true}')
+    monkeypatch.setattr(grok, "REAL_HOME", str(real))
+    monkeypatch.delenv("SWITCHBOARD_GROK_BASE_URL", raising=False)
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    r = object.__new__(grok.GrokRun)
+    r.base = tmp_path / "run"
+    r.ws = r.workspace()
+    r.ws.mkdir(parents=True)  # as ``Run.start`` makes it, before ``prepare``
+    r.token = "sbat_synthetic"
+    r.broker = type("B", (), {"url": "http://switchboard.localhost:1"})()
+    r.prepare()
+    home = Path(r.env()["HOME"]).resolve()
+    ws = r.ws.resolve()
+    auth = home / ".grok" / "auth.json"
+    assert ws == home / "ws" and ws.is_relative_to(home)  # the workspace is under HOME
+    assert (home.stat().st_mode & 0o777) == 0o700
+    assert auth.read_text() == '{"synthetic": true}' and (auth.stat().st_mode & 0o777) == 0o600
+    assert not auth.resolve().is_relative_to(ws)  # the login is not under the workspace
+    assert not list(ws.rglob("auth.json")) and not (ws / ".grok").exists()
+    assert not [f for f in home.rglob("*") if "trust" in f.name.lower()]  # no trusted_folders written
+    assert not [a for a in r.argv(False) + r.argv(True) if "trust" in a.lower()]
+    config = tomllib.loads((home / ".grok" / "config.toml").read_text())
+    assert config["features"]["telemetry"] is False
+    assert config["telemetry"]["trace_upload"] is False
+    assert config["plugins"]["enabled"] == ["switchboard"]
+    assert "trust" not in json.dumps(config).lower()
+    r.standin = None
+    r.scrub()
+    assert not auth.exists()
+
+
+# Grok Build 1.0.92's start-up question, as a live run saw it (the run's temp folder)
+GROK_TRUST_SCREEN = """
+  ~/ws
+
+                                                       Do you trust the contents of this directory?
+                                                          /tmp/sb-live-grok-hrvjdgzt/grok-home/ws
+
+                                                 Grok Build may run or modify contents in this directory,
+                                                                  posing security risks.
+
+                                                              Yes, proceed                 y
+                                                              No, quit                     n
+"""
+GROK_WS = "/tmp/sb-live-grok-hrvjdgzt/grok-home/ws"
+
+
+def _grok_run_with_keys(screen: str) -> tuple[grok.GrokRun, list[str]]:
+    r = object.__new__(grok.GrokRun)
+    sent: list[str] = []
+    r.session = "s"
+    r.harness = "grok"
+    r.stray_declined = 0
+    r.ws = Path(GROK_WS)
+    r.tmux = type("T", (), {"capture": lambda self, s: screen, "key": lambda self, s, k: sent.append(k)})()
+    return r, sent
+
+
+def test_grok_s_start_up_trust_question_is_answered_only_for_the_run_s_own_folder() -> None:
+    """#928, with the maintainer's yes of 2026-11-22: at start-up the driver presses ``y`` on Grok's trust
+    question when the folder it names is the run's own scratch folder, and the screen is not yet ready. The
+    same question about any other folder (the person's home, a parent, a longer path), or with rows that
+    don't read as Grok's, fails the run with nothing pressed. Fails if the run answers for another folder,
+    answers a malformed question, or never answers its own (the 1.0.92 run stopped there)."""
+    assert screens.grok_dialog(GROK_TRUST_SCREEN, {GROK_WS}) == "y"
+    assert screens.grok_dialog("❯ \nShift+Tab:mode", {GROK_WS}) is None
+    for other in ("/tmp/sb-live-grok-hrvjdgzt/grok-home", "/home/someone", GROK_WS + "/sub"):
+        assert screens.grok_dialog(GROK_TRUST_SCREEN.replace(GROK_WS, other), {GROK_WS}) == "FAIL"
+    no_yes_row = GROK_TRUST_SCREEN.replace("Yes, proceed                 y", "Yes, proceed")
+    assert screens.grok_dialog(no_yes_row, {GROK_WS}) == "FAIL"
+
+    r, sent = _grok_run_with_keys(GROK_TRUST_SCREEN)
+    assert r.ready_step(GROK_TRUST_SCREEN) is False and sent == ["y"]
+    elsewhere = GROK_TRUST_SCREEN.replace(GROK_WS, "/home/someone")
+    r, sent = _grok_run_with_keys(elsewhere)
+    with pytest.raises(AssertionError, match="never answers this one"):
+        r.ready_step(elsewhere)
+    assert sent == []
+
+
+QUESTION = "Do you trust the contents of this directory?"
+YES_ROW = "Yes, proceed                 y"
+NO_ROW = "No, quit                     n"
+
+
+def test_grok_s_trust_answer_reads_the_recorded_dialog_and_skips_the_header() -> None:
+    """F12: the recorded 1.0.92 screen is answered ``y``. Its top line ``~/ws`` is Grok's header, above the
+    question, and is not read as a path inside the dialog. Fails if the header counts, or if the dialog's
+    own rows (question, folder, warning, the two choices) stop reading as one dialog."""
+    assert screens.grok_dialog(GROK_TRUST_SCREEN, {GROK_WS}) == "y"
+    assert GROK_TRUST_SCREEN.lstrip().startswith("~/ws")
+    selected = GROK_TRUST_SCREEN.replace(YES_ROW, "❯ " + YES_ROW)
+    assert screens.grok_dialog(selected, {GROK_WS}) == "y"
+
+
+def test_grok_s_trust_answer_ignores_the_workspace_on_a_row_outside_the_dialog() -> None:
+    """F12: the workspace's path on an unrelated row (the header, a line of output) while the dialog names
+    another folder is ``FAIL``. aa90d3fc's parser took any line equal to the workspace, anywhere on the
+    pane, and answered ``y`` for the other folder."""
+    for where in ("header", "below"):
+        screen = GROK_TRUST_SCREEN.replace(GROK_WS, "/home/someone")
+        screen = f"{GROK_WS}\n{screen}" if where == "header" else f"{screen}\n{GROK_WS}\n"
+        assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL", where
+
+
+def test_grok_s_trust_answer_fails_on_two_trust_questions() -> None:
+    """F12: two lines asking the trust question (two dialogs, or one drawn over another) is ``FAIL``, even
+    when both name the run's folder. aa90d3fc's parser answered ``y``."""
+    dialog = f"{QUESTION}\n{GROK_WS}\n"
+    screen = GROK_TRUST_SCREEN.replace(QUESTION, f"{QUESTION}\n{GROK_WS}\n\n{QUESTION}", 1)
+    assert screen.count(QUESTION) == 2 and dialog in screen
+    assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL"
+
+
+def test_grok_s_trust_answer_fails_on_a_path_between_the_folder_and_the_choices() -> None:
+    """F12: between the folder and the choices only the warning text may stand; a line that looks like a
+    path (``/`` or ``~``) there means the dialog names more than the one folder, and is ``FAIL``.
+    aa90d3fc's parser answered ``y``."""
+    for path in ("/home/someone", "~/elsewhere"):
+        screen = GROK_TRUST_SCREEN.replace("posing security risks.", f"posing security risks.\n{path}")
+        assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL", path
+
+
+def test_grok_s_trust_answer_fails_when_the_choices_are_out_of_order_or_missing() -> None:
+    """F12: the two rows after the warning must be exactly "Yes, proceed  y" then "No, quit  n". Swapped,
+    with the "No" row gone, or with another row between them is ``FAIL``. aa90d3fc's parser answered ``y``
+    to each, since it only looked for a "Yes" row anywhere."""
+    swapped = GROK_TRUST_SCREEN.replace(YES_ROW, "@@").replace(NO_ROW, YES_ROW).replace("@@", NO_ROW)
+    no_quit = GROK_TRUST_SCREEN.replace(NO_ROW, "")
+    between = GROK_TRUST_SCREEN.replace(YES_ROW, f"{YES_ROW}\nYes, always    a")
+    for name, screen in (("swapped", swapped), ("no quit row", no_quit), ("a row between", between)):
+        assert screens.grok_dialog(screen, {GROK_WS}) == "FAIL", name
+
+
+def test_grok_is_told_to_run_the_scratch_script_as_given_from_its_folder() -> None:
+    """The first real-login run: Grok searched the disk for ``hold.sh`` before running it, a command no rule
+    allows, so the turn ended at a declined prompt. Its join prompt keeps the shared one and adds that the
+    script is in its folder, to run exactly as asked. Fails if Grok's prompt loses either."""
+    from harness import run as harness_run
+
+    r = object.__new__(grok.GrokRun)
+    r.name = "grok-1"
+    prompt = r.join_prompt()
+    assert prompt.startswith(harness_run.Run.join_prompt(r))
+    assert "current folder" in prompt and "exactly that command" in prompt
+
+
+def test_grok_s_trust_question_after_start_up_fails_the_run_and_is_never_answered() -> None:
+    """F12: a trust question once the run is under way fails it with a clear message, and no key is sent for
+    it (not even the Ctrl+C that declines a tool's prompt), even for the run's own folder. Fails if the run
+    answers or declines it."""
+    r, sent = _grok_run_with_keys(GROK_TRUST_SCREEN)
+    with pytest.raises(AssertionError, match="never answers this one"):
+        r.decline_stray_prompt()
+    assert sent == []
 
 
 def test_claudes_start_up_dialogs_get_only_the_answers_this_run_owns() -> None:
@@ -773,8 +962,8 @@ def test_a_harness_runs_only_when_named(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_a_plain_pytest_skips_every_live_module() -> None:
-    """With no ``SWITCHBOARD_LIVE`` the twelve live modules (ten harness runs, the meeting self-test and its
-    hosted variant, which start containers and join a real call) are collected and skipped, each with the
+    """With no ``SWITCHBOARD_LIVE`` the thirteen live modules (eleven harness runs, the meeting self-test and
+    its hosted variant, which start containers and join a real call) are collected and skipped, each with the
     line that says how to run it, and nothing is run. (The hosted variant imports the self-test, whose skip
     it shares, so that line shows twice.) Fails if a live module starts a broker, a container or a CLI on
     import, or if one is added without the opt-in."""
@@ -785,8 +974,8 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
     )  # fmt: skip
     out = r.stdout + r.stderr
     assert r.returncode in (0, 5), out  # 5: no test was collected, every module skipped itself
-    assert "12 skipped" in out and "passed" not in out and "failed" not in out, out
-    for h in ("claude", "codex", "devin", "cursor", "opencode", "meeting"):
+    assert "13 skipped" in out and "passed" not in out and "failed" not in out, out
+    for h in ("claude", "codex", "devin", "cursor", "opencode", "grok", "meeting"):
         assert f"SWITCHBOARD_LIVE={h}" in out, out
     assert sorted(p.name for p in (LIVE).glob("test_live_*.py")) == [
         "test_live_claude.py",
@@ -797,6 +986,7 @@ def test_a_plain_pytest_skips_every_live_module() -> None:
         "test_live_codex.py",
         "test_live_cursor.py",
         "test_live_devin.py",
+        "test_live_grok.py",
         "test_live_opencode.py",
         "test_live_restart.py",
     ]

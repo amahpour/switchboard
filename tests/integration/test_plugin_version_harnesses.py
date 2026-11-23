@@ -10,6 +10,7 @@ the way it does for the other two (DESIGN.md §49.13). A plugin that sends none 
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -196,12 +197,12 @@ def mcp_who(b: InProcBroker, harness: str, token: str, client: Any) -> dict[str,
 
 
 def test_every_harness_has_a_versioned_plugin_with_its_own_update_words() -> None:
-    """All five harnesses are checked by the one major rule, each with a distinct update instruction naming
-    that harness (§49.13, #887). Fails if a harness is left out of either table, or two share words."""
-    five = {"claude", "codex", "cursor", "devin", "opencode"}
-    assert set(plugin_versions.PINNED) == set(plugin_versions.UPDATE) == five
-    assert len(set(plugin_versions.UPDATE.values())) == 5
-    for harness in five:
+    """All six harnesses are checked by the one major rule, each with a distinct update instruction naming
+    that harness (§49.13, #887, #851). Fails if a harness is left out of either table, or two share words."""
+    six = {"claude", "codex", "cursor", "devin", "opencode", "grok"}
+    assert set(plugin_versions.PINNED) == set(plugin_versions.UPDATE) == six
+    assert len(set(plugin_versions.UPDATE.values())) == 6
+    for harness in six:
         assert harness in plugin_versions.UPDATE[harness].lower()
 
 
@@ -230,3 +231,17 @@ def test_devins_real_hook_sends_the_plugin_version(broker: InProcBroker) -> None
     assert (member["plugin_state"], member["plugin_version"]) == ("current", NOW)  # its own join's report
     dv.run_hook("post-other", devin_tool(sid))
     assert inspector(broker, "dev")["plugin_version"] == NOW
+
+
+def test_grok_s_real_hook_sends_the_plugin_version(broker: InProcBroker, tmp_path: Path) -> None:
+    """Grok Build's script (``plugins/grok/bin/hook``, with the recorded UserPromptSubmit) sends its
+    manifest's version on its report, since its MCP entry is a static file that carries none (#851). Fails if
+    the script sends none (the member would carry no plugin version)."""
+    from test_agents_http_grok import SID, Grok, hook, payload
+
+    broker.call("room.create", {"name": "#build"})
+    token = make_token(broker)
+    assert Grok(broker, token).start().call("join", room="#build", screen_name="gro")["ok"]
+    hook(broker, token, tmp_path, payload("UserPromptSubmit.json", sid=SID))
+    member = inspector(broker, "gro")
+    assert (member["plugin_state"], member["plugin_version"]) == ("current", NOW)

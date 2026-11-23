@@ -52,7 +52,7 @@ def test_a_1_13_0_database_moves_its_webhooks_and_drops_the_one_that_does_not_pa
     backup = db.connect(db.backup_path_for(path, 59), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 60
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 61
         assert db.schema_version(backup) == 59
         q = (
             "SELECT type, name, sql FROM sqlite_master"
@@ -169,7 +169,7 @@ def test_a_status_time_no_broker_wrote_is_dropped_and_the_upgrade_commits(tmp_pa
     at_59(path, {"webhook_status:1": {"at": at, "ok": False, "error": notify.fail_reason("status")}})
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == 60
+        assert db.schema_version(con) == db.SCHEMA_VERSION
         assert moved_people(con) == CLEAN
         assert rows(con, "SELECT first_at, first_ok, first_error FROM webhooks WHERE person=1") == [
             (None, None, None)
@@ -229,7 +229,7 @@ def test_a_person_key_no_broker_wrote_is_skipped_and_the_upgrade_commits(tmp_pat
     )
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == 60
+        assert db.schema_version(con) == db.SCHEMA_VERSION
         assert moved_people(con) == CLEAN
         assert rows(con, "SELECT key FROM webhook_sent") == [("q:build:12",)]
         assert rows(con, "SELECT key FROM broker_settings") == [("notify_text:0",)]
@@ -270,7 +270,7 @@ def test_text_that_cannot_be_stored_is_dropped_and_the_upgrade_commits(
     at_59(path, extra)
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == 60
+        assert db.schema_version(con) == db.SCHEMA_VERSION
         assert moved_people(con) == CLEAN
         assert rows(con, "SELECT first_at, first_ok, first_error FROM webhooks WHERE person=1") == [status_1]
         assert rows(con, "SELECT key FROM webhook_sent") == [("q:build:12",)]
@@ -293,7 +293,7 @@ def test_a_sent_key_with_a_nul_is_skipped_and_the_upgrade_commits(tmp_path: Path
     at_59(path, {"webhook_sent:0": ["q:build:12", key], "webhook_sent:1": ["b:plan:3"]})
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == 60
+        assert db.schema_version(con) == db.SCHEMA_VERSION
         assert moved_people(con) == CLEAN
         assert sorted(rows(con, "SELECT key FROM webhook_sent")) == [("b:plan:3",), ("q:build:12",)]
         assert rows(con, "SELECT key FROM broker_settings") == [("notify_text:0",)]

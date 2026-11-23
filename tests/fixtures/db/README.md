@@ -22,5 +22,11 @@
   it to schema v60, which moves them into `webhooks` and `webhook_sent` (#923, #926, DESIGN.md
   §62.4). `make_v1_13_0.py` made it, from the 1.13.0 code (see its docstring).
 
+- `v1_14_0.sql`: a schema-v60 database written by switchboard 1.14.0: a member over HTTPS of
+  every harness it knew, joined to a room, two chat lines (so the search index has rows), bob,
+  an agent token, and the owner's webhook with a sent key. `tests/unit/test_db_migrate_v61.py`
+  migrates it to schema v61, which admits Grok Build as a harness (#851, DESIGN.md §49.15).
+  `make_v1_14_0.py` made it, from the 1.14.0 code (see its docstring).
+
 Nothing here comes from a real session; `tests/unit/test_fixtures_scan.py` checks
 these files like every other fixture.

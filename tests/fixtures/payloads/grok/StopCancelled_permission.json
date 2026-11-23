@@ -1,0 +1,18 @@
+{
+  "_source": "grok 1.0.89 (28be5bb1bf65) on Linux, headless -p; a personal hook in ~/.grok/hooks copied stdin; the model was a local stub chat-completions endpoint ([model.*] base_url) and MCP servers local stubs or a throwaway broker, so no xAI login (spike #902); headless, no allow rule for the MCP tool",
+  "_unverified": false,
+  "hookEventName": "stop_cancelled",
+  "sessionId": "00000000-0000-4000-8000-0000000a1002",
+  "cwd": "/ws",
+  "workspaceRoot": "/ws",
+  "timestamp": "2026-11-20T16:06:31.072692952+00:00",
+  "transcriptPath": "/grok-home/sessions/%2Fws/00000000-0000-4000-8000-0000000a1002/updates.jsonl",
+  "promptId": "00000000-0000-4000-8000-0000000a2002",
+  "permissionMode": "default",
+  "reason": "permission_cancelled",
+  "cancelledBy": "user",
+  "hook_event_name": "StopCancelled",
+  "session_id": "00000000-0000-4000-8000-0000000a1002",
+  "transcript_path": "/grok-home/sessions/%2Fws/00000000-0000-4000-8000-0000000a1002/updates.jsonl",
+  "permission_mode": "default"
+}
