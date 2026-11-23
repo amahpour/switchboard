@@ -467,7 +467,6 @@ class CaptionsTranscriptionController:
         self._bot = ""
         self._playback_active: Callable[[], bool] = lambda: False
         self._anonymous_own: dict[str, str] = {}
-        self._playing_at = float("-inf")  # the last read at which the bot was playing a line (#852)
         self._task: asyncio.Task[None] | None = None
         self._drain_task: asyncio.Task[None] | None = None
         self._no_speech = asyncio.Event()
@@ -657,27 +656,22 @@ class CaptionsTranscriptionController:
                     redact_markup(row),
                 )
         self._anonymous_own = anonymous_own
-        playing = self._playback_active()
-        if playing:
-            self._playing_at = now
-        # The bot's own row can keep changing for a moment after its line ends (caption lag) (#852)
-        blind = playing or now - self._playing_at < QUIET_S
-        self._sample_active(entries, blind)
+        self._sample_active(entries)
         finals = self._hold.step(self._rule.feed(entries, now), entries, now)
-        self._update_no_speech(now, blind)
+        self._update_no_speech(now)
         if finals:
             await self._dump_buttons()
             await self._look_up(now, {f.key for f in finals})
         self._emit(finals)
 
-    def _update_no_speech(self, now: float, blind: bool = False) -> None:
+    def _update_no_speech(self, now: float) -> None:
         playing = self._playback_active()
-        # While the bot plays (and for the caption lag after), a row nobody has named yet (no initials, no
-        # label, and a picture that was not named from earlier speech) may be the bot's own (#852, live): it
-        # does not count as a person talking over the bot. A picture person named before the line cuts it at
-        # once; one first heard during the line is not noticed for that line (see ``_sample_active``).
+        # During playback a row nobody has named yet (no initials, no label, and no picture the active speaker
+        # has named as someone else) may be the bot's own first frame (#852, live): it does not count as a
+        # person talking over the bot until it has an identity. A person with a picture is named by the call's
+        # active-speaker detection after ``PIC_MIN_SAMPLES`` changes; a real interruption is noticed then.
         rows = self._rule.changing_rows(
-            now, 0.6, lambda k: self._is_own_key(k) or (blind and self._is_unnamed_key(k))
+            now, 0.6, lambda k: self._is_own_key(k) or (playing and self._is_unnamed_key(k))
         )
         first = next(rows, None)
         if first is None:
@@ -697,20 +691,14 @@ class CaptionsTranscriptionController:
                 )
         self._no_speech.clear()
 
-    def _sample_active(self, entries: list[tuple[str, str]], blind: bool = False) -> None:
+    def _sample_active(self, entries: list[tuple[str, str]]) -> None:
         """While a speaker's caption changes, note who the call's own active-speaker detection names (joinly's
-        Zoom fix reads the speaking tile). It names a speaker without opening Zoom's participant panel.
-
-        ``blind``: the bot is playing, or just was (#852). joinly's observer then names the first tile that is
-        not the bot, usually a person, so the name says nothing about which row is changing: it is not recorded
-        for a row with a picture and no initials, or the bot's own row would be named as that person."""
+        Zoom fix reads the speaking tile). It names a speaker without opening Zoom's participant panel."""
         name = getattr(getattr(self._provider, "_platform_controller", None), "active_speaker", None)
         for key, text in entries:
             if text != self._seen_text.get(key):
                 self._seen_text[key] = text
                 self._active_samples += 1
-                if blind and not key_parts(key)[0].strip() and key_pic(key):
-                    continue
                 if isinstance(name, str) and name:
                     self._active_named += 1
                     counts = self._active.setdefault(self._active_id(*key_parts(key), key_pic(key)), {})
