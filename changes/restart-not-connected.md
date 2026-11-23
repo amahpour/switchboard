@@ -1,3 +1,0 @@
-### Fixed
-
-- **A broker restart no longer brings every agent out of the Members pane's Not connected fold.** The restart set every session offline and counted that as hearing from it, so after any restart or upgrade every member that was gone showed again as a plain offline row for 30 minutes, and `who()` dropped its `not_connected_since`. Now a member is not connected from when it was last heard from, restart or not; one heard a minute before the restart still has the rest of its 30 minutes. The 3-day cleanup counts from the same time, so a restart no longer postpones it: a session last heard 3 or more days before an upgrade is removed at the first sweep after it, with the usual notice, and can join again (#948).
