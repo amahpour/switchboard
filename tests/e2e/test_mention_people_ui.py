@@ -261,7 +261,9 @@ def test_another_persons_mention_raises_the_badge_but_your_own_does_not(
     tab, a count in the title and, on a phone, on the Rooms toggle -- as an agent's @alice would
     be. Bob talking without naming her, and naming carol, are not. Alice's own @bob in the same
     room is no badge for her (and is one for bob, in his own page); opening the room clears it,
-    and bob's message is a mention line. Fails if a person's mention is only ever an agent's."""
+    and bob's message is a mention line, and marks it seen on the broker with no further tap, on a
+    phone too. Fails if a person's mention is only ever an agent's, or if the phone's drawer still
+    covers the log when the page checks it and nothing checks again once it has gone (#941)."""
     options: dict[str, Any] = PHONE if phone else {}
     room = "watched-phone" if phone else "watched"
     with room_of_its_own(hosted, room):
@@ -297,7 +299,14 @@ def test_another_persons_mention_raises_the_badge_but_your_own_does_not(
         # alice's own @bob is a badge for bob, on his page, and (above) none for her
         expect(bob.locator(f'#tabs .room[data-room="#{room}"] .badge')).to_have_text("1")
 
-        open_room(alice, room)
+        # opening the room marks it seen once a painted frame shows its log: on a phone, once the
+        # drawer has slid off it, with no tap (it waited for one, and was sent by the redraw of
+        # room_of_its_own's /close instead: a 404 and a console error at teardown, #941). Let that
+        # mark answer before the room is closed
+        seen = f"/api/rooms/{room}/seen"
+        with alice.expect_response(lambda r: r.request.method == "POST" and r.url.endswith(seen)) as marked:
+            open_room(alice, room)
+        assert marked.value.ok, marked.value.status
         expect(badge).to_have_count(0)
         expect(alice).to_have_title(f"switchboard — #{room}")
         expect(chat_row(alice, mention)).to_have_class(cls("mention"))
