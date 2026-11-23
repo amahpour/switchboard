@@ -61,7 +61,7 @@
     if (frame && ready && current) frame.contentWindow.postMessage({ t: 'sb-board', action, room: current, session, ...extra }, '*');
   }
   function dark() { return document.documentElement.dataset.theme === 'dark' || (document.documentElement.dataset.theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches); }
-  function init() { post('init', { elements: cache.get(current) || [], dark: dark() }); }
+  function init() { post('init', { elements: cache.get(current) || [], dark: dark(), seq: seqs.get(current) || 0 }); }
   // The board mounts in Excalidraw's light theme and learns the app's theme from the `init` above, so for a
   // moment a dark app showed a white frame (#684). The frame stays hidden, over the host's own background
   // (the app's), until it reports its first render, which is after the theme is set; two animation frames
@@ -147,7 +147,7 @@
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {
-        post('elements', { elements: merged });
+        post('elements', { elements: merged, seq: seqs.get(room) || 0 });
         el('play').disabled = !frames().length;
         if (playing) showFrame(Math.max(0, frames().findIndex(f => f.id === selected)));
       }

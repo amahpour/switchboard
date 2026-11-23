@@ -8,6 +8,10 @@ import { Excalidraw, MainMenu, restoreElements, exportToBlob } from '@excalidraw
 import '@excalidraw/excalidraw/index.css';
 import './frame.css';
 let playing = null, fullScene = [];
+// The version of the broker's board the newest copy applied came from (`seq`), and whether this frame has sent a
+// change since: a copy older than that, or the same one again once something was sent, would put back text the
+// person has typed past (#937).
+let copySeq = -1, sent = false;
 let api = null, session = null, room = null, known = new Map(), applying = false, timer = null, pointer = false, dirty = false;
 const sig = e => `${e.version}:${e.versionNonce}`;
 const post = (action, extra = {}) => parent.postMessage({ t: 'sb-board', action, session, room, ...extra }, '*');
@@ -19,6 +23,7 @@ function flush() {
   const changed = cleaned.filter(e => known.get(e.id) !== sig(e));
   dirty = false;
   if (!changed.length) return;
+  sent = true;
   changed.forEach(e => known.set(e.id, sig(e)));
   fullScene = rules.merge(fullScene, changed);
   post('change', { elements: changed });
@@ -46,14 +51,17 @@ window.addEventListener('message', async ev => {
   if (ev.source !== parent || !m || m.t !== 'sb-board' || typeof m.session !== 'string' || typeof m.room !== 'string' || !api) return;
   if (m.action === 'init') {
     const elements = rules.batch(m.elements, true);
-    if (!elements) return;
+    if (!elements || !Number.isInteger(m.seq) || m.seq < 0) return;
+    copySeq = m.seq; sent = false;
     session = m.session; room = m.room;
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
     apply(elements);
     if (elements.some(e => !e.isDeleted)) api.scrollToContent(undefined, { fitToContent: true });
   } else if (m.session === session && m.room === room && m.action === 'elements') {
     const elements = rules.batch(m.elements, true);
-    if (elements) apply(elements);
+    if (!elements || !Number.isInteger(m.seq) || m.seq < copySeq || (sent && m.seq === copySeq)) return;
+    copySeq = m.seq;
+    apply(elements);
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
   } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {

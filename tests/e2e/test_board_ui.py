@@ -407,6 +407,99 @@ def test_text_closed_with_escape_after_the_broker_answered_is_sent_again(
     assert token not in scene and "aB3aB3" not in scene
 
 
+def test_an_older_board_copy_does_not_overwrite_text_a_person_typed_after_it(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """A person types, the frame sends the open text and the broker stores it; they type more and that is
+    stored too. Then the board copy from before the second stretch arrives at the frame (#937: under load
+    the parent page's older copy came after the frame's newer keystrokes) and replaced the open text with
+    the older one, losing the characters typed in between. The copy is posted on purpose here, with its own
+    older `seq`, so nothing depends on load. Fails if that copy changes the open text, or if a copy newer
+    than everything the frame has (an agent's note, at the next `seq`) is not applied after it."""
+    room = "board-older-copy"
+    world.create_room(room)
+    world.add_agents("#" + room, ("drawer",))
+    page = ui.open(room)
+    open_board(page)
+    frame = page.frame_locator("#whiteboard-host iframe")
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    # what the frame says to the app names the session and room an app-to-frame message must carry
+    page.evaluate(
+        "() => { window.__sb = null; window.addEventListener('message', e => {"
+        " if (e.data && e.data.t === 'sb-board' && e.data.session)"
+        " window.__sb = [e.data.session, e.data.room]; }); }"
+    )
+    b = world.broker
+
+    def stored_or_none() -> tuple[int, dict[str, Any]]:
+        seq, elements = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))
+        texts = [e for e in elements if e.get("type") == "text"]
+        return (seq, texts[0]) if texts else (seq, {})
+
+    def wait_stored(words: str) -> tuple[int, dict[str, Any]]:
+        deadline = time.monotonic() + 20
+        seq, text = 0, {}
+        while words not in str(text.get("originalText")) and time.monotonic() < deadline:
+            time.sleep(0.05)
+            seq, text = stored_or_none()
+        assert words in str(text.get("originalText")), text
+        return seq, text
+
+    frame.locator("label").filter(has=frame.locator('[data-testid="toolbar-text"]')).click()
+    box = page.locator("#whiteboard-host iframe").bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.4)
+    page.keyboard.insert_text("alpha")
+    first_seq, first = wait_stored("alpha")
+    # the copy the app held before the next stretch of typing, exactly as the broker stored it
+    old_elements = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))[1]
+    page.keyboard.insert_text(" beta gamma")
+    second_seq, second = wait_stored("alpha beta gamma")
+    assert second_seq > first_seq
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getAppState().editingTextElement !== null && window.sbBoard.api"
+        ".getSceneElements().some(e => e.type === 'text' && e.originalText === 'alpha beta gamma')",
+    )
+    wait_js(page, "() => window.__sb !== null")
+    post = """([copy, seq]) => { const [session, room] = window.__sb;
+      document.querySelector('#whiteboard-host iframe').contentWindow.postMessage(
+        { t: 'sb-board', action: 'elements', session, room, elements: copy, seq }, '*'); }"""
+    # Messages reach the frame in order, so a `theme` message sent after the older copy is handled only once
+    # the older copy has been; the wrapper records every scene the frame draws, and the theme call ends it.
+    board_frame.evaluate(
+        """() => { const api = window.sbBoard.api, update = api.updateScene.bind(api);
+          window.__drawn = []; window.__themed = false;
+          api.updateScene = data => {
+            if (data.elements) window.__drawn.push(
+              data.elements.filter(e => e.type === 'text').map(e => e.originalText));
+            if (data.appState && data.appState.theme === 'dark') window.__themed = true;
+            return update(data); }; }"""
+    )
+    page.evaluate(post, [old_elements, first_seq])
+    page.evaluate(
+        """() => { const [session, room] = window.__sb;
+          document.querySelector('#whiteboard-host iframe').contentWindow.postMessage(
+            { t: 'sb-board', action: 'theme', session, room, dark: true }, '*'); }"""
+    )
+    wait_js(board_frame, "() => window.__themed === true")
+    drawn = board_frame.evaluate("() => window.__drawn")
+    assert ["alpha"] not in drawn, drawn
+    assert board_frame.evaluate("() => window.sbBoard.api.getAppState().editingTextElement !== null")
+    made = world.agent_call("#" + room, "drawer", "board", action="note", text="newer", x=400, y=300)
+    assert made["ok"], made
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getSceneElements()"
+        ".some(e => e.type === 'text' && e.originalText === 'newer')",
+    )
+    texts = board_frame.evaluate(
+        "() => window.sbBoard.api.getSceneElements().filter(e => e.type === 'text').map(e => e.originalText)"
+    )
+    assert "alpha beta gamma" in texts and "alpha" not in texts, texts
+
+
 def test_a_picture_for_an_agent_shows_only_the_committed_board(
     ui: UI,  # noqa: F811
     world: UIWorld,  # noqa: F811
