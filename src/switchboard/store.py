@@ -97,6 +97,9 @@ class Ambiguous(StoreError):
         self.names = names
 
 
+PING_BUSY_MS = 500  # how long a /readyz probe waits for a lock another process holds (§30.3)
+
+
 class Store:
     def __init__(self, con: sqlite3.Connection, clock: Clock | None = None):
         self.con = con
@@ -1735,6 +1738,19 @@ class Store:
     def meta_get(self, key: str) -> str | None:
         r = self.con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return str(r[0]) if r else None
+
+    def ping(self) -> None:
+        """One cheap read that reaches the file, for ``/readyz`` (§30.3): raises ``sqlite3.Error`` when it
+        can't be read. The connection's page cache goes first: a warm connection answers this SELECT from
+        memory, and says all is well with every disk read failing (#953). Only the event loop uses this
+        connection, so the shorter wait for a lock is the probe's alone, and it is put back."""
+        busy_ms = self.con.execute("PRAGMA busy_timeout").fetchone()[0]
+        self.con.execute(f"PRAGMA busy_timeout={PING_BUSY_MS}").fetchall()
+        try:
+            self.con.execute("PRAGMA shrink_memory").fetchall()
+            self.con.execute("SELECT 1 FROM meta LIMIT 1").fetchone()
+        finally:
+            self.con.execute(f"PRAGMA busy_timeout={int(busy_ms)}").fetchall()
 
     def meta_set(self, key: str, value: str) -> None:
         with db.tx(self.con):

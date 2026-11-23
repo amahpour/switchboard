@@ -26,8 +26,8 @@ LOGIN_TTL_S = 300
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 UI_HOST = "switchboard.localhost"
 # paths a platform's health checker may GET without the UI's Host (it probes the container's own
-# address): they answer "ok" and nothing else
-OPEN_PATHS = frozenset({"/healthz"})
+# address): they answer "ok" and nothing else (/readyz also reads the database, §30.3)
+OPEN_PATHS = frozenset({"/healthz", "/readyz"})
 # agents over HTTPS (DESIGN.md §49.2): an agent token authenticates them, never a cookie, and the
 # route itself (``agent_http.AgentAuth``) refuses any request that has an Origin, so a browser can't
 # call it at all; its Host is checked as everywhere
@@ -284,7 +284,7 @@ class HostOriginGuard:
     - ``Host`` must be exactly the UI's (``switchboard.localhost:<port>``, or the public URL's
       host), else 421 (http) or a handshake refused with close code 1008, which the server
       sends as 403 (websocket). The one exception is a GET or HEAD of ``OPEN_PATHS``
-      (``/healthz``), which a platform's health checker sends to the container's own address.
+      (``/healthz``, ``/readyz``), which a platform's health checker sends to the container's own address.
     - Unsafe http methods also need ``Origin`` to be the UI's origin and ``X-Switchboard: 1``,
       else 403. (The session cookie is checked by routes.) The exceptions are ``AGENT_PATHS``
       (``/mcp``, ``/mcp/listen``, ``/mcp/session`` and the command hooks'), which an agent token

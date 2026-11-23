@@ -69,9 +69,10 @@ ENV SWITCHBOARD_HOME=/data/switchboard \
 VOLUME ["/data"]
 WORKDIR /data
 EXPOSE 7419
-# for Docker and Compose (Kubernetes and Render probe /healthz themselves): the standard
+# for Docker and Compose (Kubernetes and Render probe the broker themselves); /readyz reads the database,
+# so a broker that can't read it turns unhealthy: the standard
 # library only, straight to the broker's own port, never through a proxy from the environment
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD python3 -c 'import os, urllib.request as u; u.build_opener(u.ProxyHandler({})).open("http://127.0.0.1:%s/healthz" % (os.environ.get("SWITCHBOARD_PORT") or "7419"), timeout=4)'
+  CMD python3 -c 'import os, urllib.request as u; u.build_opener(u.ProxyHandler({})).open("http://127.0.0.1:%s/readyz" % (os.environ.get("SWITCHBOARD_PORT") or "7419"), timeout=4)'
 ENTRYPOINT ["/usr/local/bin/switchboard"]
 CMD ["start", "--foreground", "--log-stdout"]
