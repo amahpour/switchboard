@@ -8296,9 +8296,9 @@
     return notifyIcons;
   }
 
-  // The sender's avatar, from this page's own origin: an uploaded one (§29.11), or the built-in image of Codex, Cursor
-  // and Devin, in the scheme the page is showing; for the rest (Claude Code, OpenCode, a person) a tile the page draws
-  // itself, the harness's color and its letters. No address but the broker's own.
+  // The sender's avatar, from this page's own origin: an uploaded one (§29.11), or the built-in image of Codex, Cursor,
+  // Devin and Grok Build, in the scheme the page is showing; for the rest (Claude Code, OpenCode, a person) a tile
+  // the page draws itself, the harness's color and its letters. No address but the broker's own.
   async function notifyIconFor(who) {
     if (!who) return undefined;
     const theme = document.documentElement.getAttribute('data-theme');
@@ -8310,7 +8310,9 @@
       const mine = (await notifyIconList()).filter(function (i) { return i.harness === harness; });
       const pick = mine.find(function (i) { return i.scheme === want; }) || mine[0];
       if (pick) return '/api/agent-icons/' + harness + '/' + pick.scheme + '?v=' + encodeURIComponent(pick.v);
-      if (harness === 'codex' || harness === 'cursor' || harness === 'devin') return '/static/agents/' + harness + '-' + want + '.png';
+      if (harness === 'codex' || harness === 'cursor' || harness === 'devin' || harness === 'grok') {
+        return '/static/agents/' + harness + '-' + want + '.png';
+      }
     }
     try {
       const c = document.createElement('canvas');

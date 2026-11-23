@@ -235,9 +235,9 @@ def test_it_notifies_when_the_page_is_visible_but_not_focused_and_not_when_focus
 
 
 def test_the_icon_is_the_brokers_own_never_a_remote_address(ui: UI) -> None:
-    """The icon is a Codex agent's built-in image served by the broker, an admin's upload for Cursor under the
-    upload's URL, and for an agent with no image a tile the page drew (a data: URL), never an http(s) address
-    of another host. Fails if an icon points off the broker, or an upload is ignored."""
+    """The icon is a Codex or Grok Build agent's built-in image served by the broker, an admin's upload for
+    Cursor under the upload's URL, and for an agent with no image a tile the page drew (a data: URL), never an
+    http(s) address of another host. Fails if an icon points off the broker, or an upload is ignored."""
     from test_agent_icons_ui import picture, put_icon, reset_all
 
     page, room = room_page(ui)
@@ -261,6 +261,10 @@ def test_the_icon_is_the_brokers_own_never_a_remote_address(ui: UI) -> None:
         ui.world.agent_say(f"#{room}", "scout", "@alice three")
         wait_shown(page, 3, 30_000)
         assert page.evaluate("window.__shown[2].icon").startswith("data:image/png;base64,")
+        set_harness(ui, room, "scout", "grok")  # #930: Grok Build's built-in logo, like Codex's
+        ui.world.agent_say(f"#{room}", "scout", "@alice four")
+        wait_shown(page, 4, 30_000)
+        assert page.evaluate("window.__shown[3].icon") == "/static/agents/grok-light.png"
     finally:
         reset_all(ui.world)
 

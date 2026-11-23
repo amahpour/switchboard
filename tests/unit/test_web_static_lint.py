@@ -129,6 +129,10 @@ AGENT_ICONS = {
     # Cognition's own avatar files from its brand kit (devin.ai/brand), byte for byte (#441)
     "agents/devin-light.png": "3afb7f4c0e2c233a6e3a1956e4c9606a0ac3f774972bc7085f17d1b48dca6ee2",
     "agents/devin-dark.png": "b604b099bcdb8d09455368e67eb7ae74962871eac87524eddc3b30e3a31b4e2d",
+    # xAI's own Grok logomarks from its brand kit (x.ai/legal/brand-guidelines), byte for byte (#930):
+    # Grok_Logomark_Dark.png (the #0A0A0A mark, the light theme's) and Grok_Logomark_Light.png (the white one)
+    "agents/grok-light.png": "37ddbcb6e2a7f2e4b3be78a7d41296a3bc7edf6926362434efc00df5a56a3586",
+    "agents/grok-dark.png": "359056ee8983cfa0ba7e72795078c7c0ddf6c5d7a1870401ab960ed4f9df9e53",
 }
 # The call platforms' logos (#623, DESIGN.md §29.9): Zoom's, Google's and Microsoft's artwork, unaltered,
 # which the maintainer chose to ship (2026-11-05). Pinned by hash the same way, and CSS may load exactly these

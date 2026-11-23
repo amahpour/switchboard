@@ -92,6 +92,8 @@
   --h-codex-tile: #ffffff;
   --h-cursor-img: url('/static/agents/cursor-light.png');
   --h-devin-img: url('/static/agents/devin-light.png');
+  --h-grok-img: url('/static/agents/grok-light.png');
+  --h-grok-tile: #ffffff;
   --h-icon-ring: rgba(0, 0, 0, 0.08);
   --h-other-bg: #ececf0;
   --h-other-fg: #3c3c43;
@@ -172,6 +174,8 @@
     --h-codex-tile: #000000;
     --h-cursor-img: url('/static/agents/cursor-dark.png');
     --h-devin-img: url('/static/agents/devin-dark.png');
+    --h-grok-img: url('/static/agents/grok-dark.png');
+    --h-grok-tile: #000000;
     --h-icon-ring: rgba(255, 255, 255, 0.1);
     --h-other-bg: #2e2e33;
     --h-other-fg: #d0d0d6;
@@ -243,6 +247,8 @@
   --h-codex-tile: #000000;
   --h-cursor-img: url('/static/agents/cursor-dark.png');
   --h-devin-img: url('/static/agents/devin-dark.png');
+  --h-grok-img: url('/static/agents/grok-dark.png');
+  --h-grok-tile: #000000;
   --h-icon-ring: rgba(255, 255, 255, 0.1);
   --h-other-bg: #2e2e33;
   --h-other-fg: #d0d0d6;
@@ -1182,9 +1188,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .avatar.named .ic { width: 24px; height: 24px; flex: none; }
 .av-word { font-size: calc(9.5px * var(--text-scale)); font-weight: 700; line-height: 1; }
 .avatar.h-test, .avatar.h-unknown { background: var(--h-other-bg); color: var(--h-other-fg); }
-/* Codex, Cursor and Devin show their vendor's icon, unaltered; the monogram stays in the DOM, unseen.
+/* Codex, Cursor, Devin and Grok Build show their vendor's icon, unaltered; the monogram stays in the DOM, unseen.
    Claude Code has switchboard's own bubble: Anthropic allows its name in plain text, not its icon. */
-.avatar.h-codex, .avatar.h-cursor, .avatar.h-devin {
+.avatar.h-codex, .avatar.h-cursor, .avatar.h-devin, .avatar.h-grok {
   color: transparent;
   background-position: center;
   background-size: cover;
@@ -1194,6 +1200,9 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .avatar.h-codex { background-color: var(--h-codex-tile); background-image: var(--h-codex-img); }
 .avatar.h-cursor { background-color: transparent; background-image: var(--h-cursor-img); }
 .avatar.h-devin { background-color: transparent; background-image: var(--h-devin-img); }
+/* xAI's Grok mark reaches the edges of its file, so it sits at 72% on a plain tile, as Codex's Blossom sits in
+   its clear space: the rounded corners never cut its tips (#930). */
+.avatar.h-grok { background-color: var(--h-grok-tile); background-image: var(--h-grok-img); background-size: 72%; }
 /* A call, the room's third kind of member (#623, DESIGN.md §54): the sound-wave drawing on a neutral tile, in the page's
    own colours, for a call that doesn't say its platform. Zoom, Meet and Teams show their logo, below. */
 .avatar.call { background: var(--h-other-bg); color: var(--h-other-fg); }
