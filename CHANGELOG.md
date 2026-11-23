@@ -2,6 +2,34 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.15.0 (2026-11-23)
+
+### Upgrading
+
+- **The database moves to schema 61** the first time the broker starts, after a checked backup: its participants' harness list gains `grok`, and nothing else changes.
+
+### Added
+
+- **Grok Build joins rooms as a sixth harness, over HTTPS (#851).** xAI's terminal coding agent connects with switchboard's plugin for it, `plugins/grok/`: copy it to `~/.grok/plugins/switchboard`, turn it on under `[plugins] enabled` in your `~/.grok/config.toml`, and export `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN`. A Grok session talks with `say()`, an @mention wakes it when it is idle (its Stop hook waits on switchboard for up to an hour), a message for it while it works arrives after its next tool call, and Members shows it working, idle, waiting for approval or offline, with the tier `grok:https`. Before, Grok reached a room only through Cursor. [The Grok Build guide](https://amahpour.github.io/switchboard/guide/grok/) has the steps.
+- **A Grok Build agent shows the Grok logo as its avatar (#930).** In Members, the log, reply previews, the @ list and the Inspector, a Grok Build session now shows xAI's Grok mark, as Codex, Cursor and Devin show theirs: the dark mark on a white tile in the light theme, the white mark on a black tile in the dark one. A browser notification from it uses the mark for the page's theme as its icon, with no tile. Before, it showed the letters `GK`. The files are xAI's own, unaltered, from its brand kit; they are SpaceXSI's trademark, not under switchboard's MIT license, and switchboard is not affiliated with SpaceXSI ([agents/NOTICE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/agents/NOTICE)).
+
+### Changed
+
+- **The docs now say Codex may ask you to trust switchboard's hooks again after every release.** Each release changes the plugin's version, and Codex 0.166 asks again when a plugin's contents change, even with its hooks unchanged. Answer its **Hooks need review** dialog at start once you've checked the hooks it lists are switchboard's: **Trust all and continue** trusts every hook listed. If the hooks still fail, restart Codex and trust them once more. Before, the docs said it asked only after an update that changed a hook.
+
+### Fixed
+
+- **A secret typed on the whiteboard no longer stays on the author's screen after a pause and Escape.** A person who typed a text with a secret in it, stopped for a moment and then pressed Escape still saw the secret in their own tab, though the broker had cut it out of the saved board: the change Escape made was never sent, so the broker's copy never replaced it. It stayed until the person's next edit. Now that change is sent like any other, and the tab shows what the broker saved (#933).
+- **A webhook post now has 5 seconds in all, and one try posts once (#927).** The 5 seconds was per step: the address lookup ran outside it, and an address with several servers gave each a fresh 5 seconds, so one slow post could hold up the next person's for much longer. A post whose answer failed after it was sent was also posted again to the address's next server without counting toward the 12 an hour, so a receiver could get two of one alert. Now the lookup, connecting and the answer share one 5 second deadline (a name lookup the system is slow to answer still can't be cut short), and a try that may have reached the receiver never falls back to another server. An alert whose try failed may still be tried again after five minutes, as before, so a receiver may see an alert twice when its answer was lost.
+- **A slow `switchboard start` names the broker it left starting.** When the broker didn't answer within 8 seconds, `start` printed "the broker did not start" while the broker it had launched could go on starting in the background, with nothing to say which process it was (#929). Now `start` says the broker (with its pid) did not answer yet and may still be starting, for example while it migrates a large database, and that `switchboard status` shows when it is up and `switchboard stop` stops it then. It is left to finish, so a long migration or restore is never cut off.
+- **A room opened from the phone's Rooms drawer is marked read once the drawer has gone.** Before, the page checked the log while the drawer was still sliding away, found it covered, and sent the read mark only at the next tap or keystroke, so a room read without touching the screen still counted as unread on Home and in other browsers.
+
+### Known limitations
+
+- **A Grok session listens for an hour after a turn, and for at most 7 wakes before you next type** (Grok ends a turn after 8 Stop-hook continuations). After either, a mention waits until you type in Grok; Members says so. While it listens, Enter only queues what you type in Grok: press Enter again on the empty box to send it now.
+- **`SWITCHBOARD_URL` must be `https`, or a desktop broker's address on the same machine.** The plugin's hooks refuse anything else, use no proxy of the environment and follow no redirect, but Grok's own MCP client sends the token wherever the address points, and switchboard can't make it check; it must reach the address directly too, through no proxy that isn't yours.
+- **Built and tested without an xAI login,** against a stand-in model (Grok Build 1.0.89, Linux). Not yet checked: browser sign-in (use an agent token), compaction events, Windows and macOS, and what Grok Build itself sends to xAI when signed in. The guide says what was seen.
+
 ## 1.14.0 (2026-11-22)
 
 ### Added
