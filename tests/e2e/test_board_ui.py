@@ -407,97 +407,141 @@ def test_text_closed_with_escape_after_the_broker_answered_is_sent_again(
     assert token not in scene and "aB3aB3" not in scene
 
 
-def test_an_older_board_copy_does_not_overwrite_text_a_person_typed_after_it(
+# Added to the context before the board frame loads: its message listeners are wrapped as they register, so
+# that every `elements` message is held in the order it arrives, and `__deliver` hands the first one to them
+# as the parent would have (the same data and source). Nothing else about the frame changes.
+HOLD_BOARD_COPIES = """(() => { if (location.pathname !== '/board') return;
+          const add = window.addEventListener.bind(window);
+          window.__held = []; window.__listeners = [];
+          window.addEventListener = function (type, fn, opts) {
+            if (type !== 'message' || typeof fn !== 'function') return add(type, fn, opts);
+            window.__listeners.push(fn);
+            return add(type, ev => {
+              const m = ev.data;
+              if (ev.source === parent && m && m.t === 'sb-board' && m.action === 'elements') {
+                window.__held.push({ data: m, source: ev.source });
+              } else fn(ev);
+            }, opts);
+          };
+          window.__deliver = () => {
+            const ev = window.__held.shift();
+            window.__listeners.forEach(fn => fn(ev));
+          };
+          window.__texts = h => h.data.elements.filter(e => e.type === "text").map(e => e.originalText);
+        })();"""
+
+
+def test_a_board_copy_that_was_in_flight_does_not_take_back_text_the_frame_already_sent(
     ui: UI,  # noqa: F811
     world: UIWorld,  # noqa: F811
 ) -> None:
-    """A person types, the frame sends the open text and the broker stores it; they type more and that is
-    stored too. Then the board copy from before the second stretch arrives at the frame (#937: under load
-    the parent page's older copy came after the frame's newer keystrokes) and replaced the open text with
-    the older one, losing the characters typed in between. The copy is posted on purpose here, with its own
-    older `seq`, so nothing depends on load. Fails if that copy changes the open text, or if a copy newer
-    than everything the frame has (an agent's note, at the next `seq`) is not applied after it."""
-    room = "board-older-copy"
+    """A person types, the frame sends the open text and the broker stores it; they type more and the frame
+    sends that too, before the broker's copy of the first text has reached the frame (#937). Copies arrive
+    in the order the broker made them, so the copy of the first text then reaches the frame after the frame
+    has sent more, and it put the open text back to the first words, losing what was typed in between.
+    Every copy here is held in the frame and delivered in its original order by the test, so nothing depends
+    on load or on a sleep: the copy of the shorter text is delivered while the copy of the longer one is
+    still on its way. Fails if the open text goes back to the shorter one, if the longer copy's arrival does
+    not then clear the hold, or if a note an agent adds afterwards (a newer copy) is not applied."""
+    room = "board-in-flight-copy"
     world.create_room(room)
     world.add_agents("#" + room, ("drawer",))
     page = ui.open(room)
-    open_board(page)
-    frame = page.frame_locator("#whiteboard-host iframe")
+    page.context.add_init_script(HOLD_BOARD_COPIES)
+    frame = open_board(page)
     board_frame = next(f for f in page.frames if f.url.endswith("/board"))
-    # what the frame says to the app names the session and room an app-to-frame message must carry
-    page.evaluate(
-        "() => { window.__sb = null; window.addEventListener('message', e => {"
-        " if (e.data && e.data.t === 'sb-board' && e.data.session)"
-        " window.__sb = [e.data.session, e.data.room]; }); }"
-    )
     b = world.broker
 
-    def stored_or_none() -> tuple[int, dict[str, Any]]:
-        seq, elements = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))
-        texts = [e for e in elements if e.get("type") == "text"]
-        return (seq, texts[0]) if texts else (seq, {})
+    def stored_text() -> str:
+        _, elements = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))
+        return " ".join(str(e.get("originalText")) for e in elements if e.get("type") == "text")
 
-    def wait_stored(words: str) -> tuple[int, dict[str, Any]]:
+    def wait_stored(words: str) -> None:
         deadline = time.monotonic() + 20
-        seq, text = 0, {}
-        while words not in str(text.get("originalText")) and time.monotonic() < deadline:
+        while stored_text() != words and time.monotonic() < deadline:
             time.sleep(0.05)
-            seq, text = stored_or_none()
-        assert words in str(text.get("originalText")), text
-        return seq, text
+        assert stored_text() == words
 
     frame.locator("label").filter(has=frame.locator('[data-testid="toolbar-text"]')).click()
     box = page.locator("#whiteboard-host iframe").bounding_box()
     assert box is not None
     page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.4)
     page.keyboard.insert_text("alpha")
-    first_seq, first = wait_stored("alpha")
-    # the copy the app held before the next stretch of typing, exactly as the broker stored it
-    old_elements = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))[1]
+    wait_stored("alpha")
     page.keyboard.insert_text(" beta gamma")
-    second_seq, second = wait_stored("alpha beta gamma")
-    assert second_seq > first_seq
-    wait_js(
-        board_frame,
-        "() => window.sbBoard.api.getAppState().editingTextElement !== null && window.sbBoard.api"
-        ".getSceneElements().some(e => e.type === 'text' && e.originalText === 'alpha beta gamma')",
+    wait_stored("alpha beta gamma")
+    # the broker's copies of both texts are now on their way to the frame, held in order
+    wait_js(board_frame, "() => window.__held.some(m => window.__texts(m).includes('alpha beta gamma'))")
+    older = board_frame.evaluate(
+        "() => window.__held.filter(m => !window.__texts(m).includes('alpha beta gamma')).length"
     )
-    wait_js(page, "() => window.__sb !== null")
-    post = """([copy, seq]) => { const [session, room] = window.__sb;
-      document.querySelector('#whiteboard-host iframe').contentWindow.postMessage(
-        { t: 'sb-board', action: 'elements', session, room, elements: copy, seq }, '*'); }"""
-    # Messages reach the frame in order, so a `theme` message sent after the older copy is handled only once
-    # the older copy has been; the wrapper records every scene the frame draws, and the theme call ends it.
-    board_frame.evaluate(
-        """() => { const api = window.sbBoard.api, update = api.updateScene.bind(api);
-          window.__drawn = []; window.__themed = false;
-          api.updateScene = data => {
-            if (data.elements) window.__drawn.push(
-              data.elements.filter(e => e.type === 'text').map(e => e.originalText));
-            if (data.appState && data.appState.theme === 'dark') window.__themed = true;
-            return update(data); }; }"""
-    )
-    page.evaluate(post, [old_elements, first_seq])
-    page.evaluate(
-        """() => { const [session, room] = window.__sb;
-          document.querySelector('#whiteboard-host iframe').contentWindow.postMessage(
-            { t: 'sb-board', action: 'theme', session, room, dark: true }, '*'); }"""
-    )
-    wait_js(board_frame, "() => window.__themed === true")
-    drawn = board_frame.evaluate("() => window.__drawn")
-    assert ["alpha"] not in drawn, drawn
-    assert board_frame.evaluate("() => window.sbBoard.api.getAppState().editingTextElement !== null")
-    made = world.agent_call("#" + room, "drawer", "board", action="note", text="newer", x=400, y=300)
-    assert made["ok"], made
-    wait_js(
-        board_frame,
-        "() => window.sbBoard.api.getSceneElements()"
-        ".some(e => e.type === 'text' && e.originalText === 'newer')",
-    )
-    texts = board_frame.evaluate(
+    assert older >= 1, "the copy of the first text never came"
+    # the older copies reach the frame first; it has already sent the longer text
+    for _ in range(older):
+        board_frame.evaluate("() => window.__deliver()")
+    open_text = (
         "() => window.sbBoard.api.getSceneElements().filter(e => e.type === 'text').map(e => e.originalText)"
     )
-    assert "alpha beta gamma" in texts and "alpha" not in texts, texts
+    assert board_frame.evaluate(open_text) == ["alpha beta gamma"], board_frame.evaluate(open_text)
+    assert board_frame.evaluate("() => window.sbBoard.api.getAppState().editingTextElement !== null")
+    # the copy of the longer text then arrives and the frame shows it, with nothing held back any more
+    while board_frame.evaluate("() => window.__held.length"):
+        board_frame.evaluate("() => window.__deliver()")
+    assert board_frame.evaluate(open_text) == ["alpha beta gamma"]
+    # a newer copy from someone else is applied at once
+    made = world.agent_call("#" + room, "drawer", "board", action="note", text="newer", x=400, y=300)
+    assert made["ok"], made
+    wait_js(board_frame, "() => window.__held.length > 0")
+    while board_frame.evaluate("() => window.__held.length"):
+        board_frame.evaluate("() => window.__deliver()")
+    assert sorted(board_frame.evaluate(open_text)) == ["alpha beta gamma", "newer"]
+
+
+def test_a_refused_shape_goes_when_the_whole_board_answers_it_though_an_older_copy_arrived_first(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """The frame holds back what it sent from a copy of the board that does not show it yet (#937), and a
+    shape the broker refuses never shows in any copy. The broker answers a refused write with the whole
+    board (#893), and that must end the hold: a frame that kept holding would show the refused shape for
+    good. An agent's note makes a copy the app posted before it had seen the shape; it reaches the frame
+    after the frame sent the shape, while the answer is still on its way. Fails if the shape is gone before
+    the whole board arrives (the hold does nothing), or still shown after it (the hold was never cleared)."""
+    room = "board-refused-held"
+    world.create_room(room)
+    world.add_agents("#" + room, ("drawer",))
+    page = ui.open(room)
+    page.context.add_init_script(HOLD_BOARD_COPIES)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    made = world.agent_call("#" + room, "drawer", "board", action="note", text="older", x=100, y=100)
+    assert made["ok"], made
+    wait_js(board_frame, "() => window.__held.some(h => window.__texts(h).includes('older'))")
+    # a shape the broker refuses (its marker would push its text past the limit), sent as drawing does
+    refused = "x" * 170 + " password=" + "hunter2" * 2
+    board_frame.evaluate(
+        """(text) => { const a = window.sbBoard.api;
+          a.updateScene({ elements: [...a.getSceneElementsIncludingDeleted(), {
+            id: 'refused1', type: 'rectangle', x: 40, y: 300, width: 160, height: 90, version: 1,
+            versionNonce: 7, isDeleted: false, seed: 1, angle: 0, strokeColor: '#000000',
+            backgroundColor: '#ff0000', fillStyle: 'solid', strokeWidth: 2, roughness: 1, opacity: 100,
+            groupIds: [], frameId: null, roundness: null, boundElements: null, updated: 1, link: null,
+            locked: false, text }] });
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }));
+          window.sbBoard.flush(); }""",
+        refused,
+    )
+    # the broker's answer, the whole board, is held behind the note's copy, which has not seen the shape
+    wait_js(board_frame, "() => window.__held.some(h => h.data.full === true)")
+    shown = "() => window.sbBoard.api.getSceneElements().some(e => e.id === 'refused1')"
+    while not board_frame.evaluate("() => window.__held[0].data.full === true"):
+        assert not any(
+            e["id"] == "refused1" for e in board_frame.evaluate("() => window.__held[0].data.elements")
+        )
+        board_frame.evaluate("() => window.__deliver()")
+    assert board_frame.evaluate(shown), "an older copy took the shape away before the broker answered"
+    board_frame.evaluate("() => window.__deliver()")
+    assert not board_frame.evaluate(shown), "the broker refused the shape and its answer did not remove it"
 
 
 def test_a_picture_for_an_agent_shows_only_the_committed_board(

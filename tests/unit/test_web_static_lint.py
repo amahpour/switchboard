@@ -431,9 +431,9 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("2596fcfe1a24f28dc5162251a26eb12fdc71460235ad0ad4c8af15801858a07f"),
+    "vendor/board/NOTICE": ("0460c147c752fd04d1233bdb414c2cbed16efc959abe9981bf701a7f90ad3b78"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("c9978bc731717c72d5aff75bdfa258c9e3eb48f87d5724ba4b3fb5b04ef4f285"),
+    "vendor/board/board.js": ("adaa1b2b4a4c4312461c921e87912e93764857b2b85ba612cfcfd62304fc4735"),
     "vendor/board/chunks/chunk-42LTX363.js": (
         "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
@@ -600,26 +600,23 @@ def test_the_board_marks_itself_dirty_on_a_key_in_the_capture_phase() -> None:
     assert bundled == [",!0"], bundled
 
 
-def test_the_board_frame_ignores_a_board_copy_older_than_the_one_it_has() -> None:
-    """The app's board messages say which version of the broker's board a copy is (`seq`), and the frame
-    applies none that is older than what it has (an equal one is applied: the answer to a refused write
-    carries the same `seq`; #937: an older copy arriving after newer keystrokes replaced the text a person
-    was typing). Fails if
-    `scripts/board/frame.jsx` or the committed `board.js` takes `init` or `elements` without an integer
-    `seq`, or applies an older one, or if the app sends either without it. The behavior is
-    `tests/e2e/test_board_ui.py`'s."""
+def test_the_board_frame_keeps_what_it_sent_until_a_copy_shows_it() -> None:
+    """The frame holds back, per element, a copy of the board that is older than what it already sent and has
+    not seen come back (#937), and a whole board from the broker (what a refused write is answered with, #893)
+    clears that. So the app's `elements` message must say whether it is a whole board, as a boolean, and the
+    frame ignores one that does not. Fails if `scripts/board/frame.jsx` or the committed `board.js` records
+    nothing when it sends, takes an `elements` message without a boolean `full`, does not clear on a whole
+    board, or if the app sends the message without `full`. The behavior is `tests/e2e/test_board_ui.py`'s."""
     source = (STATIC.parents[3] / "scripts" / "board" / "frame.jsx").read_text()
-    assert "!Number.isInteger(m.seq) || m.seq < 0" in source
-    assert "!Number.isInteger(m.seq) || m.seq < copySeq" in source
+    assert "sent.set(e.id, e.version)" in source
+    assert "typeof m.full !== 'boolean'" in source
+    assert "if (m.full) sent.clear();" in source
     bundle = (STATIC / "vendor/board/board.js").read_text()
-    assert "if(!e||!Number.isInteger(r.seq)||r.seq<0)return;sq=r.seq," in bundle
-    assert "if(!e||!Number.isInteger(r.seq)||r.seq<sq)return;sq=r.seq,_(e)" in bundle
+    assert "sn.set(e.id,e.version)" in bundle
+    assert 'typeof r.full!="boolean"' in bundle
+    assert "if(r.full)sn.clear();" in bundle
     app = (STATIC / "whiteboard.js").read_text()
-    assert (
-        "post('init', { elements: cache.get(current) || [], dark: dark(), seq: seqs.get(current) || 0 })"
-        in app
-    )
-    assert "post('elements', { elements: merged, seq: seqs.get(room) || 0 })" in app
+    assert "post('elements', { elements: merged, full: full === true })" in app
 
 
 def test_the_board_ships_none_of_excalidraw_coms_service_settings() -> None:

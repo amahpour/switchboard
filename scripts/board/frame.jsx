@@ -8,9 +8,11 @@ import { Excalidraw, MainMenu, restoreElements, exportToBlob } from '@excalidraw
 import '@excalidraw/excalidraw/index.css';
 import './frame.css';
 let playing = null, fullScene = [];
-// The version of the broker's board the newest copy applied came from (`seq`): an older copy would put back text
-// the person has typed past (#937). The same version is applied: the answer to a refused write carries it.
-let copySeq = -1;
+// What this frame has sent and not yet seen come back, by element id: the version it sent. A copy of the board that
+// was already on its way when the frame sent more holds an older version of that element, and would put back the
+// text a person has typed past (#937). It is dropped when a copy holds the element at that version or newer, and
+// all of it when the broker answers with the whole board, which is what a refused write is answered with (#893).
+const sent = new Map();
 let api = null, session = null, room = null, known = new Map(), applying = false, timer = null, pointer = false, dirty = false;
 const sig = e => `${e.version}:${e.versionNonce}`;
 const post = (action, extra = {}) => parent.postMessage({ t: 'sb-board', action, session, room, ...extra }, '*');
@@ -22,11 +24,11 @@ function flush() {
   const changed = cleaned.filter(e => known.get(e.id) !== sig(e));
   dirty = false;
   if (!changed.length) return;
-  changed.forEach(e => known.set(e.id, sig(e)));
+  changed.forEach(e => { known.set(e.id, sig(e)); sent.set(e.id, e.version); });
   fullScene = rules.merge(fullScene, changed);
   post('change', { elements: changed });
 }
-function apply(elements) {
+function apply(elements, held = new Set()) {
   applying = true;
   const before = known;
   known = new Map(elements.map(e => [e.id, sig(e)]));
@@ -34,8 +36,11 @@ function apply(elements) {
   // This preserves both arrow bindings and the existing targets' exact dimensions.
   // Only what changed since it was last sent or received is merged in: a shape that was sent, was not kept
   // and has not changed since is gone with the broker's board, while what is still being drawn stays (#893).
-  const local = dirty ? (rules.batch(api.getSceneElementsIncludingDeleted(), true) || []).filter(e => before.get(e.id) !== sig(e)) : null;
-  const scene = local ? rules.merge(elements, local) : elements;
+  // `held` is what was sent and is not in this copy at that version: the frame's own copy of it stays (#937).
+  const live = dirty || held.size ? rules.batch(api.getSceneElementsIncludingDeleted(), true) || [] : [];
+  const local = live.filter(e => held.has(e.id) || (dirty && before.get(e.id) !== sig(e)));
+  live.forEach(e => { if (held.has(e.id) && before.get(e.id) === sig(e)) known.set(e.id, sig(e)); });
+  const scene = local.length ? rules.merge(elements, local) : elements;
   fullScene = scene;
   const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;
   api.updateScene({ elements: attachArrows(centerLabels(restoreElements(shown, null, { repairBindings: true, refreshDimensions: true }))), captureUpdate: 'NEVER' });
@@ -49,17 +54,26 @@ window.addEventListener('message', async ev => {
   if (ev.source !== parent || !m || m.t !== 'sb-board' || typeof m.session !== 'string' || typeof m.room !== 'string' || !api) return;
   if (m.action === 'init') {
     const elements = rules.batch(m.elements, true);
-    if (!elements || !Number.isInteger(m.seq) || m.seq < 0) return;
-    copySeq = m.seq;
+    if (!elements) return;
+    sent.clear();
     session = m.session; room = m.room;
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
     apply(elements);
     if (elements.some(e => !e.isDeleted)) api.scrollToContent(undefined, { fitToContent: true });
   } else if (m.session === session && m.room === room && m.action === 'elements') {
     const elements = rules.batch(m.elements, true);
-    if (!elements || !Number.isInteger(m.seq) || m.seq < copySeq) return;
-    copySeq = m.seq;
-    apply(elements);
+    if (!elements || typeof m.full !== 'boolean') return;
+    // A whole board from the broker answers every write sent before it (a refused one included): nothing is held.
+    // Any other copy holds back an element only where it is older than what this frame sent, or has not got it yet.
+    const held = new Set();
+    if (m.full) sent.clear();
+    else {
+      const seen = new Map(elements.map(e => [e.id, e.version]));
+      for (const [id, version] of sent) {
+        if (seen.has(id) && seen.get(id) >= version) sent.delete(id); else held.add(id);
+      }
+    }
+    apply(elements, held);
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
   } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {

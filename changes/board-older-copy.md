@@ -1,3 +1,3 @@
 ### Fixed
 
-- **An older copy of the whiteboard no longer overwrites text you are still typing.** Under heavy load, a copy of the board older than your latest keystrokes could arrive in the drawing pane and put back the text from before them, losing what you typed in between. The pane now knows which version of the board each copy is and ignores one older than what it has.
+- **An older copy of the whiteboard no longer takes back text you are still typing.** While you typed, a copy of the board the broker had made before your last keystrokes could reach the drawing pane after them and put the text back to what it was, losing what you typed in between. The pane now keeps what it has sent until a copy of the board shows it, so only a copy that already holds your text, or a whole board from the broker (which is how it answers something it refused), takes its place. A change from someone else still shows at once.
