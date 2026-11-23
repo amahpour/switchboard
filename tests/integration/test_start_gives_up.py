@@ -174,10 +174,10 @@ def test_a_broker_up_just_after_the_deadline_stays_up_and_stop_stops_it(
     paths = Paths.from_home(tmp_home)
     real_popen = subprocess.Popen
 
-    def broker_up() -> None:
+    def broker_up(child: subprocess.Popen[bytes]) -> None:
         deadline = time.monotonic() + EVENT_S
         while ping(paths.sock, timeout=1.0) is None:
-            assert launches.children[-1].poll() is None, "the broker exited before it was up"
+            assert child.poll() is None, "the broker exited before it was up"
             assert time.monotonic() < deadline, f"the broker was not up within {EVENT_S}s"
             time.sleep(0.05)  # between pings of the socket, the event waited for
 
@@ -186,7 +186,7 @@ def test_a_broker_up_just_after_the_deadline_stays_up_and_stop_stops_it(
         kw["pass_fds"] = tmp_homes.lock_fds_for(tmp_home)
         child = real_popen(cmd, **kw)
         launches.children.append(child)
-        broker_up()
+        broker_up(child)
         return child
 
     monkeypatch.setattr(daemon.subprocess, "Popen", popen_then_wait)
@@ -199,6 +199,9 @@ def test_a_broker_up_just_after_the_deadline_stays_up_and_stop_stops_it(
     assert first.poll() is None, "start stopped the broker that came up"
     info = ping(paths.sock)
     assert info is not None and info["pid"] == first.pid
+    # Put the real Popen and ping back before stop: on macOS stop runs `ps` to check the pid
+    # (Linux uses a pidfd), and the wrapper above would take that `ps` for the broker.
+    monkeypatch.setattr(daemon.subprocess, "Popen", real_popen)
     monkeypatch.setattr(daemon, "ping", ping)
     assert daemon.stop(paths) == 0
     assert first.wait(timeout=EVENT_S) == 0, "the broker did not exit cleanly on `switchboard stop`"
