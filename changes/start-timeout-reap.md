@@ -1,0 +1,3 @@
+### Fixed
+
+- **A slow `switchboard start` names the broker it left starting.** When the broker didn't answer within 8 seconds, `start` printed "the broker did not start" while the broker it had launched could go on starting in the background, with nothing to say which process it was (#929). Now `start` says the broker (with its pid) did not answer yet and may still be starting, for example while it migrates a large database, and that `switchboard status` shows when it is up and `switchboard stop` stops it then. It is left to finish, so a long migration or restore is never cut off.

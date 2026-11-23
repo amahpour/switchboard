@@ -331,6 +331,21 @@ def start(
         if child.poll() is not None:
             break
         time.sleep(0.1)
+    if not info and child.poll() is None:
+        # Still running, not answering yet: it may be applying a pending restore or creating or
+        # migrating a large database (run_foreground does both before it serves the socket). It is
+        # left to finish, never stopped mid-migration, and named so the person can find it (#929).
+        print(
+            f"switchboard: the broker (pid {child.pid}) did not answer within {START_WAIT_S:g} s."
+            " It may still be starting (migrating a large database, say). Last lines of its output:",
+            file=sys.stderr,
+        )
+        print(_tail(paths.out_log), file=sys.stderr)
+        print(
+            "Run `switchboard status` to see whether it is up, and `switchboard stop` to stop it once it is.",
+            file=sys.stderr,
+        )
+        return 1
     if not info:
         print("switchboard: the broker did not start. Last lines of its output:", file=sys.stderr)
         print(_tail(paths.out_log), file=sys.stderr)

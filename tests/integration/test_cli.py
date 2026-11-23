@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import shutil
 import signal
 import subprocess
@@ -223,27 +224,149 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+# A bound for a daemonized broker to exit once signalled; the tests never wait it out.
+DAEMON_EXIT_S = 30.0
+# A bound for the teardown's `switchboard stop`; when it runs out, the scan by the home still runs.
+STOP_CLI_S = 60.0
+
+
+def _argv(pid: int) -> list[str] | None:
+    """The arguments ``pid`` runs with, or None if it is gone or can't be read: ``/proc`` on Linux,
+    else ``ps`` (space-split, enough to find one argument with no space in it)."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                raw = f.read()
+        except OSError:
+            return None
+        return [a.decode(errors="replace") for a in raw.split(b"\0") if a] or None
+    ps = proc.ps_bin()
+    if ps is None:
+        return None
+    r = subprocess.run([ps, "-ww", "-o", "args=", "-p", str(pid)], capture_output=True, text=True, timeout=30)
+    return r.stdout.split() or None
+
+
+def _holds_home(pid: int, homes: set[str]) -> bool:
+    argv = _argv(pid)
+    return argv is not None and not homes.isdisjoint(argv)
+
+
+def _pids_in_home(homes: set[str]) -> list[int]:
+    """Every process but this one with one of ``homes`` as an exact argument (the broker runs with
+    ``--home <home>``). A test's home is a unique temp directory made for that test alone
+    (``make_tmp_home()``), so a process with it as an exact argument is this test's own."""
+    if sys.platform.startswith("linux"):
+        pids = [int(n) for n in os.listdir("/proc") if n.isdigit()]
+    else:
+        ps = proc.ps_bin()
+        assert ps is not None, "no ps to find the broker a test left"
+        out = subprocess.run([ps, "-ax", "-o", "pid="], capture_output=True, text=True, timeout=30).stdout
+        pids = [int(n) for n in out.split()]
+    return [pid for pid in pids if pid != os.getpid() and _holds_home(pid, homes)]
+
+
+def _stop_pid_in_home(pid: int, homes: set[str]) -> None:
+    """SIGTERM, then SIGKILL, to ``pid`` while it is still a process of this test's home, and see it
+    exit, each with a bound. On Linux through a pidfd, which names one process for good: the
+    argument check is made again once it is open, so a pid reused since the scan is left alone, and
+    the signal can only reach the process checked; the pidfd turns readable when it exits. macOS has
+    no pidfd, so the closest it can get is to check the arguments again right before each signal and
+    know the process by pid and start time (a pid reused between that check and the kill would still
+    be hit)."""
+    if hasattr(os, "pidfd_open"):
+        try:
+            fd = os.pidfd_open(pid)
+        except ProcessLookupError:
+            return
+        try:
+            if not _holds_home(pid, homes):
+                return
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    signal.pidfd_send_signal(fd, sig)
+                except ProcessLookupError:
+                    return
+                if select.select([fd], [], [], DAEMON_EXIT_S)[0]:
+                    return
+            raise AssertionError(f"a process of the test's home (pid {pid}) did not exit")
+        finally:
+            os.close(fd)
+    # macOS: no pidfd, so the re-check right before each kill is the closest it can get.
+    me = proc.info(pid)
+    if me is None:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not proc.alive(pid, me.start) or not _holds_home(pid, homes):
+            return
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + DAEMON_EXIT_S
+        while proc.alive(pid, me.start) and time.monotonic() < deadline:
+            time.sleep(0.05)  # between checks of the process, the event waited for
+    assert not proc.alive(pid, me.start), f"a process of the test's home (pid {pid}) did not exit"
+
+
+def _stop_daemon(home: Path) -> None:
+    """Every daemonizing test's ``finally``: stop what its `switchboard start` launched in ``home``,
+    and see it exit, before ``tmp_home`` is removed, even when the start's ``subprocess.run`` raised
+    or an assertion failed first (#929). Found by the home, never by a bare pid: `switchboard stop`
+    first, which checks the pid file's process is this home's broker; then, always, even when that
+    stop timed out or failed, every process still running with this home as an exact argument (one
+    that never wrote its pid file, say). The test fails, naming the pids and the home, when one is
+    still running or its exit couldn't be seen: teardown never passes with a process left."""
+    stop_error: BaseException | None = None
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "switchboard", "--home", str(home), "stop"],
+            env=child_env(),
+            capture_output=True,
+            timeout=STOP_CLI_S,
+        )
+    except Exception as e:  # a hung or failed stop must never skip the scan below
+        stop_error = e
+    # The home is a unique temp directory made for this test, so a process with it as an exact
+    # argument is this test's (``_pids_in_home``).
+    homes = {str(home), str(home.resolve())}
+    unverified: list[str] = []
+    for pid in _pids_in_home(homes):
+        try:
+            _stop_pid_in_home(pid, homes)
+        except Exception as e:  # every pid is tried, then the test fails naming each
+            unverified.append(f"pid {pid}: {e}")
+    left = _pids_in_home(homes)
+    if left or unverified:
+        raise AssertionError(
+            f"processes of the test's home {home} are still running or their exit couldn't be seen:"
+            f" running {left}, unverified {unverified}"
+            + (f" (`switchboard stop` failed first: {stop_error!r})" if stop_error else "")
+        )
+
+
 def test_daemonized_start_and_stop(tmp_home: Path) -> None:
+    """`switchboard start` daemonizes a broker that answers, a second start reports it, and
+    `switchboard stop` stops it. The broker it launched is stopped before ``tmp_home`` goes even if
+    an assertion fails first or the start's ``subprocess.run`` raises (``_stop_daemon``, found by
+    the home): before #929 a failed start left it running in a removed home."""
     env = child_env()
     base = [sys.executable, "-m", "switchboard", "--home", str(tmp_home)]
-    r = subprocess.run(
-        base + ["start", "--port", "0", "--test-mode", "--test-trust-uds"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        # the home's test lock, held until daemon.start() sees the daemon answer (it holds its broker
-        # lock by then), so a concurrent run's sweep never takes the home in the handoff (#922)
-        pass_fds=tmp_homes.lock_fds_for(tmp_home),
-    )
-    pid = None
+    p = Paths.from_home(tmp_home)
     try:
+        r = subprocess.run(
+            base + ["start", "--port", "0", "--test-mode", "--test-trust-uds"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            # the home's test lock, held until daemon.start() sees the daemon answer (it holds its
+            # broker lock by then), so a concurrent run's sweep never takes the home in the handoff (#922)
+            pass_fds=tmp_homes.lock_fds_for(tmp_home),
+        )
         assert r.returncode == 0, r.stderr
         assert "switchboard is running" in r.stdout and "TEST MODE" in r.stdout
         assert "/login?t=" in r.stdout
-        from switchboard.paths import Paths
-
-        p = Paths.from_home(tmp_home)
         info = ping(p.sock)
         assert info is not None
         pid = info["pid"]
@@ -265,14 +388,12 @@ def test_daemonized_start_and_stop(tmp_home: Path) -> None:
         assert r2.returncode == 0 and "already running" in r2.stdout
         r3 = subprocess.run(base + ["stop"], env=env, capture_output=True, text=True, timeout=30)
         assert r3.returncode == 0 and "stopped" in r3.stdout
-        deadline = time.time() + 5
-        while time.time() < deadline and proc.alive(pid, me.start):
+        deadline = time.monotonic() + DAEMON_EXIT_S
+        while time.monotonic() < deadline and proc.alive(pid, me.start):
             time.sleep(0.05)
         assert not proc.alive(pid, me.start)
-        pid = None
     finally:
-        if pid is not None:
-            os.kill(pid, signal.SIGTERM)
+        _stop_daemon(tmp_home)
 
 
 def test_test_mode_guards(tmp_path: Path, tmp_home: Path) -> None:
