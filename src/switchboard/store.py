@@ -1286,8 +1286,8 @@ class Store:
             " p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
-            " MAX(COALESCE(p.last_seen, 0), COALESCE(p.status_at, 0),"
-            "   COALESCE(p.last_say_at, 0)) AS heard_at,"
+            # not status_at: a status the broker sets (its restart) is not the session heard (#948)
+            " MAX(COALESCE(p.last_seen, 0), COALESCE(p.last_say_at, 0)) AS heard_at,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"

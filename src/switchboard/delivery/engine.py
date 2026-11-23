@@ -1193,7 +1193,7 @@ class Engine:
         )
 
     def not_connected_since(self, p: Participant) -> float | None:
-        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.status_at, p.last_say_at))
+        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.last_say_at))
 
     def touch(self, p: Participant) -> list[Action]:
         """A call from the session, or a wait of its opening or closing: proof it is there. Stored at most
@@ -1264,11 +1264,13 @@ class Engine:
         running anywhere in it means the prompt was answered (Claude Code sends the prompt's Notification
         with no subagent id even for a subagent's prompt, and no hook of its own when it is answered), so
         the hold ends. Without it a prompt in a subagent that runs for minutes would keep the session
-        "waiting" long after the person approved. It never delivers, confirms or reports anything else."""
+        "waiting" long after the person approved. It never delivers, confirms or reports anything else.
+        Ending the hold is the session heard (``touch``): a subagent's hook writes no ``last_seen`` of its
+        own, and ``heard_at`` no longer reads ``status_at`` (#948)."""
         cur = self.store.get_participant(p.id)
         if cur is None or cur.status != "waiting-approval":
             return []
-        return self.set_status(cur, "busy", "hook:subagent")
+        return self.touch(cur) + self.set_status(cur, "busy", "hook:subagent")
 
     def close_conn_sinks(self, conn_id: int) -> list[Action]:
         out: list[Action] = []
