@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from typing import Any
 
 import pytest
@@ -339,6 +340,69 @@ def test_a_secret_a_person_types_is_cut_out_and_the_drawing_tab_shows_the_commit
     )
     assert token not in stored(), stored()[:3000]
     assert "[redacted: github token]" in stored()
+    scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElementsIncludingDeleted())")
+    assert token not in scene and "aB3aB3" not in scene
+
+
+def test_text_closed_with_escape_after_the_broker_answered_is_sent_again(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """A person types a secret, stops, and presses Escape only after the broker has answered (#933). The
+    pause lets the frame send the open text, and the broker's redacted copy replaces it while the editor is
+    still open. Escape then commits the editor's own text, a new version holding the secret, inside
+    Excalidraw's key handler and so before the frame's keydown listener had marked the board dirty: the
+    change was never sent, and the author's tab kept the secret. That was the flake of the test above,
+    when a slow runner left a pause before its Escape. Fails if the broker never stores a newer version of
+    the text after Escape, redacted, or the tab does not show it. Without the fix a late onChange of
+    Excalidraw's sometimes sends the change anyway; the static check of the capture listener in
+    `test_web_static_lint.py` is the one that fails every time."""
+    room = "board-secret-escape"
+    world.create_room(room)
+    page = ui.open(room)
+    frame = open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    token = "ghp" + "_" + "aB3" * 12
+    frame.locator("label").filter(has=frame.locator('[data-testid="toolbar-text"]')).click()
+    box = page.locator("#whiteboard-host iframe").bounding_box()
+    assert box is not None
+    page.mouse.click(box["x"] + box["width"] * 0.3, box["y"] + box["height"] * 0.4)
+    # One input event, so the frame sends the open text once and no older copy of it is still on its way back.
+    page.keyboard.insert_text("note " + token)
+    # the frame sends the open text once typing stops, and the broker's redacted copy lands under the editor
+    wait_js(
+        board_frame,
+        "() => window.sbBoard.api.getAppState().editingTextElement !== null && window.sbBoard.api"
+        ".getSceneElements().some(e => e.type === 'text' && e.originalText.includes('[redacted'))",
+    )
+    b = world.broker
+
+    def stored_text() -> dict[str, Any]:
+        _, elements = b.on_loop(lambda: b.state.store.board_load(b.state.store.get_room("#" + room).id))
+        texts = [e for e in elements if e.get("type") == "text"]
+        assert len(texts) == 1, elements
+        return texts[0]
+
+    # the redacted copy the tab holds came from here, so Escape's commit is what a newer version must be
+    before = stored_text()
+    assert token not in str(before) and "[redacted: github token]" in before["originalText"], before
+    page.keyboard.press("Escape")
+    # until the broker stores the change Escape made: a poll of the store, bounded, not a wait for "by now"
+    deadline = time.monotonic() + 15
+    after = stored_text()
+    while after["version"] <= before["version"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        after = stored_text()
+    assert after["id"] == before["id"] and after["version"] > before["version"], (before, after)
+    assert token not in str(after) and "[redacted: github token]" in after["originalText"], after
+    # and the tab that drew shows that version, closed, not the editor's own text
+    wait_js(
+        board_frame,
+        "([id, v]) => window.sbBoard.api.getAppState().editingTextElement === null && window.sbBoard.api"
+        ".getSceneElements().some(e => e.id === id && e.version >= v"
+        " && e.originalText.includes('[redacted'))",
+        [after["id"], after["version"]],
+    )
     scene = board_frame.evaluate("JSON.stringify(window.sbBoard.api.getSceneElementsIncludingDeleted())")
     assert token not in scene and "aB3aB3" not in scene
 

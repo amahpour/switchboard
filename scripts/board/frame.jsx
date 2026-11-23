@@ -75,7 +75,9 @@ window.addEventListener('message', async ev => {
   }
 });
 document.addEventListener('pointerdown', () => { pointer = true; dirty = true; });
-document.addEventListener('keydown', () => { dirty = true; });
+// Capture, so a key is counted before Excalidraw acts on it: Escape commits an open text inside Excalidraw's own
+// handler, and that change was dropped when the board was not yet dirty (a flush had just gone out, #933).
+document.addEventListener('keydown', () => { dirty = true; }, true);
 document.addEventListener('input', () => { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 250); });
 document.addEventListener('pointerup', () => { pointer = false; timer = setTimeout(flush, 0); });
 // Font loading is asynchronous in a cold browser. Remeasure after its metrics are available.

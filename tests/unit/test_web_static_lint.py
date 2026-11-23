@@ -427,9 +427,9 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("54fa838eca91e3e9eb3e6421e72ac61f8de4e2fc082b80e468170b30d8c20509"),
+    "vendor/board/NOTICE": ("f90363a83e49d97734b5944b34ccc03fcfb1576c4ec093359c3a672c741068cc"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("17aa8fb703c78d258e5700c86ea130ef511edbbcfaf5264287c0ac38cbbe5f06"),
+    "vendor/board/board.js": ("2a54064114b6fe601d0a2d34312a5eba138da1e3bfb80c3a2e46e97e2cfbf383"),
     "vendor/board/chunks/chunk-42LTX363.js": (
         "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
@@ -577,6 +577,23 @@ def test_board_assets_are_exactly_the_reviewed_bytes_with_notices() -> None:
     for file in (STATIC / "vendor/board").rglob("*.js"):
         text = file.read_text()
         assert "https://esm.sh/" not in text
+
+
+def test_the_board_marks_itself_dirty_on_a_key_in_the_capture_phase() -> None:
+    """Escape commits an open text inside Excalidraw's own key handler, which runs before a bubble-phase
+    listener on the document. A frame that marked itself dirty only in the bubble phase saw that change
+    while still clean, when a flush had just gone out, and never sent it: the author's tab kept the secret
+    the broker had cut out (#933). Fails if `scripts/board/frame.jsx` or the committed `board.js` built
+    from it registers the dirty-marking keydown listener without capture."""
+    source = (STATIC.parents[3] / "scripts" / "board" / "frame.jsx").read_text()
+    listeners = re.findall(r"addEventListener\('keydown', \(\) => \{ dirty = true; \}(, true)?\);", source)
+    assert listeners == [", true"], listeners
+    bundle = (STATIC / "vendor/board/board.js").read_text()
+    pointer = re.search(r'addEventListener\("pointerdown",\(\)=>\{\w+=!0,(\w+)=!0\}\)', bundle)
+    assert pointer is not None, "the frame's pointerdown listener, which names the dirty flag"
+    dirty = re.escape(pointer.group(1))
+    bundled = re.findall(r'addEventListener\("keydown",\(\)=>\{' + dirty + r"=!0\}(,!0)?\)", bundle)
+    assert bundled == [",!0"], bundled
 
 
 def test_the_board_ships_none_of_excalidraw_coms_service_settings() -> None:
