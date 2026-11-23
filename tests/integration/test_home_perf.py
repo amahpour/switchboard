@@ -2,14 +2,13 @@
 
 Every open tab asks for it again after a frame, and the build runs on the broker's event loop inside an
 async route, so a slow build is a stall for every page and every agent. This builds the setup the issue
-measured, one person with 50 rooms of 300 messages each, and fails if the median is past a bound that the
+measured, one person with 50 rooms of 300 messages each, and fails if the best build is past a bound that the
 code before #649 (about 260 ms here) was over. The bound is relative to the machine, so a slow runner does
 not fail it and a real slowdown does.
 """
 
 from __future__ import annotations
 
-import statistics
 import time
 from pathlib import Path
 
@@ -25,7 +24,11 @@ ROOMS, MESSAGES = 50, 300
 # ``Message`` objects, which the build did twice over before #649, and which is as slow or fast as the
 # machine is. Measured when this was written: a build of 23 ms against 55 ms for the read here (0.42),
 # 109 ms for the build on a slow macOS runner (where a fixed 100 ms bound failed), and about 4.7 before.
+# Those were medians; a macOS runner later measured medians of 130 ms against 126 ms (1.03) and failed,
+# which is why the best of interleaved rounds is compared now (#944).
 MAX_SHARE = 1.0
+# Rounds of a build then a read; the best of each is compared (#944).
+ROUNDS = 15
 
 
 def seed(b: InProcBroker) -> None:
@@ -67,23 +70,18 @@ def _plant(store: Store) -> None:
 
 
 def test_building_home_for_50_rooms_of_300_messages_stays_fast(tmp_home: Path) -> None:
-    """The median of ten builds is under ``MAX_SHARE`` of the time to read every message in the setup,
+    """The best of 15 builds is under ``MAX_SHARE`` of the best of 15 reads of every message in the setup,
+    each build followed by a read so that noise on a busy runner falls on both,
     and what is built is the page's real answer: a question card and a board card in the rooms that have
     them, not an empty page that is quick because it is empty."""
     b = InProcBroker(tmp_home).start()
     try:
         b.on_loop(seed, b, timeout=300)  # a backstop for a very slow runner; the seed is one transaction
 
-        def once() -> tuple[float, dict[str, object]]:
+        def build() -> tuple[float, dict[str, object]]:
             t = time.perf_counter()
             out = home.build(b.state, "alice", None, True)
             return time.perf_counter() - t, out
-
-        runs = [b.on_loop(once) for _ in range(10)]
-        out = runs[-1][1]
-        assert out["waiting_total"] == ROOMS + ROOMS // 5  # a question in every room, a board in every fifth
-        assert len(out["live"]) == 0 and len(out["done"]) > 0  # type: ignore[arg-type]
-        median_ms = statistics.median(t for t, _ in runs) * 1000
 
         def read_all() -> float:
             t = time.perf_counter()
@@ -91,11 +89,26 @@ def test_building_home_for_50_rooms_of_300_messages_stays_fast(tmp_home: Path) -
                 b.state.store.history(room.id, None, MESSAGES)
             return time.perf_counter() - t
 
-        read_ms = statistics.median(b.on_loop(read_all) for _ in range(5)) * 1000
-        print(f"home.build median {median_ms:.1f} ms; reading every message {read_ms:.1f} ms")
-        assert median_ms < MAX_SHARE * read_ms, (
-            f"home.build took {median_ms:.0f} ms, over {MAX_SHARE:.0%} of the {read_ms:.0f} ms "
-            "it takes to read every message in the rooms"
+        # Build and read in turn, so a stretch of interference (another job, a throttled core) lands on both,
+        # and compare the best of each: the fastest run is the cost with the least noise in it. A median of
+        # ten builds against a median of five reads taken after them let one busy stretch decide (#944).
+        builds: list[float] = []
+        reads: list[float] = []
+        out: dict[str, object] = {}
+        for _ in range(ROUNDS):
+            took, out = b.on_loop(build)
+            builds.append(took)
+            reads.append(b.on_loop(read_all))
+        assert out["waiting_total"] == ROOMS + ROOMS // 5  # a question in every room, a board in every fifth
+        assert len(out["live"]) == 0 and len(out["done"]) > 0  # type: ignore[arg-type]
+        build_ms, read_ms = min(builds) * 1000, min(reads) * 1000
+        print(
+            f"home.build best {build_ms:.1f} ms; reading every message best {read_ms:.1f} ms "
+            f"(ratio {build_ms / read_ms:.2f}, bound {MAX_SHARE:.2f}, best of {ROUNDS} interleaved)"
+        )
+        assert build_ms < MAX_SHARE * read_ms, (
+            f"home.build took {build_ms:.0f} ms at best, over {MAX_SHARE:.0%} of the {read_ms:.0f} ms "
+            "it takes at best to read every message in the rooms"
         )
     finally:
         b.stop()
