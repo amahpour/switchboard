@@ -91,9 +91,9 @@ def root(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     test's own, short (a socket under a home in it must fit sun_path), not named ``yk-*``, with its
     sweep lock already made, as a real run's root has it before any worker starts (module docstring)."""
     d = Path(tempfile.mkdtemp(prefix="ykleak-", dir="/tmp"))
-    os.close(os.open(d / SWEEP_LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
-    monkeypatch.setenv("SWITCHBOARD_TEST_SWEEP_ROOT", str(d))
-    try:
+    try:  # from right after mkdtemp: a lock that can't be made still removes the root (no sweep finds it)
+        os.close(os.open(d / SWEEP_LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
+        monkeypatch.setenv("SWITCHBOARD_TEST_SWEEP_ROOT", str(d))
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
