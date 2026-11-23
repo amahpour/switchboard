@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -223,27 +224,78 @@ def test_cli_through_a_relay_named_ssh_is_forbidden(tmp_home: Path) -> None:
         shutil.rmtree(d, ignore_errors=True)
 
 
+# A bound for a daemonized broker to exit once signalled; the tests never wait it out.
+DAEMON_EXIT_S = 30.0
+
+
+def _daemon_left(paths: Paths, stderr: str) -> tuple[int, float] | None:
+    """The broker a `switchboard start` daemonized in ``paths``, if one is still running: by its pid
+    file, by its socket, or by the pid a timed-out start names on stderr (#929), with the start time
+    that tells it from a later process given the same pid."""
+    from switchboard.broker import daemon
+
+    candidates: list[int] = []
+    pf = daemon.read_pidfile(paths)
+    if pf:
+        candidates.append(pf[0])
+    info = ping(paths.sock, timeout=1.0)
+    if info:
+        candidates.append(int(info["pid"]))
+    found = re.search(r"the broker \(pid (\d+)\) did not answer", stderr)
+    if found:
+        candidates.append(int(found.group(1)))
+    for pid in candidates:
+        me = proc.info(pid)
+        if me is not None and proc.alive(pid, me.start):
+            return pid, me.start
+    return None
+
+
+def _stop_daemon(paths: Paths, stderr: str) -> None:
+    """Every daemonizing test's ``finally``: stop the broker its `switchboard start` launched, and see
+    it exit, before ``tmp_home`` is removed, even when an assertion on the start failed (#929). It is
+    no child of this process (the start daemonized it), so its exit is watched by pid and start time:
+    SIGTERM to its group (it leads one), then SIGKILL, each with a bound."""
+    left = _daemon_left(paths, stderr)
+    if left is None:
+        return
+    pid, start = left
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not proc.alive(pid, start):
+            return
+        try:
+            os.killpg(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass  # gone between the check and the signal (macOS says EPERM for a group of zombies)
+        deadline = time.monotonic() + DAEMON_EXIT_S
+        while proc.alive(pid, start) and time.monotonic() < deadline:
+            time.sleep(0.05)  # between checks of the process, the event waited for
+    assert not proc.alive(pid, start), f"the daemonized broker (pid {pid}) did not exit"
+
+
 def test_daemonized_start_and_stop(tmp_home: Path) -> None:
+    """`switchboard start` daemonizes a broker that answers, a second start reports it, and
+    `switchboard stop` stops it. The broker it launched is stopped before ``tmp_home`` goes even if
+    an assertion fails first: before #929 a failed start left it running in a removed home."""
     env = child_env()
     base = [sys.executable, "-m", "switchboard", "--home", str(tmp_home)]
-    r = subprocess.run(
-        base + ["start", "--port", "0", "--test-mode", "--test-trust-uds"],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        # the home's test lock, held until daemon.start() sees the daemon answer (it holds its broker
-        # lock by then), so a concurrent run's sweep never takes the home in the handoff (#922)
-        pass_fds=tmp_homes.lock_fds_for(tmp_home),
-    )
-    pid = None
+    p = Paths.from_home(tmp_home)
+    stderr = ""
     try:
+        r = subprocess.run(
+            base + ["start", "--port", "0", "--test-mode", "--test-trust-uds"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            # the home's test lock, held until daemon.start() sees the daemon answer (it holds its
+            # broker lock by then), so a concurrent run's sweep never takes the home in the handoff (#922)
+            pass_fds=tmp_homes.lock_fds_for(tmp_home),
+        )
+        stderr = r.stderr
         assert r.returncode == 0, r.stderr
         assert "switchboard is running" in r.stdout and "TEST MODE" in r.stdout
         assert "/login?t=" in r.stdout
-        from switchboard.paths import Paths
-
-        p = Paths.from_home(tmp_home)
         info = ping(p.sock)
         assert info is not None
         pid = info["pid"]
@@ -265,14 +317,12 @@ def test_daemonized_start_and_stop(tmp_home: Path) -> None:
         assert r2.returncode == 0 and "already running" in r2.stdout
         r3 = subprocess.run(base + ["stop"], env=env, capture_output=True, text=True, timeout=30)
         assert r3.returncode == 0 and "stopped" in r3.stdout
-        deadline = time.time() + 5
-        while time.time() < deadline and proc.alive(pid, me.start):
+        deadline = time.monotonic() + DAEMON_EXIT_S
+        while time.monotonic() < deadline and proc.alive(pid, me.start):
             time.sleep(0.05)
         assert not proc.alive(pid, me.start)
-        pid = None
     finally:
-        if pid is not None:
-            os.kill(pid, signal.SIGTERM)
+        _stop_daemon(p, stderr)
 
 
 def test_test_mode_guards(tmp_path: Path, tmp_home: Path) -> None:

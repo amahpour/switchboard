@@ -1,13 +1,15 @@
-"""A ``switchboard start`` that gives up leaves nothing it launched running (#929, DESIGN.md §2).
+"""What a ``switchboard start`` that gives up does with the broker it launched (#929, DESIGN.md §2).
 
-``daemon.start()`` launches the broker in a session of its own and waits for its socket. Before
-#929, a start that waited out ``START_WAIT_S`` printed "the broker did not start" and returned 1
-with the child still running: no one had its pid, and a test's ``tmp_home`` teardown then removed
-the home under it. These tests run ``daemon.start()`` in-process with ``subprocess.Popen`` wrapped:
-the wrapper swaps in a stand-in broker (or launches the real one), waits for it to say it is ready
-(the event, never a sleep), and only then hands it back, so the start's short deadline always
-passes with the child alive. Each stand-in holds the write end of a pipe the test reads, and so
-does every process it starts: EOF on the read end is the event that every one of them has exited.
+``daemon.start()`` launches the broker in a session of its own and waits for its socket. A start
+that waits out ``START_WAIT_S`` leaves the broker running and names its pid: it may still be
+applying a restore or migrating a large database, which ``run_foreground`` does before it serves the
+socket, and stopping it there would mean it never comes up. A start the person interrupts (Ctrl-C)
+stops and reaps what it launched, since the terminal's SIGINT never reaches the broker's session.
+These tests run ``daemon.start()`` in-process with ``subprocess.Popen`` wrapped: the wrapper swaps in
+a stand-in broker (or launches the real one), waits for it to say it is ready (the event, never a
+sleep), and only then hands it back, so the start's short deadline always passes with the child
+alive. Each stand-in holds the write end of a pipe the test reads, and so does every process it
+starts: EOF on the read end is the event that every one of them has exited.
 """
 
 from __future__ import annotations
@@ -88,7 +90,8 @@ def _reaped(pid: int) -> bool:
 
 
 class Launches:
-    """What the wrapped Popen launched, and its cleanup: on main a child outlives the start."""
+    """What the wrapped Popen launched, and its cleanup: a child a test didn't stop outlives the
+    start, so this stops each one, its whole group, before ``tmp_home`` is removed."""
 
     def __init__(self) -> None:
         self.children: list[subprocess.Popen[bytes]] = []
@@ -125,10 +128,18 @@ def launches() -> Iterator[Launches]:
 
 
 def _stand_in_start(
-    monkeypatch: pytest.MonkeyPatch, home: Path, lx: Launches, *, ignore_term: bool, pidfile: str
-) -> tuple[int, subprocess.Popen[bytes], int, int]:
-    """Run ``daemon.start()`` on a stand-in broker that never opens its socket: (its return code,
-    the child, the grandchild's pid, the pipe's read end)."""
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+    lx: Launches,
+    *,
+    ignore_term: bool,
+    pidfile: str,
+    interrupt: bool = False,
+) -> tuple[int | None, subprocess.Popen[bytes], int, int]:
+    """Run ``daemon.start()`` on a stand-in broker that never opens its socket: (its return code, or
+    None if it raised KeyboardInterrupt, the child, the grandchild's pid, the pipe's read end).
+    With ``interrupt``, the first ping of the wait (after the launch) raises KeyboardInterrupt, as
+    Ctrl-C there would."""
     real_popen = subprocess.Popen
     r, w = lx.pipe()
     seen: dict[str, Any] = {}
@@ -143,67 +154,97 @@ def _stand_in_start(
         seen["grandchild"] = int(_read_line(r, "ready line").split()[1])
         return child
 
+    def ctrl_c(*a: Any, **k: Any) -> None:
+        if lx.children:  # the "already running?" ping before the launch answers as no broker
+            raise KeyboardInterrupt
+        return None
+
     monkeypatch.setattr(daemon.subprocess, "Popen", popen)
     monkeypatch.setattr(daemon, "START_WAIT_S", 0.2)
-    rc = daemon.start(Paths.from_home(home), port=0, test_mode=True)
+    if interrupt:
+        monkeypatch.setattr(daemon, "ping", ctrl_c)
+    rc: int | None = None
+    try:
+        rc = daemon.start(Paths.from_home(home), port=0, test_mode=True)
+    except KeyboardInterrupt:
+        assert interrupt, "start raised KeyboardInterrupt with no interrupt"
+    else:
+        assert not interrupt, "an interrupted start did not raise KeyboardInterrupt"
     return rc, lx.children[0], seen["grandchild"], r
 
 
-def test_a_timed_out_start_stops_and_reaps_the_broker_it_launched(
+def test_a_timed_out_start_leaves_the_broker_running_and_names_it(
     tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A start whose broker never answers stops it, and every process in its group, and reaps it.
+    """A start whose broker doesn't answer in time returns 1 and leaves it running, since it may be
+    migrating a large database, and says so with its pid and how to check and stop it. The test
+    then stops it itself and sees every process in its group exit.
 
-    Fails before #929: start returned 1 with the stand-in and its grandchild still running (the
-    child had no return code and was no zombie either, just alive)."""
+    Fails on d371feed: the start SIGTERMed and reaped the stand-in (it had a return code), and its
+    message named no pid."""
     rc, child, _grandchild, r = _stand_in_start(
         monkeypatch, tmp_home, launches, ignore_term=False, pidfile=""
     )
     assert rc == 1
-    assert "the broker did not start" in capsys.readouterr().err
-    assert child.returncode == -signal.SIGTERM, "start did not stop and reap the broker it launched"
+    err = capsys.readouterr().err
+    assert f"the broker (pid {child.pid}) did not answer" in err, err
+    assert "may still be starting" in err and "migrating a large database" in err, err
+    assert "`switchboard status`" in err and "`switchboard stop`" in err, err
+    assert "the broker did not start" not in err, err
+    assert child.poll() is None, "start stopped a broker that may still be starting"
+    os.killpg(child.pid, signal.SIGTERM)  # the test's own stop, while the leader is unreaped
+    assert child.wait(timeout=EVENT_S) == -signal.SIGTERM
+    assert _eof(r), "a process the broker started is still running"
+
+
+def test_an_interrupted_start_stops_and_reaps_the_broker_it_launched(
+    tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches
+) -> None:
+    """Ctrl-C while start waits stops the broker it launched, and every process in its group, and
+    reaps it, then lets the KeyboardInterrupt through: the broker is in a session of its own, so the
+    terminal's SIGINT never reached it.
+
+    Fails on origin/main: the stand-in and its grandchild kept running after the interrupt."""
+    rc, child, _grandchild, r = _stand_in_start(
+        monkeypatch, tmp_home, launches, ignore_term=False, pidfile="", interrupt=True
+    )
+    assert rc is None
+    assert child.returncode == -signal.SIGTERM, "an interrupted start did not stop and reap its broker"
     assert _reaped(child.pid)
     assert _eof(r), "a process the broker started is still running"
 
 
-def test_a_broker_that_ignores_sigterm_is_killed_and_its_pid_file_removed(
+def test_an_interrupted_start_kills_a_broker_that_ignores_sigterm_and_removes_its_pid_file(
     tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches
 ) -> None:
     """A child that doesn't exit on SIGTERM gets SIGKILL after a bounded wait, and the pid file
     it wrote naming itself (which SIGKILL gives it no chance to remove) is removed for it, so the
     home is as a fresh start expects.
 
-    Fails before #929: the stand-in kept running and its pid file stayed."""
+    Fails on origin/main: the stand-in kept running after the interrupt and its pid file stayed."""
     paths = Paths.from_home(tmp_home)
-    monkeypatch.setattr(daemon, "REAP_TERM_WAIT_S", 0.5, raising=False)  # absent before #929
+    monkeypatch.setattr(daemon, "REAP_TERM_WAIT_S", 0.5, raising=False)  # absent on origin/main
     rc, child, _grandchild, r = _stand_in_start(
-        monkeypatch, tmp_home, launches, ignore_term=True, pidfile=str(paths.pidfile)
+        monkeypatch, tmp_home, launches, ignore_term=True, pidfile=str(paths.pidfile), interrupt=True
     )
-    assert rc == 1
+    assert rc is None
     assert child.returncode == -signal.SIGKILL, "start did not kill the broker that ignored SIGTERM"
     assert _reaped(child.pid)
     assert _eof(r), "a process the broker started is still running"
     assert not paths.pidfile.exists()
 
 
-def test_a_broker_up_just_after_the_deadline_is_stopped_and_a_fresh_start_works(
+def test_a_broker_up_just_after_the_deadline_stays_up_and_stop_stops_it(
     tmp_home: Path, monkeypatch: pytest.MonkeyPatch, launches: Launches, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The real broker, fully up by the time start gives up (start's own ping is made to miss it),
-    is stopped by the SIGTERM as `switchboard stop` would: it exits 0, its socket and pid file go,
-    its lock is free, and a fresh start then runs a broker in the same home.
+    is left running: start returns 1 naming its pid, the broker then answers on its socket, and a
+    later `switchboard stop` stops it (socket and pid file gone).
 
-    Fails before #929: the first broker kept running, answering on the socket, so the fresh start
-    found it "already running" instead of starting its own."""
+    Fails on d371feed: start SIGTERMed the broker that had come up, so it no longer answered.
+    Fails on origin/main: start's message did not name the broker's pid."""
     paths = Paths.from_home(tmp_home)
     real_popen = subprocess.Popen
-
-    def popen(cmd: list[str], **kw: Any) -> subprocess.Popen[bytes]:
-        kw["env"] = child_env()
-        kw["pass_fds"] = tmp_homes.lock_fds_for(tmp_home)
-        child = real_popen(cmd, **kw)
-        launches.children.append(child)
-        return child
 
     def broker_up() -> None:
         deadline = time.monotonic() + EVENT_S
@@ -213,7 +254,10 @@ def test_a_broker_up_just_after_the_deadline_is_stopped_and_a_fresh_start_works(
             time.sleep(0.05)  # between pings of the socket, the event waited for
 
     def popen_then_wait(cmd: list[str], **kw: Any) -> subprocess.Popen[bytes]:
-        child = popen(cmd, **kw)
+        kw["env"] = child_env()
+        kw["pass_fds"] = tmp_homes.lock_fds_for(tmp_home)
+        child = real_popen(cmd, **kw)
+        launches.children.append(child)
         broker_up()
         return child
 
@@ -223,19 +267,12 @@ def test_a_broker_up_just_after_the_deadline_is_stopped_and_a_fresh_start_works(
     rc = daemon.start(paths, port=0, test_mode=True, test_trust_uds=True)
     first = launches.children[0]
     assert rc == 1
-    assert first.returncode == 0, "the broker that came up was not stopped by SIGTERM"
-    assert _reaped(first.pid)
+    assert f"the broker (pid {first.pid}) did not answer" in capsys.readouterr().err
+    assert first.poll() is None, "start stopped the broker that came up"
+    info = ping(paths.sock)
+    assert info is not None and info["pid"] == first.pid
+    monkeypatch.setattr(daemon, "ping", ping)
+    assert daemon.stop(paths) == 0
+    assert first.wait(timeout=EVENT_S) == 0, "the broker did not exit cleanly on `switchboard stop`"
     assert ping(paths.sock) is None
     assert not paths.pidfile.exists()
-
-    monkeypatch.setattr(daemon.subprocess, "Popen", popen)
-    monkeypatch.setattr(daemon, "START_WAIT_S", EVENT_S)
-    monkeypatch.setattr(daemon, "ping", ping)
-    capsys.readouterr()
-    assert daemon.start(paths, port=0, test_mode=True, test_trust_uds=True) == 0
-    assert "switchboard is running" in capsys.readouterr().out
-    second = launches.children[1]
-    info = ping(paths.sock)
-    assert info is not None and info["pid"] == second.pid
-    assert daemon.stop(paths) == 0
-    second.wait(timeout=EVENT_S)
