@@ -618,6 +618,11 @@ class CaptionsTranscriptionController:
     def _is_own_key(self, key: str) -> bool:
         return self._name_of(key) == SELF
 
+    def _is_unnamed_key(self, key: str) -> bool:
+        """Whether a row has no identity yet: no initials, no label, and no name from the active speaker."""
+        initials, _, label, _ = key.split("|", 3)
+        return not initials.strip() and not label and self._name_of(key) is None
+
     def _name_of(self, key: str) -> str | None:
         return self._name_for(*key_parts(key), key_pic(key))
 
@@ -660,12 +665,19 @@ class CaptionsTranscriptionController:
         self._emit(finals)
 
     def _update_no_speech(self, now: float) -> None:
-        rows = self._rule.changing_rows(now, 0.6, self._is_own_key)
+        playing = self._playback_active()
+        # During playback a row nobody has named yet (no initials, no label, and no picture the active speaker
+        # has named as someone else) may be the bot's own first frame (#852, live): it does not count as a
+        # person talking over the bot until it has an identity. A person with a picture is named by the call's
+        # active-speaker detection after ``PIC_MIN_SAMPLES`` changes; a real interruption is noticed then.
+        rows = self._rule.changing_rows(
+            now, 0.6, lambda k: self._is_own_key(k) or (playing and self._is_unnamed_key(k))
+        )
         first = next(rows, None)
         if first is None:
             self._no_speech.set()
             return
-        if self._no_speech.is_set() and self._playback_active():
+        if self._no_speech.is_set() and playing:
             for key, caption in (first, *rows):
                 initials, colour, label, picture = key.split("|", 3)
                 logger.info(
