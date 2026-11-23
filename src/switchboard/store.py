@@ -1736,6 +1736,10 @@ class Store:
         r = self.con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return str(r[0]) if r else None
 
+    def ping(self) -> None:
+        """One cheap read, for ``/readyz`` (§30.3): raises ``sqlite3.Error`` when the file can't be read."""
+        self.con.execute("SELECT 1 FROM meta LIMIT 1").fetchone()
+
     def meta_set(self, key: str, value: str) -> None:
         with db.tx(self.con):
             self.con.execute(

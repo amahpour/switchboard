@@ -48,6 +48,7 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import urllib.parse
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -398,6 +399,27 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     # HostOriginGuard, no Host check (the checker probes the container's own address).
     @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
     async def healthz() -> Response:
+        return Response("ok\n", media_type="text/plain", headers=NO_STORE)
+
+    # A liveness probe that reads the database (DESIGN.md §30.3): 200 "ok" when one read through the
+    # broker's own store works, 503 with no detail when it raises or the store isn't open yet. Only the
+    # first failure and the recovery are logged, not every probe.
+    ready = {"ok": True}
+
+    @app.api_route("/readyz", methods=["GET", "HEAD"], include_in_schema=False)
+    async def readyz() -> Response:
+        try:
+            if state.store is None:  # startup, a migration, a restore at start (§57)
+                raise sqlite3.OperationalError("store not open")
+            state.store.ping()
+        except sqlite3.Error:
+            if ready["ok"]:
+                ready["ok"] = False
+                log.error("/readyz: the database can't be read; answering 503 until it can")
+            return Response("unavailable\n", status_code=503, media_type="text/plain", headers=NO_STORE)
+        if not ready["ok"]:
+            ready["ok"] = True
+            log.warning("/readyz: the database reads again")
         return Response("ok\n", media_type="text/plain", headers=NO_STORE)
 
     # the tab icon for a browser that asks the old way (a JSON response opened in a tab, or a
