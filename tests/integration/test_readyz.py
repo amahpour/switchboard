@@ -4,13 +4,16 @@ can't read switchboard.db answers 503 and a platform restarts it, where ``/healt
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
+from pathlib import Path
 
 import httpx
 import pytest
-from conftest import InProcBroker
+from conftest import FakeClock, InProcBroker
 
-from switchboard.store import Store
+from switchboard import db
+from switchboard.store import PING_BUSY_MS, Store
 
 
 def _fail(self: Store) -> None:
@@ -62,3 +65,45 @@ def test_readyz_is_503_not_a_500_while_the_store_is_not_open(broker: InProcBroke
     finally:
         broker.state.store = store
     assert web.get("/readyz").status_code == 200
+
+
+def _store_on_a_file(path: Path) -> Store:
+    store = Store(db.open_db(path), FakeClock())
+    store.meta_set("probe", "1")
+    store.con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+    store.ping()  # the connection is warm, as a running broker's is
+    return store
+
+
+def test_ping_reads_the_file_and_not_the_connections_memory(tmp_path: Path) -> None:
+    """The file goes bad under a running broker. A plain SELECT on the warm connection still answers from
+    its page cache (asserted, since that is the trap), so a probe made of it says ok through the very
+    failure /readyz exists for. Fails if ``Store.ping`` doesn't drop the cache before it reads."""
+    path = tmp_path / "switchboard.db"
+    store = _store_on_a_file(path)
+    os.truncate(path, 0)
+    assert tuple(store.con.execute("SELECT 1 FROM meta LIMIT 1").fetchone()) == (1,)
+    with pytest.raises(sqlite3.Error):
+        store.ping()
+
+
+def test_ping_waits_briefly_for_a_lock_and_puts_the_timeout_back(tmp_path: Path) -> None:
+    """Another process holding the file must not stall the event loop for the connection's 5 s
+    ``busy_timeout`` on every probe: the read runs under the shorter wait, and the broker's own calls get
+    their 5 s back, after a read that failed too. Fails if the probe keeps the long wait or leaves the
+    short one behind."""
+    path = tmp_path / "switchboard.db"
+    store = _store_on_a_file(path)
+    before = store.con.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert before > PING_BUSY_MS
+    seen: list[str] = []
+    store.con.set_trace_callback(seen.append)
+    store.ping()
+    store.con.set_trace_callback(None)
+    read = next(i for i, sql in enumerate(seen) if sql.startswith("SELECT 1 FROM meta"))
+    assert f"PRAGMA busy_timeout={PING_BUSY_MS}" in seen[:read]
+    assert f"PRAGMA busy_timeout={before}" in seen[read:]
+    os.truncate(path, 0)
+    with pytest.raises(sqlite3.Error):
+        store.ping()
+    assert store.con.execute("PRAGMA busy_timeout").fetchone()[0] == before
