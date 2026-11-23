@@ -54,8 +54,9 @@ monotonic: Callable[[], float] = time.monotonic  # what a send's deadline is mea
 
 
 class SendError(Exception):
-    """A send that failed; ``code`` is a key of ``notify.fail_reason``. Once the request may have gone
-    out (the answer failed), the receiver may or may not have the POST: a failure is not proof none arrived."""
+    """A send that failed; ``code`` is a key of ``notify.fail_reason``. Once the request may have
+    gone out (the answer failed), the receiver may or may not have the POST: a failed send may have
+    arrived."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
