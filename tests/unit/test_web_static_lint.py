@@ -579,6 +579,23 @@ def test_board_assets_are_exactly_the_reviewed_bytes_with_notices() -> None:
         assert "https://esm.sh/" not in text
 
 
+def test_the_board_marks_itself_dirty_on_a_key_in_the_capture_phase() -> None:
+    """Escape commits an open text inside Excalidraw's own key handler, which runs before a bubble-phase
+    listener on the document. A frame that marked itself dirty only in the bubble phase saw that change
+    while still clean, when a flush had just gone out, and never sent it: the author's tab kept the secret
+    the broker had cut out (#933). Fails if `scripts/board/frame.jsx` or the committed `board.js` built
+    from it registers the dirty-marking keydown listener without capture."""
+    source = (STATIC.parents[3] / "scripts" / "board" / "frame.jsx").read_text()
+    listeners = re.findall(r"addEventListener\('keydown', \(\) => \{ dirty = true; \}(, true)?\);", source)
+    assert listeners == [", true"], listeners
+    bundle = (STATIC / "vendor/board/board.js").read_text()
+    pointer = re.search(r'addEventListener\("pointerdown",\(\)=>\{\w+=!0,(\w+)=!0\}\)', bundle)
+    assert pointer is not None, "the frame's pointerdown listener, which names the dirty flag"
+    dirty = re.escape(pointer.group(1))
+    bundled = re.findall(r'addEventListener\("keydown",\(\)=>\{' + dirty + r"=!0\}(,!0)?\)", bundle)
+    assert bundled == [",!0"], bundled
+
+
 def test_the_board_ships_none_of_excalidraw_coms_service_settings() -> None:
     """Excalidraw's dist carries excalidraw.com's own Firebase browser config and service addresses. The
     board uses none of them, and GitHub's secret scanning flagged the Google API key in it, so the build
