@@ -131,10 +131,16 @@ def words_of(text: str) -> list[str]:
 
 def is_edit(before: list[str] | None, now: list[str]) -> bool:
     """Whether a row's words are only a revision of what it showed when the bot began to speak (#852): no
-    more words than before, and at least half of them were there. Zoom revises an old caption in place (a
+    more words than before, not scrolled (the old words moved forward, new ones after them), and at least half
+    of them were there. Zoom revises an old caption in place (a
     word's case, punctuation or spelling), and that is not someone speaking over the bot. A row with no
     baseline (``None``), more words, or a new utterance (fewer words, mostly different ones) is speech."""
     if before is None or not now or len(now) > len(before):
+        return False
+    n = len(before)
+    # The box is a rolling window: once it is full, new words push old ones out and the count stays the same.
+    # Old words that moved forward with new ones after them are speech, not a revision in place.
+    if any(before[k:] == now[: n - k] and len(now) > n - k for k in range(1, n)):
         return False
     shown = set(before)
     return 2 * sum(1 for w in now if w in shown) >= len(now)

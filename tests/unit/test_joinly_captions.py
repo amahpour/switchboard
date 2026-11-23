@@ -767,3 +767,41 @@ async def test_the_logs_hold_counts_and_none_of_the_captions_words(caplog: pytes
     assert caplog.text.count("an edit to words already shown") == 1
     assert "words=4 baseline_words=3" in caplog.text
     assert "tester" not in caplog.text.lower() and "what" not in caplog.text.lower()
+
+
+WINDOW = [f"w{i}" for i in range(30)]  # a full row: the words of one person's caption box
+
+
+@pytest.mark.parametrize("new_words", [1, 4])
+async def test_a_full_row_that_scrolls_at_the_same_count_cuts_a_line(
+    joinly_types: None, new_words: int
+) -> None:
+    """The box is a rolling window: once a person has talked a while, each new word pushes an old one out and
+    the count stays the same. That is speech over the bot, not an edit. Fails if a row with the same count
+    and mostly shown words is always an edit, so someone who has talked a lot cannot stop the bot."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, " ".join(WINDOW), 1.0)
+    line.on = True
+    await _show(c, " ".join(WINDOW[new_words:] + [f"new{i}" for i in range(new_words)]), 2.0)
+    assert not c.no_speech_event.is_set()
+
+
+def test_is_edit_keeps_in_place_revisions_and_refuses_scrolls() -> None:
+    """Guard: a revision keeps its words in their places and stays an edit (the live "Hey Tester, what's",
+    and one word of a long row); a scroll, even by one word, is not."""
+    assert cap.is_edit(cap.words_of("Hey Tester, what's"), cap.words_of("hey tester whats"))
+    revised = WINDOW[:10] + ["fixed"] + WINDOW[11:]
+    assert cap.is_edit(WINDOW, revised)
+    assert not cap.is_edit(WINDOW, WINDOW[1:] + ["new"])
+    assert not cap.is_edit(WINDOW, WINDOW[3:] + ["a", "b", "c"])
+
+
+async def test_a_one_word_revision_of_a_full_row_does_not_cut_a_line(joinly_types: None) -> None:
+    """Guard: the scroll check must not turn an in-place correction of a long row into speech."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, " ".join(WINDOW), 1.0)
+    line.on = True
+    await _show(c, " ".join(WINDOW[:10] + ["fixed"] + WINDOW[11:]), 2.0)
+    assert c.no_speech_event.is_set()
