@@ -805,3 +805,44 @@ async def test_a_one_word_revision_of_a_full_row_does_not_cut_a_line(joinly_type
     line.on = True
     await _show(c, " ".join(WINDOW[:10] + ["fixed"] + WINDOW[11:]), 2.0)
     assert c.no_speech_event.is_set()
+
+
+# The live call on ec3b3668: a person who talked over the bot reused words of their previous caption.
+SAID = cap.words_of("I am now talking over you right now. Did I interrupt you correctly")
+
+
+async def _after_said(c: Any, text: str) -> None:
+    line = _with_line(c)
+    await _show(c, " ".join(SAID), 1.0)
+    line.on = True
+    await _show(c, text, 2.0)
+
+
+async def test_a_new_row_that_begins_with_a_word_the_last_one_had_cuts_at_the_first_word(
+    joinly_types: None,
+) -> None:
+    """Live: the person's previous row was 13 words; the new row began "I" and was logged as an edit because
+    "i" was among the old words, so the line was cut nine seconds late. Compared by position against the end
+    of the baseline, "I" is not "correctly". Fails if words are compared as a set."""
+    c = controller(Page([None]))
+    await _after_said(c, "I")
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_new_row_of_common_words_cuts_without_outgrowing_the_baseline(joinly_types: None) -> None:
+    """Live: "I am talking over you right now" reuses most of the old words and has fewer, and must still cut.
+    Fails if it takes more words than the baseline to be heard."""
+    c = controller(Page([None]))
+    await _after_said(c, "I am talking over you right now")
+    assert not c.no_speech_event.is_set()
+
+
+def test_is_edit_keeps_a_dropped_front_and_revisions_and_refuses_scrolls() -> None:
+    """Guard: the live 14-to-7 case (Zoom dropped the older sentence of a quiet person's row) is an edit, as
+    are an in-place revision and a dropped front with one revised word; a scroll is speech."""
+    long = cap.words_of("one two three four five six seven eight nine ten eleven twelve thirteen fourteen")
+    assert cap.is_edit(long, long[7:])
+    assert cap.is_edit(long, long[6:-1] + ["fixed"])
+    assert cap.is_edit(long, long[:5] + ["fixed"] + long[6:])
+    assert not cap.is_edit(long, long[1:] + ["new"])
+    assert not cap.is_edit(SAID, ["i"])

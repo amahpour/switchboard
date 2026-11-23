@@ -130,20 +130,17 @@ def words_of(text: str) -> list[str]:
 
 
 def is_edit(before: list[str] | None, now: list[str]) -> bool:
-    """Whether a row's words are only a revision of what it showed when the bot began to speak (#852): no
-    more words than before, not scrolled (the old words moved forward, new ones after them), and at least half
-    of them were there. Zoom revises an old caption in place (a
-    word's case, punctuation or spelling), and that is not someone speaking over the bot. A row with no
-    baseline (``None``), more words, or a new utterance (fewer words, mostly different ones) is speech."""
+    """Whether a row's words are only a revision of what it showed when the bot began to speak (#852). Zoom
+    revises an old caption in place (a word's case, punctuation or spelling) and drops a row's oldest words
+    when the speaker is quiet; neither is someone speaking over the bot. Compared by position against the END
+    of the baseline: an edit has no more words than before, and at least two thirds of them equal the baseline's
+    last words at the same places. A row with no baseline (``None``), more words, a scroll (old words moved
+    forward, new ones after) or a new utterance does not line up, so it is speech. A speaker who repeats
+    exactly the last words of their previous caption is not heard until they say something new."""
     if before is None or not now or len(now) > len(before):
         return False
-    n = len(before)
-    # The box is a rolling window: once it is full, new words push old ones out and the count stays the same.
-    # Old words that moved forward with new ones after them are speech, not a revision in place.
-    if any(before[k:] == now[: n - k] and len(now) > n - k for k in range(1, n)):
-        return False
-    shown = set(before)
-    return 2 * sum(1 for w in now if w in shown) >= len(now)
+    tail = before[-len(now) :]
+    return 3 * sum(1 for a, b in zip(tail, now, strict=True) if a == b) >= 2 * len(now)
 
 
 def sentences(text: str) -> list[str]:
