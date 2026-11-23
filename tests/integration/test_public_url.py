@@ -251,6 +251,25 @@ def test_healthz_answers_any_host_and_nothing_else(
     assert out.split(b"\r\n", 1)[0].endswith(b" 200 OK") and out.endswith(b"\r\n\r\nok\n")
 
 
+# ------------------------------------------------------------------ /readyz
+def test_readyz_needs_no_sign_in_and_no_host_but_a_neighbour_still_does(
+    public: InProcBroker,
+) -> None:
+    """On a hosted broker, with sign-in on, /readyz answers a probe at the container's own address with
+    no session; /api/me with the right Host is 401 and with a foreign one 421, and /readyz is open for GET
+    and HEAD only. Fails (421) while /readyz is not in OPEN_PATHS."""
+    for host in ["10.0.0.7:7419", HOST]:
+        with client(public, host=host) as c:
+            assert (c.get("/readyz").status_code, c.get("/readyz").text) == (200, "ok\n"), host
+            assert c.head("/readyz").status_code == 200
+    with client(public, host="10.0.0.7:7419") as c:
+        assert c.post("/readyz", headers=write_headers()).status_code == 421
+        for path in ["/readyz/", "/READYZ", "/api/me", "/"]:
+            assert c.get(path).status_code == 421, path
+    with client(public) as c:
+        assert c.get("/api/me").status_code == 401
+
+
 # --------------------------------------------------------- a real broker process
 def test_a_real_broker_with_container_settings(tmp_home: Path) -> None:
     """`start --foreground --public-url … --log-stdout`: announces the public URL, logs to stdout

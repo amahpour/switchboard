@@ -147,7 +147,7 @@
       if (!merged) return;
       cache.set(room, merged);
       if (current === room) {
-        post('elements', { elements: merged });
+        post('elements', { elements: merged, full: full === true });
         el('play').disabled = !frames().length;
         if (playing) showFrame(Math.max(0, frames().findIndex(f => f.id === selected)));
       }

@@ -296,6 +296,17 @@ def test_the_defaults_render_the_manifest(render: Callable[..., Rendered]) -> No
 
 
 @needs_helm
+def test_the_rendered_probes_read_the_database_for_liveness_and_readiness(
+    render: Callable[..., Rendered],
+) -> None:
+    """Rendered, the broker's startup probe is /healthz and its liveness and readiness probes /readyz
+    (#953). Fails on a chart whose liveness still answers ok without reading the database."""
+    broker = render(*SET_BASE).container("switchboard")
+    paths = {k: broker[k]["httpGet"]["path"] for k in ("startupProbe", "livenessProbe", "readinessProbe")}
+    assert paths == {"startupProbe": "/healthz", "livenessProbe": "/readyz", "readinessProbe": "/readyz"}
+
+
+@needs_helm
 @pytest.mark.parametrize(
     "fixes",
     [(), ("zoom",), ("preroll",), ("zoom", "preroll"), ("voice",), ("zoom", "preroll", "voice")],

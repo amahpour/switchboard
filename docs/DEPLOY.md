@@ -14,7 +14,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 
 - **One container, one volume, one broker.** The broker takes a lock in its data directory, and a second broker on the same volume refuses to start. Never run more than one replica. Several brokers behind one address are a different design ([#35](https://github.com/amahpour/switchboard/issues/35)).
 - **The volume is a real disk:** a Render disk, EBS, a GCE persistent disk, a Docker volume. Never NFS or EFS, where SQLite's locking isn't reliable.
-- **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The one exception is `GET /healthz`, which answers `ok` to anyone (platforms probe the container's own address) and nothing else.
+- **The public URL is the only address.** You tell the broker the `https://` address browsers use. It then answers only to that host, accepts writes only from that origin, marks its session cookie `Secure`, and puts that address in the sign-in links. Requests for any other host get `421`. The exceptions are `GET /healthz` and `GET /readyz`, which answer anyone (platforms probe the container's own address) with `ok` and nothing else, or, for `/readyz`, a 503 with no detail when the database can't be read.
 - **TLS is the proxy's job.** The broker speaks plain HTTP on port 7419 inside the container. It never reads `X-Forwarded-*` headers: the public URL you configure decides the scheme and the host, so a forged header can't change them.
 - **Redact `X-Switchboard-Token` as you do `Authorization`, if your proxy logs request headers.** Claude Code's plugin sends a token typed into its settings in that header, because an `Authorization` header (even an empty one) keeps Claude Code from offering to sign in through the browser instead. The broker logs no header, and a proxy logs none by default (Caddy's `reverse_proxy` above, an ingress, Render's router); a proxy configured to log request headers would otherwise keep the token. Upgrade the broker before the plugin: an older one ignores the header.
 - **WebSockets and long calls pass through the proxy:** the web UI's WebSocket (`/ws`) and your agents' calls to `/mcp` (a listening agent's call stays open until a message comes, up to a day). Every proxy above does that by default. Don't put request buffering on them, or a timeout shorter than the call: the broker pings the web UI's WebSocket every 20 seconds.
@@ -24,7 +24,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:1.15.0
+  ghcr.io/amahpour/switchboard:1.16.0
 docker logs switchboard
 ```
 
@@ -152,7 +152,7 @@ own storage and CPU before relying on either limit.
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:1.15.0`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:1.16.0`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -324,8 +324,8 @@ Remove `prerollFix` once a joinly release has the fix too. It is independent of 
 **A voice for each line.** The voice patch (two files, [described above](#a-meeting-bot)) is one ConfigMap with two keys. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 ```
 
@@ -778,6 +778,8 @@ spec:
         runAsGroup: 10001
         fsGroup: 10001
         fsGroupChangePolicy: OnRootMismatch
+        # on an SELinux-enforcing node, the broker's level (see Health checks and logs)
+        # seLinuxOptions: {level: "s0:c123,c456"}
       containers:
         - name: stage-archive
           image: ghcr.io/amahpour/switchboard:<version>
@@ -923,8 +925,8 @@ switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` arg
 **A voice for each line (#713).** joinly 0.5.4 takes one voice when a bot session starts, and its `speak_text` tool has no voice argument, so every agent that speaks on a call has the same voice. The patch is two files of joinly (`server.py` and the Kokoro voice, `kokoro.py`): `speak_text` takes an optional `voice` for that line, and Kokoro uses it, falling back to the session's voice when it is not given or Kokoro has no voice of that name. Without a `voice` joinly behaves as 0.5.4, so the patch changes nothing on its own: it is the base for a voice per agent. The files are in this repository ([deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly), with joinly's MIT licence and a NOTICE saying what changed); until a joinly release has the argument, mount them over the image's copies, read-only, in the same `docker run` as the other files (use any or all):
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
-curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/kokoro.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/server.py
+curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/kokoro.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro" \
@@ -940,8 +942,8 @@ The URL names a release tag, which does not move; the link works from the releas
 **Captions (#764).** The bot reads the call's own captions by default, so no speech model is loaded or run and no GPU is needed. It needs a new file of joinly, `captions.py` (the three small parts joinly builds a session from: a transcription controller that reads Zoom's caption box, and a speech-to-text and a voice-activity service that do nothing), and the patched `server.py` above, which points joinly at them when the broker asks for `captions` and answers whether the captions could be turned on. Both are in [deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly); `captions.py` is switchboard's own, MIT licensed like the rest. Mount them with the same `docker run` as the other files:
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
-curl -fsSLo captions.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/captions.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/server.py
+curl -fsSLo captions.py https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/captions.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/captions.py:/app/.venv/lib/python3.12/site-packages/joinly/captions.py:ro" \
@@ -1116,8 +1118,8 @@ Drop this patch once a joinly release has the fix too, and move the image to tha
 **A voice for each line.** The voice patch (#713, [described above](#a-meeting-bot)) is a fourth patch, [joinly-voice-patch.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-voice-patch.yaml): one ConfigMap with the two files of this repository as its keys, each mounted over joinly's copy with `subPath`, so a pod can't start without the ConfigMap. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.16.0/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
 ```
@@ -1211,12 +1213,14 @@ The key and the link are files in `calls/<fingerprint>/` of the plugin's data fo
 
 ## Health checks and logs
 
-- **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. The image's Docker `HEALTHCHECK` calls it, and so do the Kubernetes probes and Render's `healthCheckPath`. A hosted call's relay turns that check off: the relay is not a broker ([Meetings on your own machine](#meetings-on-your-own-machine)).
+- **`GET /healthz`** answers `ok` with status 200. It needs no sign-in, returns no data, and accepts any Host, so platforms can probe the container's own address. It says only that the process is up, so the Kubernetes startup probe uses it. A hosted call's relay turns that check off: the relay is not a broker ([Meetings on your own machine](#meetings-on-your-own-machine)).
+- **`GET /readyz`** reads one row of the database from the file (not from the connection's memory), through the broker's own connection, and answers `ok` (200), or 503 with no detail when the read fails (`disk I/O error`, a locked-out volume) or the database isn't open yet (starting, migrating, a restore at start). It needs no sign-in and accepts any Host, like `/healthz`. The Kubernetes and Helm liveness and readiness probes and Render's `healthCheckPath` call it, so a broker that is up but can't read its database is restarted instead of staying broken. The image's Docker `HEALTHCHECK` calls it too, but Docker and Compose only mark the container `unhealthy` and don't restart it for that: watch for that state, or restart it yourself. The first failure and the recovery are logged, not every probe. A read doesn't wait for a writer (the database is in WAL mode), so a backup or a write in progress doesn't fail it; the probes also need three failures in a row (a period of 10 s for readiness and 20 s for liveness) before the broker leaves its Service or restarts.
+- **SELinux and a second pod on the volume.** On SELinux-enforcing nodes (Bottlerocket, OpenShift), each pod gets its own MCS level and the volume is relabeled for whichever pod last started a container on it. A second pod that mounts the broker's volume (a backup CronJob running `switchboard backup`, a restore Job like the one in [Restore at the next start](#restore-at-the-next-start), a debug pod) can lock the broker out, and every read fails with `sqlite3.OperationalError: disk I/O error` while `/healthz` still answers. Give every pod that mounts the volume the same `securityContext.seLinuxOptions.level` as the broker's (for example `level: "s0:c123,c456"` under the pod's `securityContext`). The chart starts no second pod on the volume: its Litestream containers are in the broker's own pod. The chart has no value for the broker's own level: on OpenShift the namespace assigns one that every pod in it shares, so keep the second pod in the broker's namespace; elsewhere, add `seLinuxOptions` to the pod's `securityContext` in the manifest or with a Helm post-renderer.
 - **Logs** are on stdout: `docker logs switchboard`, `kubectl logs switchboard-0`, or Render's Logs tab. They hold ids, never message text. The admin's one-time password is the one secret ever printed there, and it works once and expires. The people's one-time passwords never appear there. Agent tokens never appear there.
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.15.0 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.16.0 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](https://github.com/amahpour/switchboard/blob/main/deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.

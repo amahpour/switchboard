@@ -14,11 +14,11 @@ services:
     name: switchboard
     runtime: image
     image:
-      url: ghcr.io/amahpour/switchboard:1.15.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
+      url: ghcr.io/amahpour/switchboard:1.16.0   # a release, not :latest (docs/DEPLOY.md, "Upgrading")
     plan: 0.5c-512mb        # the smallest paid plan; disks aren't available on the free one
     region: oregon
     numInstances: 1         # one broker per disk, always
-    healthCheckPath: /healthz
+    healthCheckPath: /readyz   # reads the database: Render holds back a deploy that can't and restarts an instance that stops
     envVars:
       - key: SWITCHBOARD_PUBLIC_URL
         sync: false         # asked for when the Blueprint is created

@@ -431,9 +431,9 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("f90363a83e49d97734b5944b34ccc03fcfb1576c4ec093359c3a672c741068cc"),
+    "vendor/board/NOTICE": ("0460c147c752fd04d1233bdb414c2cbed16efc959abe9981bf701a7f90ad3b78"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("2a54064114b6fe601d0a2d34312a5eba138da1e3bfb80c3a2e46e97e2cfbf383"),
+    "vendor/board/board.js": ("adaa1b2b4a4c4312461c921e87912e93764857b2b85ba612cfcfd62304fc4735"),
     "vendor/board/chunks/chunk-42LTX363.js": (
         "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
@@ -598,6 +598,25 @@ def test_the_board_marks_itself_dirty_on_a_key_in_the_capture_phase() -> None:
     dirty = re.escape(pointer.group(1))
     bundled = re.findall(r'addEventListener\("keydown",\(\)=>\{' + dirty + r"=!0\}(,!0)?\)", bundle)
     assert bundled == [",!0"], bundled
+
+
+def test_the_board_frame_keeps_what_it_sent_until_a_copy_shows_it() -> None:
+    """The frame holds back, per element, a copy of the board that is older than what it already sent and has
+    not seen come back (#937), and a whole board from the broker (what a refused write is answered with, #893)
+    clears that. So the app's `elements` message must say whether it is a whole board, as a boolean, and the
+    frame ignores one that does not. Fails if `scripts/board/frame.jsx` or the committed `board.js` records
+    nothing when it sends, takes an `elements` message without a boolean `full`, does not clear on a whole
+    board, or if the app sends the message without `full`. The behavior is `tests/e2e/test_board_ui.py`'s."""
+    source = (STATIC.parents[3] / "scripts" / "board" / "frame.jsx").read_text()
+    assert "sent.set(e.id, e.version)" in source
+    assert "typeof m.full !== 'boolean'" in source
+    assert "if (m.full) sent.clear();" in source
+    bundle = (STATIC / "vendor/board/board.js").read_text()
+    assert "sn.set(e.id,e.version)" in bundle
+    assert 'typeof r.full!="boolean"' in bundle
+    assert "if(r.full)sn.clear();" in bundle
+    app = (STATIC / "whiteboard.js").read_text()
+    assert "post('elements', { elements: merged, full: full === true })" in app
 
 
 def test_the_board_ships_none_of_excalidraw_coms_service_settings() -> None:
