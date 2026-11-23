@@ -292,3 +292,27 @@ def test_no_status_the_broker_sets_on_its_own_moves_when_a_member_was_heard(
     clock.advance(BUSY)
     assert w.engine.not_connected_since(w.p(p)) == seen
     assert members_pane_since(w, p.id) == seen
+
+
+def test_a_subagent_tool_that_ends_an_approval_hold_is_hearing_from_the_session(
+    w: World, clock: FakeClock
+) -> None:
+    """A tool that finishes in a subagent ends the session's approval hold (``hook:subagent``, #472). That
+    is the session's own hook, so it is the session heard, and the member leaves the Not connected fold
+    at once. A subagent's hook writes no ``last_seen`` of its own, so this fails if ending the hold does
+    not touch the session: once ``status_at`` stopped counting (#948), a prompt answered after the 2 hours
+    left the member not connected while its subagent ran, and the cleanup counted days from the prompt."""
+    p, m = w.agent("bot", harness="claude", status="busy", hooks=True)
+    w.hook(p, "Notification", notification="permission_prompt")
+    assert w.p(p).status == "waiting-approval"
+    asked = clock.now()
+    clock.advance(BUSY + NC_SWEEP_S)
+    w.actions += w.engine.tick()
+    assert w.engine.not_connected == {p.id} and w.engine.not_connected_since(w.p(p)) == asked
+    w.take()
+    w.actions += w.engine.subagent_tool_ran(w.p(p))
+    assert w.p(p).status == "busy" and w.p(p).status_src == "hook:subagent"
+    assert w.p(p).last_seen == clock.now()
+    assert w.engine.not_connected == set() and w.engine.not_connected_since(w.p(p)) is None
+    assert members_pane_since(w, p.id) is None
+    assert any(type(a).__name__ == "Snapshot" and a.room_id == m.room_id for a in w.take())

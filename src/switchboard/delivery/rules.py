@@ -656,7 +656,8 @@ def heard_at(last_seen: float | None, last_say_at: float | None) -> float | None
     Not ``status_at``: the broker sets a status itself (its restart, ``restart`` and ``restart:idle``; a
     dropped wait, ``wait:dropped``; a timer undoing a follow-up's busy; a wait opening or closing), and that
     is not the session being there. Every status the session's own hook or call sets also writes
-    ``last_seen`` (``claim_for_hook``, ``touch``, ``upsert_participant``), so nothing heard is lost (#948)."""
+    ``last_seen`` (``claim_for_hook``, ``touch``, ``upsert_participant``, and ``subagent_tool_ran`` through
+    ``touch``), so nothing heard is lost (#948)."""
     known = [t for t in (last_seen, last_say_at) if t]
     return max(known) if known else None
 
