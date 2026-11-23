@@ -215,10 +215,12 @@ def test_web_sessions_slide_and_expire(store: Store, clock: FakeClock) -> None:
 
 def test_recover_on_start(store: Store, clock: FakeClock) -> None:
     """§4 restart semantics: offered batches expire and revert; everyone offline, nobody ended: a session
-    over HTTPS is tied to no process the broker could probe, so each comes back with its next call."""
+    over HTTPS is tied to no process the broker could probe, so each comes back with its next call.
+    Only the former idle session keeps the status source that lets a listener repark."""
     r = store.create_room("#b", "alice", 60, 6)
     first_part, first_m = add_agent(store, r.id, "first")
     second_part, second_m = add_agent(store, r.id, "second")
+    store.set_status(second_part, "waiting-approval", "hook:approval")
     msg = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="x")
     msg2 = store.insert_message(r.id, sender_name="alice", sender_kind="human", via="web", text="y")
     con = store.con
@@ -244,7 +246,7 @@ def test_recover_on_start(store: Store, clock: FakeClock) -> None:
     ).fetchone()
     assert d2["state"] == "pending" and d2["attempts"] == 0
     rows = {x["id"]: (x["status"], x["status_src"]) for x in con.execute("SELECT * FROM participants")}
-    assert rows == {first_part: ("offline", "restart"), second_part: ("offline", "restart")}
+    assert rows == {first_part: ("offline", "restart:idle"), second_part: ("offline", "restart")}
     # nobody left a room: both memberships are still active, and the room says nothing
     assert sorted(m.name for m in store.members(r.id)) == ["first", "second"]
     assert [m.kind for m in store.history(r.id)] == ["chat", "chat"]

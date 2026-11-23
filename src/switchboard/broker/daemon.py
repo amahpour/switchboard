@@ -301,6 +301,16 @@ def start(
             cmd.append("--test-trust-uds")
     fd = os.open(paths.out_log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
+        # A shared flock on broker.out's open file description, which the daemon inherits as its
+        # stdout and stderr: it holds the lock from its first instruction to its exit, before it
+        # takes run/broker.lock and after, and this process's copy closes below. It tells the test
+        # suite's sweep of killed runs' homes (#922, DESIGN.md §12) that a broker still uses this
+        # home; nothing a user sees reads it. A failed flock never stops a start: the broker runs
+        # without it, and only that sweep could miss it before it takes run/broker.lock.
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+        except OSError:
+            pass
         child = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -321,6 +331,21 @@ def start(
         if child.poll() is not None:
             break
         time.sleep(0.1)
+    if not info and child.poll() is None:
+        # Still running, not answering yet: it may be applying a pending restore or creating or
+        # migrating a large database (run_foreground does both before it serves the socket). It is
+        # left to finish, never stopped mid-migration, and named so the person can find it (#929).
+        print(
+            f"switchboard: the broker (pid {child.pid}) did not answer within {START_WAIT_S:g} s."
+            " It may still be starting (migrating a large database, say). Last lines of its output:",
+            file=sys.stderr,
+        )
+        print(_tail(paths.out_log), file=sys.stderr)
+        print(
+            "Run `switchboard status` to see whether it is up, and `switchboard stop` to stop it once it is.",
+            file=sys.stderr,
+        )
+        return 1
     if not info:
         print("switchboard: the broker did not start. Last lines of its output:", file=sys.stderr)
         print(_tail(paths.out_log), file=sys.stderr)

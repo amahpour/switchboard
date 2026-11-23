@@ -24,13 +24,16 @@ PR = "https://example.com/shop/pull/7"
 
 @pytest.fixture
 def team() -> Iterator[tuple[InProcBroker, Browser, Browser]]:
-    """A hosted broker: alice (the owner) and bob, with #build and #uploads, and claude-1 in #build."""
+    """A hosted broker: alice (the owner) and bob, with #build and #uploads, both of them members of both
+    (§63), and claude-1 in #build."""
     b = hosted_broker()
     admin = set_up(b)
     bob = join_as_bob(b, admin)
     try:
         for name in ("#build", "#uploads"):
             assert admin.post("/api/rooms", {"name": name}).status_code == 200
+            slug = name.lstrip("#")
+            assert bob.post(f"/api/rooms/{slug}/people", {"action": "add", "name": "bob"}).status_code == 200
 
         def seed() -> None:
             store = b.state.store
@@ -279,8 +282,13 @@ def test_a_seen_mark_is_the_signed_in_persons_own_for_a_room_they_can_see(
     missing = bob.post("/api/rooms/nope/seen", {"id": 1})
     assert hidden.status_code == missing.status_code == 404
     assert hidden.json()["error"] == missing.json()["error"] == "not_found"
-    rows = b.on_loop(lambda: b.state.store.con.execute("SELECT COUNT(*) FROM home_seen").fetchone()[0])
-    assert rows == 1  # bob's one mark in #build; the probe of #secret stored nothing
+    secret = b.on_loop(lambda: b.state.store.get_room("#secret"))
+    rows = b.on_loop(
+        lambda: b.state.store.con.execute(
+            "SELECT COUNT(*) FROM home_seen WHERE room_id=?", (secret.id,)
+        ).fetchone()[0]
+    )
+    assert rows == 0  # the probe of #secret stored nothing
 
 
 def test_the_room_list_carries_each_persons_own_seen_mark(
@@ -296,10 +304,11 @@ def test_the_room_list_carries_each_persons_own_seen_mark(
         rooms = {r["name"]: r for r in who.get("/api/rooms").json()["rooms"]}
         return int(rooms["#build"]["seen"])
 
-    assert seen(alice) == seen(bob) == 0
+    joined = seen(bob)  # bob joined #build when it was made: a member starts from then (§63)
+    assert seen(alice) == 0 and 0 < joined < q
     assert alice.post("/api/rooms/build/seen", {"id": q}).status_code == 200
     assert seen(alice) == q
-    assert seen(bob) == 0
+    assert seen(bob) == joined
 
 
 def seed_board(b: InProcBroker) -> int:

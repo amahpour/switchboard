@@ -5,7 +5,11 @@ pushes segments the way the real server does: the resource is the whole transcri
 and a subscriber is told it changed. ``speak_text`` records what it was asked to say and,
 like the real one, returns only when the speech is over: ``hold_speech`` keeps it in the
 middle of a line until ``release_speech``, and ``interrupt_next`` makes the next reply the
-one joinly gives when someone talks over it. ``synth_s_per_char`` models the time joinly takes to make speech
+one joinly gives when someone talks over it; ``fail_speech`` makes it fail, after any hold.
+``hold_before_play`` keeps a request before any of it plays (joinly still making the speech): it is
+in ``received`` but not yet in ``spoken`` until ``release_speech``, and ``fail_speech`` then fails it
+before it plays.
+``synth_s_per_char`` models the time joinly takes to make speech
 before any of it plays. ``get_video_snapshot`` returns ``frame`` as an
 image, claiming ``frame_type``. ``share_image`` (the patch of deploy/joinly, §52.9) records the picture's
 decoded bytes in ``shared`` and ``stop_share_image`` counts in ``share_stops``; ``share_error`` is the
@@ -95,6 +99,8 @@ class FakeJoinly:
         self.voices: list[str | None] = []  # the voice each line was asked for (the patched speak_text)
         self.unknown_voices: set[str] = set()  # voices this stand-in's Kokoro does not have
         self.hold_speech = False
+        self.hold_before_play = False  # a request waits before it plays, not yet in ``spoken``
+        self.received: list[str] = []  # every speak_text text as it arrived, before any hold
         # Making speech takes time before any of it plays, as in joinly: ``synth_s_per_char`` seconds a
         # character of a call's text; ``started`` is when each call began to play (time.monotonic), and
         # ``arrived`` when it came in.
@@ -167,15 +173,16 @@ class FakeJoinly:
             @mcp.tool
             async def speak_text(text: str, voice: str | None = None) -> str:
                 fake._note_loop()
+                await fake._before_play(text)
                 fake.spoken.append(text)
                 fake.voices.append(voice)
                 await fake._synthesize(text)
                 if voice is not None and voice in fake.unknown_voices:
                     return "Finished speaking. The voice was not found, so the session's voice was used."
-                if fake.fail_speech:
-                    raise RuntimeError("could not speak")
                 if fake.hold_speech:
                     await fake._gate.wait()
+                if fake.fail_speech:  # after the hold: a line can fail midway, as it can be interrupted
+                    raise RuntimeError("could not speak")
                 if fake.interrupt_next:
                     fake.interrupt_next = False
                     return INTERRUPTED
@@ -185,13 +192,14 @@ class FakeJoinly:
             @mcp.tool
             async def speak_text(text: str) -> str:
                 fake._note_loop()
+                await fake._before_play(text)
                 fake.spoken.append(text)
                 fake.voices.append(None)
                 await fake._synthesize(text)
-                if fake.fail_speech:
-                    raise RuntimeError("could not speak")
                 if fake.hold_speech:
                     await fake._gate.wait()
+                if fake.fail_speech:  # after the hold: a line can fail midway, as it can be interrupted
+                    raise RuntimeError("could not speak")
                 if fake.interrupt_next:
                     fake.interrupt_next = False
                     return INTERRUPTED
@@ -324,9 +332,19 @@ class FakeJoinly:
         if self.loop is not None:
             self.loop.call_soon_threadsafe(self._share_gate.set)
 
+    async def _before_play(self, text: str) -> None:
+        """Record the request; with ``hold_before_play``, wait before it plays, and fail it there with
+        ``fail_speech``: joinly makes a sentence's audio before playing any of it, and can fail meanwhile."""
+        self.received.append(text)
+        if self.hold_before_play:
+            await self._gate.wait()
+            if self.fail_speech:
+                raise RuntimeError("could not make the speech")
+
     def release_speech(self) -> None:
         """Let every line that is waiting in ``speak_text``, and every later one, finish."""
         self.hold_speech = False
+        self.hold_before_play = False
         if self.loop is not None:
             self.loop.call_soon_threadsafe(self._gate.set)
 

@@ -65,8 +65,18 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from switchboard import __version__, board, build_info, db, ref_links
-from switchboard.broker import agent_icons, agent_tokens, home, oauth, oidc, people, usage
+from switchboard import __version__, board, build_info, db, notify, ref_links
+from switchboard.broker import (
+    agent_icons,
+    agent_tokens,
+    home,
+    oauth,
+    oidc,
+    people,
+    room_filters,
+    usage,
+    webhook,
+)
 from switchboard.broker import search as search_api
 from switchboard.broker.auth import BOARD_CSP, COOKIE_NAME, SESSION_TTL_S, app_csp, sha256_hex, upload_path
 from switchboard.broker.commands import MAX_BUDGET, MAX_HOPS, Actor
@@ -80,7 +90,7 @@ from switchboard.broker.passwords import (
     password_problem,
     verify_password,
 )
-from switchboard.broker.service import ServiceError
+from switchboard.broker.service import ServiceError, is_member
 from switchboard.delivery import rules
 from switchboard.files import (
     FILE_ID_RE,
@@ -112,6 +122,9 @@ WS_MAX_ROOMS = 64
 WS_BACKLOG = 500
 WS_FRAME_MAX = 16384  # hello and ping; a board frame may be as large as the board itself
 BAD_TOKEN_EVENT_S = 60.0
+# Send a test's answer when the webhook changed while a test post was out (#923, F15): the page shows it in
+# place of the results
+TEST_CHANGED = "Your webhook settings changed during the test, so nothing more was sent. Send a test again."
 # the ceremony cookies (§31.3, §31.4): the claim's id, a sign-in's sealed state, an add's
 SETUP_COOKIE = "switchboard_setup"
 PASSKEY_COOKIE = "switchboard_passkey"
@@ -1107,6 +1120,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         state.store.add_event("people", data={"what": "add", "person": name, "by": w.name})
         state.hub.notice(None, "info", f"{name} added by {w.name}")
         people_changed(state)
+        state.service.rooms_changed()  # a second person: public rooms are now joined and left (§63)
         return _ok(
             {
                 "person": next(x for x in people.summary(state) if x["id"] == p.id),
@@ -1161,6 +1175,7 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             return _err(404, "not_found", "no such person")
         devices = [t.device for t in state.store.agent_tokens_of(p.id)]  # revoked with them (§49.1)
         gone = state.store.person_remove(p.id) or []
+        webhook.remove(state, p.id)  # their webhook goes with them (§62)
         # their agents over HTTPS leave, as on a revoke (§49.3)
         ended = sum(state.agents.end_device(d, "token revoked") for d in devices)
         state.service.person_gone(p.id)  # out of every private room, with their agents (§44.3)
@@ -1548,6 +1563,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 "notify": state.store.setting_get(notify_key(w.person_id)) == "1",
                 # ... and whether a notification carries the message's first line (#837): on unless turned off
                 "notify_text": state.store.setting_get(notify_text_key(w.person_id)) != "0",
+                # this person's webhook (#723, §62): its host and wait, never the address itself
+                "webhook": webhook.public(state, state.service.person_key(w.person_id)),
             }
         )
         # Slide the browser cookie along with the server-side session.
@@ -1792,6 +1809,140 @@ def install(app: FastAPI, state: "BrokerState") -> None:
             }
         )
 
+    # A person's own webhook (#723, §62): where the broker posts "you're needed" after a wait. Set only here,
+    # by the signed-in person, never by a room message. The address is a secret: it is never returned.
+    @app.put("/api/me/webhook")
+    async def set_webhook(request: Request) -> Response:
+        """Set the signed-in person's webhook: ``url`` (https, a public address unless the operator allows
+        more) and ``wait_min`` (1 to 120); the second alert (#923, §62.4): ``second_url`` (the same checks,
+        or null to remove it) and ``second_after_min`` (5 to 240); and ``quiet``, ``{from, to, tz, always}``
+        or null to turn quiet hours off. Any may be left out once there is an address (a change to the rest
+        keeps the address they have)."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        try:
+            body = await _json_body(request)
+        except ServiceError as e:
+            return _svc_err(e)
+        fields = {"url", "wait_min", "second_url", "second_after_min", "quiet"}
+        if not body or not set(body) <= fields:
+            return _err(400, "bad_request", "give url, wait_min, second_url, second_after_min or quiet")
+        key = state.service.person_key(w.person_id)
+        # Only what the body gives is checked and kept, in one statement on the person's row, after the
+        # addresses' checks (which wait on DNS): never a rewrite of the rest from a read made before them,
+        # which would bring back a webhook another tab removed, or undo quiet hours it saved (#923, F3).
+        changes: dict[str, Any] = {}
+        if "url" in body:
+            changes["url"] = body["url"]
+        if "wait_min" in body:
+            m = body["wait_min"]
+            if (
+                isinstance(m, bool)
+                or not isinstance(m, int)
+                or not notify.WAIT_MIN_S <= m * 60 <= notify.WAIT_MAX_S
+            ):
+                return _err(400, "bad_request", "wait_min is a whole number of minutes, 1 to 120")
+            changes["wait_s"] = m * 60.0
+        if "second_url" in body:
+            changes["second_url"] = body["second_url"]
+        if "second_after_min" in body:
+            m = body["second_after_min"]
+            if (
+                isinstance(m, bool)
+                or not isinstance(m, int)
+                or not notify.SECOND_MIN_S <= m * 60 <= notify.SECOND_MAX_S
+            ):
+                return _err(400, "bad_request", "second_after_min is a whole number of minutes, 5 to 240")
+            if changes.get("second_url", "") is None:
+                return _err(400, "bad_request", "give the second address first")
+            changes["second_after_s"] = m * 60.0
+        if "quiet" in body:
+            q = body["quiet"]
+            if q is None:
+                changes["quiet"] = None
+            elif not isinstance(q, dict) or set(q) != {"from", "to", "tz", "always"}:
+                return _err(400, "bad_request", "quiet is {from, to, tz, always} or null")
+            else:
+                start, end = notify.parse_hhmm(q["from"]), notify.parse_hhmm(q["to"])
+                if start is None or end is None:
+                    return _err(400, "bad_quiet", "Quiet hours need a start and an end time, as HH:MM.")
+                if (why := notify.quiet_problem(start, end, q["tz"], q["always"])) is not None:
+                    return _err(400, "bad_quiet", why)
+                changes["quiet"] = {
+                    "from": q["from"],
+                    "to": q["to"],
+                    "tz": q["tz"],
+                    "always": set(q["always"]),
+                }
+        # the cheap answers first, before any DNS; the save below still decides, on the row as it is then
+        now = state.store.webhook_get(key)
+        if now is None and "url" not in body:
+            return _err(400, "bad_request", "give the url first")
+        if (
+            "second_after_s" in changes
+            and "second_url" not in changes
+            and (now is None or not now["second_url"])
+        ):
+            return _err(400, "bad_request", "give the second address first")
+        if "url" in changes and (why := await webhook.check_for_save(state, changes["url"])) is not None:
+            return _err(400, "bad_webhook", why)
+        s_url = changes.get("second_url")
+        if s_url is not None and (why := await webhook.check_for_save(state, s_url)) is not None:
+            return _err(400, "bad_webhook", "The second address: " + why)
+        done = webhook.save(state, key, changes)
+        if done == "gone":  # removed while the addresses were checked: nothing was written (#923, F14)
+            return unauthorized()
+        if done == "none":
+            return _err(409, "conflict", "There is no webhook now: it was removed. Save an address first.")
+        if done == "no_second":
+            return _err(409, "conflict", "There is no second address now: it was removed. Save one first.")
+        return _ok(webhook.public(state, key))
+
+    @app.delete("/api/me/webhook")
+    async def delete_webhook(request: Request) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        webhook.remove(state, state.service.person_key(w.person_id))
+        return _ok(webhook.public(state, state.service.person_key(w.person_id)))
+
+    @app.post("/api/me/webhook/test")
+    async def test_webhook(request: Request) -> Response:
+        """Post a test line to the signed-in person's webhook now, and to their second address when there is
+        one, so they can see both work. It goes through the same checks and the same hourly cap as a real
+        one, ignores quiet hours, and the answer says how each went."""
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        key = state.service.person_key(w.person_id)
+        hook = webhook.load(state, key)
+        if state.notifier is None or hook is None:
+            return _err(400, "bad_request", "set a webhook first")
+        # Both addresses are tried, whatever the first one did, and the answer carries both results: the page
+        # shows these, never a stored status, which a capped try does not write (#923, F7). Both posts go to
+        # the one webhook read above; when it was replaced, removed or made again while a post was out, no
+        # more is sent and the answer says so, rather than reporting on settings that are gone (#923, F15).
+        code = await state.notifier.post(key, hook, notify.test_payload(state.web_origin.origin))
+        if not state.notifier.unchanged(key, hook):
+            return _err(409, "changed", TEST_CHANGED)
+        second: dict[str, Any] | None = None
+        if hook["second"] is not None:
+            code2 = await state.notifier.post(
+                key, hook, notify.test_payload(state.web_origin.origin, True), True
+            )
+            if not state.notifier.unchanged(key, hook):
+                return _err(409, "changed", TEST_CHANGED)
+            second = {"ok": code2 is None, "error": None if code2 is None else notify.fail_reason(code2)}
+        return _ok(
+            {
+                "ok": code is None,
+                "error": None if code is None else notify.fail_reason(code),
+                "second": second,
+                "webhook": webhook.public(state, key),
+            }
+        )
+
     @app.put("/api/me/preferences")
     async def set_preferences(request: Request) -> Response:
         w = who(request)
@@ -1844,14 +1995,20 @@ def install(app: FastAPI, state: "BrokerState") -> None:
     async def list_rooms(request: Request) -> Response:
         if session(request) is None:
             return unauthorized()
-        rooms = state.service.rooms(viewer(request))
+        me = viewer(request)
+        listed = state.service.visible_rooms(me)
+        rooms = [state.service.room_dict(r) for r in listed]
         # how far this person has read each room (§55.8): the page counts its red badge from there, so a
         # reload doesn't bring back what they already opened
-        w = who(request)
-        marks = state.store.home_seen_marks(state.service.person_key(w.person_id)) if w is not None else {}
-        for r in rooms:
+        marks = state.store.home_seen_marks(me)
+        # whether they are a member, pinged there, and the agent that made them one, until they open it
+        # (§63): the page lists the rooms they are in, and the others under Other rooms
+        joined, one = state.store.person_rooms(me), state.service.one_person()
+        for room, r in zip(listed, rooms, strict=True):
             r["seen"] = marks.get(r["id"], 0)
-        return _ok({"rooms": rooms, "closed": len(state.service.closed_room_dicts(viewer(request)))})
+            r["member"] = is_member(room, joined, one)
+            r["joined_with"] = joined.get(room.id) if r["member"] else None
+        return _ok({"rooms": rooms, "closed": len(state.service.closed_room_dicts(me))})
 
     # The home page (§55, #626): what waits on this person across their rooms, what got done since
     # they last looked, and what is live. A read of what is stored, for the one person asking;
@@ -1908,7 +2065,10 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 raise ServiceError("bad_request", "give id, a message id")
             room = state.service.room_for(slug, viewer(request))
             key = state.service.person_key(w.person_id)
-            return _ok({"seen": home.mark_room_seen(state, key, room, body["id"])})
+            seen = home.mark_room_seen(state, key, room, body["id"])
+            if state.notifier is not None:
+                state.notifier.opened(key, room.slug)  # opening the room is "got it" for their webhook (§62)
+            return _ok({"seen": seen})
         except ServiceError as e:
             return _svc_err(e)
 
@@ -2015,6 +2175,23 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
+    @app.get("/api/rooms/{slug}/review/past")
+    async def past_room_review(request: Request, slug: str, url: str | None = None) -> Response:
+        if session(request) is None:
+            return unauthorized()
+        try:
+            room = state.service.room_for(slug, viewer(request))
+            if url is None:
+                return _ok({"boards": state.boards.past_boards(room)})
+            rv = state.boards.past_board(room, url)
+            if rv is None:
+                return _err(404, "not_found", "No past board for this link")
+            return _ok({"board": rv})
+        except ServiceError as e:
+            return _svc_err(e)
+        except ReviewError as e:
+            return _err(400, "bad_request", str(e))
+
     @app.post("/api/rooms/{slug}/review")
     async def room_review_move(request: Request, slug: str) -> Response:
         w = who(request)
@@ -2081,6 +2258,29 @@ def install(app: FastAPI, state: "BrokerState") -> None:
                 # the room opened at a search result (§58.5): the same visibility check, then a window
                 return _ok({"messages": state.service.history_around(room, around), "around": around})
             return _ok({"messages": state.service.history(slug, after, min(limit, 1000))})
+        except ServiceError as e:
+            return _svc_err(e)
+
+    # A room filtered to its Mentions or its Files (§64, #914): a read, paged back like history, after the
+    # same room_for check as the room's other reads (§44, §58.4). An unknown filter is a 400, never All.
+    @app.get("/api/rooms/{slug}/filter")
+    async def room_filter(request: Request, slug: str) -> Response:
+        w = who(request)
+        if w is None or w.must_reset:
+            return unauthorized()
+        qp = request.query_params
+        try:
+            return _ok(
+                room_filters.run(
+                    state,
+                    viewer(request),
+                    w.name,
+                    slug,
+                    show=qp.get("show"),
+                    before=qp.get("before"),
+                    limit=qp.get("limit"),
+                )
+            )
         except ServiceError as e:
             return _svc_err(e)
 
@@ -2479,7 +2679,8 @@ def install(app: FastAPI, state: "BrokerState") -> None:
         except ServiceError as e:
             return _svc_err(e)
 
-    # A private room's people (§44.2): any of them adds or removes one, and anyone may leave.
+    # A private room's people (§44.2): any of them adds or removes one, and anyone may leave. A public
+    # room's members (§63): anyone joins (adds themself), a member adds someone, and a person leaves.
     @app.post("/api/rooms/{slug}/people")
     async def room_people(request: Request, slug: str) -> Response:
         w = who(request)
@@ -2730,5 +2931,9 @@ def _ws_board(state: "BrokerState", sub: WsSubscriber, frame: dict[str, Any]) ->
     if not isinstance(elements, list) or len(elements) > board.MAX_ELEMENTS:
         return False
     who = state.service.person_name(person) or "someone"
-    state.room_board.from_page(room, who, elements)
+    done = state.room_board.from_page(room, who, elements)
+    if done.get("dropped") or not done.get("changed"):
+        # Something the page drew was not kept as it drew it (refused, or an older copy): the page keeps its
+        # own copy until the broker's arrives, so it is given the committed board, which wins (#893).
+        sub.offer({"t": "board", "room": name, **state.room_board.snapshot(room)})
     return True

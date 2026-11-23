@@ -1,6 +1,7 @@
 """The plugins say which version they are, and switchboard says when the major differs (#789, #850).
 
-Claude Code's and Codex's plugins send ``X-Switchboard-Plugin-Version`` on the MCP connection. The server
+Claude Code's and Codex's plugins send ``X-Switchboard-Plugin-Version`` on the MCP connection (the other three
+harnesses' on their own requests: ``test_plugin_version_harnesses.py``). The server
 treats it as a claim: cut to a length, parsed strictly, and never trusted to mean "current" unless it parses
 and its major matches this server's (DESIGN.md §49.13). ``/who``, the Inspector and the ``join`` answer then
 say when a session's plugin is another major, or never said. A plugin from an older major includes that
@@ -192,7 +193,9 @@ def test_the_expected_plugin_version_is_the_servers_own() -> None:
     same number. Fails if the table holds a copy that can drift."""
     from switchboard import __version__
 
-    assert plugin_versions.PINNED == {"claude": __version__, "codex": __version__}
+    assert plugin_versions.PINNED == dict.fromkeys(
+        ("claude", "codex", "cursor", "devin", "opencode", "grok"), __version__
+    )
 
 
 def test_a_codex_that_sends_no_version_is_not_nagged(build: InProcBroker) -> None:

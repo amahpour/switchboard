@@ -236,6 +236,8 @@ def test_a_release_pr_may_change_the_marketplaces() -> None:
     assert rel.is_release_file("plugins/claude/.claude-plugin/plugin.json")
     assert rel.is_release_file("plugins/codex/.codex-plugin/plugin.json")
     assert rel.is_release_file("plugins/cursor/.cursor-plugin/plugin.json")
+    assert rel.is_release_file("plugins/devin/plugin.json")
+    assert rel.is_release_file("plugins/opencode/package.json")
 
 
 # ------------------------------------------------------------------ a real repo
@@ -309,9 +311,13 @@ def make_repo(tmp_path: Path) -> Path:
         ("claude", ".claude-plugin", "1.2.9"),
         ("codex", ".codex-plugin", "0.8.4"),
         ("cursor", ".cursor-plugin", "0.3.8"),
+        ("devin", "", "0.1.0"),
+        ("opencode", "", "0.1.0"),
     ):
-        (repo / "plugins" / folder / manifest).mkdir(parents=True)
-        (repo / "plugins" / folder / manifest / "plugin.json").write_text(
+        where = repo / "plugins" / folder / manifest
+        where.mkdir(parents=True, exist_ok=True)
+        name = "package.json" if folder == "opencode" else "plugin.json"
+        (where / name).write_text(
             f'{{\n  "name": "switchboard",\n  "version": "{version}",\n  "description": "x 1.0.0"\n}}\n'
         )
     (repo / "src" / "switchboard" / "plugin_versions.py").write_text('"""x"""\n\nUPDATE = {}\n')
@@ -508,7 +514,11 @@ def remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
     git(repo, "remote", "add", "origin", str(origin))
-    git(repo, "commit", "-q", "--allow-empty", "-m", "feat(cli): colour the framing (#30)")
+    # main carries this very script, so the copy that runs is main's own (open_pr refuses any other)
+    (repo / rel.SCRIPT_PATH).parent.mkdir(parents=True)
+    (repo / rel.SCRIPT_PATH).write_bytes(SCRIPT.read_bytes())
+    git(repo, "add", rel.SCRIPT_PATH)
+    git(repo, "commit", "-q", "-m", "feat(cli): colour the framing (#30)")
     git(repo, "push", "-q", "origin", "main", "--tags")
     (tmp_path / "bin").mkdir()
     (tmp_path / "bin" / "gh").write_text(FAKE_GH)
@@ -604,6 +614,52 @@ def test_open_pr_refuses_while_a_release_pr_is_open(
     assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
 
 
+@pytest.mark.parametrize("main_has", ["an older copy", "no copy"])
+def test_open_pr_refuses_to_run_a_copy_of_the_script_that_is_not_mains(
+    remote: tuple[Path, Path], main_has: str
+) -> None:
+    """What a release stamps is written in the script, so a stale copy stamps a stale set: v1.11.0 ran
+    from a checkout of v1.10.0 and left Devin's and OpenCode's manifests at 1.10.0. Fails if open_pr
+    runs a copy that differs from origin/main's, or guesses when main has none."""
+    repo, origin = remote
+    if main_has == "an older copy":
+        (repo / rel.SCRIPT_PATH).write_text(SCRIPT.read_text().replace('"plugins/devin"', '"plugins/x"'))
+        git(repo, "commit", "-qam", "ci: an older release script (#31)")
+    else:
+        git(repo, "rm", "-q", rel.SCRIPT_PATH)
+        git(repo, "commit", "-qm", "ci: no release script (#31)")
+    git(repo, "push", "-q", "origin", "main")
+    with pytest.raises(SystemExit, match=r"release\.py is not origin/main's: run main's own copy"):
+        rel.open_pr(repo, "2026-09-30")
+    assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
+    assert len(git(repo, "worktree", "list").splitlines()) == 1
+    assert "pr create" not in (repo.parent / "gh.log").read_text()
+
+
+def test_open_pr_cuts_from_the_commit_it_checked_even_if_main_moves_in_between(
+    remote: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The script is checked against one commit of origin/main, and the release must be cut from that
+    same commit: a fetch that moves origin/main in between would otherwise let an older copy's rules
+    stamp a newer main (#901). With the commit pinned, the moved main is seen and nothing is released.
+    Fails if open_pr resolves origin/main again for its worktree."""
+    repo, origin = remote
+    real = rel.own_copy_is_mains
+
+    def check_then_main_moves(*args: object, **kwargs: object) -> bool:
+        ok = real(*args, **kwargs)  # type: ignore[arg-type]
+        git(repo, "commit", "-q", "--allow-empty", "-m", "feat: another merge lands (#31)")
+        git(repo, "push", "-q", "origin", "main")
+        git(repo, "fetch", "-q", "origin", "main")  # origin/main moves after the check
+        return ok
+
+    monkeypatch.setattr(rel, "own_copy_is_mains", check_then_main_moves)
+    assert rel.open_pr(repo, "2026-09-30") is None
+    assert "main has moved on" in capsys.readouterr().out
+    assert git(origin, "for-each-ref", "--format=%(refname:short)", "refs/heads").split() == ["main"]
+    assert len(git(repo, "worktree", "list").splitlines()) == 1
+
+
 def test_open_pr_with_nothing_to_release(
     remote: tuple[Path, Path], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -641,7 +697,8 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
 def test_a_release_sets_every_plugin_to_the_releases_version_changed_or_not(tmp_path: Path) -> None:
     """The plugin of switchboard X.Y.Z is X.Y.Z (#841; the maintainer, 2026-11-17: "They should trail with
     each other."). Claude Code and Codex keep an installed plugin by its manifest `version` alone, so every
-    release sets Claude Code's, Codex's and Cursor's to the release's own, whether or not a file of that
+    release sets Claude Code's, Codex's, Cursor's, Devin's and OpenCode's to the release's own, whether or
+    not a file of that
     plugin changed, and nothing but the number moves. A release PR skips the suite, so only the script can
     keep this. Fails if a manifest keeps its old version (a plugin with no change in it included), or the
     stamp touches anything else."""
@@ -649,11 +706,13 @@ def test_a_release_sets_every_plugin_to_the_releases_version_changed_or_not(tmp_
     git(repo, "commit", "-q", "--allow-empty", "-m", "fix(cli): a fix (#30)")  # no plugin file changed
     assert rel.release(repo, tmp_path / "notes.md", "2026-09-30") == "0.4.1"
     for folder, manifest in (
-        ("claude", ".claude-plugin"),
-        ("codex", ".codex-plugin"),
-        ("cursor", ".cursor-plugin"),
+        ("claude", ".claude-plugin/plugin.json"),
+        ("codex", ".codex-plugin/plugin.json"),
+        ("cursor", ".cursor-plugin/plugin.json"),
+        ("devin", "plugin.json"),  # #887: Devin's hook reads its version from here
+        ("opencode", "package.json"),  # #887: OpenCode's listener reads it from here
     ):
-        text = (repo / "plugins" / folder / manifest / "plugin.json").read_text()
+        text = (repo / "plugins" / folder / manifest).read_text()
         assert json.loads(text)["version"] == "0.4.1", folder
         assert text.replace("0.4.1", "9.9.9") == (
             '{\n  "name": "switchboard",\n  "version": "9.9.9",\n  "description": "x 1.0.0"\n}\n'

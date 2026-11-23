@@ -104,6 +104,7 @@ def test_delete_removes_the_room_and_nothing_else(store: Store, two) -> None:
         "batches": 2,
         "events": 3,
         "files": 0,
+        "room_people": 0,
     }
     assert list(counts) == list(ROOM_DELETE_TABLES)
     total = db.row_counts(con, db.TABLES)
@@ -158,6 +159,7 @@ def test_an_open_room_without_members_can_go(store: Store) -> None:
         "batches": 0,
         "events": 0,
         "files": 0,
+        "room_people": 0,
     }
     assert store.get_room("#scratch") is None
 

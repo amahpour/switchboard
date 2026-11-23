@@ -6,14 +6,15 @@ each open call is one task and one MCP session. The task always calls
 the connection drops, the room closes, or the broker stops. The meeting link
 lives only in the task, long enough to join, and is never logged.
 
-Three things go back into the call through the same session, all started by a person. While
-voice is on, an agent's ``@call`` line is spoken (``speak_text``), one line at a time off the
-request that posted it. A snapshot (``get_video_snapshot``) is stored as a room file and posted. A
-room's picture is shown as a screen share (``share_image``, §52.9), one at a time, and ends with
-the call. While voice is on, the bot's own mute button is read once a line is about to be spoken
-(``mute_status``, §52.12): muted, the room is told once for that call. A person's ``/meeting unmute``
-calls ``unmute_yourself`` once. Whether voice is on, and whether a picture is shared, is memory only:
-a call does not outlive the process, so neither does either.
+Three things go back into the call through the same session, all started by a person. While voice is
+on, an agent's ``@call`` line is spoken (``speak_text``), one line at a time off the request that
+posted it; while one is being spoken, the bar names its agent (``speaking``, §52.13). A snapshot
+(``get_video_snapshot``) is stored as a room file and posted. A room's picture is shown as a screen
+share (``share_image``, §52.9), one at a time, and ends with the call. While voice is on, the bot's
+own mute button is read once a line is about to be spoken (``mute_status``, §52.12): muted, the room
+is told once for that call. A person's ``/meeting unmute`` calls ``unmute_yourself`` once. Whether
+voice is on, whether a picture is shared and who is speaking is memory only: a call does not outlive
+the process, so neither does any of them.
 """
 
 from __future__ import annotations
@@ -79,6 +80,7 @@ class _Live:
     mute_told: bool = False  # the room has been told this call that the bot is muted (§52.12)
     reads_mute: bool | None = None  # this joinly has mute_status; None until asked once
     unmute_busy: bool = False  # an unmute is under way: the command calls the tool once
+    speaker: int | None = None  # the membership whose line is with speak_text now, for the bar (§52.13)
 
 
 class MeetingBridge:
@@ -378,6 +380,8 @@ class MeetingBridge:
                         await live.client.call_tool("speak_text", args, timeout=SPEAK_TIMEOUT_S)
                     )
 
+                # the bar names the agent from here until speak_text returns, however it returns (§52.13)
+                self._set_speaking(room_id, live, line.membership_id)
                 # a sentence at a time, so the first plays early (#761); voice off drops the rest
                 said = await joinly.speak_by_sentence(one, line.text, lambda: room_id in self._voice)
                 if line.voice is not None and voices.NOT_FOUND in said and line.voice not in live.missing:
@@ -396,6 +400,44 @@ class MeetingBridge:
                 self.state.service.notice_in(room_id, "Couldn't speak in the call.")
             finally:
                 live.turns.finish(line.id)
+                self._set_speaking(room_id, live, None)
+
+    def speaking(self, room_id: int) -> str | None:
+        """The screen name of the agent whose line is with the call in this room, or None (§52.13). Looked
+        up for each frame, so a member that has left (``left_at`` set) names nobody, however long its line
+        waited or plays; a lookup that fails names nobody too."""
+        live = self._live.get(room_id)
+        if live is None or live.speaker is None:
+            return None
+        try:
+            member = self.state.store.get_membership(live.speaker)
+        except Exception:  # the bar is a courtesy: a failed lookup names nobody, and never stops a frame
+            log.warning("meeting room %s: could not look up who is speaking", room_id)
+            return None
+        return member.screen_name if member is not None and member.active else None
+
+    def member_left(self, membership_id: int) -> None:
+        """A membership ended (leave, kick, a session gone): if its line is with the call, the bar is sent
+        again, now naming nobody (§52.13). The line itself goes on; only the name goes."""
+        for room_id, live in list(self._live.items()):
+            if live.speaker == membership_id:
+                self._publish_speaking(room_id)
+
+    def _set_speaking(self, room_id: int, live: _Live, membership_id: int | None) -> None:
+        """Live state only: the room's settings frame says it, and nothing is stored. A frame goes out only
+        when it changed, so a line with no known speaker sends none. The name is looked up as the frame is
+        made (``speaking``), under the frame's guard: a lookup that fails names nobody, and the line is still
+        spoken."""
+        if live.speaker == membership_id:
+            return
+        live.speaker = membership_id
+        self._publish_speaking(room_id)
+
+    def _publish_speaking(self, room_id: int) -> None:
+        try:
+            self.state.service.publish_settings(room_id)
+        except Exception:  # the bar is a courtesy: it must never stop a line or its slot being freed
+            log.warning("meeting room %s: could not publish who is speaking", room_id)
 
     async def _note_if_muted(self, room_id: int, live: _Live) -> None:
         """Once per call, when voice is on and the bot's own button says it is muted (#853).

@@ -32,8 +32,8 @@ def test_defaults_match_design() -> None:
         5.0,
         10.0,
     )
-    assert c.claude.wait_cap_s == 600
-    assert (c.codex.wait_cap_s, c.codex.ctx_max_chars) == (280, 5000)
+    assert c.claude.wait_cap_s == 60  # #878: a Stop listener wakes it, so a wait stays short
+    assert (c.codex.wait_cap_s, c.codex.ctx_max_chars) == (60, 5000)
     assert (c.cursor.wait_cap_s, c.cursor.ctx_max_chars) == (55, 8000)
     assert c.opencode.wait_cap_s == 50  # #547: the one harness that had no key for it
     assert (c.devin.wait_cap_s, c.devin.rearm, c.devin.rearm_max_per_prompt, c.devin.ctx_max_chars) == (
@@ -616,3 +616,13 @@ def test_the_transcriber_environment_variable_wins_over_the_file_and_a_bad_one_s
     monkeypatch.setenv("SWITCHBOARD_MEETING_TRANSCRIBER", "voxtral")
     with pytest.raises(ConfigError, match="SWITCHBOARD_MEETING_TRANSCRIBER"):
         config.load(paths)
+
+
+def test_private_webhooks_are_off_unless_the_operator_turns_them_on() -> None:
+    """``[notify] allow_private_webhooks`` (§62) defaults to off, takes true, and refuses anything that is not
+    a boolean (a string "false" must not read as on). Fails if the default is permissive."""
+    assert Config().notify.allow_private_webhooks is False
+    assert from_dict({"notify": {"allow_private_webhooks": True}}).notify.allow_private_webhooks is True
+    for bad in ("false", 1, "yes"):
+        with pytest.raises(ConfigError):
+            from_dict({"notify": {"allow_private_webhooks": bad}})

@@ -37,7 +37,7 @@ SENDER_KINDS = ("human", "agent", "system")
 VIAS = ("web", "cli", "mcp", "system")
 MSG_KINDS = ("chat", "join", "leave", "notice")
 STATUSES = ("starting", "idle", "busy", "waiting-approval", "offline")
-HARNESSES = ("claude", "codex", "cursor", "devin", "opencode", "test", "unknown")
+HARNESSES = ("claude", "codex", "cursor", "devin", "opencode", "grok", "test", "unknown")
 
 
 def tier_label(tier: str | None, note: str | None) -> str:
@@ -447,6 +447,24 @@ class ListenerKeyRow:
 
 
 @dataclass(frozen=True)
+class McpSessionRow:
+    """An ``mcp_sessions`` row (DESIGN.md §49.2, #823): the client that opened one of a token's MCP
+    sessions (its own name and version, and the protocol it asked for), kept under the sha256 of the
+    session's ID, so the broker can open that session again after a restart."""
+
+    token_id: int
+    sid_hash: str
+    client_name: str
+    client_version: str
+    protocol: str
+    opened_at: float
+
+    @classmethod
+    def from_row(cls, r: sqlite3.Row) -> "McpSessionRow":
+        return cls(**{k: r[k] for k in r.keys()})
+
+
+@dataclass(frozen=True)
 class OAuthClientRow:
     """An ``oauth_clients`` row (DESIGN.md §49.9): an agent that registered to sign in through the
     browser (RFC 7591). A public client: no secret, and loopback redirect URIs only (``redirect_uris``
@@ -668,6 +686,10 @@ class Participant:
     def active(self) -> bool:
         return self.ended_at is None
 
+    @property
+    def idle_at_restart(self) -> bool:
+        return self.status == "offline" and self.status_src == "restart:idle"
+
 
 @dataclass(frozen=True)
 class Membership:
@@ -876,6 +898,9 @@ class HookEvent:
     subagent_bg: bool = False
     t: float | None = None
     max_wait_s: float | None = None
+    # a turn's end that was not a completed turn: Grok Build's StopCancelled and StopFailure, which the broker
+    # reads as a Stop (``ev``) but which say the continued turn never ran its follow-up (§49.15)
+    aborted: bool = False
 
     @property
     def ev(self) -> str:

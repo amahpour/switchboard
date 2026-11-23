@@ -25,6 +25,12 @@ _APPROVAL = {
         r"(?i)(↵ confirm|esc cancel|approve once|switch to bypass|allow (once|always|for)"
         r"|do you want to (run|allow|proceed))"
     ),
+    # Grok Build's permission prompt (1.0.89, seen live): "Yes, proceed", "No, reject", "Always allow:
+    # <rule>", "Never allow: <rule>", and its docs' "Allow once" / "Reject once"
+    "grok": re.compile(
+        r"(?i)(yes, proceed|no, reject|always allow: |never allow: |allow once|reject once"
+        r"|always-approve mode\))"
+    ),
     "cursor": re.compile(
         r"(?i)(run this (mcp tool|command)|run \(once\)|skip \(esc or n\)"
         r"|allow .{0,30}(once|always)|\[a\] allow|waiting for approval)"
@@ -110,6 +116,64 @@ def claude_input_text(screen: str) -> str:
     if len(rows) < 2:
         return ""
     return " ".join(screen.splitlines()[rows[-2] + 1 : rows[-1]]).strip()
+
+
+# Grok's first-run question about a folder's trust, in the phrasings it may use
+_GROK_TRUST = re.compile(
+    r"Do you trust|trust (?:this|the) (?:folder|directory|workspace)|Trust (?:folder|workspace)", re.I
+)
+# its two choice rows, in order, each with the key that picks it (Grok Build 1.0.92: "Yes, proceed   y")
+_GROK_TRUST_YES = re.compile(r"^(?:❯\s*)?Yes, proceed\s+y$")
+_GROK_TRUST_NO = re.compile(r"^(?:❯\s*)?No, quit\s+n$")
+_GROK_CHOICE = re.compile(r"^(?:❯\s*)?(?:Yes|No)\b")
+
+
+def grok_trust_prompt(screen: str) -> bool:
+    """Whether Grok is asking whether to trust a folder."""
+    return bool(_GROK_TRUST.search(screen))
+
+
+def grok_dialog(screen: str, workspaces: set[str]) -> str | None:
+    """What the driver does at Grok Build's start-up trust question: the key to press, or None.
+
+    Only the question for the run's own scratch folder is answered, as for Claude Code (``claude_dialog``),
+    with the maintainer's yes of 2026-11-22 (#928): ``y`` on "Yes, proceed". The answer reads one dialog,
+    never the whole pane (F12): exactly one line asks the question; the next non-empty line is the folder,
+    one of ``workspaces`` (the scratch folder's path as given and resolved); then only the warning text, with
+    no other line that looks like a path (starting with ``/`` or ``~``); then the next two non-empty rows
+    are exactly "Yes, proceed  y" and "No, quit  n", in that order. What is above the question (Grok's
+    header, whose ``~/ws`` is the folder's short name) is not read. Anything else is ``FAIL``: the caller
+    fails the run and answers nothing."""
+    if not grok_trust_prompt(screen):
+        return None
+    lines = [line.strip() for line in screen.splitlines()]
+    asks = [i for i, line in enumerate(lines) if _GROK_TRUST.search(line)]
+    if len(asks) != 1:
+        return "FAIL"
+    after = [line for line in lines[asks[0] + 1 :] if line]
+    if not after or after[0] not in workspaces:
+        return "FAIL"
+    rest = after[1:]
+    choices = next((i for i, line in enumerate(rest) if _GROK_CHOICE.match(line)), None)
+    if choices is None or any(line.startswith(("/", "~")) for line in rest[:choices]):
+        return "FAIL"
+    pair = rest[choices : choices + 2]
+    if len(pair) != 2 or not _GROK_TRUST_YES.match(pair[0]) or not _GROK_TRUST_NO.match(pair[1]):
+        return "FAIL"
+    return "y"
+
+
+def grok_input_text(screen: str) -> str:
+    """What is in Grok Build's input box: the rows between its last ``╭`` and ``╰`` borders, without the
+    side borders and the ``❯`` it starts with, joined. Empty when the box can't be found."""
+    lines = screen.splitlines()
+    tops = [i for i, x in enumerate(lines) if x.strip().startswith("╭")]
+    ends = [i for i, x in enumerate(lines) if x.strip().startswith("╰")]
+    if not tops or not ends or ends[-1] <= tops[-1]:
+        return ""
+    rows = [x.strip().strip("│").strip() for x in lines[tops[-1] + 1 : ends[-1]]]
+    text = " ".join(r for r in rows if r)
+    return text.removeprefix("❯").strip()
 
 
 def claude_agent_finished(screen: str) -> bool:

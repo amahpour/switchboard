@@ -19,7 +19,7 @@ SCREEN_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 VOICE_RE = re.compile(r"[a-z0-9_]{1,32}")
 # Agents may not take a screen name that starts with the human's name, so a login
 # name that prefixes a harness's usual names (claude-1, dev -> devin-1) is not used.
-_AGENT_PREFIXES = ("claude", "codex", "cursor", "devin")
+_AGENT_PREFIXES = ("claude", "codex", "cursor", "devin", "grok")
 FALLBACK_HUMAN_NAME = "me"
 
 
@@ -82,23 +82,33 @@ class DeliveryCfg:
             raise ConfigError("[delivery] listen_max_wakes must be an integer from 1 to 10000")
 
 
+# Claude Code and Codex have a Stop listener that wakes an idle session, so a long wait() is never
+# needed: it holds the whole session, and the person's typing and the harness's own notices don't end it.
+# Their default is 60 s (#878, DESIGN.md §6.1), well under what their clients allow. The measured limits:
 # wait() caps, measured with each harness's CLI in November 2026 (#547, DESIGN.md §6.1): Claude Code
 # uses the plugin timeout and background-result confirmation for a 600 s wait (#558); Codex
 # ends a call at its default tool_timeout_sec of 300 s; Cursor at 60 s; Devin at 120 s (§49.7).
 @dataclass(frozen=True)
 class ClaudeCfg:
-    wait_cap_s: int = 600
+    wait_cap_s: int = 60
 
 
 @dataclass(frozen=True)
 class CodexCfg:
-    wait_cap_s: int = 280
+    wait_cap_s: int = 60
     ctx_max_chars: int = 5000
 
 
 @dataclass(frozen=True)
 class CursorCfg:
     wait_cap_s: int = 55
+    ctx_max_chars: int = 8000
+
+
+# Grok Build has a Stop listener too (§49.15), so its wait() default is Claude Code's and Codex's 60 s.
+@dataclass(frozen=True)
+class GrokCfg:
+    wait_cap_s: int = 60
     ctx_max_chars: int = 8000
 
 
@@ -283,6 +293,15 @@ class SecurityCfg:
 
 
 @dataclass(frozen=True)
+class NotifyCfg:
+    """[notify] (DESIGN.md §62, #723): where a person's webhook may point. Off, the broker posts only to
+    public addresses, so a person on a hosted broker cannot make it reach a service on its own network.
+    An operator on a home network, with a webhook on a private address, turns it on."""
+
+    allow_private_webhooks: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
     human_name: str = field(default_factory=default_human_name)
     # SWITCHBOARD_HUMAN_NAME set it: then it wins over a rename in Settings too (#114, §41)
@@ -298,9 +317,11 @@ class Config:
     cursor: CursorCfg = field(default_factory=CursorCfg)
     devin: DevinCfg = field(default_factory=DevinCfg)
     opencode: OpenCodeCfg = field(default_factory=OpenCodeCfg)
+    grok: GrokCfg = field(default_factory=GrokCfg)
     review: ReviewCfg = field(default_factory=ReviewCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     meeting: MeetingCfg = field(default_factory=MeetingCfg)
+    notify: NotifyCfg = field(default_factory=NotifyCfg)
     files: FilesCfg = field(default_factory=FilesCfg)
     # the retired keys the file had (``section.key``), ignored: reported once when the broker starts
     retired: tuple[str, ...] = ()
@@ -319,9 +340,11 @@ _SECTIONS = {
     "cursor": CursorCfg,
     "devin": DevinCfg,
     "opencode": OpenCodeCfg,
+    "grok": GrokCfg,
     "review": ReviewCfg,
     "security": SecurityCfg,
     "meeting": MeetingCfg,
+    "notify": NotifyCfg,
     "files": FilesCfg,
 }
 

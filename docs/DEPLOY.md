@@ -24,7 +24,7 @@ your agents ──https──▶ Render's router, Caddy, an ingress           th
 ```bash
 docker run -d --name switchboard -p 127.0.0.1:7419:7419 -v switchboard:/data \
   -e SWITCHBOARD_PUBLIC_URL=http://switchboard.localhost:7419 \
-  ghcr.io/amahpour/switchboard:1.9.1
+  ghcr.io/amahpour/switchboard:1.15.0
 docker logs switchboard
 ```
 
@@ -152,7 +152,7 @@ own storage and CPU before relying on either limit.
 
 ## Deploy it
 
-Each example pins a release (`ghcr.io/amahpour/switchboard:1.9.1`). Every release moves these pins, and `:latest` follows the newest release.
+Each example pins a release (`ghcr.io/amahpour/switchboard:1.15.0`). Every release moves these pins, and `:latest` follows the newest release.
 
 ### A VM with Docker Compose
 
@@ -180,8 +180,8 @@ What the manifest relies on:
 - **Service links are off** (`enableServiceLinks: false`). Kubernetes gives each pod a variable per Service in its namespace, and a Service named `switchboard` makes one called `SWITCHBOARD_PORT=tcp://<cluster-ip>:7419`, which overrides the image's own `SWITCHBOARD_PORT` and stops the broker: `'tcp://…' is not a port number` (#595). Keep the setting in your own manifest if you name the Service `switchboard`.
 - **Replacing the pod is stop-then-start.** A StatefulSet with one replica stops its pod before it starts the new one, as a Deployment's `Recreate` strategy would.
 - **The Ingress passes the browser's Host and Origin through**, which ingress-nginx and most controllers do by default. The WebSocket needs no timeout annotation, because the broker pings the UI's every 20 seconds.
-- **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. A proxy that cuts the wait sooner doesn't lose a message: the listener just starts its next wait at once. Another controller has its own setting for this, such as a load balancer's idle timeout.
-- **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 600 seconds for Claude Code with its current plugin and 280 for Codex (`wait_cap_s` in `config.toml` changes that, but never past what each harness's own client allows, [USAGE.md](USAGE.md) has the limits, and a route's timeout has to stay above whatever it is set to), and a route that cuts sooner fails it with `upstream request timeout`. A cut listener round is harmless (the listener posts again at once), but a short limit makes every round a cut. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
+- **The Ingress keeps a quiet request open for 16 minutes** (`proxy-read-timeout` and `proxy-send-timeout`, 960 s), for agents over HTTPS: Claude Code's listener waits up to 15 minutes at `/mcp/listen` before it starts its next wait, and ingress-nginx's own default closes a quiet request after 60 seconds. An agent's tool calls and Codex's Stop hook need nothing, because the broker sends them a keepalive every 15 seconds. If a proxy cuts a Claude Code or OpenCode listener round after at least 10 seconds, the listener starts its next round immediately and resets its two-minute outage clock. A shorter timeout can interrupt every round and cause extra requests. Another controller has its own setting for this, such as a load balancer's idle timeout.
+- **A Gateway API route needs its timeouts set by hand.** Kubernetes' Gateway API has no annotations: set `timeouts: {request: 960s, backendRequest: 960s}` on the `HTTPRoute` rule that serves `/mcp`. An Envoy-based gateway ends a request that runs longer than its route's timeout whatever is being sent on it, and the default can be much shorter than one of Claude Code's 15-minute listener rounds. `wait()` runs into the same limit: it is one request too, held up to 60 seconds by default for Claude Code and Codex (`wait_cap_s` in `config.toml` changes that, but never past what each harness's own client allows, [USAGE.md](USAGE.md) has the limits, and a route's timeout has to stay above whatever it is set to), and a route that cuts sooner fails it with `upstream request timeout`. The same listener retry rules apply to gateway cuts. Set the timeout above the round length so the listener can finish each wait normally. If an idle agent over HTTPS stops being woken, the broker's log has a warning for a listener it turned away (`listener refused for session …`, with the reason), and the plugin's `listen.log` (in its data folder, or `~/.cache/switchboard`) has a line for each time the listener stopped on something unexpected (#436).
 - **Use a block-storage class** (the default on EKS, GKE and AKS), not an NFS or EFS one.
 - **Following live calls adds a second container to the pod:** a patch of this StatefulSet in [deploy/kubernetes/meetings/](https://github.com/amahpour/switchboard/tree/main/deploy/kubernetes/meetings/), which leaves this manifest as it is. See [Meetings on Kubernetes](#meetings-on-kubernetes), or `meetings.enabled` in [the Helm chart](#helm).
 
@@ -324,8 +324,8 @@ Remove `prerollFix` once a joinly release has the fix too. It is independent of 
 **A voice for each line.** The voice patch (two files, [described above](#a-meeting-bot)) is one ConfigMap with two keys. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 ```
 
@@ -481,26 +481,45 @@ waits before draining HTTP requests and posts accepted rate-limited says before 
 database. Their remaining rate-limit delay is skipped; the three-post cap per member still
 applies. A crash or SIGKILL can still lose says that were only queued in memory.
 
-- **Web UI:** shows **Reconnecting…**, reconnects automatically and catches up from its last
-  message id. Keep the page open; no reload is needed. There is currently no final give-up timer.
-- **Claude Code's listener:** an open listening round ends with HTTP 503 and `Retry-After: 1`.
-  Its shell and Windows implementations already retry an unreachable broker or a 429, 500,
-  502, 503 or 504, starting at 1 second and doubling to a maximum 60 seconds between attempts.
-  After a long listening round it retries immediately. These retries have no two-minute
-  give-up limit, but a non-retryable refusal such as HTTP 409 ends the current listener.
-  Startup marks sessions offline; an existing listener's later round can therefore receive
-  409 before a fresh hook reports the session. Automatic recovery across that transition
-  still needs the live checks in #823.
-- **MCP tools and Stop hooks:** an open MCP stream already has HTTP 200 headers. A waiting
-  `wait()` therefore ends with `code: restarting` and `retry_after_s: 1`; an open MCP Stop hook
-  ends with a tool error saying to try again in a minute. New requests get HTTP 503. Transport
-  session ids are held in memory: after startup an old id gets 404 and the MCP client must
-  initialize a new session. The participant's room memberships and pending messages survive.
-- **Cursor and Devin:** Cursor's HTTP park ends with 503, but its hook script does not retry
-  that request itself. Devin's `wait()` uses the MCP behavior above. Automatic recovery of
-  each harness, including Codex's day-long Stop wait and Devin's 130-second dropped-wait
-  liveness window, still needs the live checks tracked in #823. Do not assume a guaranteed
-  reconnect or a common give-up deadline across all clients yet.
+- **Web UI:** shows **Reconnecting…** and catches up from its last message id when the
+  broker returns. After two minutes the banner says how long the tab has been disconnected.
+  Keep the tab open to catch up automatically.
+- **Claude Code and OpenCode:** an open listener receives HTTP 503 and `Retry-After: 1`.
+  The same listener can park again once the broker returns if its session was idle before
+  startup and no newer status prevents it. Update the Claude Code plugin to use the
+  restart path. Its local hooks cancel a previous listener when a prompt or approval appears
+  during the outage. The listeners back off after quick failures and report after two minutes without a reply or a
+  round that stayed open for at least 10 seconds. Claude Code writes to `listen.log` and
+  wakes its session once with the notice. OpenCode logs the notice and starts listening again
+  on its next idle event.
+- **Cursor:** its open Stop park retries transient failures within the original park window.
+  The same outage clock applies, and the hook reports an outage to its error output if the
+  park still has time left. Start a turn in Cursor to listen again after the hook ends.
+- **MCP tools and Stop hooks:** open streams already have HTTP 200 headers. A waiting
+  `wait()` ends with `code: restarting` and `retry_after_s: 1`. An open MCP Stop hook
+  ends with a tool error saying to try again in a minute. New requests get HTTP 503 and the
+  same message. While the broker is down the harness reports its own connection error. After
+  startup the broker opens an old `Mcp-Session-Id` again for the token that opened it, so a
+  client that keeps its session id (Cursor) carries on, and one that opens a new session
+  (Claude Code, Codex, Devin) does too. The participant's room memberships and pending
+  messages survive. The broker keeps a month of these sessions, at most 100 per token; a
+  revoked token's, and a removed person's, go at once.
+- **Codex and Devin:** an idle Codex's Stop wait and an idle Devin's `wait()` end with the
+  outage, and neither starts listening again by itself: switchboard never starts a turn from
+  outside. Once the broker is back, type anything in the CLI (for example `read #build`). A
+  session that was mid-turn carries on with its next hook. The [live findings in #823](https://github.com/amahpour/switchboard/issues/823)
+  track recovery for each harness.
+
+How long each client keeps trying before it says the broker is gone:
+
+| Client | During the outage | Gives up, or says so |
+| --- | --- | --- |
+| Web UI | **Reconnecting…**, retrying | Says how long it has been disconnected after 2 minutes, and keeps retrying |
+| Claude Code listener | retries after 1 s, doubling to 60 s | Stops after 2 minutes without a reply, writes why to `listen.log`, and wakes its session once |
+| OpenCode listener | retries with backoff | Logs and stops after 2 minutes; listens again on its next idle event |
+| Cursor's Stop park | retries after 1 s, doubling to 60 s, within its park window | Stops after 2 minutes unreachable and says so on the hook's error output; a turn in Cursor listens again |
+| A tool call (any harness) | fails at once with the harness's error, or the broker's 503 while it drains | No retry by switchboard: call it again after a minute, with the same `key` for a `say` |
+| Codex's Stop wait, Devin's `wait()` | ends | Offline until you type in the CLI |
 
 To retry a `say` after the connection drops, send the same call with the same key you supplied
 on the first attempt. The broker remembers the post for five minutes, across restarts. A
@@ -904,8 +923,8 @@ switchboard sends joinly nothing for it: the new `utterance_preroll_seconds` arg
 **A voice for each line (#713).** joinly 0.5.4 takes one voice when a bot session starts, and its `speak_text` tool has no voice argument, so every agent that speaks on a call has the same voice. The patch is two files of joinly (`server.py` and the Kokoro voice, `kokoro.py`): `speak_text` takes an optional `voice` for that line, and Kokoro uses it, falling back to the session's voice when it is not given or Kokoro has no voice of that name. Without a `voice` joinly behaves as 0.5.4, so the patch changes nothing on its own: it is the base for a voice per agent. The files are in this repository ([deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly), with joinly's MIT licence and a NOTICE saying what changed); until a joinly release has the argument, mount them over the image's copies, read-only, in the same `docker run` as the other files (use any or all):
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
-curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/kokoro.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
+curl -fsSLo kokoro.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/kokoro.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/kokoro.py:/app/.venv/lib/python3.12/site-packages/joinly/services/tts/kokoro.py:ro" \
@@ -921,8 +940,8 @@ The URL names a release tag, which does not move; the link works from the releas
 **Captions (#764).** The bot reads the call's own captions by default, so no speech model is loaded or run and no GPU is needed. It needs a new file of joinly, `captions.py` (the three small parts joinly builds a session from: a transcription controller that reads Zoom's caption box, and a speech-to-text and a voice-activity service that do nothing), and the patched `server.py` above, which points joinly at them when the broker asks for `captions` and answers whether the captions could be turned on. Both are in [deploy/joinly](https://github.com/amahpour/switchboard/tree/main/deploy/joinly); `captions.py` is switchboard's own, MIT licensed like the rest. Mount them with the same `docker run` as the other files:
 
 ```bash
-curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
-curl -fsSLo captions.py https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/captions.py
+curl -fsSLo server.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
+curl -fsSLo captions.py https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/captions.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/server.py:/app/.venv/lib/python3.12/site-packages/joinly/server.py:ro" \
   -v "$PWD/captions.py:/app/.venv/lib/python3.12/site-packages/joinly/captions.py:ro" \
@@ -1097,8 +1116,8 @@ Drop this patch once a joinly release has the fix too, and move the image to tha
 **A voice for each line.** The voice patch (#713, [described above](#a-meeting-bot)) is a fourth patch, [joinly-voice-patch.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-voice-patch.yaml): one ConfigMap with the two files of this repository as its keys, each mounted over joinly's copy with `subPath`, so a pod can't start without the ConfigMap. Make it first:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/server.py
-curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.9.1/deploy/joinly/kokoro.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/server.py
+curl -fsSLO https://raw.githubusercontent.com/amahpour/switchboard/v1.15.0/deploy/joinly/kokoro.py
 kubectl -n switchboard create configmap joinly-voice-patch --from-file=server.py --from-file=kokoro.py
 kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-voice-patch.yaml
 ```
@@ -1197,7 +1216,7 @@ The key and the link are files in `calls/<fingerprint>/` of the plugin's data fo
 
 ## The image
 
-- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.9.1 --format '{{json .Provenance}}'` (or `.SBOM`).
+- **Where:** `ghcr.io/amahpour/switchboard:<version>` and `:latest`, for linux/amd64 and linux/arm64. The release job builds it from the release's tag, with a provenance attestation and an SBOM. Inspect them with `docker buildx imagetools inspect ghcr.io/amahpour/switchboard:1.15.0 --format '{{json .Provenance}}'` (or `.SBOM`).
 - **What's in it:** Python 3.13 (Debian slim) with switchboard installed from its wheel and the exact dependencies in `uv.lock`, plus tini. No uv, compiler, git, ssh or shell tools beyond the base image's.
 - **Who it runs as:** the `switchboard` user (uid and gid 10001), always.
   - Started as root, as Render and plain `docker run` do, the image's `switchboard` command ([deploy/image/switchboard.sh](https://github.com/amahpour/switchboard/blob/main/deploy/image/switchboard.sh)) first makes `$SWITCHBOARD_HOME` that user's private directory. It then drops to that user with no capabilities and no way back through setuid.

@@ -17,6 +17,7 @@ from switchboard.adapters import (
     HTTPS_CODEX,
     HTTPS_CURSOR,
     HTTPS_DEVIN,
+    HTTPS_GROK,
     HTTPS_OPENCODE,
     adapter_for,
     build_adapters,
@@ -33,6 +34,7 @@ from switchboard.adapters.https import (
     HttpsCodexAdapter,
     HttpsCursorAdapter,
     HttpsDevinAdapter,
+    HttpsOpenCodeAdapter,
     rearm_text,
 )
 from switchboard.adapters.testagent import ACK_MODES, TestAgentAdapter
@@ -218,18 +220,20 @@ def test_a_listening_join_says_a_long_wait_ends_the_turn() -> None:
 
 
 def test_cursors_idle_limit_is_said_in_its_note_its_parked_reason_and_its_join_text() -> None:
-    """#519: Cursor's Stop hook is held about ten minutes and nothing starts another park, so a mention after
-    that waits until the person types. The tier note, the parked reason and the join text must say so and how
-    to recover; fails if Cursor reads like Claude Code's listener, which comes back by itself. The other
-    listening harnesses keep their wording (their holds are a day or more)."""
+    """#519: Cursor's Stop hook is held about an hour (#885) and nothing starts another park, so a
+    mention after that waits until the person types. The tier note, the parked reason and the join text
+    must say so and how to recover; fails if Cursor reads like Claude Code's listener, which comes back
+    by itself. The other listening harnesses keep their wording (their holds are a day or more)."""
     a = HttpsCursorAdapter(CFG)
     p = part(harness="cursor")
     note = a.tier(p)[1] or ""
-    assert "about 10 min" in note and "type in Cursor" in note
+    assert "up to 1 hour" in note and "10 min with an older plugin copy" in note
+    assert "type in Cursor" in note
     why = a.route(p, WAKE, None, 0.0).reason or ""
-    assert "about 10 min" in why and "type in Cursor" in why and "no Stop hook waiting" in why
+    assert "up to 1 hour" in why and "older plugin copy" in why
+    assert "type in Cursor" in why and "no Stop hook waiting" in why
     guidance = a.join_guidance(p, "#build")
-    assert "Stop hook waits on switchboard for them, for about 10 minutes" in guidance
+    assert "for up to 1 hour after your turn ends (10 minutes with an older plugin copy)" in guidance
     assert "later mentions stay queued until your user types in Cursor" in guidance
     assert 'read("#build")' in guidance and "after your tool calls" in guidance
     for other in (HttpsClaudeAdapter(CFG), HttpsCodexAdapter(CFG)):
@@ -393,6 +397,7 @@ def test_the_engine_builds_one_adapter_per_https_harness_and_the_test_agent() ->
         HTTPS_CODEX,
         HTTPS_CURSOR,
         HTTPS_DEVIN,
+        HTTPS_GROK,
         HTTPS_OPENCODE,
         "unknown",
         "test",
@@ -406,11 +411,12 @@ def test_a_session_is_served_by_the_adapter_of_its_harness() -> None:
     ads = build_adapters(CFG)
     assert adapter_for(ads, "claude") is ads[HTTPS_CLAUDE]
     assert adapter_for(ads, "devin") is ads[HTTPS_DEVIN]
+    assert adapter_for(ads, "grok") is ads[HTTPS_GROK]
     assert adapter_for(ads, "test") is ads["test"]
     assert adapter_for(ads, "gemini") is ads["unknown"]
 
 
-@pytest.mark.parametrize("harness", ["claude", "codex", "cursor"])
+@pytest.mark.parametrize("harness", ["claude", "codex", "cursor", "grok"])
 def test_catchups_session_id_is_the_one_the_sessions_key_carries(harness: str) -> None:
     """/catchup (§26) names a session by the harness's own id: for a session over HTTPS, the id its
     calls name, which is in its session key. Fails if a session's row and key disagree and the id is
@@ -428,3 +434,24 @@ def test_catchups_session_id_is_the_one_the_sessions_key_carries(harness: str) -
         None,
         why,
     )
+
+
+def test_a_join_says_an_answer_counts_only_once_it_is_posted_and_stop_listeners_carry_the_wait_advice() -> (
+    None
+):
+    """#878: an agent that acted on a message in its chat left it unanswered and the Stop hook raised it
+    again. Every HTTPS join says only say() or pass() answers. Claude Code and Codex, whose Stop hook wakes
+    them, also carry the advice a capped wait gives; the others carry none. Fails if either is missing."""
+    for cls, harness in (
+        (HttpsClaudeAdapter, "claude"),
+        (HttpsCodexAdapter, "codex"),
+        (HttpsCursorAdapter, "cursor"),
+        (HttpsOpenCodeAdapter, "opencode"),
+        (HttpsDevinAdapter, "devin"),
+    ):
+        text = cls(CFG).join_guidance(part(harness=harness), "#build")
+        assert "answered only once you post in the room with say(), or pass()" in text, harness
+    assert HttpsClaudeAdapter(CFG).long_wait_note == HttpsCodexAdapter(CFG).long_wait_note != ""
+    assert "end your turn" in HttpsClaudeAdapter(CFG).long_wait_note
+    for cls in (HttpsCursorAdapter, HttpsOpenCodeAdapter, HttpsDevinAdapter):
+        assert cls(CFG).long_wait_note == ""

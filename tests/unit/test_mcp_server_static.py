@@ -6,6 +6,7 @@ tests build the server over a stub backend, so what is checked is the tools them
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,9 @@ class Backend:
 
     def wait_cap(self) -> int:
         return 110
+
+    def wait_cap_note(self) -> str:
+        return ""
 
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
         self.calls.append((method, params))
@@ -180,16 +184,31 @@ async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
     root = Path(__file__).resolve().parents[2]
     paths = [
         root / "plugins" / name / "skills" / "review-board" / "SKILL.md"
-        for name in ("claude", "codex", "cursor")
+        for name in ("claude", "codex", "cursor", "grok")
     ]
     bodies = [p.read_bytes() for p in paths]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: review-board" in text
     assert "Markdown" in text and "Mermaid" in text
     assert "shop/cart.py:40-58" in text and "switchboard_review" in text
     for action in ACTIONS:
         assert action in text, action
+
+
+def test_the_review_board_skill_reads_each_forges_own_conflict_signal() -> None:
+    """#907, #910: a conflicting pull request is reported as ``ci="blocked"``. GitHub's signal is
+    ``mergeable`` CONFLICTING from ``gh pr view --json mergeable``; GitLab's is the boolean
+    ``has_conflicts``, which ``glab mr view`` prints only with ``--output json`` (its default is text, so
+    an agent told just "glab mr view" has no field to read). Fails if the skill drops the JSON flag, ties
+    GitLab to CONFLICTING, or says every forge runs no CI on a conflict."""
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "plugins" / "claude" / "skills" / "review-board" / "SKILL.md").read_text()
+    line = next(x for x in text.splitlines() if x.startswith("- `report`"))
+    assert "`gh pr view <n> --json mergeable`" in line and "`mergeable` is CONFLICTING" in line
+    assert "`glab mr view <iid> --output json`" in line and "`has_conflicts` is true" in line
+    assert "On GitHub a pull request that conflicts with its base runs no CI" in line
+    assert re.search(r"glab[^.]*CONFLICTING", line) is None
 
 
 async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
@@ -221,10 +240,11 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     }
     root = Path(__file__).resolve().parents[2]
     paths = [
-        root / "plugins" / name / "skills" / "board" / "SKILL.md" for name in ("claude", "codex", "cursor")
+        root / "plugins" / name / "skills" / "board" / "SKILL.md"
+        for name in ("claude", "codex", "cursor", "grok")
     ]
     bodies = [p.read_bytes() for p in paths]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: board" in text and "switchboard_board" in text
     for action in ACTIONS:
@@ -232,14 +252,15 @@ async def test_the_board_skill_holds_the_how_to_the_tool_only_names() -> None:
     for field in ("text", "id", "to", "shape", "x", "y", "style", "w", "h"):
         assert field in text, field
     # #751: the how-to says edit changes an arrow's label, which of a note's two ids to use,
-    # and that read lists frames by title and id in the order they were made
+    # and that read lists frames by title and id, in an order that depends on the server (#867)
     assert "arrow's label" in text
     assert "returns two ids" in text
-    assert "order the frames were made" in text
+    assert "how the list is ordered depends on the server" in text  # 1.0.0 sorted frames by position (#867)
     # the recipes ride next to the skill in each plugin, byte for byte
     refs = [p.with_name("reference.md").read_bytes() for p in paths]
     assert refs[0] == refs[1] == refs[2] and b"draw_mermaid" in refs[0]
     assert b"An arrow's label" in refs[0] and b"returns two ids" in refs[0]
+    assert b"depends on the server" in refs[0] and b"in the order the frames were made" not in refs[0]
     assert "reference.md" in text
 
 
@@ -407,9 +428,9 @@ def test_the_claim_skill_is_the_same_file_in_the_three_plugins_and_says_what_a_c
     root = Path(__file__).resolve().parents[2]
     bodies = [
         (root / "plugins" / name / "skills" / "claim" / "SKILL.md").read_bytes()
-        for name in ("claude", "codex", "cursor")
+        for name in ("claude", "codex", "cursor", "grok")
     ]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: claim" in text and "switchboard_claim" in text
     assert "advice and nothing more" in text and "does not lock" in text
@@ -424,11 +445,41 @@ def test_the_talk_on_a_call_skill_is_the_same_file_in_the_three_plugins_and_teac
     root = Path(__file__).resolve().parents[2]
     bodies = [
         (root / "plugins" / name / "skills" / "talk-on-a-call" / "SKILL.md").read_bytes()
-        for name in ("claude", "codex", "cursor")
+        for name in ("claude", "codex", "cursor", "grok")
     ]
-    assert bodies[0] == bodies[1] == bodies[2]
+    assert all(body == bodies[0] for body in bodies)  # Grok Build's plugin carries the same copies (#851)
     text = bodies[0].decode()
     assert "name: talk-on-a-call" in text and "@call" in text
     assert "one or two short sentences" in text.lower() and "normal `say()` without `@call`" in text
-    assert "The rest is in the room." in text and "a person turns voice on" in text
+    assert "the server may say the rest is in the room" in text and "a person turns voice on" in text
     assert len(text) < 1800
+
+
+def test_skills_defer_to_the_server_for_what_it_accepts() -> None:
+    """#850: a plugin may run against an older server of the same major. The board and review skills say
+    the server's own list (its tool description, or a refusal) is the one that counts, and the board skill
+    carries no size or rate numbers that a server states itself when it refuses. A skill that goes back to
+    a hard-coded limit, or loses the pointer, would steer agents to what an older server refuses."""
+    root = Path(__file__).resolve().parents[2]
+    for name in ("claude", "codex", "cursor", "grok"):
+        for skill in ("board", "review-board"):
+            text = (root / "plugins" / name / "skills" / skill / "SKILL.md").read_text()
+            assert "the server you are on accepts" in text, (name, skill)
+            assert "may list them too" in text, (name, skill)  # 1.0.0's board refusal named none
+        board_text = (root / "plugins" / name / "skills" / "board" / "SKILL.md").read_text()
+        for stale in ("8000 characters", "16000 bytes", "150 elements", "up to five at once"):
+            assert stale not in board_text, (name, stale)
+
+
+async def test_a_capped_wait_for_a_stop_listener_harness_says_to_end_the_turn() -> None:
+    """#878: an agent used ``wait(300)`` to pass time and held its whole session. When the cap cuts a
+    wait and the harness's adapter has advice (Claude Code, Codex: a Stop listener wakes an idle session),
+    a timeout says it after the capped sentence. Without advice, or when nothing was cut, nothing is added.
+    Fails if the result stops at "(capped from ...)"."""
+    advice = "For a longer wait, end your turn; switchboard wakes the session when a message comes."
+    text = "[switchboard] #build: no new messages within 60 s."
+    res = {"ok": True, "status": "timeout", "timeout_s": 60, "text": text}
+    got = srv.note_wait_cap(300, res, advice)
+    assert got["text"] == f"[switchboard] #build: no new messages within 60 s (capped from 300 s). {advice}"
+    assert srv.note_wait_cap(300, res)["text"].endswith("(capped from 300 s).")
+    assert srv.note_wait_cap(60, res, advice) is res  # not cut: nothing added

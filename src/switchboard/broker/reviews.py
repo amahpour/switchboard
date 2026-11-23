@@ -4,10 +4,11 @@
 A room holds several boards, one per pull request URL, open or closed (§37.14); a closed board is
 kept with every item and move it had, and ``open`` brings it back. The rules are in
 ``switchboard.reviews`` (pure); the SQL in ``store.py``. A move that hands the next step to another
-agent (``reviews.handoff``: a raise, a concession to another owner, a fix) comes back with the line
-that wakes them, which ``AgentService.review`` posts as the mover's own message; any other move is a
-notice, which wakes no one. A board is read on demand (``review(action="show")``) or, for a person,
-in the web UI.
+agent (``reviews.told``: a raise, a concession to another owner, a fix) is posted here as the mover's
+own message at once, delivered only to whoever acts next (a raise: the author's side, #884); any
+other move is a notice, which wakes no one. A line stops counting as unanswered for an agent once the
+board has moved on without it (§37.17). A board is read on demand (``review(action="show")``) or, for
+a person, in the web UI.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from switchboard import reviews
+from switchboard import db, review_stats, reviews
 from switchboard.models import Room
 from switchboard.reviews import ReviewError
 
@@ -49,6 +50,9 @@ ACTIONS = (
 
 
 MAX_UNREVIEWED = 500  # links noted as "nothing asked", across all rooms, until a restart (§37.16)
+
+# who posts a board's line: the mover's own message fields, as ``AgentService.review`` has them
+Poster = dict[str, Any]
 
 
 def vendor_of(member: Any) -> str:
@@ -89,6 +93,32 @@ class Boards:
         ctx = self._context(room)
         return [self._board(room, rv, ctx) for rv in rows]
 
+    def past_boards(self, room: Room) -> list[dict[str, Any]]:
+        """List closed boards without building their cards and handoff plans (§37.14)."""
+        rows = (rv for rv in self.store.room_reviews(room.id) if rv["closed_at"] is not None)
+        return [
+            {
+                "id": rv["id"],
+                "url": rv["url"],
+                "forge": reviews.forge(rv["url"]),
+                "opened_at": rv["opened_at"],
+                "settled_at": self._settled_at(room, rv),
+                "closed_at": rv["closed_at"],
+                "outcome": rv["pr_state"] if rv["pr_state"] in ("merged", "closed") else "unknown",
+            }
+            for rv in sorted(rows, key=lambda rv: (rv["closed_at"], rv["id"]), reverse=True)
+        ]
+
+    def past_board(self, room: Room, url: str) -> dict[str, Any] | None:
+        rv = self.store.review_for_url(room.id, reviews.url(url))
+        if rv is None or rv["closed_at"] is None:
+            return None
+        return self.board(room, rv)
+
+    def _settled_at(self, room: Room, rv: dict[str, Any]) -> float | None:
+        events = [(e.ts, e.data) for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+        return review_stats.settled_at(self.store.review_items(rv["id"]), events)
+
     def board(self, room: Room, rv: dict[str, Any]) -> dict[str, Any]:
         """One board of the room as data, open or closed: the review, its items and whether it's
         settled."""
@@ -115,11 +145,16 @@ class Boards:
         events = [
             {"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])
         ]
+        # the newest commit an open, a fix or a report named (#906). ``head`` stays the one the
+        # board was opened or moved to: history, list, the outdated mark and line links keep it.
+        head_sha, head_note = reviews.header_commit(rv, items, events)
         return {
             "id": rv["id"],
             "url": rv["url"],
             "forge": f,
             "head": rv["head"],
+            "head_sha": head_sha,
+            "head_note": head_note,
             "opened_by": rv["opened_by"],
             "opened_at": rv["opened_at"],
             # kept when closed, and brought back by ``open`` (§37.14)
@@ -211,11 +246,11 @@ class Boards:
         self.store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
 
     # ------------------------------------------------------------ agent moves
-    def agent(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
+    def agent(self, room: Room, actor: str, params: dict[str, Any], *, poster: Poster) -> dict[str, Any]:
         """One ``review`` tool call from the member ``actor`` of ``room``. Returns the board as
-        text (what the agent reads), with ``handoff`` (who must act next, and the line that tells
-        them) when the move is someone else's to answer; or raises ReviewError with what to fix.
-        A call is about one board (§37.14): its ``url``, else the one the agent last used."""
+        text (what the agent reads); or raises ReviewError with what to fix. A move that is someone
+        else's to answer is posted as ``actor``'s message (``poster``: its fields), to them alone. A
+        call is about one board (§37.14): its ``url``, else the one the agent last used."""
         action = params.get("action")
         if action not in ACTIONS:
             raise ReviewError(f"action must be one of: {', '.join(ACTIONS)}")
@@ -231,17 +266,21 @@ class Boards:
             return self._shown(room, rv, selected=params.get("item"))
         if action == "close":  # settled boards can close even after handoff
             return self._close(room, rv, actor, params)
+        if action == "report":  # a merge may be reported after handoff or close
+            self._remember(room, actor, rv)
+            return self._report(room, rv, actor, params)
         if rv["closed_at"] is not None:
             raise ReviewError(f'the board for {rv["url"]} is closed: open it again with action="open" first')
         self._remember(room, actor, rv)
-        if action == "report":  # also after the handoff: the merge that closes the board comes then
-            return self._report(room, rv, actor, params)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
         if action in ("raise", "ask"):
+            self._guard_slot(room, rv)
             item = self._add(rv, actor, action, params)
             verb = "raised" if item.kind == "finding" else "asked"
-            return self._told(room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}")
+            return self._told(
+                room, rv, item, actor, f"{actor} {verb} {item.label}: {item.title}", poster=poster
+            )
         kind, n = reviews.parse_label(params.get("item"))
         item = self.store.review_item(rv["id"], kind, n)
         if item is None:
@@ -253,9 +292,29 @@ class Boards:
             return self._edit(room, rv, item, actor, params, by_person=False)
         if action == "abstain":
             return self._abstain(room, rv, item, actor, here)
-        to = reviews.agent_move(
-            item, action, actor, owner_here=item.owner in here, raiser_here=item.raised_by in here
+        held = reviews.holder(rv)
+        # The board row names the holder; only an agent in the room that the board's own open or
+        # reopen records as an agent can be that holder. A name alone is not enough: a person who
+        # opened it may since be renamed, and an agent may join under their old name (#904).
+        holder_here = (
+            action == "fix"
+            and item.state == "raised"
+            and reviews.holder_in_room(held, here)
+            and reviews.held_by_agent(
+                held, [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+            )
         )
+        to = reviews.agent_move(
+            item,
+            action,
+            actor,
+            owner_here=item.owner in here,
+            raiser_here=item.raised_by in here,
+            holder=held,
+            holder_here=holder_here,
+        )
+        if action == "reopen":
+            self._guard_slot(room, rv)
         if action == "take":
             self.store.take_review_item(item.id, actor)
             self._event(room, rv, item=item.label, to="taken", by=actor, previous_raiser=item.raised_by)
@@ -276,6 +335,8 @@ class Boards:
             if owner not in here:
                 raise ReviewError(f"owner must be an agent in {room.name}: {owner!r} isn't")
             if reassigned and owner == item.owner:
+                if owner == actor:  # a reopened card comes back to its owner (#905): not a handoff
+                    raise ReviewError(f"{item.label} is already yours to fix: the next move is fix")
                 raise ReviewError(f"{item.label} is {owner}'s already: name the agent who takes it over")
             fields["owner"] = owner
         elif action == "fix":
@@ -285,6 +346,9 @@ class Boards:
             fields["commit_sha"] = commit
             fields["proof"] = reviews.proof(params.get("proof"))
             fields["reason"] = ""  # a conceded contest's reason no longer describes the fix
+            if item.state == "raised":
+                # the holder conceded and fixed in one move: the owner is the holder (#904)
+                fields["owner"] = actor
         elif action == "reopen":
             fields["reason"] = reviews.text(params.get("reason"), "reason", reviews.MAX_REASON, required=True)
             fields["confirmed_by"] = ""
@@ -303,7 +367,6 @@ class Boards:
                 params.get("reason"), "reason (the follow-up ticket)", reviews.MAX_TICKET, required=True
             )
             fields["reason"] = ""
-        self.store.move_review_item(item.id, to, **fields)
         shown = (
             "reopened"
             if action == "reopen"
@@ -325,7 +388,15 @@ class Boards:
                 evidence.update(previous_commit=item.commit, previous_proof=item.proof)
         elif action == "reopen":
             evidence = {"reason": fields["reason"], "commit": item.commit, "proof": item.proof}
-        self._event(room, rv, item=item.label, to=shown, by=actor, **evidence)
+        # One transaction: a crash between the item and its events must not leave a fixed card
+        # with half a history. A retried fix would then revise, and the concession would be gone
+        # (#904). db.tx joins the store's own transactions. The room hears only after the commit.
+        with db.tx(self.store.con):
+            self.store.move_review_item(item.id, to, **fields)
+            if action == "fix" and item.state == "raised":
+                # the concession this fix stood in for, so the card's history does not skip it
+                self._event(room, rv, item=item.label, to="conceded", by=actor)
+            self._event(room, rv, item=item.label, to=shown, by=actor, **evidence)
         moved = self.store.review_item(rv["id"], kind, n)
         assert moved is not None
         if reassigned:  # a handover, or a takeover from an owner who left (#371)
@@ -336,6 +407,7 @@ class Boards:
                 moved,
                 actor,
                 f"{actor} moved {item.label} from {item.owner}{gone} to {fields['owner']}",
+                poster=poster,
             )
         tail = {
             "reopened": f", owner {item.owner}: {fields.get('reason')}",
@@ -349,7 +421,13 @@ class Boards:
             "confirmed": f" by {actor}",
         }.get(shown, "")
         return self._told(
-            room, rv, moved, actor, f"{actor} {action_past(action)} {item.label}{tail}", action=action
+            room,
+            rv,
+            moved,
+            actor,
+            f"{actor} {action_past(action)} {item.label}{tail}",
+            action=action,
+            poster=poster,
         )
 
     def _concur(
@@ -439,22 +517,61 @@ class Boards:
         result is said in the room, each in one line naming who reported it, so agents cite the
         board instead of passing CI on from memory. switchboard fetches nothing itself."""
         fields = reviews.report(params)
-        now = self.state.clock.now()
-        self.store.set_review(rv["id"], **fields, reported_by=actor, reported_at=now)
-        self._event(room, rv, report=dict(fields), by=actor)
+        # a head named with the report is a commit the board was told (#906). It is not a move
+        # of the board: findings are not outdated, and ``reviews.head`` stays what open set.
+        named = reviews.head(params.get("head"))
         url = rv["url"]
+        was_closed = rv["closed_at"] is not None
+        state = fields.get("pr_state")
+        if was_closed and state not in ("merged", "closed"):
+            raise ReviewError('a closed board only accepts a report with state="merged" or state="closed"')
+        if state == "closed" and rv["pr_state"] == "merged":  # open (reopened) or closed alike
+            raise ReviewError(f"{url} is recorded as merged already: a closed report would overwrite it")
+        ended = state in ("merged", "closed")
+        result = {"ok": True, "closed": True, "board": f"{url} is {state}: the board is closed."}
+        same = was_closed and all(rv[key] == value for key, value in fields.items())
+        if same and self._reported_head_is_current(room, rv, named):
+            return result
+        now = self.state.clock.now()
+        closure = {"closed_at": now, "closed_by": actor} if ended and not was_closed else {}
+        self.store.set_review(rv["id"], **fields, **closure, reported_by=actor, reported_at=now)
+        self._event(room, rv, report=fields, by=actor, **({"head": named} if named else {}))
         if fields.get("pr_ci") and fields["pr_ci"] != rv["pr_ci"]:
-            self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
-        if fields.get("pr_state") in ("merged", "closed"):
-            self.store.set_review(rv["id"], closed_at=now, closed_by=actor)
-            self._notice(room, f"{actor} reports {url} {fields['pr_state']}: the review board is closed")
+            if fields["pr_ci"] == "blocked":
+                self._notice(room, f"{actor} reports CI blocked on {url}: it conflicts with its base")
+            else:
+                self._notice(room, f"{actor} reports CI {fields['pr_ci']} on {url}")
+        if ended and same:
+            # only the head is new: the close was already said. The page still hears the commit.
             self._publish(room)
-            return {
-                "ok": True,
-                "closed": True,
-                "board": f"{url} is {fields['pr_state']}: the board is closed.",
-            }
+            return result
+        if ended:
+            status = "remains closed" if was_closed else "is closed"
+            self._notice(room, f"{actor} reports {url} {state}: the review board {status}")
+            self._settle(room, rv, closed=True)  # a closed board takes no moves: nobody owes its lines
+            self._publish(room)
+            return result
         return self._shown(room, rv)
+
+    def _reported_head_is_current(self, room: Room, rv: dict[str, Any], named: str) -> bool:
+        """Whether this report of a closed board adds no commit (#906).
+
+        No head is a repeat of the outcome alone. The same head as the latest report is a
+        repeat only when nothing told since that report changed the commit the header names.
+        A reopen at a newer commit does change it, so reporting the old head again is recorded."""
+        if not named:
+            return True
+        raw = self.store.review_events(room.id, rv["id"], rv["opened_at"])
+        events = [{"ts": event.ts, "data": event.data} for event in raw]
+        last = next((i for i in range(len(events) - 1, -1, -1) if "report" in events[i]["data"]), None)
+        if last is None:
+            return False
+        previous = events[last]["data"].get("head")
+        if not isinstance(previous, str) or named != previous:
+            return False
+        items = self.store.review_items(rv["id"])
+        earlier = reviews.header_commit(rv, items, events[: last + 1])
+        return earlier == reviews.header_commit(rv, items, events)
 
     def _close(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """Close a settled board at any time; open work needs the mover's reason in the room. The
@@ -462,6 +579,12 @@ class Boards:
         board's holder closes it: anyone else's close asks a person, in the room, and changes nothing."""
         if rv["closed_at"] is not None:
             raise ReviewError(f"the board for {rv['url']} is closed already")
+        outcome, merge_commit, given = reviews.close_outcome(params)
+        if outcome == "closed" and rv["pr_state"] == "merged":
+            raise ReviewError(
+                f"the pull request for {rv['url']} is recorded as merged: a close with state=closed would"
+                ' overwrite it. Close with state="merged", or with no state.'
+            )
         items = self.store.review_items(rv["id"])
         open_items = reviews.open_items(items)
         holder = reviews.holder(rv)
@@ -484,14 +607,28 @@ class Boards:
             )
         labels = [item.label for item in open_items]
         line = f"Review board for {ref} closed by {actor}"
+        if outcome != "unknown":  # the pull request's outcome, a claim in the closer's name (#886)
+            line += f", the pull request {outcome}" + (f" as {merge_commit}" if merge_commit else "")
         line += f": {reason}" if reason else "."
         if labels:
             line += f". Open items: {', '.join(labels)}."
-        self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
-        self._event(room, rv, close=rv["url"], by=actor, reason=reason, open=labels)
+        now = self.state.clock.now()
+        if outcome == "unknown":
+            self.store.set_review(rv["id"], closed_at=now, closed_by=actor)
+        else:  # recorded as report records it, so Past boards, the Usage page and the stats read it
+            fields = {"pr_state": outcome}
+            self.store.set_review(
+                rv["id"], **fields, closed_at=now, closed_by=actor, reported_by=actor, reported_at=now
+            )
+            self._event(
+                room, rv, report={**fields, **({"commit": merge_commit} if merge_commit else {})}, by=actor
+            )
+        self._event(room, rv, close=rv["url"], by=actor, reason=reason, open=labels, outcome=outcome)
         self.state.service.post_notice(room, line, level="info")
+        self._settle(room, rv, closed=True)
         self._publish(room)
-        return {"ok": True, "closed": True, "board": None, "note": KEPT}
+        note = KEPT if given else f"{KEPT} Next time, {reviews.CLOSE_OUTCOME_HELP}."
+        return {"ok": True, "closed": True, "board": None, "note": note}
 
     def _reset(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """A fresh board for a URL that has one, on purpose (§37.14): the earlier board stays in the
@@ -506,12 +643,14 @@ class Boards:
         holder = reviews.holder(rv)
         if actor != holder:
             raise ReviewError(f"{self._ref(rv)} was opened by {holder}: only {holder} can reset it")
-        self._check_room(room, closing=rv["closed_at"] is None)
+        freeing = rv["closed_at"] is None and reviews.fills_open_slot(self.store.review_items(rv["id"]))
+        self._check_room(room, freeing=freeing, grows=rv["closed_at"] is not None)
         if rv["closed_at"] is None:
             self.store.set_review(rv["id"], closed_at=self.state.clock.now(), closed_by=actor)
+        self._settle(room, rv, closed=True)
         self._event(room, rv, reset=u, by=actor, reason=reason)
         fresh = self.store.open_review(room.id, u, head, actor)
-        self._event(room, fresh, open=u, head=head, by=actor)
+        self._event(room, fresh, open=u, head=head, by=actor, opener="agent")
         self._notice(
             room,
             f"{actor} reset the review board for {self._ref(rv)}: {reason}. A fresh board is open;"
@@ -547,55 +686,161 @@ class Boards:
         notice: str,
         wake: bool = True,
         action: str = "",
+        poster: Poster | None = None,
     ) -> dict[str, Any]:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
-        for whoever acts next (posted by the caller as the mover's message, so it wakes them),
-        or the notice when that's nobody (§37.4). A move that asks nothing of anyone, such as a
-        pick among options (``wake`` False), is a notice whatever state the item is in. With several
-        boards open, the line and the notice say which one, and whoever is told of a move on a board
-        has it as the board their next call is about (§37.14)."""
+        for whoever acts next, posted as the mover's message (``poster``) to them alone, so it wakes
+        them, or the notice when that's nobody (§37.4). A raised finding's next move is the author's
+        side's (``reviews.author_side``, #884). A move that asks nothing of anyone, such as a pick
+        among options (``wake`` False), is a notice whatever state the item is in. With several boards
+        open, the line and the notice say which one, and whoever is told of a move on a board has it as
+        the board their next call is about (§37.14). Every move then settles the board's earlier lines:
+        one an agent no longer owes is answered (``_settle``)."""
         several = self._several(room)
-        handoff = (
-            reviews.handoff(
-                item, actor, self.store.active_names(room.id), rv["url"] if several else "", action=action
-            )
-            if wake
-            else None
-        )
-        if handoff is None:
+        line = None
+        if wake and poster is not None:
+            agents, offline = self._here(room)
+            side = self._side(room, rv, self.store.review_items(rv["id"]), agents, offline)
+            url = rv["url"] if several else ""
+            line = reviews.told(item, actor, agents, url, action=action, side=side)
+        if line is None:
             ref = self._ref(rv)
             self._notice(room, f"{ref}: {notice}" if several else notice)
         out = self._shown(room, rv, touched=item.label)
-        if handoff is not None:
-            out["handoff"] = {"mentions": list(handoff[0]), "text": handoff[1]}
-            for agent in handoff[0]:
-                self._last[(room.id, agent)] = rv["url"]
+        if line is not None and poster is not None:
+            self._say(room, rv, poster, line)
+        self._settle(room, rv)
         return out
+
+    # ---------------------------------------------------- lines for whoever acts next (#884)
+    def _here(self, room: Room) -> tuple[list[str], list[str]]:
+        """The room's agents, in the order they joined, and the ones of them that are offline."""
+        members = self.store.members(room.id)
+        names = self.store.active_names(room.id)
+        return names, [m.name for m in members if m.status == "offline"]
+
+    def _side(
+        self,
+        room: Room,
+        rv: dict[str, Any],
+        items: Sequence[reviews.Item],
+        agents: Sequence[str],
+        offline: Sequence[str],
+    ) -> tuple[str, ...]:
+        """The board's author side as it records it (``reviews.author_side``)."""
+        events = [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+        return reviews.author_side(reviews.holder(rv), items, events, agents, offline)
+
+    def _say(self, room: Room, rv: dict[str, Any], poster: Poster, line: reviews.Told) -> None:
+        """Post ``line`` at once as its mover's message, delivered only to the agents it names (§37.4),
+        then record it: which card it named, in which state, and to whom, so a later move can settle it
+        (``_settle``). The engine already gives several lines that arrive together to an agent as one
+        wake (§37.17). Whoever is told has this board as the one their next call is about (§37.14)."""
+        who = list(line.who)
+        msg = self.state.service._post(
+            room,
+            **poster,
+            # the one place stored card text is joined and cut into a message for an agent: scrubbed here as
+            # defense in depth, though the upgrade cleaned the stored rows (db.clean_review_rows, #890)
+            text=reviews.scrub(line.line)[: self.state.cfg.delivery.max_msg_chars],
+            mentions=who,
+            addressed_only=True,
+        )
+        self.store.add_event(
+            "review_line",
+            room_id=room.id,
+            data={
+                "board": rv["id"],
+                "msg": msg.id,
+                "items": [line.label],
+                "states": [line.state],
+                "to": who,
+            },
+        )
+        for agent in who:
+            self._last[(room.id, agent)] = rv["url"]
+
+    def _settle(self, room: Room, rv: dict[str, Any], *, closed: bool = False) -> None:
+        """Answer the board's earlier lines that the agents they reached no longer owe (#884): once a
+        line's cards have moved on, or the agent has no move left on them (``reviews.answered``), its
+        delivery of that line is handled, as a say or a pass would handle it, so the line neither comes
+        back to it as ``again=yes`` nor sets off the watchdog. ``closed``: the board takes no more
+        moves, so every line is answered. An agent that still has the move a line asked keeps it."""
+        lines = self.store.review_lines_open(room.id, rv["id"], rv["opened_at"])
+        if not lines:
+            return
+        items = self.store.review_items(rv["id"])
+        by_label = {i.label: i for i in items}
+        agents, offline = self._here(room)
+        side = self._side(room, rv, items, agents, offline)
+        done: list[tuple[int, int]] = []
+        for msg, cards, reached, to in lines:
+            # only the agents the line was addressed to: one that has it because the line names its
+            # claim (§8.1) answers it as it answers any message that does, with a say or a pass
+            names = [name for _, name in reached if to is None or name in to]
+            free = set(names if closed else reviews.answered(cards, by_label, names, agents, side))
+            done.extend((membership_id, msg) for membership_id, name in reached if name in free)
+        if done:
+            self.store.answer_deliveries(done)
 
     def _open(self, room: Room, actor: str, params: dict[str, Any]) -> dict[str, Any]:
         url = reviews.url(params.get("url"))
         head = reviews.head(params.get("head"))
-        rv, how = self._open_board(room, actor, url, head)
+        rv, how = self._open_board(room, actor, url, head, opener="agent")
         self._remember(room, actor, rv)
         out = self._shown(room, rv)
         if how == "reopened":
             out["note"] = "The board was closed: it is open again, with its items and history."
         return out
 
-    def _check_room(self, room: Room, *, closing: bool = False) -> None:
-        """A room holds at most ``MAX_OPEN_BOARDS`` open boards (§37.14). ``closing``: the move also
-        closes one, so the count doesn't grow."""
-        open_ = len(self.store.open_reviews(room.id))
-        if open_ - (1 if closing else 0) >= reviews.MAX_OPEN_BOARDS:
+    def _filling(self, room: Room) -> list[dict[str, Any]]:
+        """Open boards that take a slot: empty ones, and any that still have work (§37.14)."""
+        return [
+            rv
+            for rv in self.store.open_reviews(room.id)
+            if reviews.fills_open_slot(self.store.review_items(rv["id"]))
+        ]
+
+    def _check_room(
+        self, room: Room, *, freeing: bool = False, adding: bool = True, grows: bool = True
+    ) -> None:
+        """A room holds at most ``MAX_OPEN_BOARDS`` boards that fill a slot (§37.14, #886). A settled
+        board with cards does not. ``freeing``: this move closes one that fills a slot. ``adding``: the
+        board being opened fills one (a settled reopen does not). ``grows``: the move adds an open
+        board, which the ceiling ``MAX_OPEN_BOARDS_TOTAL`` on all open boards counts (#886). A refusal
+        names the boards to close, so a full room can always make room."""
+        filling = self._filling(room)
+        open_ = self.store.open_reviews(room.id)
+        if len(open_) + (1 if grows else 0) > reviews.MAX_OPEN_BOARDS_TOTAL:
+            settled = [rv["url"] for rv in open_ if rv not in filling]
             raise ReviewError(
-                f"{room.name} has {open_} open boards, the most it holds: close one before opening another"
+                f"{room.name} has {len(open_)} open boards, the most it keeps open at all"
+                f" ({reviews.MAX_OPEN_BOARDS_TOTAL}), settled ones included: close a finished one with"
+                f" state merged, closed or unknown ({', '.join(settled) or 'none are settled'})"
+            )
+        if len(filling) - (1 if freeing else 0) + (1 if adding else 0) > reviews.MAX_OPEN_BOARDS:
+            urls = ", ".join(rv["url"] for rv in filling)
+            raise ReviewError(
+                f"{room.name} has {len(filling)} open boards, the most it holds: close one before opening"
+                f" another ({urls}). A finished one is closed with state merged, closed or unknown"
             )
 
-    def _open_board(self, room: Room, by: str, url: str, head: str) -> tuple[dict[str, Any], str]:
+    def _guard_slot(self, room: Room, rv: dict[str, Any]) -> None:
+        """A move that puts work back on a settled board takes a slot. At the cap it is refused,
+        the same way opening another board is."""
+        if not reviews.fills_open_slot(self.store.review_items(rv["id"])):
+            self._check_room(room, grows=False)
+
+    def _open_board(
+        self, room: Room, by: str, url: str, head: str, *, opener: str, author: str = ""
+    ) -> tuple[dict[str, Any], str]:
         """The room's board for ``url``, opened by ``by`` (an agent or a person) with ``head``, and
         what happened to it: ``opened`` (a new board), ``reopened`` (a closed one is back, with its
         items and history), ``moved`` (an open one now at a newer head) or ``kept`` (open already).
-        Other boards of the room are left as they are (§37.14)."""
+        Other boards of the room are left as they are (§37.14). ``author``: the agent that posted the
+        link a board is opened for (§37.16), recorded with the move: the board's author side (#884).
+        ``opener``: what ``by`` is, ``agent``, ``person`` or ``link``, recorded with the move: a
+        board's holder is an agent only by this record, never by its name alone (#904)."""
         rv = self.store.review_for_url(room.id, url)
         new_head = bool(head) and (rv is None or head != rv["head"])
         if rv is not None and rv["posted_at"] is not None and new_head:
@@ -611,7 +856,8 @@ class Boards:
             how = "opened"
         else:
             if rv["closed_at"] is not None:
-                self._check_room(room)
+                adding = reviews.fills_open_slot(self.store.review_items(rv["id"]))
+                self._check_room(room, adding=adding)
                 self.store.reopen_review(rv["id"], by)
                 self._notice(
                     room, f"{by} opened the review board for {url} again: its items and history are back"
@@ -624,7 +870,8 @@ class Boards:
                 self._notice(room, f"{by} moved the review board to {head[:12]}")
                 how = how if how == "reopened" else "moved"
             rv = self.store.review_for_url(room.id, url) or rv
-        self._event(room, rv, open=url, head=head, by=by, how=how)
+        extra = {"author": author} if author else {}
+        self._event(room, rv, open=url, head=head, by=by, how=how, opener=opener, **extra)
         return rv, how
 
     def on_agent_say(self, room: Room, author: str, text: str) -> None:
@@ -662,7 +909,7 @@ class Boards:
                 )
                 continue
             try:
-                self._open_board(room, "switchboard", url, "")
+                self._open_board(room, "switchboard", url, "", opener="link", author=author)
             except ReviewError as e:
                 self._notice(room, f"not asking for a review of {url}: {e}")
                 continue
@@ -701,7 +948,7 @@ class Boards:
     def person_open(self, room: Room, name: str, url: str) -> str:
         """A person's ``/review`` (§37.8): the board opens, or comes back, or stays, for ``url``,
         and every page showing the room gets it at once. Returns what happened (``_open_board``)."""
-        rv, how = self._open_board(room, name, reviews.url(url), "")
+        rv, how = self._open_board(room, name, reviews.url(url), "", opener="person")
         self._publish(room)
         return how
 
@@ -770,6 +1017,7 @@ class Boards:
             self._notice(
                 room, f"{name} closed the review board for {rv['url']}" + (f": {reason}" if reason else "")
             )
+            self._settle(room, rv, closed=True)
             return {"ok": True, "boards": self._publish(room)}
         if action == "handoff":
             return self._handoff(room, rv, name, person_id, params)
@@ -859,6 +1107,7 @@ class Boards:
             via="web",
             person=(name, person_id),
         )
+        self._settle(room, rv)  # a ruling or an answer is the next move on that card: its lines are answered
         return {"ok": True, "boards": self._publish(room)}
 
     def _handoff(

@@ -26,10 +26,24 @@ HOOK_CONTEXT_EVENTS: dict[str, frozenset[str]] = {
     "codex": frozenset({"PostToolUse"}),
     "devin": frozenset({"PostToolUse"}),
     "cursor": frozenset({"PostToolUse", "PostToolUseFailure"}),
+    # Grok Build: only a tool hook's additionalContext reaches the model; SessionStart's and
+    # UserPromptSubmit's output never does (measured with a stand-in model, 1.0.89, #851)
+    "grok": frozenset({"PostToolUse", "PostToolUseFailure"}),
     "opencode": frozenset(),  # V2 status reports never inject tool context (§49.12)
     # synthetic hook events from scripted test agents (test mode only)
     "test": frozenset({"UserPromptSubmit", "PostToolUse", "PostToolUseFailure"}),
 }
+
+
+# What a join says about answering (#878): an agent that acted on a message in its own chat left it
+# unanswered, and the Stop hook raised it again. Only a post in the room, or a pass, answers.
+ANSWER_GUIDANCE = (
+    "A message counts as answered only once you post in the room with say(), or pass() when you have"
+    " nothing to add; acting on it in your chat does not answer it."
+)
+
+# What a capped wait() result adds for a harness with a Stop listener (#878).
+LONG_WAIT_NOTE = "For a longer wait, end your turn; switchboard wakes the session when a message comes."
 
 
 # What a join tells an agent about a member that is waiting on its person (§7.4, §49.4): a fact about
@@ -56,6 +70,9 @@ CLIENT_WAIT_LIMIT_S: dict[str, int] = {
     "cursor": 55,
     "devin": 100,
     "opencode": 50,
+    # Grok Build ends an MCP call at its tool_timeout_sec, 6000 s by default (its own docs, 1.0.89); held to
+    # Claude Code's 600, which was measured, since a longer wait is not needed with a Stop listener (#851)
+    "grok": 600,
     "test": 50,  # the scripted test agent (§9.6) has no client: the old default
 }
 # A harness that is not in the table gets the lowest cap there is: an unrecognized value fails closed.
@@ -76,6 +93,7 @@ def waits_over_client_limit(cfg: Config) -> list[tuple[str, int, int]]:
         "codex": cfg.codex.wait_cap_s,
         "cursor": cfg.cursor.wait_cap_s,
         "opencode": cfg.opencode.wait_cap_s,
+        "grok": cfg.grok.wait_cap_s,
     }
     return [(h, v, client_wait_limit(h)) for h, v in sections.items() if v > client_wait_limit(h)]
 
@@ -101,6 +119,9 @@ class Adapter:
     sink_status = False
     # A scripted stand-in: it exists only in test mode (§9.6).
     test_only = False
+    # What a capped wait() says to do instead (#878): set by the harnesses whose Stop hook wakes an idle
+    # session, so ending the turn is the better way to wait. Empty: say nothing.
+    long_wait_note = ""
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -114,6 +135,7 @@ class Adapter:
             "cursor": (c.cursor.ctx_max_chars, c.cursor.wait_cap_s),
             "devin": (c.devin.ctx_max_chars, c.devin.wait_cap_s),
             "opencode": (c.delivery.batch_max_chars, c.opencode.wait_cap_s),
+            "grok": (c.grok.ctx_max_chars, c.grok.wait_cap_s),
         }
         ctx, wait = table.get(self.harness, (c.delivery.batch_max_chars, UNKNOWN_WAIT_LIMIT_S))
         wait = min(wait, client_wait_limit(self.harness))  # never past what the harness's client allows
@@ -177,6 +199,12 @@ class Adapter:
         """Whether this hook belongs to a subagent sharing the session ID."""
         return False
 
+    def stale_hook(self, p: Participant, ev: HookEvent) -> bool:
+        """True if this hook reports a turn of the session that is already over (Grok Build's late end of an
+        older prompt, §49.15): the engine drops it with no state change at all. Unlike ``other_thread``, it
+        never ends an approval hold, since it says nothing about the session's current turn (§11)."""
+        return False
+
     def anchors_turn(self, p: Participant, ev: HookEvent) -> bool:
         """Whether a tool hook can identify the current turn when its prompt preceded join."""
         return False
@@ -219,7 +247,7 @@ class Adapter:
         return None
 
     def listener_retry(self, p: Participant, has_continue: bool) -> bool:
-        """Whether a reconnect may recover an offered wake before a turn has confirmed it (§49.12)."""
+        """Whether a later listener round may resume after a restart or an interrupted wake (§49)."""
         return False
 
     def stop_continues(self, p: Participant) -> bool:

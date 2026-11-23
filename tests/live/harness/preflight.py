@@ -45,11 +45,20 @@ def descendants(root: int, procs: list[tuple[int, int, str]]) -> list[tuple[int,
     return found
 
 
+Helper = str | re.Pattern[str]
+
+
+def is_helper(args: str, helpers: tuple[Helper, ...]) -> bool:
+    """Whether a command line is one of a CLI's own helpers: it holds one of the words, or matches one of
+    the patterns (a pattern, for a helper whose words alone would also match someone else's server)."""
+    return any(h in args if isinstance(h, str) else h.search(args) for h in helpers)
+
+
 def problems(
-    root: int, allowed: tuple[str, ...] = (), procs: list[tuple[int, int, str]] | None = None
+    root: int, allowed: tuple[Helper, ...] = (), procs: list[tuple[int, int, str]] | None = None
 ) -> list[str]:
-    """Descendants of ``root`` that look like another MCP server, minus the ones whose command line holds
-    one of the ``allowed`` words (a CLI's own helper)."""
+    """Descendants of ``root`` that look like another MCP server, minus the CLI's own helpers (``allowed``,
+    ``is_helper``) and switchboard's own scripts."""
     if procs is None:
         out = subprocess.run(
             ["/bin/ps", "-A", "-o", "pid=,ppid=,args="], capture_output=True, text=True, timeout=10
@@ -58,7 +67,5 @@ def problems(
     return [
         f"{pid}: {args[:120]}"
         for pid, _ppid, args in descendants(root, procs)
-        if SUSPECT.search(args)
-        and not any(a in args for a in allowed)
-        and not any(a.search(args) for a in ALLOWED)
+        if SUSPECT.search(args) and not is_helper(args, allowed) and not any(a.search(args) for a in ALLOWED)
     ]

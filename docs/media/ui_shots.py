@@ -46,6 +46,8 @@ connect-opencode-{light,dark,phone-light} (OpenCode V2's plugin, mcp.servers con
 connect-codex-{light,dark,phone-light} (Connect an agent's Codex step: the plugin, config.toml, and the
 environment lines, now with the server's address for the plugin's approval hook, #472),
 voices-{default,pinned}-{light,dark,phone} (Members and the Inspector with each agent's voice on a call, #713),
+speaking-now-{light,dark,phone} and speaking-now-done-{light,dark,phone} (the call bar names the agent whose
+``@call`` line is being said, then not once it ends, #913; ``--only speaking_now``),
 oauth-consent-{light,dark,phone-light} (the card an agent that signs in through the browser sends the
 person to, #386), oauth-confirm-light (the same on a hosted broker whose last check ran out: Confirm
 it's you comes first), oauth-signin-light (a browser that isn't signed in yet) and
@@ -53,11 +55,28 @@ settings-agents-signin-light (the sign-in listed beside a token, with Revoke),
 opencode-upload-after-{light,dark} and -{log,members}-phone-light (the same room with an admin's uploaded
 OpenCode images, #518), opencode-upload-settings-{light,dark,phone-light} (OpenCode's card in Agent icons),
 opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and the Inspector, #518),
+grok-{members,inspector}-{light,dark} and grok-members-phone-light (a Grok Build session in Members and the
+Inspector, #851; ``--only grok``),
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
 agents-{dark,phone-light,phone-dark}, guide-agents-light (Home's Agents section, #815; ``--only agents``),
+webhook-{empty,set,failed}-{light,dark,phone-light} (Settings → Profile → Webhook, #723; ``--only webhook``),
+webhook-alerts-{light,dark,phone-light} and webhook-quiet-{light,dark,phone-light} (its Second alert and
+Quiet hours saved, #923; ``--only webhook``), webhook-tested-{light,dark,phone-light} (Send a test with the first
+address failing and the second working, each said in its own section, #923),
+webhook-unusable-{light,dark,phone-light} (a saved webhook whose quiet hours' zone this server no longer
+knows: not used, and why, #923),
 redact-{light,dark,phone-light} (a pasted token, with and without the redaction note, #819; ``--only redact``),
+past-boards-{light,dark,phone-light} and past-board-closed-{light,dark} (the Past boards list with a
+merged, a closed-without-merging and an unknown outcome chip, and the closed one opened read-only, #886;
+``--only past_boards``),
+board-header-commit-{light,dark,phone-light} (the header names the newest commit the board was told, #906;
+``--only header_commit``),
+room-filters-{all,mentions}-{light,dark,phone-light}, guide-room-filters-light (a room's All, Mentions and Files,
+#914; ``--only room_filters``),
+report-conflict-{before,after}-{light,dark,phone-light} (the board's header for a pull request that
+conflicts with its base: only "CI none", then "conflicts with its base", #907; ``--only report_conflict``),
 phone-light, phone-dark-sheet, offline-light, offline-dark, offline-phone-dark (#129),
 welcome-light and login-light, plus, from a hosted broker
 (``tests/ui_world.py``'s ``HostedWorld``, with Chromium's virtual authenticators as the
@@ -447,6 +466,57 @@ def shoot_opencode_avatar(browser: Any, out: Path, world: Any, stem: str = "open
     shoot_opencode_room(browser, out, world.broker, stem)
 
 
+def shoot_grok(browser: Any, out: Path, world: Any) -> None:
+    """#851: a Grok Build session in a room beside a Claude Code one: Members (its GK monogram) and the
+    Inspector (``Grok Build``, the ``grok:https`` tier and its note), in light, dark and on a phone (the
+    Members sheet). ``grok-{members,inspector}-{light,dark}``, ``grok-members-phone-light``."""
+    from playwright.sync_api import expect
+    from ui_world import wait_js
+
+    room = "#grok"
+    world.create_room(room)
+    world.add_agents(room, ("grok-1", "claude-1"))
+    first = world.agent_say(room, "grok-1", "Joined from Grok Build. Looking at the failing test now.")
+    world.agent_say(room, "claude-1", "Thanks: the fixture is in tests/unit.", reply_to=first)
+    world.set_member_harness(room, "grok-1", "grok", tier=True)
+    world.set_member_harness(room, "claude-1", "claude", tier=True)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for size, scheme, tag in (
+        (DESKTOP, "light", "light"),
+        (DESKTOP, "dark", "dark"),
+        (PHONE, "light", "phone-light"),
+    ):
+        ctx = browser.new_context(**base, **size, color_scheme=scheme)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("grok", timeout=WAIT_MS)
+            if page.locator("#app.nav-open").count():
+                page.keyboard.press("Escape")
+            wait_js(
+                page, "() => document.querySelectorAll('#log .line.k-chat').length >= 2", timeout_ms=WAIT_MS
+            )
+            expect(page.locator('#buddy-list .member[data-name="grok-1"]')).to_have_count(1, timeout=WAIT_MS)
+            if size is PHONE:
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                settle(page)
+                shot(page, out, f"grok-members-{tag}.png")
+            else:
+                settle(page)
+                shot(page, out, f"grok-members-{tag}.png")
+                inspect(page, "grok-1")
+                settle(page)
+                shot(page, out, f"grok-inspector-{tag}.png")
+        finally:
+            ctx.close()
+
+
 def shoot_opencode_room(browser: Any, out: Path, b: Any, stem: str) -> None:
     """The #opencode room of ``shoot_opencode_avatar``, as its pictures: light and dark on a desktop (the log,
     Members and the Inspector's large avatar) and on a phone (the log, and the Members sheet)."""
@@ -533,7 +603,7 @@ def shoot_opencode_upload(browser: Any, out: Path, world: Any) -> None:
         web.delete("/api/agent-icons/opencode", headers=b.write_headers())
 
 
-def shoot_offline(browser: Any, out: Path, world: Any) -> None:
+def shoot_offline(browser: Any, out: Path, world: Any, *, long_outage: bool = False) -> None:
     """The page after its connection dropped (#129), in #build: the band, the You row, the
     header chip and the dimmed members (light, dark), and the phone (dark). The socket is
     closed through Playwright's WebSocket routing, and the ``/api/me`` check the page makes
@@ -558,12 +628,16 @@ def shoot_offline(browser: Any, out: Path, world: Any) -> None:
         ctx.route("**/api/me", me)
         try:
             page = ctx.new_page()
+            if long_outage:
+                page.clock.install()
             sign_in(page, b)
             open_build(page, n_chat)
             down["on"] = True
             with page.expect_request("**/api/me"):
                 live[-1].close()
             expect(page.locator("#st-conn")).to_have_text("Reconnecting…")
+            if long_outage:
+                page.clock.fast_forward(120_000)
             page.evaluate("document.activeElement && document.activeElement.blur()")
             shot(page, out, name)
         finally:
@@ -699,6 +773,120 @@ def shoot_notifications(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_webhook(browser: Any, out: Path, world: Any) -> None:
+    """#723: Settings, Profile, Webhook: empty, saved (only the host is shown back), its second alert and
+    quiet hours saved (#923), a failed test, and a saved webhook that is not used (a zone the server lost).
+    The receiver is a local HTTPS server (``tests/fakes/tls_hook.py``) the broker is told to trust; its address
+    and secret path are made up."""
+    from fakes.tls_hook import TlsHook
+    from playwright.sync_api import expect
+
+    from switchboard.config import NotifyCfg
+
+    hook = TlsHook()
+    st = world.broker.state
+
+    def arm() -> None:
+        st.cfg = st.cfg.replace(notify=NotifyCfg(allow_private_webhooks=True))
+        st.notifier.resolve = hook.resolve
+        st.notifier.context = hook.context
+
+    world.broker.on_loop(arm)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    try:
+        for theme, ctx_args in (
+            ("light", {**DESKTOP, "color_scheme": "light"}),
+            ("dark", {**DESKTOP, "color_scheme": "dark"}),
+            ("phone-light", {**PHONE, "color_scheme": "light"}),
+        ):
+            ctx = browser.new_context(**base, **ctx_args)
+            ctx.set_default_timeout(WAIT_MS)
+            try:
+                page = ctx.new_page()
+                sign_in(page, world.broker)
+                if not page.locator("#me-settings").is_visible():
+                    page.click("#rooms-toggle")
+                page.click("#me-settings")
+                row = page.locator("#settings-row-profile")
+                if row.is_visible():
+                    row.click()
+                field = page.locator("#settings-webhook-url")
+                field.scroll_into_view_if_needed()
+                expect(field).to_be_visible()
+                settle(page)
+                shot(page, out, f"webhook-empty-{theme}.png")
+                hook.status = 200
+                field.fill(hook.url)
+                page.fill("#settings-webhook-wait", "5")
+                page.click("#settings-webhook-save")
+                expect(page.locator("#settings-webhook-status")).to_have_text("Saved.")
+                settle(page)
+                shot(page, out, f"webhook-set-{theme}.png")
+                page.fill("#settings-webhook-second-url", hook.url.replace("secretsecret", "loudloud"))
+                page.fill("#settings-webhook-second-after", "20")
+                page.click("#settings-webhook-second-save")
+                expect(page.locator("#settings-webhook-second-status")).to_have_text("Second alert saved.")
+                page.fill("#settings-webhook-quiet-from", "22:00")
+                page.fill("#settings-webhook-quiet-to", "07:00")
+                page.fill("#settings-webhook-quiet-tz", "America/New_York")
+                page.click("#settings-webhook-quiet-save")
+                expect(page.locator("#settings-webhook-quiet-status")).to_have_text("Quiet hours saved.")
+                page.locator("#settings-webhook-second-url").scroll_into_view_if_needed()
+                page.evaluate(
+                    "document.querySelector('#settings-webhook-second-url')"
+                    ".closest('.settings-panel-content').scrollBy(0, -80)"
+                )
+                settle(page)
+                shot(page, out, f"webhook-alerts-{theme}.png")
+                page.locator("#settings-webhook-quiet-remove").scroll_into_view_if_needed()
+                settle(page)
+                shot(page, out, f"webhook-quiet-{theme}.png")
+                page.locator("#settings-webhook-test").scroll_into_view_if_needed()
+                hook.status_of[hook.url.split(str(hook.port), 1)[1]] = 500  # the first fails, the second goes
+                page.click("#settings-webhook-test")
+                expect(page.locator("#settings-webhook-second-status")).to_have_text(
+                    "The test went through to the second address."
+                )
+                page.evaluate(  # the first result at the top, the second's below it
+                    "document.querySelector('#settings-webhook-status').scrollIntoView({block: 'start'})"
+                )
+                settle(page)
+                shot(page, out, f"webhook-tested-{theme}.png")
+                hook.status_of.clear()
+                page.locator("#settings-webhook-test").scroll_into_view_if_needed()
+                hook.status = 500
+                page.click("#settings-webhook-test")
+                expect(page.locator("#settings-webhook-status")).to_contain_text("The test failed")
+                settle(page)
+                shot(page, out, f"webhook-failed-{theme}.png")
+                hook.status = 200
+
+                def lose_zone() -> None:  # as after a tzdata update dropped the zone (#923, F12)
+                    st.store.con.execute("UPDATE webhooks SET quiet_tz='Mars/Olympus_Mons' WHERE person=0")
+
+                world.broker.on_loop(lose_zone)
+                page.reload()
+                if not page.locator("#me-settings").is_visible():
+                    page.click("#rooms-toggle")
+                page.click("#me-settings")
+                row = page.locator("#settings-row-profile")
+                if row.is_visible():
+                    row.click()
+                problem = page.locator("#settings-webhook-problem")
+                expect(problem).to_be_visible()
+                page.evaluate(
+                    "document.querySelector('#settings-webhook-problem').scrollIntoView({block: 'start'})"
+                )
+                settle(page)
+                shot(page, out, f"webhook-unusable-{theme}.png")
+                page.click("#settings-webhook-remove")
+                expect(page.locator("#settings-webhook-status")).to_have_text("Removed.")
+            finally:
+                ctx.close()
+    finally:
+        hook.stop()
+
+
 def shoot_board(browser: Any, out: Path, world: Any) -> None:
     """The review board (#80): a room of its own, after every #build shot, so none of those
     shows its board button. Its question open on the right, in light, dark and on a phone."""
@@ -816,6 +1004,81 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
                 world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
                 expect(buttons.nth(1)).to_have_text("After tax (picked by codex-1)")
                 shot(page, out, "review-options-split-light.png")
+        finally:
+            ctx.close()
+
+
+def shoot_past_boards(browser: Any, out: Path, world: Any) -> None:
+    """#886: the outcome chip of a past board. Three closed boards in one room: a pull request merged, one
+    closed without merging, and one with no recorded outcome. The outcome is set through the store (the
+    review row's ``pr_state``), as a close with an outcome does, so the set also runs on a build without
+    the new tool field. Shots: the Past boards list, and the closed one opened read-only."""
+    from playwright.sync_api import expect
+
+    room = "#past-boards"
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    call = world.agent_call
+    boards = (
+        ("https://github.com/example/shop/pull/21", "merged", "Discount is taken after tax"),
+        ("https://github.com/example/shop/pull/22", "closed", "Expired codes still apply"),
+        ("https://github.com/example/shop/pull/23", "", "Codes are case-sensitive"),
+    )
+    for url, _state, title in boards:
+        call(room, "codex-1", "review", action="open", url=url, head="4f2c9e1a7b30")
+        call(room, "codex-1", "review", action="raise", title=title, where="shop/cart.py:40",
+             detail="Found while reading the diff.")  # fmt: skip
+        call(room, "claude-1", "review", action="concede", item="F1")
+        call(room, "codex-1", "review", action="close", url=url, reason="the pull request is done")
+
+    def set_outcomes() -> None:
+        store = world.broker.state.store
+        row = store.get_room(room)
+        for url, state, _title in boards:
+            if state:
+                store.set_review(store.review_for_url(row.id, url)["id"], pr_state=state)
+
+    world.broker.on_loop(set_outcomes)
+
+    def clip_of(page: Any, *selectors: str, pad: int = 8) -> dict[str, float]:
+        """The box around every element ``selectors`` name, measured in one evaluate after the page settles."""
+        settle(page)
+        return page.evaluate(
+            "([sels, pad]) => { const r = sels.map(s => document.querySelector(s).getBoundingClientRect());"
+            " const x0 = Math.min(...r.map(b => b.left)) - pad, y0 = Math.min(...r.map(b => b.top)) - pad;"
+            " return {x: x0, y: y0, width: Math.max(...r.map(b => b.right)) + pad - x0,"
+            " height: Math.max(...r.map(b => b.bottom)) + pad - y0}; }",
+            [list(selectors), pad],
+        )
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    views = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+    for slug, ctx_args in views:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#past-boards-toggle")
+            expect(page.locator("#board .past-board-row")).to_have_count(3)
+            shot(
+                page,
+                out,
+                "past-boards-" + slug + ".png",
+                clip_of(page, ".past-boards-title", ".past-boards-list"),
+            )
+            if slug != "phone-light":
+                page.locator("#board [data-past-board]").nth(1).click()
+                expect(page.locator("#board .board-head")).to_contain_text("Read-only")
+                shot(page, out, "past-board-closed-" + slug + ".png", clip_of(page, "#board .board-head"))
         finally:
             ctx.close()
 
@@ -2696,6 +2959,9 @@ def shoot_agent_owner(browser: Any, out: Path, world: Any) -> None:
         added = c.post("/api/people", json={"name": "bob", "email": "bob@example.com"})
         assert added.status_code == 200, added.text
         bob_id = int(added.json()["person"]["id"])
+        # bob is in #build, as his agent there would make him (§63): People lists him
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob"})
+        assert joined.status_code == 200, joined.text
         admin_cookie = c.cookies.get("switchboard_session")
     assert admin_cookie
 
@@ -3009,6 +3275,9 @@ def shoot_real_names(browser: Any, out: Path, world: Any) -> None:
         signed = c.post("/api/signin/password", json={"name": "bob.lee@example.com", "password": bob_otp})
         assert signed.status_code == 200, signed.text
         assert c.post("/api/me/password", json={"password": "bob's own secret 1"}).status_code == 200
+        # he is in #build, so its People list has him (§63)
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": "bob-lee"})
+        assert joined.status_code == 200, joined.text
         assert c.post("/api/rooms/build/say", json={"text": "The port check is in."}).status_code == 200
 
     base = {"timezone_id": "UTC", "locale": "en-US"}
@@ -3518,6 +3787,117 @@ def shoot_listen(browser: Any, out: Path, world: Any) -> None:
             "guide-meeting-listen-light.png",
             clip=pane_clip(page, "#banner-meeting", "#banner-meeting"),
         )
+    finally:
+        for page in pages.values():
+            page.context.close()
+
+
+def shoot_speaking_now(browser: Any, out: Path, world: Any) -> None:
+    """#913, who is speaking on a call: a live Zoom call with voice on in a room with claude-1 and codex-1, and
+    claude-1's ``@call`` line held mid-speech by a stand-in joinly client, so the broker's own bridge takes the
+    line and the bar says "claude-1 has the mic" (``speaking-now-{light,dark,phone}``); then the line ends and the
+    words go (``speaking-now-done-{light,dark,phone}``). The same script on ``main`` gives the before: the line
+    is being spoken and the bar does not say so."""
+    import asyncio
+    import time as _time
+
+    from playwright.sync_api import expect
+
+    from switchboard.meeting.bridge import _Live
+
+    class Joinly:
+        """Only what the bridge asks while it speaks: no tools listed, and ``speak_text`` held until released."""
+
+        def __init__(self) -> None:
+            self.spoken: list[str] = []
+            self.gate = asyncio.Event()
+
+        async def list_tools(self) -> list[Any]:
+            return []
+
+        async def call_tool(self, name: str, args: dict[str, Any], timeout: float | None = None) -> str:
+            if name != "speak_text":
+                raise RuntimeError(name)
+            self.spoken.append(args["text"])
+            await self.gate.wait()
+            return "Finished speaking."
+
+    room, b = "#launch", world.broker
+    world.create_room(room)
+    world.add_agents(room, ("claude-1", "codex-1"))
+    world.set_approval_modes(room, {"claude-1": "prompting", "codex-1": "prompting"})
+    joinly = Joinly()
+
+    def begin() -> None:
+        r = b.state.store.get_room(room)
+        row = b.state.store.insert_meeting(r.id, started_by="alice", platform="zoom")
+        b.state.store.set_meeting_live(row.id)
+        b.state.meetings._live[r.id] = _Live(joinly)
+        b.state.meetings.set_voice(r.id, True)
+        b.state.service.publish_settings(r.id)
+
+    b.on_loop(begin)
+    world.say(room.lstrip("#"), "@claude-1 is the build green? Say it on the call.")
+    text = "@call The build is green. I am deploying it now."
+    world.agent_say(room, "claude-1", text)
+    for name in (
+        "claude-1",
+        "codex-1",
+    ):  # their avatars, once claude-1 has spoken as the scripted agent it is
+        world.set_member_harness(room, name, name.split("-")[0])
+    variants = {
+        "light": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="light"),
+        "dark": dict(viewport={"width": 1200, "height": 560}, device_scale_factor=1.5, color_scheme="dark"),
+        "phone": {**PHONE, "color_scheme": "light"},
+    }
+    pages = {}
+
+    def speaking() -> Any:
+        return b.on_loop(
+            lambda: (b.state.service.meeting_state(b.state.store.get_room(room)) or {}).get("speaking")
+        )
+
+    try:
+        for name, options in variants.items():
+            ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+            ctx.set_default_timeout(WAIT_MS)
+            page = ctx.new_page()
+            sign_in(page, b)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+            expect(page.locator("#banner-meeting")).to_contain_text("agents can speak")
+            pages[name] = page
+
+        def take(prefix: str) -> None:
+            for name, page in pages.items():
+                page.evaluate(
+                    """() => document.querySelectorAll('#log .line').forEach(e => {
+                      if (/login/.test(e.textContent)) e.style.display = 'none'; })"""
+                )
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                page.mouse.move(0, 0)
+                shot(page, out, f"{prefix}-{name}.png")
+
+        # the agent's say went to the bridge, which is now saying it: on main the bar has no word for that
+        deadline = _time.monotonic() + WAIT_MS / 1000
+        while not b.on_loop(lambda: list(joinly.spoken)):
+            assert _time.monotonic() < deadline, "the bridge never spoke the line"
+            _time.sleep(0.05)
+        if speaking():
+            for page in pages.values():
+                expect(page.locator("#banner-meeting-text")).to_contain_text("claude-1 has the mic")
+        take("speaking-now")
+        b.on_loop(joinly.gate.set)
+        r_id = b.on_loop(lambda: b.state.store.get_room(room).id)
+        while b.on_loop(lambda: b.state.meetings._live[r_id].turns.active is not None):
+            assert _time.monotonic() < deadline + WAIT_MS / 1000, "the line never ended"
+            _time.sleep(0.05)
+        for page in pages.values():
+            expect(page.locator("#banner-meeting-text")).not_to_contain_text("has the mic")
+        take("speaking-now-done")
     finally:
         for page in pages.values():
             page.context.close()
@@ -4094,9 +4474,88 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_header_commit(browser: Any, out: Path, world: Any) -> None:
+    """#906: the header names the newest commit the board was told. The seed opens at one commit
+    and fixes a finding at a later one, so the header reads that later commit, with (last fix)."""
+    from playwright.sync_api import expect
+
+    world.create_room("#header-commit")
+    world.add_agents("#header-commit", ("claude-1", "codex-1"))
+    world.seed_review("#header-commit")
+
+    def clip_of(page: Any) -> dict[str, float]:
+        settle(page)
+        return page.evaluate(
+            "(pad) => { const b = document.querySelector('#board .board-head').getBoundingClientRect();"
+            " return {x: Math.max(0, b.left - pad), y: Math.max(0, b.top - pad),"
+            " width: b.width + pad * 2, height: b.height + pad * 2}; }",
+            12,
+        )
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#header-commit"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            expect(page.locator("#board .board-head-sha")).to_have_text("9a1b2c3")
+            expect(page.locator("#board .board-head-note")).to_have_text("(last fix)")
+            shot(page, out, f"board-header-commit-{slug}.png", clip_of(page))
+        finally:
+            ctx.close()
+
+
 # The sets ``--only`` can shoot alone. ``real_names``, ``admin_names``, ``admins`` and ``backups`` need a
 # hosted broker; the others need the seeded desktop world. A pull request that adds one picture
 # set can make it in seconds.
+def shoot_report_conflict(browser: Any, out: Path, world: Any) -> None:
+    """#907: the board's header for a pull request that conflicts with its base. Before: the reviewer
+    reports only the CI it saw (none, since a conflict runs no CI), which is all the board said. After:
+    the same report as ci="blocked". Light, dark and the phone (light)."""
+    from playwright.sync_api import expect
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for slug, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        room = "#conflict-" + slug
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1"))
+        world.seed_review(room)
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="' + room + '"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            page.click("#board-toggle")
+            world.agent_call(room, "codex-1", "review", action="report", state="open", ci="none")
+            expect(page.locator("#board-report")).to_contain_text("CI none")
+            settle(page)
+            shot(page, out, "report-conflict-before-" + slug + ".png")
+            world.agent_call(room, "codex-1", "review", action="report", ci="blocked")
+            expect(page.locator("#board-report")).to_contain_text("conflicts with its base")
+            settle(page)
+            shot(page, out, "report-conflict-after-" + slug + ".png")
+        finally:
+            ctx.close()
+
+
 def shoot_review_edit(browser: Any, out: Path, world: Any) -> None:
     """#786: a person corrects a card. Light shows the card before; light, dark and the phone
     show it after, with the new title and the history line."""
@@ -4160,6 +4619,64 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
             room.id, sender_name="alice", sender_kind="human", via="web", text="how far did the build get?"
         )
         store.create_batch(target.id, path="wait", kind="wake", counted=True, items=[(msg.id, 1)])
+        plant_reviews(store, room)
+
+    def plant_reviews(store: Any, room: Any) -> None:
+        """#863: two review boards a few hours old, one settled and merged, one still open. The clock is
+        swapped while they are written, so the figures read in minutes and hours."""
+        from conftest import FakeClock
+
+        real = store.clock
+        now = float(real.now())
+        clock = FakeClock(now)
+        store.clock = clock
+        try:
+
+            def at(ago_min: float) -> None:
+                clock.t = now - ago_min * 60
+
+            def event(rv: dict[str, Any], ago_min: float, **data: Any) -> None:
+                at(ago_min)
+                store.add_event("review", room_id=room.id, data={**data, "board": rv["id"]})
+
+            def board(n: int, holder: str, ago_min: float) -> dict[str, Any]:
+                at(ago_min)
+                rv = store.open_review(
+                    room.id, f"https://github.com/example/shop/pull/{n}", "a1b2c3d", holder
+                )
+                event(rv, ago_min, open=rv["url"], head="a1b2c3d", by=holder, how="opened")
+                return rv
+
+            def finding(rv: dict[str, Any], ago_min: float, by: str) -> Any:
+                at(ago_min)
+                return store.add_review_item(rv["id"], "finding", "raised", title="finding", raised_by=by)
+
+            def move(
+                rv: dict[str, Any], ago_min: float, item: Any, to: str, state: str, **fields: Any
+            ) -> None:
+                at(ago_min)
+                store.move_review_item(item.id, state, **fields)
+                event(rv, ago_min, item=item.label, to=to, by="x")
+
+            a = board(7, "codex-1", 190)
+            one, two, three = (finding(a, 180 - 5 * i, "claude-1") for i in range(3))
+            for item in (one, three):
+                move(a, 150, item, "conceded", "conceded", owner="codex-1")
+                move(a, 120, item, "fixed", "fixed", commit_sha="abc1234", proof="t")
+            move(a, 110, three, "reopened", "conceded")
+            event(a, 100, open=a["url"], head="e4f5a6b", by="codex-1", how="moved")
+            move(a, 95, three, "fixed", "fixed", commit_sha="abc1235", proof="t")
+            move(a, 90, one, "confirmed", "fixed", confirmed_by="claude-1")
+            move(a, 85, two, "dropped", "dropped", reason="covered")
+            move(a, 80, three, "confirmed", "fixed", confirmed_by="claude-1")
+            event(a, 35, report={"pr_state": "merged"}, by="codex-1")
+            at(35)
+            store.set_review(a["id"], pr_state="merged", reported_by="codex-1", reported_at=clock.t)
+            b = board(8, "claude-1", 25)
+            four = finding(b, 20, "codex-1")
+            move(b, 15, four, "contested", "contested", reason="intended")
+        finally:
+            store.clock = real
 
     world.broker.on_loop(plant)
 
@@ -4192,6 +4709,19 @@ def shoot_usage(browser: Any, out: Path, world: Any) -> None:
         page = open_usage(PHONE, scheme)
         try:
             shot(page, out, f"usage-phone-{scheme}.png")
+        finally:
+            page.context.close()
+    # #863: the Reviews section, scrolled into view
+    for name, options, scheme in (
+        ("usage-reviews-light.png", {"viewport": {"width": 1200, "height": 900}}, "light"),
+        ("usage-reviews-dark.png", {"viewport": {"width": 1200, "height": 900}}, "dark"),
+        ("usage-reviews-phone.png", PHONE, "light"),
+    ):
+        page = open_usage(options, scheme)
+        try:
+            page.locator("#usage-review-rooms").scroll_into_view_if_needed()
+            page.locator("#usage .usage-h", has_text="Reviews").scroll_into_view_if_needed()
+            shot(page, out, name)
         finally:
             page.context.close()
 
@@ -4301,20 +4831,286 @@ def shoot_agents(browser: Any, out: Path, world: Any) -> None:
             page.context.close()
 
 
+def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
+    """#843, on a hosted broker with alice, bob and carol (DESIGN.md §63): ``room-members-sidebar-*`` is
+    #build with the rooms alice is in (#design with a red count, #infra "joined with claude-2") and Other
+    rooms folded, its dot saying a call is live in one; ``room-members-preview-*`` is #ops, a room she is
+    not in, read with the Join bar and Other rooms open; ``room-members-leave-*`` is the confirm from the
+    room's menu; ``room-members-people-*`` is Members with the room's people, Leave and Add a person. Light,
+    dark and the phone, which must not scroll sideways; ``guide-rooms-light`` is the guide's picture.
+    ``world`` is a HostedWorld. Run on a branch without
+    #843, the same setup makes the "before" pictures: every public room in the sidebar, and People listing
+    everyone on the broker."""
+    import httpx
+    from playwright.sync_api import expect
+
+    origin = world.origin
+    headers = {"Origin": origin, "X-Switchboard": "1"}
+    cookies: dict[str, str] = {}
+    with httpx.Client(base_url=origin, headers=headers) as c:
+        one_time = world.claim_link().split("#t=", 1)[1]
+        assert c.post("/api/signin/password", json={"name": "admin", "password": one_time}).status_code == 200
+        assert c.post("/api/setup/password", json={"password": "correct horse battery"}).status_code == 200
+        cookies["alice"] = c.cookies.get("switchboard_session") or ""
+        added = {
+            n: c.post("/api/people", json={"name": n, "email": f"{n}@example.com"}) for n in ("bob", "carol")
+        }
+    for name, r in added.items():
+        assert r.status_code == 200, r.text
+        with httpx.Client(base_url=origin, headers=headers) as c:
+            signed = c.post(
+                "/api/signin/password", json={"name": f"{name}@example.com", "password": r.json()["password"]}
+            )
+            assert signed.status_code == 200, signed.text
+            assert c.post("/api/me/password", json={"password": "correct horse " + name}).status_code == 200
+            cookies[name] = c.cookies.get("switchboard_session") or ""
+
+    def as_(who: str, path: str, body: dict[str, Any]) -> None:
+        with httpx.Client(
+            base_url=origin, headers=headers, cookies={"switchboard_session": cookies[who]}
+        ) as c:
+            c.post(path, json=body)  # a "before" run refuses joining a public room: that is the point
+
+    as_("alice", "/api/rooms", {"name": "#design"})
+    for room in ("#infra", "#ops", "#hiring", "#random"):
+        as_("bob", "/api/rooms", {"name": room})
+    as_("carol", "/api/rooms/hiring/people", {"action": "add", "name": "carol"})
+    as_("bob", "/api/rooms/build/people", {"action": "add", "name": "bob"})
+    as_(
+        "alice",
+        "/api/rooms/build/say",
+        {"text": "Can someone review the login rewrite? @claude-1 you wrote the first pass."},
+    )
+    as_("bob", "/api/rooms/design/say", {"text": "@alice is the new header ready to look at?"})
+    as_(
+        "bob",
+        "/api/rooms/ops/say",
+        {"text": "Deploy window moves to Thursday. Anything blocking? @humans please shout now."},
+    )
+    as_(
+        "bob",
+        "/api/rooms/ops/say",
+        {"text": "Rollback plan is in the runbook; the canary stays at 5% until Wednesday."},
+    )
+    b = world.broker
+
+    def seed() -> None:
+        store, svc = b.state.store, b.state.service
+        room = store.get_room("#build")
+        for name, harness in (("claude-1", "claude"), ("codex-1", "codex")):
+            p = store.upsert_participant(harness, f"{harness}:{name}", host="")
+            m = store.create_membership(room.id, p.id, name)
+            svc._post(
+                room,
+                sender_name=name,
+                sender_kind="agent",
+                sender_harness=harness,
+                sender_membership_id=m.id,
+                via="mcp",
+                kind="join",
+                text="joined (mcp-only)",
+            )
+        infra = store.get_room("#infra")
+        if hasattr(svc, "agent_joined"):  # what an agent's join does since #843 (§63)
+            svc.agent_joined(infra, 0, "claude-2")
+        ops = store.get_room("#ops")
+        call = store.insert_meeting(ops.id, started_by="bob", platform="zoom")
+        store.set_meeting_live(call.id)
+        svc.publish_settings(ops.id)
+        svc.rooms_changed()
+
+    b.on_loop(seed)
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    themes = (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    )
+
+    def page_for(ctx_args: dict[str, Any]) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        ctx.add_cookies([{"name": "switchboard_session", "value": cookies["alice"], "url": origin}])
+        page = ctx.new_page()
+        page.goto(origin + "/#build")
+        connected(page)
+        expect(page.locator("#room-title")).to_have_text("build")
+        return page
+
+    def drawer(page: Any, open_: bool) -> None:
+        if not page.locator("#rooms-toggle").is_visible():
+            return
+        if open_ != bool(page.locator("#app.nav-open").count()):
+            page.click("#rooms-toggle")
+
+    def wide_ok(page: Any) -> None:
+        assert page.evaluate(
+            "document.documentElement.scrollWidth <= window.innerWidth && document.body.scrollWidth <= window.innerWidth"
+        )
+
+    def still(page: Any) -> None:
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+
+    for theme, ctx_args in themes:
+        phone = theme.startswith("phone")
+        page = page_for(ctx_args)
+        try:
+            drawer(page, True)
+            still(page)
+            shot(page, out, f"room-members-sidebar-{theme}.png")
+            other = page.locator("#other-rooms")
+            if other.count():
+                other.click()
+                page.locator('#tabs .room[data-room="#ops"]').click()
+            else:
+                page.locator('#tabs .room[data-room="#ops"]').click()
+            drawer(page, False)
+            if phone:
+                wide_ok(page)
+            still(page)
+            shot(page, out, f"room-members-preview-{theme}.png")
+            drawer(page, True)
+            page.locator('#tabs .room[data-room="#build"]').click()
+            drawer(page, False)
+            if page.locator("#room-menu-btn").is_visible():
+                page.click("#room-menu-btn")
+                page.click("#room-menu-leave")
+                expect(page.locator("#app-dialog")).to_be_visible()
+                still(page)
+                shot(page, out, f"room-members-leave-{theme}.png")
+                page.click("#app-dialog-cancel")
+            if phone:
+                page.click("#buddy-toggle")
+                expect(page.locator("#app")).to_have_class(re.compile(r"\bsheet-open\b"))
+                wide_ok(page)
+            expect(page.locator("#room-people .person-row").first).to_be_visible()
+            still(page)
+            shot(page, out, f"room-members-people-{theme}.png")
+        finally:
+            page.context.close()
+    # the guide's picture (docs/guide/rooms.md): a room alice is not in, read, with Other rooms open
+    page = page_for(
+        {"viewport": {"width": 1200, "height": 760}, "device_scale_factor": 1.5, "color_scheme": "light"}
+    )
+    try:
+        if page.locator("#other-rooms").count():
+            page.click("#other-rooms")
+        page.locator('#tabs .room[data-room="#ops"]').click()
+        still(page)
+        shot(page, out, "guide-rooms-light.png")
+    finally:
+        page.context.close()
+
+
+def shoot_room_filters(browser: Any, out: Path, world: Any) -> None:
+    """#914 (DESIGN.md §64): a busy room, #release, where two agents talk among themselves and now and then
+    address alice. ``room-filters-all-*`` is the room as it opens (All); ``room-filters-mentions-*`` the same
+    room with Mentions chosen: only what is addressed to her. Light, dark and the phone, which must not scroll
+    sideways; ``guide-room-filters-light`` is the guide's picture. Run on a branch without #914, the same
+    setup makes the "before" pictures (``room-filters-all-*``: no row) and no Mentions ones."""
+    from playwright.sync_api import expect
+
+    room = "#release"
+    world.create_room(room)
+    names = ("claude-1", "codex-1")
+    world.add_agents(room, names)
+    lines = [
+        ("claude-1", "Starting on the changelog for 2.4: I'll group it by area."),
+        ("codex-1", "@claude-1 the migration notes are in docs/UPGRADING.md if you need them."),
+        ("claude-1", "@alice should the 2.4 notes call out the new schema step, or keep it to Upgrading?"),
+        ("codex-1", "Running the full suite on the release branch now."),
+        ("claude-1", "@codex-1 thanks, I'll link them from the Upgrading section."),
+        ("codex-1", "Suite is green: 3,412 passed. The image build is next."),
+        ("codex-1", "@humans the release branch is ready for a last look before tagging."),
+        ("claude-1", "Changelog drafted; two entries still need a sentence on what a person sees."),
+        ("codex-1", "Image built and scanned: no new findings."),
+        ("claude-1", "@alice the draft is up: can you check the wording of the two Fixed entries?"),
+        ("codex-1", "@claude-1 one typo in the second Fixed entry: 'recieve'."),
+        ("claude-1", "Fixed the typo; waiting on the last review."),
+    ]
+    for name, text in lines:
+        world.agent_call(room, name, "say", text=text)
+    for name in names:  # after the posts: a scripted agent makes no more calls once its harness is rewritten
+        world.set_member_harness(room, name, name.split("-")[0])
+    world.set_approval_modes(room, {name: "prompting" for name in names})
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+
+    def open_room(ctx_args: dict[str, Any]) -> Any:
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        sign_in(page, world.broker)
+        tab = page.locator(f'#tabs .room[data-room="{room}"]')
+        if not tab.is_visible():
+            page.click("#rooms-toggle")  # a phone keeps its rooms in a drawer
+        tab.click()
+        expect(page.locator("#room-title")).to_have_text("release")
+        if page.locator("#app.nav-open").count():
+            page.keyboard.press("Escape")
+        expect(page.locator("#log .line.k-chat")).to_have_count(len(lines))
+        return page
+
+    def still(page: Any) -> None:
+        page.mouse.move(0, 0)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+
+    def mentions(page: Any) -> bool:
+        """Choose Mentions, if this page has the row; False on a branch without it."""
+        if not page.locator("#room-filters").count():
+            return False
+        page.locator('#room-filters .room-filter[data-show="mentions"]').click()
+        expect(page.locator("#room-filter-note")).to_have_text("3 messages addressed to you")
+        expect(page.locator("#log .line.k-chat")).to_have_count(3)
+        return True
+
+    for theme, ctx_args in (
+        ("light", {**DESKTOP, "color_scheme": "light"}),
+        ("dark", {**DESKTOP, "color_scheme": "dark"}),
+        ("phone-light", {**PHONE, "color_scheme": "light"}),
+    ):
+        page = open_room(ctx_args)
+        try:
+            still(page)
+            shot(page, out, f"room-filters-all-{theme}.png")
+            if mentions(page):
+                if theme.startswith("phone"):
+                    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                still(page)
+                shot(page, out, f"room-filters-mentions-{theme}.png")
+        finally:
+            page.context.close()
+    # the guide's picture (docs/guide/rooms.md): the room with Mentions chosen
+    page = open_room(
+        {"viewport": {"width": 1200, "height": 760}, "device_scale_factor": 1.5, "color_scheme": "light"}
+    )
+    try:
+        if mentions(page):
+            still(page)
+            shot(page, out, "guide-room-filters-light.png")
+    finally:
+        page.context.close()
+
+
 ONLY: dict[str, Any] = {
     "agents": shoot_agents,
     "redact": shoot_redact,
     "backups": shoot_backups,
     "home": shoot_home,
     "usage": shoot_usage,
+    "long_outage": lambda browser, out, world: shoot_offline(browser, out, world, long_outage=True),
     "link_card": shoot_link_card,
     "review_guide": shoot_review_guide,
+    "past_boards": shoot_past_boards,
     "review_edit": shoot_review_edit,
+    "report_conflict": shoot_report_conflict,
     "review_abstain": shoot_review_abstain,
     "quiet": shoot_quiet,
     "claim_board": shoot_claim_board,
     "not_connected": shoot_not_connected,
+    "grok": shoot_grok,
     "notifications": shoot_notifications,
+    "webhook": shoot_webhook,
     "real_names": shoot_real_names,
     "admin_names": shoot_admin_names,
     "admins": shoot_admins,
@@ -4322,24 +5118,29 @@ ONLY: dict[str, Any] = {
     "listen": shoot_listen,
     "voices": shoot_voices,
     "call_card": shoot_call_card,
+    "speaking_now": shoot_speaking_now,
     "room_calls": shoot_room_calls,
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
+    "room_members": shoot_room_members,
+    "header_commit": shoot_header_commit,
+    "room_filters": shoot_room_filters,
 }
 
 
 # -------------------------------------------------------------------- main
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names``,
-    ``admin_names``, ``admins`` and ``backups`` start a hosted broker; the others start the seeded desktop world."""
+    ``admin_names``, ``admins``, ``backups`` and ``room_members`` start a hosted broker; the others start the
+    seeded desktop world."""
     from ui_world import HostedWorld, UIWorld
 
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    hosted = name in ("real_names", "admin_names", "admins", "backups")
+    hosted = name in ("real_names", "admin_names", "admins", "backups", "room_members")
     world = HostedWorld(keep=args.keep) if hosted else UIWorld(keep=args.keep)
     try:
         world.start()

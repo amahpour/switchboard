@@ -18,8 +18,10 @@ from fakes.fake_agent import FakeAgent
 from test_passkeys import hosted_broker, stop
 from test_people import join_as_bob, set_up
 
+from switchboard.broker import reviews as review_boards
 from switchboard.config import Config
 from switchboard.models import session_key
+from switchboard.store import Store
 
 FAST = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0)
 PR = "https://example.com/shop/pull/7"
@@ -134,6 +136,243 @@ async def test_fix_requires_proof_and_the_raiser_confirms_it(broker: InProcBroke
         assert checked["ok"] and checked["settled"]
     row = q(broker, "SELECT proof, confirmed_by, reason FROM review_items WHERE kind='finding'")[0]
     assert tuple(row) == ("tests/test_cart.py::test_total", "codex-1", "")
+
+
+async def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes_in_one_move(
+    broker: InProcBroker,
+) -> None:
+    """#904: the author's agent fixes a finding as soon as it is raised. One fix by the board's
+    holder concedes it and records the fix, the card stays unconfirmed, and its history shows
+    both steps. The raiser is told the other side has to act, and that it can drop the finding.
+    A third agent, who can concede, is told to concede first. A contested finding still cannot
+    be fixed from there, and the holder cannot fix a finding it raised. Fails if the raiser is
+    told to concede, or a bystander's fix lands."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "holder-author") as author,
+            FakeAgent(broker.home, "holder-reviewer") as reviewer,
+            FakeAgent(broker.home, "holder-other") as other,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await other.join("#build", "devin-1")
+            await author.call("review", room="#build", action="open", url=PR, head="abc1234")
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            refused = await reviewer.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total"
+            )
+            assert not refused["ok"]
+            assert "is yours" in refused["error"] and "drop" in refused["error"]
+            assert "The other side concedes or contests it" in refused["error"]
+            assert "Concede it first" not in refused["error"]
+            bystander = await other.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total"
+            )
+            assert not bystander["ok"]
+            assert 'review(action="concede", item="F1")' in bystander["error"]
+            assert "Concede it first" in bystander["error"]
+            waiting = page_board(web.get("/api/rooms/build/review"))["items"][0]
+            assert waiting["state"] == "raised" and waiting["owner"] == ""
+            assert [h["did"] for h in waiting["history"]] == ["raised it"]
+            missing = await author.call("review", room="#build", action="fix", item="F1", commit="abc1234")
+            assert not missing["ok"] and "proof" in missing["error"]
+            assert page_board(web.get("/api/rooms/build/review"))["items"][0]["state"] == "raised"
+            fixed = await author.call(
+                "review",
+                room="#build",
+                action="fix",
+                item="F1",
+                commit="abc1234",
+                proof="tests/test_cart.py::test_total",
+            )
+            assert fixed["ok"] and not fixed["settled"]
+            board = page_board(web.get("/api/rooms/build/review"))
+            item = board["items"][0]
+            assert item["state"] == "fixed" and item["owner"] == "claude-1"
+            assert item["commit"] == "abc1234" and item["confirmed_by"] == ""
+            assert item["proof"] == "tests/test_cart.py::test_total"
+            assert not board["settled"]
+            assert [(h["by"], h["did"]) for h in item["history"]] == [
+                ("codex-1", "raised it"),
+                ("claude-1", "conceded it"),
+                ("claude-1", "fixed it"),
+            ]
+            await reviewer.call("review", room="#build", action="raise", title="rounding")
+            await author.call("review", room="#build", action="contest", item="F2", reason="the spec says so")
+            contested = await author.call(
+                "review", room="#build", action="fix", item="F2", commit="abc1234", proof="test_round"
+            )
+            assert not contested["ok"] and "can't be fixed from there" in contested["error"]
+            assert page_board(web.get("/api/rooms/build/review"))["items"][1]["state"] == "contested"
+            await author.call("review", room="#build", action="raise", title="my own note")
+            own = await author.call(
+                "review", room="#build", action="fix", item="F3", commit="abc1234", proof="test_own"
+            )
+            assert not own["ok"] and "is yours" in own["error"]
+            assert page_board(web.get("/api/rooms/build/review"))["items"][2]["state"] == "raised"
+    finally:
+        web.close()
+
+
+async def test_a_raised_fix_on_a_board_no_agent_holds_names_no_one(
+    broker: InProcBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#904: a board opened from a posted link is held by the reserved opener, and one a person
+    opened is held by that person. Neither is an agent in the room, so the author's raised fix is
+    refused the way an unknown holder is: it can't be fixed from there, then concede, and the
+    refusal names no one. Fails while a link's refusal says only switchboard, who holds the board,
+    can fix it from there, and a person's says only alice."""
+    web = broker.web_client()
+    monkeypatch.setattr(
+        review_boards,
+        "vendor_of",
+        lambda member: {"claude-1": "claude", "codex-1": "codex"}.get(member.name, member.harness),
+    )
+    person_pr = "https://github.com/example/shop/pull/8"
+    try:
+        async with (
+            FakeAgent(broker.home, "link-author") as author,
+            FakeAgent(broker.home, "link-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            turned = web_cmd(broker, web, "/room review on")
+            assert turned.status_code == 200, turned.text
+            broker.on_loop(
+                lambda: broker.state.boards.on_agent_say(
+                    broker.state.store.get_room("#build"), "claude-1", GITHUB_PR
+                )
+            )
+            assert [row["opened_by"] for row in q(broker, "SELECT opened_by FROM reviews")] == ["switchboard"]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total", url=GITHUB_PR)
+            refused = await author.call(
+                "review",
+                room="#build",
+                action="fix",
+                item="F1",
+                commit="abc1234",
+                proof="test_total",
+                url=GITHUB_PR,
+            )
+            assert not refused["ok"]
+            assert "can't be fixed from there" in refused["error"]
+            assert 'review(action="concede", item="F1")' in refused["error"]
+            assert "switchboard" not in refused["error"].lower()
+            assert q(broker, "SELECT state FROM review_items")[0]["state"] == "raised"
+            opened = web_cmd(broker, web, f"/review {person_pr}")
+            assert opened.status_code == 200, opened.text
+            holders = {
+                row["url"]: row["opened_by"] for row in q(broker, "SELECT url, opened_by FROM reviews")
+            }
+            assert holders[person_pr] == "alice"
+            await reviewer.call("review", room="#build", action="raise", title="tax order", url=person_pr)
+            by_person = await author.call(
+                "review",
+                room="#build",
+                action="fix",
+                item="F1",
+                commit="abc1234",
+                proof="test_total",
+                url=person_pr,
+            )
+            assert not by_person["ok"]
+            assert "can't be fixed from there" in by_person["error"]
+            assert 'review(action="concede", item="F1")' in by_person["error"]
+            assert "alice" not in by_person["error"].lower()
+            assert "switchboard" not in by_person["error"].lower()
+    finally:
+        web.close()
+
+
+async def test_a_renamed_persons_board_is_not_held_by_the_agent_that_takes_their_old_name(
+    broker: InProcBroker,
+) -> None:
+    """#904 (F4): the board row keeps the name of the person who opened it, and a rename leaves
+    it as it was. Once an agent joins under that old name, the name matches the holder, but the
+    board's own open records a person, so that agent's fix on a raised finding is refused the way
+    an unknown holder's is (concede first, naming no one) and assigns it nothing. Fails while the
+    holder is an agent by name alone: the newcomer then owns a finding it never conceded."""
+    web = broker.web_client()
+    try:
+        async with (
+            FakeAgent(broker.home, "renamed-reviewer") as reviewer,
+            FakeAgent(broker.home, "renamed-namesake") as namesake,
+        ):
+            await reviewer.join("#build", "codex-1")
+            opened = web_cmd(broker, web, f"/review {PR}")
+            assert opened.status_code == 200, opened.text
+            assert [row["opened_by"] for row in q(broker, "SELECT opened_by FROM reviews")] == ["alice"]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total", url=PR)
+            renamed = web.post("/api/me/name", json={"name": "erin"}, headers=broker.write_headers())
+            assert renamed.status_code == 200, renamed.text
+            assert [row["opened_by"] for row in q(broker, "SELECT opened_by FROM reviews")] == ["alice"]
+            await namesake.join("#build", "alice")
+            refused = await namesake.call(
+                "review", room="#build", action="fix", item="F1", commit="abc1234", proof="test_total", url=PR
+            )
+            assert not refused["ok"], refused
+            assert "can't be fixed from there" in refused["error"]
+            assert 'review(action="concede", item="F1")' in refused["error"]
+            assert "alice" not in refused["error"].lower()
+            row = q(broker, "SELECT state, owner, commit_sha FROM review_items")[0]
+            assert tuple(row) == ("raised", "", "")
+            assert not {"conceded", "fixed"} & set(_finding_moves(broker, "F1"))
+    finally:
+        web.close()
+
+
+def _finding_moves(broker: InProcBroker, label: str) -> list[str]:
+    """The ``to`` of each review event stored for one card."""
+    out = []
+    for row in q(broker, "SELECT data FROM events WHERE kind='review'"):
+        data = json.loads(row["data"])
+        if data.get("item") == label and isinstance(data.get("to"), str):
+            out.append(data["to"])
+    return out
+
+
+async def test_a_failed_fix_event_leaves_the_finding_raised_with_no_history(
+    broker: InProcBroker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#904: the item update, the concession and the fix event are one transaction. If the fix
+    event cannot be stored, the finding stays raised and neither event remains. Fails while each
+    write commits on its own: the card is then fixed, and only the concession is in its history."""
+    web = broker.web_client()
+    real = Store.add_event
+
+    def fail_the_fix_event(self: Store, kind: str, **kwargs: Any) -> int:
+        data = kwargs.get("data") or {}
+        if isinstance(data, dict) and data.get("to") == "fixed":
+            raise RuntimeError("fix event failed")
+        return real(self, kind, **kwargs)
+
+    try:
+        async with (
+            FakeAgent(broker.home, "atomic-author") as author,
+            FakeAgent(broker.home, "atomic-reviewer") as reviewer,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await author.call("review", room="#build", action="open", url=PR, head="abc1234")
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            monkeypatch.setattr(Store, "add_event", fail_the_fix_event)
+            failed = await author.raw(
+                "review",
+                {
+                    "room": "#build",
+                    "action": "fix",
+                    "item": "F1",
+                    "commit": "abc1234",
+                    "proof": "test_total",
+                },
+            )
+            assert failed.is_error
+            item = page_board(web.get("/api/rooms/build/review"))["items"][0]
+            assert item["state"] == "raised" and item["owner"] == "" and item["commit"] == ""
+            assert _finding_moves(broker, "F1") == []
+    finally:
+        web.close()
 
 
 async def test_a_person_confirms_any_fix_and_the_board_still_flags_the_ones_that_need_them(
@@ -307,6 +546,80 @@ async def test_an_agent_reports_the_pull_request_and_a_merge_closes_the_board(br
         web.close()
 
 
+async def test_a_report_of_ci_blocked_by_a_conflict_shows_on_the_board_and_in_show(
+    broker: InProcBroker,
+) -> None:
+    """#907: a pull request that conflicts with its base runs no CI, so the board said "CI none" and hid
+    that the author must resolve the conflict. A report with ci="blocked" is on the page and in `show`,
+    one notice says it once, a later report replaces it, and an unknown ci is refused with the stored
+    report untouched. Fails if "blocked" is refused or the board still reads only "CI none"."""
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "kc-r") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked")
+            assert r["ok"] and "CI blocked: conflicts with its base (per codex-1" in r["board"], r
+            shown = await reviewer.call("review", room="#build", action="show")
+            assert "CI blocked: conflicts with its base" in shown["board"], shown
+            page = page_board(web.get("/api/rooms/build/review"))
+            assert page["report"].startswith("CI blocked: conflicts with its base (per codex-1")
+            assert page["pr_ci"] == "blocked"
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked")
+            assert r["ok"], r  # the same again: no second notice
+            r = await reviewer.call("review", room="#build", action="report", ci="conflicting")
+            assert r.get("ok") is False and "ci must be one of" in r["error"], r
+            assert page_board(web.get("/api/rooms/build/review"))["pr_ci"] == "blocked"
+            r = await reviewer.call("review", room="#build", action="report", ci="passing")
+            assert r["ok"] and "blocked" not in r["board"] and "CI passing" in r["board"], r
+        texts = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        said = [t for t in texts if "reports CI" in t]
+        assert said == [
+            f"codex-1 reports CI blocked on {PR}: it conflicts with its base",
+            f"codex-1 reports CI passing on {PR}",
+        ], texts
+    finally:
+        web.close()
+
+
+async def test_a_report_with_a_head_and_ci_blocked_shows_both_in_show_and_on_the_page(
+    broker: InProcBroker,
+) -> None:
+    """#906 with #907: one report can name a newer commit and say CI is blocked by a conflict. `show`
+    names the commit with "(reported)" on its first line and the conflict on the next, and the page gets
+    the commit, the note and pr_ci="blocked" together. Fails if either part drops the other, or the
+    blocked notice is lost when the report carries a head."""
+    reported = "c0ffee0c0ffee0"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "kc-r") as reviewer:
+            await reviewer.join("#build", "codex-1")
+            await reviewer.call("review", room="#build", action="open", url=PR, head="a1b2c3d4e5f6")
+            r = await reviewer.call("review", room="#build", action="report", ci="blocked", head=reported)
+            assert r["ok"], r
+            shown = (await reviewer.call("review", room="#build", action="show"))["board"].splitlines()
+            assert shown[0].startswith(f"Review of {PR} at {reported[:12]} (reported): "), shown
+            blocked = "The pull request: CI blocked: conflicts with its base (per codex-1"
+            assert shown[1].startswith(blocked), shown
+            page = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert page is not None
+            assert page["head"] == "a1b2c3d4e5f6" and page["head_sha"] == reported
+            assert page["head_note"] == "reported" and page["pr_ci"] == "blocked"
+            assert page["report"].startswith("CI blocked: conflicts with its base (per codex-1"), page
+        texts = [
+            m["text"]
+            for m in web.get("/api/rooms/build/messages").json()["messages"]
+            if m["kind"] == "notice"
+        ]
+        assert f"codex-1 reports CI blocked on {PR}: it conflicts with its base" in texts, texts
+    finally:
+        web.close()
+
+
 async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
     broker: InProcBroker,
 ) -> None:
@@ -321,7 +634,7 @@ async def test_agent_closes_a_settled_board_without_a_reason_and_opens_the_next(
             assert (await author.call("review", room="#build", action="drop", item="F1", reason="checked"))[
                 "ok"
             ]
-            closed = await author.call("review", room="#build", action="close")
+            closed = await author.call("review", room="#build", action="close", state="unknown")
             assert closed["ok"] and closed["closed"] is True, closed
             assert page_board(web.get("/api/rooms/build/review")) is None
             opened = await author.call("review", room="#build", action="open", url=GITHUB_PR + "8")
@@ -359,10 +672,14 @@ async def test_agent_close_with_open_items_needs_a_reason_and_lists_them_for_the
                 recommend=0,
             )
             for reason in ("", "   ", "x" * 501):
-                refused = await author.call("review", room="#build", action="close", reason=reason)
+                refused = await author.call(
+                    "review", room="#build", action="close", state="unknown", reason=reason
+                )
                 assert refused["ok"] is False and "reason" in refused["error"], refused
                 assert page_board(web.get("/api/rooms/build/review")) is not None
-            closed = await author.call("review", room="#build", action="close", reason="moving to #8")
+            closed = await author.call(
+                "review", room="#build", action="close", state="unknown", reason="moving to #8"
+            )
             assert closed["ok"] and closed["closed"] is True, closed
             assert page_board(web.get("/api/rooms/build/review")) is None
             reopened = web_cmd(broker, web, f"/review {GITHUB_PR}")
@@ -399,7 +716,7 @@ async def test_agent_can_close_a_settled_board_after_handoff(broker: InProcBroke
                 "/api/rooms/build/review", json={"action": "handoff"}, headers=broker.write_headers()
             )
             assert handed.status_code == 200, handed.text
-            closed = await author.call("review", room="#build", action="close")
+            closed = await author.call("review", room="#build", action="close", state="unknown")
             assert closed["ok"] and closed["closed"] is True, closed
     finally:
         web.close()
@@ -422,7 +739,7 @@ async def test_agent_close_notice_keeps_every_open_label_at_the_board_limit(brok
                 store.add_review_item(rv["id"], "finding", "raised", title="open", raised_by="claude-1")
 
         broker.on_loop(fill)
-        closed = await author.call("review", room="#build", action="close", reason="r" * 500)
+        closed = await author.call("review", room="#build", action="close", state="unknown", reason="r" * 500)
         assert closed["ok"] and closed["closed"] is True, closed
     [line] = [
         row["text"]
@@ -743,9 +1060,10 @@ async def test_handoff_summarizes_all_items_and_defaults_to_the_opener(broker: I
             mine = [line for line in text.splitlines() if " from=alice " in line]
             assert mine and not any(PR in line or "expired codes" in line for line in mine)
             r = await reviewer.call("review", room="#build", action="show")
+            # the board was opened with no head; the fix is the commit it was told (#906)
             assert (
                 r["board"].splitlines()[0]
-                == f"Review of {PR}: handed off to codex-1: post one review now, once"
+                == f"Review of {PR} at 9a1b2c3 (last fix): handed off to codex-1: post one review now, once"
             )
             assert "F2 Dropped: style nit" in r["board"]
     finally:
@@ -1441,7 +1759,7 @@ async def test_show_one_card_exposes_the_contest_evidence_and_history(broker: In
             refused = await reviewer.call("review", room="#build", action="show", item=label)
             assert not refused["ok"]
         await reviewer.call("review", room="#build", action="insist", item="F1", reason="Readers do not.")
-        await reviewer.call("review", room="#build", action="close", reason="Paused review")
+        await reviewer.call("review", room="#build", action="close", state="unknown", reason="Paused review")
         closed = await reviewer.call("review", room="#build", action="show", item="F1", url=PR)
         assert closed["ok"] and "closed" in closed["board"]
         assert "Readers do not." in closed["board"] and "insisted on it" in closed["board"]
@@ -1641,3 +1959,183 @@ async def test_an_independent_reviewer_takes_a_departed_raisers_findings(broker:
             assert done["ok"] and done["settled"]
     finally:
         web.close()
+
+
+async def test_show_and_the_page_name_the_newest_commit_the_board_was_told(broker: InProcBroker) -> None:
+    """#906: after a fix at a newer commit, ``show`` and the page named the commit the board was
+    opened at, so a reader could think the review was of that old commit. Both name the newest
+    commit an open, a fix or a report told the board. ``list``, the stored head and the outdated
+    mark keep the commit the board was opened or moved to. A report's head does not move the
+    board, and opening again at the same head does not hide the fix."""
+    opened, fix, reported, moved, newer = (
+        "4f2c9e1a7b30",
+        "9a1b2c3d4e5f",
+        "aeb613ed0011",
+        "7b9c2a4d6e8f",
+        "656cfb2d395b",
+    )
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            opened_board = await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+            assert opened_board["board"].splitlines()[0] == f"Review of {PR} at {opened}: settled"
+            await reviewer.call(
+                "review", room="#build", action="raise", title="Expired codes still apply",
+                where="shop/codes.py:12",
+            )  # fmt: skip
+            await author.call("review", room="#build", action="concede", item="F1")
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=fix, proof="test_expiry"
+            )
+            assert fixed["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+
+            page = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert page is not None
+            assert page["head"] == opened
+            assert page["head_sha"] == fix
+            assert page["head_note"] == "last fix"
+            assert page["items"][0]["outdated_head"] == ""
+
+            listed = await reviewer.call("review", room="#build", action="list")
+            assert f"at {opened}" in listed["boards"]
+            assert "(last fix)" not in listed["boards"]
+            assert fix not in listed["boards"]
+
+            kept = await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+            assert kept["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+
+            bad = await reviewer.call("review", room="#build", action="report", state="open", head="main")
+            assert bad["ok"] is False and "commit hash" in bad["error"]
+            still = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert still is not None and still["head"] == opened and still["head_sha"] == fix
+
+            told = await reviewer.call("review", room="#build", action="report", state="open", head=reported)
+            assert told["board"].splitlines()[0] == f"Review of {PR} at {reported} (reported): open"
+            after = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert after is not None
+            assert after["head"] == opened and after["head_sha"] == reported
+            assert after["head_note"] == "reported"
+            assert after["items"][0]["outdated_head"] == ""
+
+            moved_board = await reviewer.call("review", room="#build", action="open", url=PR, head=moved)
+            assert moved_board["board"].splitlines()[0] == f"Review of {PR} at {moved}: open"
+            shifted = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert shifted is not None
+            assert shifted["head"] == moved and shifted["head_sha"] == moved and shifted["head_note"] == ""
+            assert shifted["items"][0]["outdated_head"] == moved
+
+            again = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=newer, proof="test_expiry"
+            )
+            assert again["board"].splitlines()[0] == f"Review of {PR} at {newer} (last fix): open"
+            latest = page_board(web.get("/api/rooms/build/review", headers=broker.write_headers()))
+            assert latest is not None
+            assert latest["head"] == moved and latest["head_sha"] == newer
+            assert latest["head_note"] == "last fix"
+
+            merged = "c0ffee123456"
+            before = [row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")]
+            closed = await reviewer.call(
+                "review", room="#build", action="close", state="merged", commit=merged, reason="landed"
+            )
+            assert closed["ok"] and closed["closed"] is True
+            shown = await reviewer.call("review", room="#build", action="show", url=PR)
+            assert shown["board"].splitlines()[0].startswith(f"Review of {PR} at {merged} (merged)")
+            # the same merged report, naming only a newer head, does not say the close again
+            again_report = await reviewer.call(
+                "review", room="#build", action="report", state="merged", url=PR, head="b0b0b0b0b0b0"
+            )
+            assert again_report["ok"] and again_report["closed"] is True
+            after = [row["text"] for row in q(broker, "SELECT text FROM messages WHERE kind='notice'")]
+            added = after[len(before) :]
+            assert any(merged in line and "closed by" in line for line in added)
+            assert not any("remains closed" in line or "the review board is closed" in line for line in added)
+            reread = await reviewer.call("review", room="#build", action="show", url=PR)
+            assert reread["board"].splitlines()[0].startswith(f"Review of {PR} at b0b0b0b0b0b0 (reported)")
+    finally:
+        web.close()
+
+
+async def test_a_holders_one_move_fix_at_a_new_commit_names_that_commit(broker: InProcBroker) -> None:
+    """#909 and #906 together: the holder's fix on a raised finding writes a concession and a fix
+    event in one move, and its open event records ``opener``. The header must read that fix's
+    commit as an agent fix and name it with (last fix); the opener on the open event must not
+    change the commit the board was opened at. Fails if the combined move's fix event is skipped,
+    or the open event's opener makes the header lose the opened head."""
+    opened, fix = "4f2c9e1a7b30", "9a1b2c3d4e5f"
+    web = broker.web_client()
+    try:
+        async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            board = await author.call("review", room="#build", action="open", url=PR, head=opened)
+            assert board["board"].splitlines()[0] == f"Review of {PR} at {opened}: settled"
+            assert q(broker, "SELECT count(*) FROM events WHERE kind='review' AND data LIKE '%opener%'")[0][0]
+            await reviewer.call("review", room="#build", action="raise", title="wrong total")
+            raised = await author.call("review", room="#build", action="show", url=PR)
+            assert raised["board"].splitlines()[0] == f"Review of {PR} at {opened}: open"
+            fixed = await author.call(
+                "review", room="#build", action="fix", item="F1", commit=fix, proof="test_total"
+            )
+            assert fixed["ok"], fixed
+            assert fixed["board"].splitlines()[0] == f"Review of {PR} at {fix} (last fix): open"
+            page = page_board(web.get("/api/rooms/build/review"))
+            assert page is not None
+            assert page["head"] == opened and page["head_sha"] == fix and page["head_note"] == "last fix"
+            assert [h["did"] for h in page["items"][0]["history"]] == ["raised it", "conceded it", "fixed it"]
+    finally:
+        web.close()
+
+
+async def test_a_repeated_report_after_a_reopen_records_the_head_again(broker: InProcBroker) -> None:
+    """A closed outcome reported at B, a reopen at C, then a close with no outcome, keeps
+    ``pr_state``. Reporting B again used to see B on the old report and return without
+    recording it, so the header stayed at C although B was the latest head told. Fails if
+    that second report is dropped."""
+    opened, reported, moved = "4f2c9e1a7b30", "bbbbbbbbbbbb", "cccccccccccc"
+    async with FakeAgent(broker.home, "k1") as author, FakeAgent(broker.home, "k2") as reviewer:
+        await author.join("#build", "claude-1")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR, head=opened)
+        closed = await reviewer.call("review", room="#build", action="report", state="closed", head=reported)
+        assert closed["ok"] and closed["closed"] is True, closed
+        back = await reviewer.call("review", room="#build", action="open", url=PR, head=moved)
+        assert back["board"].splitlines()[0].startswith(f"Review of {PR} at {moved}")
+        shut = await reviewer.call("review", room="#build", action="close", reason="pausing")
+        assert shut["ok"] and shut["closed"] is True, shut
+        again = await reviewer.call(
+            "review", room="#build", action="report", state="closed", url=PR, head=reported
+        )
+        assert again["ok"] and again["closed"] is True, again
+        shown = await reviewer.call("review", room="#build", action="show", url=PR)
+        assert shown["board"].splitlines()[0].startswith(f"Review of {PR} at {reported} (reported)")
+
+
+async def test_concede_on_a_reopened_card_says_it_is_already_yours(broker: InProcBroker) -> None:
+    """#905: a reopened finding comes back to its owner, and that owner's `concede` was refused with
+    "name the agent who takes it over", a handoff error. It now says the card is theirs to fix and
+    changes nothing (no new history); a real handoff to another agent still works."""
+    async with (
+        FakeAgent(broker.home, "k905-a") as owner,
+        FakeAgent(broker.home, "k905-b") as other,
+        FakeAgent(broker.home, "k905-r") as reviewer,
+    ):
+        await owner.join("#build", "claude-1")
+        await other.join("#build", "claude-2")
+        await reviewer.join("#build", "codex-1")
+        await reviewer.call("review", room="#build", action="open", url=PR)
+        await reviewer.call("review", room="#build", action="raise", title="wrong total")
+        assert (await owner.call("review", room="#build", action="concede", item="F1"))["ok"]
+        r = await owner.call("review", room="#build", action="fix", item="F1", commit="abc1234", proof="t")
+        assert r["ok"], r
+        r = await reviewer.call("review", room="#build", action="reopen", item="F1", reason="still wrong")
+        assert r["ok"], r
+        before = q(broker, "SELECT count(*) FROM events WHERE kind = 'review'")[0][0]
+        r = await owner.call("review", room="#build", action="concede", item="F1")
+        assert r.get("ok") is False and "already yours to fix" in r["error"], r
+        assert "next move is fix" in r["error"] and "takes it over" not in r["error"], r
+        assert q(broker, "SELECT count(*) FROM events WHERE kind = 'review'")[0][0] == before
+        r = await owner.call("review", room="#build", action="concede", item="F1", owner="claude-2")
+        assert r["ok"], r  # a real handoff keeps its rule

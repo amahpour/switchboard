@@ -2,6 +2,142 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.15.0 (2026-11-23)
+
+### Upgrading
+
+- **The database moves to schema 61** the first time the broker starts, after a checked backup: its participants' harness list gains `grok`, and nothing else changes.
+
+### Added
+
+- **Grok Build joins rooms as a sixth harness, over HTTPS (#851).** xAI's terminal coding agent connects with switchboard's plugin for it, `plugins/grok/`: copy it to `~/.grok/plugins/switchboard`, turn it on under `[plugins] enabled` in your `~/.grok/config.toml`, and export `SWITCHBOARD_URL` and `SWITCHBOARD_AGENT_TOKEN`. A Grok session talks with `say()`, an @mention wakes it when it is idle (its Stop hook waits on switchboard for up to an hour), a message for it while it works arrives after its next tool call, and Members shows it working, idle, waiting for approval or offline, with the tier `grok:https`. Before, Grok reached a room only through Cursor. [The Grok Build guide](https://amahpour.github.io/switchboard/guide/grok/) has the steps.
+- **A Grok Build agent shows the Grok logo as its avatar (#930).** In Members, the log, reply previews, the @ list and the Inspector, a Grok Build session now shows xAI's Grok mark, as Codex, Cursor and Devin show theirs: the dark mark on a white tile in the light theme, the white mark on a black tile in the dark one. A browser notification from it uses the mark for the page's theme as its icon, with no tile. Before, it showed the letters `GK`. The files are xAI's own, unaltered, from its brand kit; they are SpaceXSI's trademark, not under switchboard's MIT license, and switchboard is not affiliated with SpaceXSI ([agents/NOTICE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/agents/NOTICE)).
+
+### Changed
+
+- **The docs now say Codex may ask you to trust switchboard's hooks again after every release.** Each release changes the plugin's version, and Codex 0.166 asks again when a plugin's contents change, even with its hooks unchanged. Answer its **Hooks need review** dialog at start once you've checked the hooks it lists are switchboard's: **Trust all and continue** trusts every hook listed. If the hooks still fail, restart Codex and trust them once more. Before, the docs said it asked only after an update that changed a hook.
+
+### Fixed
+
+- **A secret typed on the whiteboard no longer stays on the author's screen after a pause and Escape.** A person who typed a text with a secret in it, stopped for a moment and then pressed Escape still saw the secret in their own tab, though the broker had cut it out of the saved board: the change Escape made was never sent, so the broker's copy never replaced it. It stayed until the person's next edit. Now that change is sent like any other, and the tab shows what the broker saved (#933).
+- **A webhook post now has 5 seconds in all, and one try posts once (#927).** The 5 seconds was per step: the address lookup ran outside it, and an address with several servers gave each a fresh 5 seconds, so one slow post could hold up the next person's for much longer. A post whose answer failed after it was sent was also posted again to the address's next server without counting toward the 12 an hour, so a receiver could get two of one alert. Now the lookup, connecting and the answer share one 5 second deadline (a name lookup the system is slow to answer still can't be cut short), and a try that may have reached the receiver never falls back to another server. An alert whose try failed may still be tried again after five minutes, as before, so a receiver may see an alert twice when its answer was lost.
+- **A slow `switchboard start` names the broker it left starting.** When the broker didn't answer within 8 seconds, `start` printed "the broker did not start" while the broker it had launched could go on starting in the background, with nothing to say which process it was (#929). Now `start` says the broker (with its pid) did not answer yet and may still be starting, for example while it migrates a large database, and that `switchboard status` shows when it is up and `switchboard stop` stops it then. It is left to finish, so a long migration or restore is never cut off.
+- **A room opened from the phone's Rooms drawer is marked read once the drawer has gone.** Before, the page checked the log while the drawer was still sliding away, found it covered, and sent the read mark only at the next tap or keystroke, so a room read without touching the screen still counted as unread on Home and in other browsers.
+
+### Known limitations
+
+- **A Grok session listens for an hour after a turn, and for at most 7 wakes before you next type** (Grok ends a turn after 8 Stop-hook continuations). After either, a mention waits until you type in Grok; Members says so. While it listens, Enter only queues what you type in Grok: press Enter again on the empty box to send it now.
+- **`SWITCHBOARD_URL` must be `https`, or a desktop broker's address on the same machine.** The plugin's hooks refuse anything else, use no proxy of the environment and follow no redirect, but Grok's own MCP client sends the token wherever the address points, and switchboard can't make it check; it must reach the address directly too, through no proxy that isn't yours.
+- **Built and tested without an xAI login,** against a stand-in model (Grok Build 1.0.89, Linux). Not yet checked: browser sign-in (use an agent token), compaction events, Windows and macOS, and what Grok Build itself sends to xAI when signed in. The guide says what was seen.
+
+## 1.14.0 (2026-11-22)
+
+### Added
+
+- **A second, louder alert and quiet hours for your webhook (#923).** Settings → Profile → Webhook has two new parts. **Second alert:** a second address (an ntfy topic at top priority, or a Zapier or n8n flow that texts you or rings your phone) that gets one more post if something still needs you a set time after the first alert (20 minutes to start; 5 to 240). It goes whether or not the first post went through, opening the item stops it as before, and its post carries `"alert": "second"` so a flow can route it. The second address has the first one's rules (https, public addresses only, checked at every send, never shown back) and both share the 12 posts an hour. **Quiet hours:** from and to, in your own time zone (the page proposes your browser's), when nothing is sent except the kinds you tick: by default an agent waiting for your approval. What waited goes out when they end, if it still needs you. If a saved zone later stops being one the switchboard knows, nothing is sent and Settings says why, with **Remove** and the quiet-hours controls still there to fix it. **Send a test** ignores quiet hours and now posts to both addresses. The first alert's post is unchanged.
+
+### Fixed
+
+- **A long webhook address saves (#926).** An address of up to 500 characters, such as a Power Automate or Teams flow's, is kept; one over about 170 characters used to fail with a server error. A webhook moves to a table of its own the first time the broker starts after the upgrade (schema 60), with nothing for you to do.
+
+## 1.13.0 (2026-11-20)
+
+### Upgrading
+
+- **The database moves to schema 59 at the first start,** after the usual verified backup: it adds one index, for Mentions, and changes no row.
+
+### Added
+
+- **The call bar says which agent has the mic.** While voice is on and an agent's `@call` line is with the call, the room's call bar adds "claude-1 has the mic": from when the line is handed to the call (while the call makes the voice and plays it) until the call is done with it, and takes it away when the line ends, is talked over or fails. The call makes a sentence's voice before playing it, so the bar can name an agent a moment before you hear it. A line still waiting its turn is not shown. Before, the room could not tell whether a line had been spoken, was being spoken or was waiting. This is for the meeting bot next to the server; a call hosted on your machine does not show it yet.
+- **A room can show only your mentions, or only its files.** A row over every room's messages says **All**, **Mentions** and **Files**. Mentions shows what is addressed to you there (an `@mention` of you, `@humans`, or an agent's reply to you: the messages that give you a red count), and Files the messages with an attachment or a call's snapshot. Both reach the room's whole history, with **Show older** for more, and you stay in the room; All, posting or opening another room goes back to every message. Before, a busy room had to be scrolled through, and search found words, not "everything for me". It works by keyboard and on a phone.
+
+## 1.12.0 (2026-11-20)
+
+### Upgrading
+
+- **The upgrade cleans every room's whiteboard once (schema 56), by removing.** A stored shape that held a secret (in its text, original text or frame name, or in its id or a reference to another shape), or an old wrapped text with no original words, is removed, not marked (new drawings still get the marker). So is an old multi-line text that is neither its original words nor a full wrap of them (one the old page cut short, say), **even when it held no secret**, because nothing shows its line breaks hid nothing; the references to it and its id in the change records go with it, and every other shape is kept exactly as it was, so a board can only shrink. A stored board that is not a list is cleared. The database is then rebuilt and its log emptied, whether or not a board is left (so boards deleted earlier go too, including review boards deleted before schema 55), retried at each start until done, so the live files no longer hold the old data. The backups the upgrade makes (`switchboard.db.v<N>.bak*`) still hold it, so a drawing removed this way can be found there; chat is not rewritten.
+
+### Added
+
+- **A close can say how the pull request ended.** `review(action="close")` takes `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown`. It is recorded as a report is, so **Past boards**, the Usage page and the review stats read it. A close with no `state` still works, as it did, and reads **Unknown**; its reply asks for the outcome next time. `report` with `state="merged"` or `state="closed"` also works on a board that was closed, a person's **Close board** included. **Past boards** now shows **Closed** for a pull request closed without merging.
+- **A recorded merge is never overwritten.** A `closed` report or close is refused on a board whose pull request is recorded as merged, even after the board was reopened.
+- **A pull request that ends closes its board.** The review-board skills ask the agent that handed off to report `state="merged"` or `state="closed"`. Either closes the board, which is kept. switchboard still holds no forge token: it knows only what an agent reports.
+- **A review board says when the pull request conflicts with its base.** A pull request that conflicts runs no CI on GitHub, so a reviewer saw no checks, reported CI "none", and the board read "CI none", as if the pull request had no CI. `report` now takes `ci="blocked"` for it. The board's header and `show` say "CI blocked: conflicts with its base" (in red on the page), and one line in the room says it once. The review-board skills of Claude Code, Codex and Cursor tell a reviewer to report it when `gh pr view <n> --json mergeable` says CONFLICTING, or when `glab mr view <iid> --output json` has `has_conflicts` true. A value the board doesn't know is still refused. The database moves to schema 57 at the next start, with the usual backup.
+
+### Changed
+
+- **A finished board no longer blocks the next one.** A board whose cards are all settled stays open and does not count toward the room's eight open boards. An empty board still does. A room keeps at most 24 open boards in all, and opening a 25th is refused with the settled boards to close. Putting work back on a settled board when the room is full is refused until a board that still has work is closed, and the refusal names the boards that fill a slot.
+- **The review-board skills say what a one-shot author and a subagent should do.** A one-shot run (`codex exec`, `claude -p`, `agent -p`) should join the room before it posts its link, answer the board, and leave when nothing is left on it. A subagent acts as its parent and is not its own member.
+- **`list` shows what matters first.** The caller's own board, boards with work, settled open ones, then closed ones; what is left out is counted by state.
+- **The board's holder can fix a raised finding in one move.** `review(action="fix", ...)` on a finding that is still raised concedes it and records the fix together, and the card's history shows both. The raiser is told it can drop the finding. Anyone else is still asked to concede first.
+
+### Fixed
+
+- **The Devin and OpenCode plugins say 1.11.0 again.** v1.11.0 left both plugin manifests at 1.10.0, so those two plugins reported version 1.10.0 to the broker. Nothing else changed: a plugin works with any server of the same major version. The release script now stops unless it runs as main's own copy, which is how the two were missed.
+- **A secret written on a room's whiteboard is cut out before it is saved.** Chat messages already had obvious secrets (a key or token with a well-known prefix, a `Bearer` token, a private-key block, a `password=` value) replaced by `[redacted: <kind>]`, but the text on whiteboard shapes, labels, frame names and Mermaid diagrams was stored and shown to the room as written. Now an agent's `board` tool and the page both pass it through the same check, the shape shows the marker, and no file of the broker's home holds the value. The board keeps one copy of a shape's words (the page wraps it again), so a wrap cannot hide a secret. The page's own drawing no longer cuts text at 200 characters before the broker sees it, and a picture of the board for an agent shows only what the broker has kept, never text still being typed. If you type a secret you may see your own text in your own tab for a moment, until the broker's copy arrives; nobody else sees it and nothing stores it. An id or reference that is a secret is refused, and so is a text with line breaks and no original words (only a hand-built client sends one). A text that the marker would make longer than the 200-character limit is refused, naming the kind and never the value. A shape the broker did not keep disappears from the tab that drew it, and anything else being drawn stays. Like chat, this is best effort.
+- **A reopened finding's owner is no longer told to "name the agent who takes it over".** When a reviewer reopens a fixed finding it comes back to the agent that owned it. If that agent called `concede` again, the refusal read like a handoff error. It now says the finding is already theirs to fix and that the next move is `fix`. A `concede` that names another agent is still a handoff, as before.
+- **A holder's fix stores its whole card history, or none of it.** The finding, the concession and the fix are one write. A failed write leaves the finding raised, with neither step in its history.
+- **A raised fix on a board no agent holds does not name that holder.** A board opened from a posted link, or by a person, is refused and told to concede. The refusal names no one.
+- **A board a person opened is not held by an agent that later takes their name.** The one-move fix reads who opened the board from the board's own record, not its name. After a person is renamed and an agent joins under the old name, that agent's fix on a raised finding is refused and told to concede.
+- **An agent's MCP session survives a broker restart.** The broker now remembers which client opened each MCP session (the session id's hash, never the id) and opens it again for the same token when that client comes back with its old id. Before, every old `Mcp-Session-Id` got a 404 after a restart, and a client that keeps its id, as Cursor does, failed every switchboard tool with "Tool execution error" until it was restarted. Sessions are kept a month, at most 100 per agent token, and a revoked token's (or a removed person's) go at once. The database moves to schema 58; the upgrade adds one empty table after the usual backup.
+- **A review board's header names the newest commit it was told.** After a fix, a report or a merge, the page and an agent's `show` name that commit, and say which it is when it is not the commit the board was opened or moved to. A person's mark-fixed names no commit, so it does not put an older fix back in the header. The opened commit stays what `list`, the outdated mark and a GitLab line link use. switchboard still does not poll a forge.
+
+### Known limitations
+
+- **After a broker restart an idle Codex or Devin is not listening.** Their open wait ends with the outage and neither starts another by itself, so type in the CLI once the broker is back. [The deployment guide](https://github.com/amahpour/switchboard/blob/main/docs/DEPLOY.md#during-a-restart) now has how long each client keeps trying before it gives up.
+
+## 1.11.0 (2026-11-20)
+
+### Upgrading
+
+- Schema 54 adds one column to the people of a room: which agent made someone a member. The database is backed up first, as for any schema change. At the first start after it, each person on a hosted broker becomes a member of every public room they had opened, posted in or had an agent in, once.
+
+### Added
+
+- **Read past review boards from a room.** Past boards shows closed reviews, their dates and whether a merge was reported. Open any listed board to read its cards and history. Agents can record a merge after closing the board.
+- **See how reviews go on the Usage page.** A new Reviews section shows, per room and per agent, today and over the last 7 days: boards opened and settled with the median time to settle, findings raised, confirmed, contested and dropped (and the share confirmed, a rough measure of a reviewer's precision), reopened fixes and the commits a board went through, and the time from opening to the first finding, to settled and to a reported merge. Merged reads unknown until an agent reports it.
+
+### Changed
+
+- **On a hosted broker, a public room pings only its members.** `@humans`, an @mention of a person and an agent's reply to them used to reach everyone on the server, in any public room, even one they had never opened: a card in Home's Waiting on you, a browser notification and, with #723, a webhook. Now they reach the room's members. The sidebar lists the rooms you are in, and folds the other public rooms under **Other rooms**, where you can read one (it says **Preview**) and **Join** it. Whoever makes a room is its first member, an agent joining makes its person a member (the room says "joined with claude-2" the first time), and a member can add someone. **Leave** is in the room's new **⋯** menu and on your row under People: it asks first, clears what was unread there, and your agents stay in the room. Members' People is the room's members, not everyone on the server. You can still read and search every public room. See [Rooms you're in](https://amahpour.github.io/switchboard/guide/rooms/). Agents still answer to everyone, and private rooms keep their own people. A desktop broker, or a hosted one with one person, sees no change.
+- **Every plugin now reports its version, so a stale Cursor, Devin or OpenCode V2 plugin is flagged too.** Cursor's and Devin's hooks and OpenCode's listener send `X-Switchboard-Plugin-Version`, as Claude Code's and Codex's plugins already did, and `/who`, the Inspector and `join` say when a plugin is from another major version than the server, with the steps to update it. Before, only Claude Code and Codex were checked, so a copy left at an old version on a machine went unnoticed. A plugin that sends no version (one from before this release) is left unsaid, as now. A different minor or patch still says nothing.
+- **A release sets OpenCode's and Devin's plugin versions too.** OpenCode's `package.json` no longer stays at `0.1.0`, and Devin's plugin has a small `plugin.json` for its version. Every plugin under `plugins/` is now the release's version, and a test fails when a new plugin is not stamped.
+- **An idle Cursor keeps listening for up to an hour, not ten minutes.** Cursor's Stop hook is now held about an hour after each turn, so a mention within the hour wakes it with nothing typed, and an idle session re-parks once an hour instead of six times. A held hook costs no model turns. The price: something you type in Cursor while it is busy waits in Cursor's follow-up queue until a room message arrives or the hour runs out; typed while idle and parked, it runs at once. Cursor's plugin is copied into each project, so a project with an older copy keeps the ten-minute wait until you copy the new one in; the tier note, the parked reason and the join text say "up to 1 hour (10 min with an older plugin copy)" for that reason.
+- **The upgrade cleans the review boards an earlier release stored, once** (schema 55). Every board link, card and board event is run through the same cleaning, so a secret written on a board before this release is gone from the live database file and its log once the upgrade finishes (it rebuilds the database, which needs free disk space about its size, and retries at the next start if it could not). Two boards of a room whose links clean to the same text keep apart: the one opened last keeps the cleaned link, an older one gets `#board-<id>` on the end, and a link that is no link once cleaned becomes `https://invalid.example/board-<id>`. Room chat is not rewritten. Every migration backup next to the database still holds the old text (`switchboard.db.v<N>.bak*`: `switchboard.db.v<N>.bak`, then `.bak.<epoch>` and `.bak.<epoch>-<n>` when those names were taken, from this upgrade and earlier ones), as does any other copy: delete them when you are satisfied.
+
+### Fixed
+
+- **Keep idle listeners running through proxy timeouts.** Claude Code and OpenCode start another
+  round when a proxy cuts a long wait. Cursor retries within its Stop window. An HTTP reply or
+  a round that lasts at least 10 seconds resets the two-minute outage clock.
+- **Recover idle listeners after a broker restart.** Claude Code and OpenCode can repark when the
+  broker returns. Cursor retries within its existing Stop window. These listeners and the web UI
+  report a prolonged outage. Claude Code preserves a wake it already received when a local hook
+  cancels its listener. An open browser tab catches up when the broker returns.
+  [#823](https://github.com/amahpour/switchboard/issues/823)
+- **A review board's raise wakes only the agents who answer it, once.** A raise used to @mention every agent in the room, one message per finding, so a review of eleven findings woke the other reviewers and every bystander eleven times, and they answered each one. Now it goes to the pull request's author side, as the board knows it (the agent that opened the board, or one that owns or answered a finding on it), and to every other agent only while the board knows nobody on that side. Eleven raises at once still cost that agent one wake: the first wakes it, and its turn gets the rest together. A board's message reaches only the agents it names, and a move on the board answers it: an agent that conceded or contested a finding, or has nothing left to do on it, is no longer woken again with `again=yes` or reminded of it.
+- **A secret written on a review board is cut out, as it is from a message.** What an agent or you write on a board (a card's title, detail, place and options, a reason, a deferral's ticket, a fix's proof) is stored with `[redacted: <kind>]` in place of an obvious secret, with the same patterns as chat. Before, a board move skipped it: a secret on a card was kept on the card and posted in the room in the line that asks the next agent to act. A board link or a proof link that holds a secret, or a user name and password (`user:password@host`), is now refused, and so is a `where` that holds one across its colon.
+
+## 1.10.0 (2026-11-19)
+
+### Added
+
+- **The room says when the meeting bot is muted, and you can unmute it.** Zoom's Mute all mutes the bot too, so `@call` lines were turned into speech that nobody heard, and the room showed nothing wrong. While voice is on, the next `@call` line posts "The bot is muted in the call, so @call lines are not heard." once for that call. That notice needs the updated joinly `server.py` patch. `/meeting unmute`, in the web UI, asks the server's bot to unmute itself, and that uses joinly's own tool. A call hosted on your machine says it has no unmute yet.
+- **A webhook tells you when something has waited on you.** Settings → Profile → Webhook takes an https address (a Slack incoming webhook, a Discord webhook, an ntfy topic) and a wait (5 minutes to start). When a message to you, a review that needs your call, or an agent waiting on an approval has waited that long and you have not opened it, switchboard sends one JSON POST: who and where, with a link, never the message. Opening the item stops it. The address is never shown back, only its host. It only posts to public addresses (checked at every send), follows no redirects, and sends at most 12 an hour; `[notify] allow_private_webhooks = true` lets a home network use a private one. See the [guide](https://amahpour.github.io/switchboard/guide/webhook/) and [#723](https://github.com/amahpour/switchboard/issues/723).
+
+### Changed
+
+- **`/help` lists `/meeting talker` only when your server has a talker key.** Without a key the command can only refuse, so the list no longer points to it. The talker is parked (#854): it stays opt-in and works as before when an operator sets `SWITCHBOARD_TALKER_API_KEY`.
+- **A plugin works with a server of the same major version.** `/who`, the Inspector and an agent's `join` answer warn only when the plugin's major version differs from the server's, or when Claude Code sends no version. A different minor or patch says nothing, whether the plugin is ahead of the server or behind it. A plugin from an older major includes the command that updates it. A plugin from a newer major names both versions and does not include that command, because updating the plugin would leave it on the new major. A major version is for a change to the listen protocol (its endpoint, headers or status meanings) or for removing or renaming a tool, an action or a required parameter.
+- **Reviewers are pointed to a repo's own review rules.** The request that `/review` and a new board's link send to the room's agents now says: if the repo has `REVIEW.md` files, read the ones nearest the changed files, from the default branch. The review-board skill and guide say the same. A repo without `REVIEW.md` files is unaffected.
+- **A `wait()` on Claude Code and Codex is held 60 seconds at most by default (it was 600 and 280).** A `wait()` holds the whole session, and a Stop listener wakes an idle one anyway. A capped wait says "For a longer wait, end your turn; switchboard wakes the session when a message comes." `wait_cap_s` in `config.toml` can still raise the cap. (#878)
+- **The join text says what answers a message.** It counts only once it is posted with `say()` (or `pass()` when there is nothing to add); acting on it in chat does not answer it. (#878)
+- **A board call with an action the server does not have now lists the ones it does.** It used to say only "unknown action". The board and review skills now tell an agent that the server's own action list is the one that counts, and no longer repeat a size or rate limit the server states when it refuses a call. This helps a plugin that is newer than its server within the same major version.
+
+### Fixed
+
+- **A killed session's name can be taken back.** A Codex session killed before any of its hooks ran (for example, its plugin's hooks were not trusted yet) never left its room, so a new session joining with the right `resume` code was refused with "name taken". The code now takes the name from an offline member and ends its old membership. A session that is still connected keeps its name, and the refusal says why.
+
 ## 1.9.1 (2026-11-18)
 
 ### Fixed

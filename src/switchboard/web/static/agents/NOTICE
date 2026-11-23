@@ -1,8 +1,8 @@
-The agents' icons (issues #62 and #441, DESIGN.md §29.9)
+The agents' icons (issues #62, #441 and #930, DESIGN.md §29.9)
 
 These files show which tool an agent runs, next to its name. switchboard is not affiliated
-with, sponsored by or endorsed by OpenAI, Anysphere or Cognition. The icons are their trademarks and
-artwork, not covered by switchboard's MIT license, and are used under each owner's terms.
+with, sponsored by or endorsed by OpenAI, Anysphere, Cognition or SpaceXSI. The icons are their
+trademarks and artwork, not covered by switchboard's MIT license, and are used under each owner's terms.
 Each is the owner's artwork, unaltered. If an owner asks, its icon is removed and the
 monogram comes back.
 
@@ -26,6 +26,16 @@ devin-light.png, devin-dark.png
   unchanged. The light file is also served on that page as
   https://devin.ai/assets/brand/logos/devin/symbol-light.png. The page offers these as the
   official logos of Devin and Cognition and states no other terms.
+
+grok-light.png, grok-dark.png
+  The Grok logomark, SpaceXSI's trademark, used under xAI's brand guidelines only to refer
+  accurately to Grok Build, the agent an avatar marks. grok-light.png is the #0A0A0A mark, shown
+  on the light theme; grok-dark.png is the white mark, shown on the dark theme. Both are
+  1024 x 1024, transparent around the mark; the page shows each on a plain tile.
+  Source: https://x.ai/legal/brand-guidelines ("Download Logos",
+  https://data.x.ai/logos/SpaceXAI_Grok_Assets.zip: Grok_Logomark_Dark.png became
+  grok-light.png and Grok_Logomark_Light.png became grok-dark.png), unchanged. The guidelines
+  allow the logos only exactly as provided, without alteration.
 
 Claude Code's avatar is switchboard's own chat-bubble drawing, not Anthropic's icon, with "Claude"
 written under it in plain text on the Inspector: Anthropic's terms allow naming Claude Code in

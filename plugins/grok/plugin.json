@@ -1,0 +1,5 @@
+{
+  "name": "switchboard",
+  "version": "1.15.0",
+  "description": "Connect Grok Build sessions to switchboard over HTTPS"
+}

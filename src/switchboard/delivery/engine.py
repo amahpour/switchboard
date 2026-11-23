@@ -1193,7 +1193,7 @@ class Engine:
         )
 
     def not_connected_since(self, p: Participant) -> float | None:
-        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.status_at, p.last_say_at))
+        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.last_say_at))
 
     def touch(self, p: Participant) -> list[Action]:
         """A call from the session, or a wait of its opening or closing: proof it is there. Stored at most
@@ -1264,11 +1264,13 @@ class Engine:
         running anywhere in it means the prompt was answered (Claude Code sends the prompt's Notification
         with no subagent id even for a subagent's prompt, and no hook of its own when it is answered), so
         the hold ends. Without it a prompt in a subagent that runs for minutes would keep the session
-        "waiting" long after the person approved. It never delivers, confirms or reports anything else."""
+        "waiting" long after the person approved. It never delivers, confirms or reports anything else.
+        Ending the hold is the session heard (``touch``): a subagent's hook writes no ``last_seen`` of its
+        own, and ``heard_at`` no longer reads ``status_at`` (#948)."""
         cur = self.store.get_participant(p.id)
         if cur is None or cur.status != "waiting-approval":
             return []
-        return self.set_status(cur, "busy", "hook:subagent")
+        return self.touch(cur) + self.set_status(cur, "busy", "hook:subagent")
 
     def close_conn_sinks(self, conn_id: int) -> list[Action]:
         out: list[Action] = []
@@ -1458,6 +1460,10 @@ class Engine:
         E = ev.ev
         out: list[Action] = []
         adapter = self.adapter(p)
+        if adapter.stale_hook(p, ev):
+            # an older turn's end, reported after the next turn began: nothing of the session changes, not
+            # even an approval hold, which only the session's own next hook ends (§7.4, §11)
+            return None, []
         if adapter.other_thread(p, ev):
             # a subagent's hook must not change or take the session's messages; the one thing a tool that
             # finished in it says is that an approval prompt was answered (#472)
@@ -1598,7 +1604,9 @@ class Engine:
         elif p.status == "waiting-approval" and E not in REPORT_ONLY_EVENTS:
             new = "busy"  # a hook with no status of its own (Devin's PreToolUse): the turn moved on
         p = self.store.get_participant(p.id) or p
-        if new is not None and (new != "waiting-approval" or p.status != "offline" or revived):
+        if new is not None and (
+            new != "waiting-approval" or p.status != "offline" or revived or p.idle_at_restart
+        ):
             out += self.set_status(p, new, f"hook:{E}", bump=bump)
             p = self.store.get_participant(p.id) or p
         elif mode_changed:

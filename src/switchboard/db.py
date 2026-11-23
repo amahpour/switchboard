@@ -29,7 +29,12 @@ each person has seen of each room and which board cards they set aside, for the 
 on calls (§52.6); 50 (#724) adds the search index (§58); 51 (#816) adds a room's opt-in so an agent's
 new pull request link asks for a review (§37.16); 52 (#818) indexes the usage page's window over
 agent chat and wake batches (§61);
-53 (#823) adds say retry receipts (§8.4).
+53 (#823) adds say retry receipts (§8.4); 54 (#843) says which agent made a person a member of a public room,
+whose members are in ``room_people`` too (§63); 55 (#890) and 56 (#893) clean what a review board and
+a room's whiteboard stored before their text was checked (§37.2, §56.5); 57 (#907) lets a review board's
+reported CI be ``blocked`` (§37.11); 58 (#903) remembers which client opened each MCP session, so a session
+survives a restart (§49.2); 59 (#914) indexes the messages that name someone or reply to one, for a
+room's Mentions filter (§64).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -37,20 +42,25 @@ every step up to the current version in one transaction; a newer one is refused.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import math
 import os
+import re
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
+from switchboard import reviews
 from switchboard.models import Room, room_slug
+from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 53
+SCHEMA_VERSION = 61
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -73,7 +83,8 @@ CREATE TABLE rooms(
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
-  harness TEXT NOT NULL CHECK(harness IN ('claude','codex','cursor','devin','opencode','test','unknown')),
+  harness TEXT NOT NULL
+    CHECK(harness IN ('claude','codex','cursor','devin','opencode','grok','test','unknown')),
   session_key TEXT NOT NULL,
   session_id TEXT,
   status TEXT NOT NULL DEFAULT 'starting'
@@ -192,6 +203,7 @@ CREATE TABLE preferences(
 CREATE TABLE room_people(
   room_id INTEGER NOT NULL REFERENCES rooms(id), person_id INTEGER NOT NULL CHECK(person_id >= 0),
   added_by INTEGER NOT NULL CHECK(added_by >= 0), added_at REAL NOT NULL,
+  joined_with TEXT CHECK(joined_with IS NULL OR length(joined_with) BETWEEN 1 AND 64),
   PRIMARY KEY(room_id, person_id));
 
 CREATE TABLE reviews(
@@ -200,7 +212,7 @@ CREATE TABLE reviews(
   opened_by TEXT NOT NULL, opened_at REAL NOT NULL, closed_at REAL, posted_at REAL, posted_by TEXT,
   pr_state TEXT NOT NULL DEFAULT '' CHECK(pr_state IN ('', 'open', 'merged', 'closed')),
   pr_threads INTEGER CHECK(pr_threads IS NULL OR pr_threads BETWEEN 0 AND 999),
-  pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none')),
+  pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none', 'blocked')),
   reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
   closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
   reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
@@ -386,7 +398,9 @@ V39_TABLES = (*V38_TABLES, "meetings")  # before files (v40)
 V44_TABLES = (*V39_TABLES, "broker_settings", "files", "file_grants")  # before home_seen (v45)
 V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard (v46)
 V50_TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
-TABLES = (*V50_TABLES, "say_keys")
+V55_TABLES = (*V50_TABLES, "say_keys")  # schemas 53 through 57, before mcp_sessions (v58)
+V59_TABLES = (*V55_TABLES, "mcp_sessions")  # schemas 58 and 59, before the webhook tables (v60)
+TABLES = (*V59_TABLES, "webhooks", "webhook_sent")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -1112,6 +1126,341 @@ SAY_KEYS_DDL = (
 )
 # v52 -> v53 (#823, DESIGN.md §8.4): the retry receipts.
 V52_TO_V53 = (*SAY_KEYS_DDL, "UPDATE meta SET value='53' WHERE key='schema_version'")
+# v53 -> v54 (#843, DESIGN.md §63): a public room has members too, in ``room_people`` as a private
+# room's people are. The step only adds the column that says which of a person's agents made them a
+# member, NULL for everyone already there; who is in which room on day one is filled once at the
+# broker's first start (``Store.join_day_one``), since a migration keeps every table's rows as they were.
+V53_TO_V54 = (
+    "ALTER TABLE room_people ADD COLUMN joined_with TEXT"
+    " CHECK(joined_with IS NULL OR length(joined_with) BETWEEN 1 AND 64)",
+    "UPDATE meta SET value='54' WHERE key='schema_version'",
+)
+
+
+# v54 -> v55 (#890, DESIGN.md §11 item 10, §37.2): a review board's stored text is cleaned once, by
+# ``clean_review_rows`` (a step that computes), since the check on what a board takes in applies only to
+# what is written from now on. The step has no schema change.
+V54_TO_V55 = ("UPDATE meta SET value='55' WHERE key='schema_version'",)
+
+# v55 -> v56 (#893, DESIGN.md §11 item 10, §56.5): a room's whiteboard is cleaned once, by
+# ``clean_whiteboard_rows``, as for v55: no schema change, and the same finish (``finish_review_clean``).
+V55_TO_V56 = ("UPDATE meta SET value='56' WHERE key='schema_version'",)
+
+# v56 -> v57 (#907, DESIGN.md §37.11): the reported CI can be ``blocked``, a pull request that conflicts with
+# its base and so runs no CI. Only the ``pr_ci`` CHECK gains a value: the same schema-text edit as v33 -> v34
+# (_migrate brackets the step with schema editing, checks the new CHECK is in the table's text or fails
+# closed and rolls back, and checks integrity), so no row or foreign key moves. The needle ends at the
+# closing parenthesis, so it matches only the CHECK on ``pr_ci``.
+V56_TO_V57 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''failing'', ''running'', ''none''))',"
+    " '''failing'', ''running'', ''none'', ''blocked''))')"
+    " WHERE type='table' AND name='reviews'",
+    "UPDATE meta SET value='57' WHERE key='schema_version'",
+)
+
+# Both fresh databases and the migration use these statements (#823, DESIGN.md §49.2): which client opened
+# each MCP session of a token, by the sha256 of the session's ID, so the broker can open it again after a
+# restart for a client that keeps its ID. The client's own claim, cut as ``client_info`` cuts it.
+MCP_SESSIONS_DDL = (
+    "CREATE TABLE mcp_sessions("
+    " token_id INTEGER NOT NULL REFERENCES agent_tokens(id),"
+    " sid_hash TEXT NOT NULL CHECK(length(sid_hash) = 64),"
+    " client_name TEXT NOT NULL CHECK(length(client_name) BETWEEN 1 AND 80),"
+    " client_version TEXT NOT NULL CHECK(length(client_version) <= 80),"
+    " protocol TEXT NOT NULL CHECK(length(protocol) BETWEEN 1 AND 32),"
+    " opened_at REAL NOT NULL,"
+    " PRIMARY KEY(token_id, sid_hash)) WITHOUT ROWID",
+    "CREATE INDEX mcp_sessions_opened ON mcp_sessions(token_id, opened_at)",
+)
+# v57 -> v58 (#823, DESIGN.md §49.2): the MCP sessions a restart reopens.
+V57_TO_V58 = (*MCP_SESSIONS_DDL, "UPDATE meta SET value='58' WHERE key='schema_version'")
+
+# v58 -> v59 (#914, DESIGN.md §64): a room's Mentions filter reads the chat lines addressed to one person,
+# newest first. Only a line that names someone or replies to one can be, so this partial index is that
+# filter's walk; without it the read walks every message of the room when few are for the person. The
+# predicate in Store.room_addressed repeats the index's condition, which is what lets SQLite use it.
+# Both fresh databases and the migration use it.
+ADDRESSED_DDL = (
+    "CREATE INDEX messages_addressed ON messages(room_id, id)"
+    " WHERE kind='chat' AND (mentions!='[]' OR reply_to IS NOT NULL)",
+)
+V58_TO_V59 = (*ADDRESSED_DDL, "UPDATE meta SET value='59' WHERE key='schema_version'")
+
+# A person's webhook (#923, #926, DESIGN.md §62.4): one row a person (``person`` is ``room_people``'s key, 0
+# the owner), and the items already sent on each lane, kept across restarts. Before 60 these were
+# ``broker_settings`` rows, whose value holds 200 characters: a long address could not be saved (#926), the
+# sent keys overflowed (#923), and the settings were three rows written one after another. Each CHECK is
+# ``notify.py``'s limit (``URL_MAX``, the wait bounds, ``HH:MM``, ``TZ_MAX``, ``KINDS``), so a row that got
+# past the code still could not hold what the code would refuse. ``id`` is new each time a webhook is made
+# (AUTOINCREMENT never reuses one), and ``first_gen`` and ``second_gen`` count each lane's address changes:
+# what a POST writes when it is back (its status, its sent keys) names the webhook and the address it was
+# sent for, so it lands nowhere once either changed (#923, F4, F10). Sent keys belong to the webhook's id,
+# so a webhook removed and made again starts clean. Both fresh databases and the migration use these
+# statements.
+_HHMM = "GLOB '[01][0-9]:[0-5][0-9]' OR {c} GLOB '2[0-3]:[0-5][0-9]'"
+QUIET_ALWAYS_VALUES = (
+    "",
+    "approval",
+    "board",
+    "question",
+    "approval,board",
+    "approval,question",
+    "board,question",
+    "approval,board,question",
+)  # every set of notify.KINDS, sorted and joined with commas
+
+
+def _https(c: str) -> str:
+    return f"length({c}) BETWEEN 9 AND 500 AND lower(substr({c}, 1, 8)) = 'https://'"
+
+
+def _hhmm(c: str) -> str:
+    return f"{c} IS NULL OR {c} " + _HHMM.format(c=c)
+
+
+WEBHOOKS_DDL = (
+    "CREATE TABLE webhooks("
+    " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    " person INTEGER UNIQUE NOT NULL CHECK(person >= 0),"
+    f" url TEXT NOT NULL CHECK({_https('url')}),"
+    " wait_s REAL NOT NULL DEFAULT 300 CHECK(wait_s BETWEEN 60 AND 7200),"
+    f" second_url TEXT CHECK(second_url IS NULL OR ({_https('second_url')})),"
+    " second_after_s REAL CHECK(second_after_s IS NULL OR second_after_s BETWEEN 300 AND 14400),"
+    f" quiet_from TEXT CHECK({_hhmm('quiet_from')}),"
+    f" quiet_to TEXT CHECK({_hhmm('quiet_to')}),"
+    " quiet_tz TEXT CHECK(quiet_tz IS NULL OR length(quiet_tz) BETWEEN 1 AND 64),"
+    " quiet_always TEXT CHECK(quiet_always IS NULL OR quiet_always IN ("
+    + ", ".join(f"'{v}'" for v in QUIET_ALWAYS_VALUES)
+    + ")),"
+    " first_at REAL,"
+    " first_ok INTEGER CHECK(first_ok IS NULL OR first_ok IN (0, 1)),"
+    " first_error TEXT CHECK(first_error IS NULL OR length(first_error) <= 200),"
+    " second_at REAL,"
+    " second_ok INTEGER CHECK(second_ok IS NULL OR second_ok IN (0, 1)),"
+    " second_error TEXT CHECK(second_error IS NULL OR length(second_error) <= 200),"
+    " first_gen INTEGER NOT NULL DEFAULT 0,"
+    " second_gen INTEGER NOT NULL DEFAULT 0,"
+    " CHECK((second_url IS NULL) = (second_after_s IS NULL)),"
+    " CHECK((quiet_from IS NULL) = (quiet_to IS NULL) AND (quiet_to IS NULL) = (quiet_tz IS NULL)"
+    " AND (quiet_tz IS NULL) = (quiet_always IS NULL)),"
+    " CHECK(quiet_from IS NULL OR quiet_from != quiet_to),"
+    " CHECK((first_at IS NULL) = (first_ok IS NULL) AND (first_ok = 1) <= (first_error IS NULL)),"
+    " CHECK((second_at IS NULL) = (second_ok IS NULL) AND (second_ok = 1) <= (second_error IS NULL)))",
+    "CREATE TABLE webhook_sent("
+    " webhook INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,"
+    " lane TEXT NOT NULL CHECK(lane IN ('first','second')),"
+    " key TEXT NOT NULL CHECK(length(key) BETWEEN 1 AND 1000),"
+    " at REAL NOT NULL,"
+    " PRIMARY KEY(webhook, lane, key)) WITHOUT ROWID",
+)
+# v59 -> v60 (#923, #926, DESIGN.md §62.4): the tables, then ``move_webhook_rows`` moves the old rows in.
+V59_TO_V60 = (*WEBHOOKS_DDL, "UPDATE meta SET value='60' WHERE key='schema_version'")
+
+# v60 -> v61 (#851, DESIGN.md §49.15): only the participants CHECK gains a harness, Grok Build. The same
+# schema-text edit as v33 -> v34, with the same checks: _migrate brackets this step with schema editing,
+# verifies the new CHECK is in the table's text (or fails closed and rolls back), advances SQLite's schema
+# cookie and checks integrity. Rows are untouched. The needle is the whole list, which only the CHECK on
+# participants.harness holds.
+V60_TO_V61 = (
+    "UPDATE sqlite_master SET sql=replace(sql,"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'',''test'',''unknown''',"
+    " '''claude'',''codex'',''cursor'',''devin'',''opencode'',''grok'',''test'',''unknown''')"
+    " WHERE type='table' AND name='participants'",
+    "UPDATE meta SET value='61' WHERE key='schema_version'",
+)
+
+# What the cleaning reads: the review board's free text, with each column's length limit in the schema.
+# Names (who raised, owned, answered or closed something) are not text: the room's members' names were
+# checked when they joined, and a pick is keyed by one.
+_ITEM_TEXT = {
+    "title": 200,
+    "detail": 4000,
+    "reason": 500,
+    "answer": 500,
+    "deferred_to": 200,
+    "insisted": 500,
+}
+_URL_MAX = 500
+
+
+def _clean_json(value: object) -> object:
+    """``value`` with every string in it (not a key) cleaned by ``reviews.scrub``."""
+    if isinstance(value, str):
+        return reviews.scrub(value)
+    if isinstance(value, dict):
+        return {k: _clean_json(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clean_json(v) for v in value]
+    return value
+
+
+_PLACEHOLDER = (
+    "https://invalid.example/{what}-{id}"  # a link that is clearly no real one, and one ``url`` takes
+)
+
+
+def _link_ok(url: str) -> bool:
+    """Whether ``reviews.url`` takes ``url`` as it is."""
+    try:
+        return reviews.url(url) == url
+    except reviews.ReviewError:
+        return False
+
+
+def _free_url(base: str, rid: int, taken: set[str]) -> str:
+    """``base``, if it is a link ``url`` takes, fits the column and is not ``taken`` in the room; else it with
+    ``#board-<id>`` on the end (``-1``, ``-2``... after that until nothing in the room has it), cut so the
+    whole fits; and if that is no link either, the placeholder with the same ending. A board's key is its URL,
+    so two rows of a room with one URL would hide a board: every one is checked against ``taken``."""
+    for root in (base, _PLACEHOLDER.format(what="board", id=rid)):
+        if len(root) <= _URL_MAX and root not in taken and _link_ok(root):
+            return root
+        n = 0
+        while True:
+            tail = f"#board-{rid}" + (f"-{n}" if n else "")
+            cand = root[: _URL_MAX - len(tail)] + tail
+            if cand not in taken and _link_ok(cand):
+                return cand
+            n += 1
+            if n > 1000:  # nothing so crowded exists; the placeholder is next
+                break
+    raise sqlite3.IntegrityError(f"no free URL for board {rid}")
+
+
+def _clean_board_urls(con: sqlite3.Connection) -> int:
+    """Each board's URL without credentials or secret, and still a link ``reviews.url`` takes. A room's boards
+    are its distinct URLs (a reset adds a row under the same one), and each must stay one: a URL that is
+    already clean and valid keeps it; of the others the board whose newest row is last gets the cleaned URL
+    first, and a board whose cleaned URL is taken in the room, too long, or no link (a marker in a host name
+    is not one) gets ``#board-<id of its newest row>`` on the end, and failing that a fixed placeholder
+    (``https://invalid.example/board-<id>``), each checked unused in the room. Returns how many changed."""
+    changed = 0
+    by_room: dict[int, dict[str, int]] = {}
+    for rid, room_id, url in con.execute("SELECT id, room_id, url FROM reviews ORDER BY id"):
+        by_room.setdefault(room_id, {})[url] = rid  # the last row of a URL is its newest
+    for room_id, newest in by_room.items():
+        cleaned = {url: reviews.clean_url(url) for url in newest}
+        keep = {u for u in newest if cleaned[u] == u and len(u) <= _URL_MAX and _link_ok(u)}
+        taken = set(keep)
+        for url in sorted((u for u in newest if u not in keep), key=lambda u: -newest[u]):
+            new = _free_url(cleaned[url], newest[url], taken)
+            taken.add(new)
+            con.execute("UPDATE reviews SET url=? WHERE room_id=? AND url=?", (new, room_id, url))
+            changed += 1
+    return changed
+
+
+def _clean_proof(proof: str, item_id: int) -> str:
+    """A proof as the upgrade keeps it: a link stays a link ``reviews.proof`` takes, else (it grew past its
+    column, say, or is no link once cut) a fixed placeholder; anything else is text cut to its column."""
+    if not proof.startswith(("http://", "https://")):
+        return reviews.clean_text(proof, 500)
+    new = reviews.clean_url(proof)
+    try:
+        if len(new) <= 500 and reviews.proof(new) == new:
+            return new
+    except reviews.ReviewError:
+        pass
+    return _PLACEHOLDER.format(what="proof", id=item_id)
+
+
+def _clean_location(file: str, lines: str) -> tuple[str, str]:
+    """A card's place as the upgrade keeps it. ``reviews.where`` searches a compact location whole, since a
+    match can reach across the colon between file and lines, and every move's reply joins them again: a pair
+    whose joined form redacts differently from its parts is kept as one cleaned file, with no lines."""
+    if lines and redact(f"{file}:{lines}")[0] != redact(file)[0] + ":" + redact(lines)[0]:
+        return reviews.clean_text(f"{file}:{lines}", 300), ""
+    return reviews.clean_text(file, 300), reviews.clean_text(lines, 40)
+
+
+def clean_review_rows(con: sqlite3.Connection) -> int:
+    """Run every string a review board stored through the cleaning its input gets (#890): the boards' URLs,
+    each card's text (title, detail, file, reason, options, answer, proof, ticket and the raiser's answer to
+    a contest) and every string in the data of a board's events (``review``, ``review_line``). Room chat is
+    not rewritten, as for #819. Idempotent. Returns how many values changed. Run it with
+    ``secure_delete`` on, so the old bytes are zeroed, not left in a free page (``_migrate``)."""
+    changed = _clean_board_urls(con)
+    for row in con.execute("SELECT * FROM review_items").fetchall():
+        new: dict[str, object] = {c: reviews.clean_text(row[c], n) for c, n in _ITEM_TEXT.items()}
+        new["file"], new["lines"] = _clean_location(row["file"], row["lines"])
+        new["proof"] = _clean_proof(row["proof"], row["id"])
+        try:
+            options = json.loads(row["options"])
+        except ValueError:
+            options = None
+        if isinstance(options, list):
+            new["options"] = json.dumps(_clean_json(options))
+        sets = {c: v for c, v in new.items() if v != row[c]}
+        if sets:
+            cols = ", ".join(f"{c}=?" for c in sets)
+            con.execute(f"UPDATE review_items SET {cols} WHERE id=?", (*sets.values(), row["id"]))
+            changed += len(sets)
+    events = con.execute(
+        "SELECT id, data FROM events WHERE kind='review' OR kind LIKE 'review\\_%' ESCAPE '\\'"
+    ).fetchall()
+    for event_id, data in events:
+        try:
+            loaded = json.loads(data)
+        except ValueError:
+            continue
+        cleaned = _clean_json(loaded)
+        if cleaned != loaded:
+            con.execute("UPDATE events SET data=? WHERE id=?", (json.dumps(cleaned), event_id))
+            changed += 1
+    return changed
+
+
+def clean_whiteboard_rows(con: sqlite3.Connection) -> int:
+    """Clean what a room's whiteboard stored (#893): every board's elements and every change record's
+    ids. A shape that needs any change (a secret in its text, original text or name, a legacy multi-line
+    text without its original words, an id or reference that is a secret, a tombstone with text) is
+    **removed**, with the references to it and its id in the change records (``board.clean_stored``,
+    ``board.clean_change_ids``), and a shape that needs none is kept as it is. A board can only shrink. A
+    row that is not a board is cleared. Idempotent. Returns how many values changed. Run with
+    ``secure_delete`` on."""
+    from switchboard import board
+
+    changed = 0
+    dropped: dict[int, set[str]] = {}
+    for row in con.execute("SELECT room_id, elements FROM room_boards").fetchall():
+        try:
+            loaded = json.loads(row["elements"])
+        except ValueError:
+            loaded = None
+        if not isinstance(loaded, list):
+            # not a board (``Store.board_load`` reads it as empty): cleared, so nothing in it is kept (fail
+            # closed), and the upgrade goes on
+            if row["elements"] != "[]":
+                con.execute("UPDATE room_boards SET elements='[]' WHERE room_id=?", (row["room_id"],))
+                changed += 1
+            continue
+        cleaned, gone = board.clean_stored(loaded)
+        dropped[row["room_id"]] = gone
+        if cleaned != loaded:
+            text = json.dumps(cleaned, ensure_ascii=False, separators=(",", ":"))
+            con.execute("UPDATE room_boards SET elements=? WHERE room_id=?", (text, row["room_id"]))
+            changed += 1
+    for row in con.execute("SELECT id, room_id, ids FROM room_board_changes").fetchall():
+        try:
+            ids = json.loads(row["ids"])
+        except ValueError:
+            ids = None
+        kept = (
+            board.clean_change_ids(ids, dropped.get(row["room_id"], set())) if isinstance(ids, list) else []
+        )
+        if kept != ids:
+            con.execute(
+                "UPDATE room_board_changes SET ids=? WHERE id=?",
+                (json.dumps(kept, ensure_ascii=False, separators=(",", ":")), row["id"]),
+            )
+            changed += 1
+    return changed
+
+
+# The steps that also rewrite rows with code, by the version they migrate to: run inside the migration's
+# transaction after the step's statements. Defined after ``clean_review_rows``, below.
+REWRITES: dict[int, Callable[[sqlite3.Connection], int]] = {}
 
 
 class MigrationStep(NamedTuple):
@@ -1120,6 +1469,166 @@ class MigrationStep(NamedTuple):
     new_tables: tuple[str, ...]
     # Nonempty enables writable_schema for this step and verifies each required SQL fragment.
     schema_edits: tuple[tuple[str, str], ...] = ()
+
+
+REWRITES[55] = clean_review_rows
+REWRITES[56] = clean_whiteboard_rows
+
+# The steps that move rows from one table to another, by the version they migrate to: run inside the
+# migration's transaction after the step's statements, and each says by how many rows it changed each table,
+# so the migration's row-count check still holds every other table to its count (and these to theirs).
+MOVES: dict[int, Callable[[sqlite3.Connection], dict[str, int]]] = {}
+
+# the broker_settings rows a webhook was kept in before 60 (the second, quiet and *2 rows only on #923's
+# pre-release builds), by prefix
+_WEBHOOK_ROWS = (
+    "webhook:",
+    "webhook_second:",
+    "webhook_quiet:",
+    "webhook_status:",
+    "webhook_status2:",
+    "webhook_sent:",
+    "webhook_sent2:",
+)
+
+
+def _old_webhook(rows: dict[str, str], p: str) -> dict[str, object] | None:
+    """Person ``p``'s webhook from its old rows, as ``webhook.load`` read them: the address, the second one
+    and the quiet hours, each through ``notify``'s checks, or None when any of them does not pass."""
+    from switchboard import notify  # pure; imported here so the schema does not need it
+
+    try:
+        d = json.loads(rows[f"webhook:{p}"])
+        url, wait = d["url"], float(d["wait_s"])
+        if notify.url_problem(url) is not None or not notify.WAIT_MIN_S <= wait <= notify.WAIT_MAX_S:
+            return None
+        out: dict[str, object] = {"url": url, "wait_s": wait}
+        if (raw := rows.get(f"webhook_second:{p}")) is not None:
+            s = json.loads(raw)
+            s_url, after = s["url"], float(s["after_s"])
+            if (
+                notify.url_problem(s_url) is not None
+                or not notify.SECOND_MIN_S <= after <= notify.SECOND_MAX_S
+            ):
+                return None
+            out |= {"second_url": s_url, "second_after_s": after}
+        if (raw := rows.get(f"webhook_quiet:{p}")) is not None:
+            q = json.loads(raw)
+            start, end, tz, always = q["start"], q["end"], q["tz"], q["always"]
+            if notify.quiet_problem(start, end, tz, always) is not None:
+                return None
+            out |= {
+                "quiet_from": notify.hhmm(start),
+                "quiet_to": notify.hhmm(end),
+                "quiet_tz": tz,
+                "quiet_always": ",".join(sorted(set(always))),
+            }
+        return out
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+STATUS_AT_MAX = 32_503_680_000.0  # 3000-01-01 UTC: a status time past it is no time this broker wrote
+ERROR_MAX = 200  # the error columns' CHECK
+_KEY_RE = re.compile(r"[1-9][0-9]{0,18}")
+_INT64_MAX = 2**63 - 1
+
+
+def _old_person(tail: str) -> int | None:
+    """The person key a pre-60 row name ends in, or None: only the canonical form ``str(int)`` wrote, ``0``
+    (the owner) or digits with no leading zero, ASCII only (``isdigit`` and ``int`` take other scripts'
+    digits and ``²``), and within SQLite's signed 64 bits. Another form is not a key this broker wrote (#923,
+    F11)."""
+    if tail == "0":
+        return 0
+    if not (tail.isascii() and _KEY_RE.fullmatch(tail)):
+        return None
+    p = int(tail)
+    return p if p <= _INT64_MAX else None
+
+
+def _old_status(raw: str | None) -> tuple[float, int, str | None] | None:
+    """A pre-60 status row, or None when it does not parse or its time is not one a broker wrote: not a
+    finite number, not after 1970, or past the year 3000 (NaN is stored as NULL, which the row's CHECK
+    refuses, so one bad time would stop the whole upgrade, #923, F11). The error is cut to its column, and
+    an error that is not storable text (``notify.storable``: an unpaired surrogate or a NUL) drops the status
+    too."""
+    from switchboard import notify  # pure; imported here so the schema does not need it
+
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+        ok = bool(d["ok"])
+        at = float(d["at"])
+        if not (math.isfinite(at) and 0 < at < STATUS_AT_MAX):
+            return None
+        error = None if ok or not d["error"] else str(d["error"])[:ERROR_MAX]
+        if error is not None and not notify.storable(error):
+            return None
+        return at, int(ok), error
+    except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        return None
+
+
+def _old_sent(raw: str | None) -> list[str]:
+    try:
+        keys = json.loads(raw or "[]")
+    except ValueError:
+        return []
+    if not isinstance(keys, list):
+        return []
+    from switchboard import notify  # pure; imported here so the schema does not need it
+
+    # a key that is not storable text (an unpaired surrogate, or a NUL, where length() in the CHECK stops)
+    # is skipped: its bind or its CHECK would stop the upgrade
+    return sorted({k for k in keys if isinstance(k, str) and 1 <= len(k) <= 1000 and notify.storable(k)})
+
+
+def move_webhook_rows(con: sqlite3.Connection) -> dict[str, int]:
+    """Move every person's webhook out of ``broker_settings`` into ``webhooks`` and ``webhook_sent`` (#923,
+    #926, §62.4), and delete the old rows. A webhook whose rows do not parse or pass the checks is dropped,
+    with its status and sent keys: it was no webhook (``load`` read it as none), and stays none. So is a row
+    whose person key is not one a broker wrote (``_old_person``); a status whose time or text cannot be kept
+    is dropped and the webhook still moves. One malformed row never stops the upgrade (#923, F11). Returns
+    how many rows each table gained (a negative number: lost)."""
+    rows: dict[str, str] = {}
+    for prefix in _WEBHOOK_ROWS:
+        for k, v in con.execute(
+            "SELECT key, value FROM broker_settings WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+        ):
+            rows[str(k)] = str(v)
+    people: dict[int, str] = {}
+    for k in rows:
+        if k.startswith("webhook:") and (p := _old_person(k.split(":", 1)[1])) is not None:
+            people[p] = str(p)
+    made = sent = 0
+    for p, tail in sorted(people.items()):
+        w = _old_webhook(rows, tail)
+        if w is None:
+            continue
+        cols = {"person": p, **w}
+        for lane, key in (("first", f"webhook_status:{tail}"), ("second", f"webhook_status2:{tail}")):
+            st = _old_status(rows.get(key))
+            if st is not None and (lane == "first" or "second_url" in w):
+                cols |= {f"{lane}_at": st[0], f"{lane}_ok": st[1], f"{lane}_error": st[2]}
+        names = ", ".join(cols)
+        wid = con.execute(
+            f"INSERT INTO webhooks({names}) VALUES({', '.join('?' for _ in cols)})", tuple(cols.values())
+        ).lastrowid
+        made += 1
+        for lane, key in (("first", f"webhook_sent:{tail}"), ("second", f"webhook_sent2:{tail}")):
+            for item in _old_sent(rows.get(key)):
+                con.execute(
+                    "INSERT INTO webhook_sent(webhook, lane, key, at) VALUES(?, ?, ?, 0)", (wid, lane, item)
+                )
+                sent += 1
+    for k in rows:
+        con.execute("DELETE FROM broker_settings WHERE key=?", (k,))
+    return {"broker_settings": -len(rows), "webhooks": made, "webhook_sent": sent}
+
+
+MOVES[60] = move_webhook_rows
 
 
 def _steps(frm: int) -> list[MigrationStep]:
@@ -1185,6 +1694,14 @@ def _steps(frm: int) -> list[MigrationStep]:
         50: MigrationStep(51, V50_TO_V51, ()),
         51: MigrationStep(52, V51_TO_V52, ()),
         52: MigrationStep(53, V52_TO_V53, ("say_keys",)),
+        53: MigrationStep(54, V53_TO_V54, ()),
+        54: MigrationStep(55, V54_TO_V55, ()),
+        55: MigrationStep(56, V55_TO_V56, ()),
+        56: MigrationStep(57, V56_TO_V57, (), (("reviews", "'none', 'blocked'"),)),
+        57: MigrationStep(58, V57_TO_V58, ("mcp_sessions",)),
+        58: MigrationStep(59, V58_TO_V59, ()),
+        59: MigrationStep(60, V59_TO_V60, ("webhooks", "webhook_sent")),
+        60: MigrationStep(61, V60_TO_V61, (), (("participants", "'opencode','grok','test'"),)),
     }
     out = []
     v = frm
@@ -1235,6 +1752,10 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V45_TABLES
     if version <= 52:
         return V50_TABLES  # 51 added a column and 52 indexes, no table
+    if version <= 57:
+        return V55_TABLES  # 54 added a column, 55 and 56 clean text, 57 edits a CHECK: no table
+    if version <= 59:
+        return V59_TABLES  # 59 added an index: no table
     return TABLES
 
 
@@ -1267,7 +1788,14 @@ def _statements(script: str) -> list[str]:
     return out
 
 
-SCHEMA_STATEMENTS = [*_statements(SCHEMA), *SEARCH_DDL, *SAY_KEYS_DDL]
+SCHEMA_STATEMENTS = [
+    *_statements(SCHEMA),
+    *SEARCH_DDL,
+    *SAY_KEYS_DDL,
+    *MCP_SESSIONS_DDL,
+    *ADDRESSED_DDL,
+    *WEBHOOKS_DDL,
+]
 
 
 def connect(path: str | os.PathLike, *, readonly: bool = False) -> sqlite3.Connection:
@@ -1412,7 +1940,8 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     then every step's statements in one ``BEGIN IMMEDIATE``, then ``integrity_check`` and
     the row counts again: the rows of every old table that is still there are all still there
     (``kept_tables``: a step may drop a table, which the backup still counted) and the new tables
-    are empty. Any failure rolls back and leaves the database as it was."""
+    are empty, but for the rows a step moved from one table to another (``MOVES``), which it
+    counts. Any failure rolls back and leaves the database as it was."""
     if backup_to is None:
         raise SchemaError(
             f"schema version {frm} needs a migration to version {SCHEMA_VERSION}, and a migration"
@@ -1421,6 +1950,9 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
     old_tables = tables_of(frm)
     dest, counts = backup_verified(con, backup_to, tables=old_tables)
     log.warning("schema migration %d -> %d: backup written to %s", frm, SCHEMA_VERSION, dest.name)
+    # a rewrite zeroes the bytes it replaces, and leaves none in a free page (#890)
+    secure = con.execute("PRAGMA secure_delete").fetchone()[0]
+    con.execute("PRAGMA secure_delete=ON")
     con.execute("BEGIN IMMEDIATE")
     try:
         v = schema_version(con)
@@ -1429,6 +1961,7 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         if row_counts(con, old_tables) != counts:
             raise SchemaError("the database changed while its migration backup was made; start again")
         added: list[str] = []
+        moved: dict[str, int] = {}
         for to, stmts, new, schema_edits in _steps(frm):
             if schema_edits:
                 cookie = int(con.execute("PRAGMA schema_version").fetchone()[0])
@@ -1436,6 +1969,11 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             try:
                 for stmt in stmts:
                     con.execute(stmt)
+                if to in REWRITES:
+                    log.warning("schema migration to %d rewrote %d stored values", to, REWRITES[to](con))
+                if to in MOVES:
+                    for table, n in MOVES[to](con).items():
+                        moved[table] = moved.get(table, 0) + n
                 for table, required in schema_edits:
                     row = con.execute(
                         "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -1456,11 +1994,18 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
         survivors = kept_tables(frm)
         after = row_counts(con, survivors)
         made = kept(tuple(added))  # a table made by one step and dropped by a later one is gone
-        empty = {t: 0 for t in made}
-        if after != {t: counts[t] for t in survivors} or row_counts(con, made) != empty:
+        empty = {t: moved.get(t, 0) for t in made}  # a new table holds only what a move put in it
+        if after != {t: counts[t] + moved.get(t, 0) for t in survivors} or row_counts(con, made) != empty:
             raise SchemaError(f"row counts changed in the migration ({after} != {counts})")
         if schema_version(con) != SCHEMA_VERSION:
             raise SchemaError(f"the migration did not set schema version {SCHEMA_VERSION}")
+        # always owed by the upgrade to 55 or 56, whatever survives: a room deleted before the upgrade left
+        # its board's text in free pages or the log (DESIGN §28.6), and cleaning rows cannot reach that
+        owed = (SCHEMA_VERSION >= 55 and frm < 55) or (SCHEMA_VERSION >= 56 and frm < 56)
+        if owed:
+            # a rewrite can't zero what earlier edits left in free pages: a VACUUM after the commit does,
+            # and this row (written with it, after the counts above) says it is still owed
+            con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES(?, '1')", (CLEAN_PENDING,))
     except BaseException as e:
         if con.in_transaction:  # SQLite may already have rolled back (a full disk, an I/O error)
             con.execute("ROLLBACK")
@@ -1475,8 +2020,42 @@ def _migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None, frm: 
             ) from e
         raise
     con.execute("COMMIT")
+    con.execute(f"PRAGMA secure_delete={int(secure)}")
     log.warning("schema migration %d -> %d done", frm, SCHEMA_VERSION)
-    return dest
+    return dest  # the cleanup it owes is finished by ``migrate``, once for the start
+
+
+CLEAN_PENDING = "review_clean_pending"
+
+
+def finish_review_clean(con: sqlite3.Connection) -> bool:
+    """After the upgrade that cleaned a review board's or a whiteboard's stored text (schema 55, #890, and 56,
+    #893; one pending row and one VACUUM for both): rebuild the database
+    file (``VACUUM``: the free pages earlier releases left, which a rewrite can't zero, go too) and fold the
+    WAL into it and empty it (``wal_checkpoint(TRUNCATE)``, whose answer is read: a reader holding an old
+    snapshot makes it report busy). Only then is the ``meta`` row that says it is owed removed. A failure or a
+    busy checkpoint is logged and leaves the row, and the next start tries again (``migrate``). True when
+    nothing is owed or it is done."""
+    if con.execute("SELECT 1 FROM meta WHERE key=?", (CLEAN_PENDING,)).fetchone() is None:
+        return True
+    secure = con.execute("PRAGMA secure_delete").fetchone()[0]
+    con.execute("PRAGMA secure_delete=ON")
+    try:
+        con.execute("VACUUM")
+        busy = con.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+        if busy:
+            log.warning(
+                "cleaning stored review boards: the WAL could not be emptied (busy); retrying at start"
+            )
+            return False
+        con.execute("DELETE FROM meta WHERE key=?", (CLEAN_PENDING,))
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # the row's own page: nothing secret, but leave no log
+    except sqlite3.Error as e:
+        log.warning("cleaning stored review boards: %s; retrying at start", e)
+        return False
+    finally:
+        con.execute(f"PRAGMA secure_delete={int(secure)}")
+    return True
 
 
 def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None) -> int:
@@ -1497,6 +2076,7 @@ def migrate(con: sqlite3.Connection, backup_to: str | os.PathLike | None = None)
         v = schema_version(con)
     if v != SCHEMA_VERSION:
         raise SchemaError(f"database schema version {v} is not supported (expected {SCHEMA_VERSION})")
+    finish_review_clean(con)  # owed by an upgrade whose checkpoint was busy or whose VACUUM failed
     return v
 
 

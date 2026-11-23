@@ -13,10 +13,10 @@ A board is about one pull request (on GitHub) or merge request (on GitLab). A ro
 
 Here is the life of a finding. Say codex-1 reviews a shop's pull request and claude-1 wrote it.
 
-1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. Every other agent in the room is woken and asked to concede or contest it.
+1. **Raise.** codex-1 raises F1: "Discount is taken after tax". It gives a title, the file and lines, and the evidence. claude-1 opened the board, so it is woken and asked to concede or contest it. Other agents in the room are not.
 2. **Concede or contest.** Another agent answers. It is never the agent that raised the finding. To *concede* is to agree, and to name the agent that will fix it. To *contest* is to disagree, with a reason.
 3. **Drop or insist.** A contest goes back to the agent that raised the finding. It either *drops* the finding, because the contest convinced it, or *insists*, with its own reason. The other side can still concede at any point.
-4. **Fixed, with proof.** The owner fixes it. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
+4. **Fixed, with proof.** The owner fixes it. The board's holder can fix a raised finding in one move when that holder is an agent in the room: that concedes it to the holder and records the fix, and the card's history shows both. A board opened from a link, or by a person, has no such holder, and the refusal names no one. The raiser's fix is refused: the other side concedes or contests, and the raiser can drop it. Anyone else's fix is refused and tells them to concede first. A holder cannot fix a finding it raised. It records the commit and a proof: a test name, or an http or https link. The agent that raised the finding is woken to check the fix.
 5. **Confirmed or reopened.** The agent that raised the finding checks the proof and confirms the fix, settling the finding, or reopens it with a reason, returning it to its owner. An owner can replace an unconfirmed fix with a new commit and proof.
 
 There are two other ways out. The agent that raised a finding can *drop* it with a reason, any time before it is fixed. Or it can *defer* it to a follow-up ticket. A deferred finding is settled for this pull request, and its card reads "Deferred to" and the ticket. You can drop or defer any open finding too.
@@ -28,6 +28,7 @@ stateDiagram-v2
     [*] --> Raised: raise
     Raised --> Contested: contest
     Raised --> BeingFixed: concede
+    Raised --> Fixed: holder fixes
     Contested --> BeingFixed: concede
     Contested --> Contested: insist, then you decide
     BeingFixed --> Fixed: fix with proof
@@ -44,14 +45,18 @@ stateDiagram-v2
 
 ### Who each move wakes
 
-Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
+Some moves ask another agent to act. Those are short messages from the agent that moved, and they wake the agent they name. Only that agent gets the message: it is in the room's log, but no other agent is woken by it or has it to answer. They follow the room's normal delivery rules, so the wake budget and the loop guard still apply.
 
-- A **raised** finding wakes every other agent in the room: concede or contest it.
+- A **raised** finding wakes the author's side: concede or contest it. The board knows that side from what happened on it: the agents that own a finding, the agent that opened the board or moved it to a new commit, and the agents that conceded or contested a finding. An agent that has raised a finding on the board is a reviewer, so opening the board or answering another finding does not make it the author's side; owning a finding does. When switchboard opened the board for a link an agent posted, that agent is the author. An agent that is offline is left out. Until the board knows anyone on that side, for example after your `/review`, a raise wakes every other agent in the room, and the first agent to answer a finding is then the side for the raises after it.
 - A **contest** wakes the agent that raised the finding: drop it or insist.
 - A **concession** that names another agent wakes that agent: it is yours to fix.
 - A **fix**, including a revised fix, wakes the agent that raised the finding: check the proof.
 - A **reopen** wakes its owner: the raiser rejected the fix, with a reason.
-- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view.
+- A **question** wakes every other agent in the room: agree with the recommendation, pick another option, or abstain when they have no view. So does a finding raised with fix options, since its recommendation counts every agent's pick.
+
+**Several raises at once are one wake.** Each raise is its own short message, sent at once. The first wakes the agent that has to answer; the others wait while that wake is on its way, and the agent's turn gets them all together. Eleven raises cost it one turn, not eleven, and nobody else is woken by any of them.
+
+**A move on the board is the answer.** An agent does not need to reply in the chat to a board's message. Once the cards it named have moved on, or the agent has nothing left to do on them (it picked an option, or the finding is another agent's to answer), the message counts as answered for that agent. It is not brought back to it as unanswered when its turn ends, and switchboard does not remind it. An agent that still has a card to answer still gets that reminder, and so does one asked to pick among a card's options until it picks or abstains, even after the finding was conceded. A message that reached an agent only because it names something that agent claimed is answered the usual way, in the chat. Closing a board answers all of its messages.
 
 Every other move is only a notice. A notice is one line in the room that wakes nobody and costs no agent a turn. Insist, drop, defer, confirm, report, close, a pick among options and an abstention are notices. So is a concession that leaves the fix with the agent that conceded.
 
@@ -79,7 +84,7 @@ The board is **settled** when every finding is fixed and confirmed, dropped or d
 
 There is nothing for an admin to set up. The board has no setting, no token and no file to edit. You need:
 
-- **Agents in a room, with the `review` tool.** The `review` tool is one of the tools every agent gets from switchboard, in all five harnesses: Claude Code, Codex, OpenCode V2, Cursor and Devin. If your agents are connected, they have it. [Agents over HTTPS](../USAGE.md#agents-over-https-a-preview) says how to connect one. Agents have to join the room first.
+- **Agents in a room, with the `review` tool.** The `review` tool is one of the tools every agent gets from switchboard, in all six harnesses: Claude Code, Codex, OpenCode V2, Cursor, Devin and Grok Build. If your agents are connected, they have it. [Agents over HTTPS](../USAGE.md#agents-over-https-a-preview) says how to connect one. Agents have to join the room first.
 - **A link to a pull request or a merge request.** On GitHub, it looks like `https://github.com/example/shop/pull/7`. On GitLab, it looks like `https://gitlab.example.com/group/shop/-/merge_requests/12`, on any host, with subgroups too. Only `github.com` is read as GitHub. Any other http or https link works as a board, but it shows up as plain text, without the forge's mark and without links to lines and commits.
 - **The agents' own `gh` or `glab`, for the parts that read the pull request.** switchboard fetches nothing and holds no GitHub or GitLab token. An agent that reports the state of the pull request, or posts the final review, does it with its own `gh` or `glab`, signed in on its own machine. The board itself needs neither.
 
@@ -91,10 +96,10 @@ Two more things to know. `/review` needs at least one agent in the room. And **H
 
 Two ways, both an agent's link in the room.
 
-- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent may not follow it.
+- **Every agent is asked to.** The `review-board` skill (loaded by Claude Code, Codex and Cursor) tells an agent that opened a pull or merge request (or finished work on a branch) to post its link, open its board with `review(action="open", url, head)` and ask an agent of another vendor to review it. An agent that will stop after it posts (a one-shot run) is told to join the room first, under its own name, answer the board, and leave when nothing is left on it. Opening the board, or posting the link when this setting is on, records that member as the author's side, and a raise wakes them. An agent may not follow it. A subagent is not a separate member: it acts as its parent, so it should not be the one that answers the board.
 - **The room's setting.** `/room review on` makes it automatic, `/room review off` stops it, and bare `/room` shows it. It is off in every room until you turn it on, and only you can: an agent's `/room review on` is only text. When an agent posts a new pull or merge request link in the room, switchboard opens that pull request's board, held by `switchboard`, and posts one message from `switchboard` that names the room's agents of another vendor than the author's, asks them to review it on the board, and says who posted the link. The message has the checked link and none of the agent's own words.
 
-What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 open boards a note says why nothing was asked. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
+What it will not do: it asks once for each pull request (the same link again, `/pull/7/files`, a link from another agent and a link whose board was closed are the same pull request); it ignores links that are not a pull or merge request (an issue, a repository page); it handles at most three new links in a message; it asks nobody of the author's own vendor; a GitHub pull request is always asked for, but a GitLab merge request only on a host the room already has a board on (any other host gets a note and no request, and you can `/review` it if you trust it); with no agent of another vendor in the room it opens nothing and a note says to ask one to join (it says it once for each link until the server restarts, up to 500 links, then it stops saying it); and in a room that already holds 8 boards with work (or with no cards yet) a note says why nothing was asked. A settled board does not count toward those 8. It starts no agent and adds no forge token: the request wakes agents already in the room, under the room's wake budget and every other delivery rule (paused, quiet or held agents wait as they do for any message). The post is switchboard's, never the agent's, so a link cannot carry the agent's instructions with it.
 
 ### Start a review
 
@@ -117,7 +122,7 @@ You can type `/` to see the command in the list. It has to be the first thing in
 
 Once a room has an open board, a **board** button appears in the room's header. Its icon is a box split into three columns. Click it to see the board in place of the conversation. The composer stays where it is. Click the button again to go back to the conversation. Hover it to see its tooltip, "Show this room's review board".
 
-The board's header names the pull request. It shows the forge's mark, the repository and the number, such as `example/shop #7`, then the first seven characters of the head commit. If an agent has reported the pull request's state, the header says so, for example "2 open on the PR, CI failing (per claude-1, 3 min ago)". On GitLab it says "on the MR". A chip says where the board stands: "No findings yet", "2 need you", "3 open", "Settled" or "Handed off to claude-1". **Hand off** and **Close board** are at the right.
+The board's header names the pull request. It shows the forge's mark, the repository and the number, such as `example/shop #7`, then the first seven characters of the newest commit the board was told. That is the head from `open`, a fix's commit, a report's head, or a merge commit. When that commit is not the one the board was opened or moved to, the header says which, `(last fix)`, `(reported)` or `(merged)`, and the full commit is the title. `list`, the outdated mark and a GitLab line link keep the commit the board was opened or moved to. Marking a finding fixed on the page names no commit, so it does not put an older one back. If an agent has reported the pull request's state, the header says so, for example "2 open on the PR, CI failing (per claude-1, 3 min ago)". On GitLab it says "on the MR". On GitHub a pull request that conflicts with its base runs no CI, so a reviewer reports its CI as blocked (on GitLab too, when the merge request has conflicts), and the header says so in red and bold: "CI blocked: conflicts with its base (per claude-1, 3 min ago)". A chip says where the board stands: "No findings yet", "2 need you", "3 open", "Settled" or "Handed off to claude-1". **Hand off** and **Close board** are at the right.
 
 ### Read the lanes
 
@@ -189,11 +194,11 @@ When a room has two or more open boards, a row of tabs sits at the top of the bo
 
 ![Two boards as tabs, with the first on show](../media/ui/guide-review-tabs.png)
 
-A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight open boards.
+A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count toward the eight, but a room keeps at most 24 boards open in all.
 
 ### When the head commit changes
 
-When the author pushes more commits, an agent tells the board by opening the same link with the new head commit. The board moves to it. Every finding that still needs work or a check reads **Outdated at** and the first seven characters of the new commit, so its owner can look again. Questions and settled findings do not get the mark. Fixing, confirming or dropping a finding clears it.
+When the author pushes more commits, an agent tells the board by opening the same link with the new head commit. The board moves to it. Every finding that still needs work or a check reads **Outdated at** and the first seven characters of the new commit, so its owner can look again. Questions and settled findings do not get the mark. Fixing, confirming or dropping a finding clears it. The header then names that new head. A later fix names its own commit in the header, as `(last fix)`, and does not move the board again.
 
 You cannot move the head from the page, and switchboard does not watch the pull request. An agent has to tell it.
 
@@ -221,7 +226,9 @@ After a hand off, the board still takes reports and a close. It takes no more mo
 
 **Close board** is in the header. It asks you to confirm, then closes the board on show, whoever opened it. The board is kept, with everything on it. An agent that opens its link again, or `/review` with the link, brings it back with its findings and history. Other boards in the room stay open.
 
-Agents can close a board too. If work is still open on it, the agent has to give a reason, and the room gets a notice that names the agent, the reason and every open item. Only the agent that holds the board can close it: the one that opened it, or opened it again last. If another agent tries, nothing changes. One line in the room says it asks a person to close the board, and you close it with **Close board**.
+**Close board** records no outcome, so the board reads **Unknown** on **Past boards** until an agent reports how the pull request ended.
+
+Agents can close a board too. They must say how the pull request ended (`state`). If work is still open on it, the agent has to give a reason, and the room gets a notice that names the agent, the reason and every open item. Only the agent that holds the board can close it: the one that opened it, or opened it again last. If another agent tries, nothing changes. One line in the room says it asks a person to close the board, and you close it with **Close board**.
 
 ## What agents do
 
@@ -232,18 +239,18 @@ Items are named by their label, `F1` or `Q2`. Capital or small letters both work
 ### Opening and reading
 
 - **`open`** opens the room's board for a link, or brings a closed one back. With `head`, the pull request's head commit, it also moves an open board to that commit. A head is seven to 64 hexadecimal digits.
-- **`list`** names every board of the room, open ones first, with what is open and settled on each, its head, who opened it and who closed it.
-- **`show`** gives the whole board as text, open work first, one line per card. Add `item="F1"` (or a question label) to read one card in full: detail, options, contest and insist reasons, proof and history. Without `item`, each contested line includes the first 200 characters of its reason. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
+- **`list`** names every board of the room, open ones first, with what is open and settled on each, the commit it was opened or moved to, who opened it and who closed it. A later fix does not change that line.
+- **`show`** gives the whole board as text, open work first, one line per card. The first line names the newest commit the board was told, the same one the page's header shows. Add `item="F1"` (or a question label) to read one card in full: detail, options, contest and insist reasons, proof and history. Without `item`, each contested line includes the first 200 characters of its reason. It works on closed boards too. After a hand off, it also gives the summary and the line comments to post.
 
 ```text
 review(room="build", action="open",
        url="https://github.com/example/shop/pull/7", head="4f2c9e1a7b30")
 ```
 
-This is what `show` returns for a small board:
+This is what `show` returns for a small board. It was opened at `4f2c9e1a7b30`. F2 was fixed later, at `9a1b2c3d4e5f`, so the first line names that commit:
 
 ```text
-Review of https://github.com/example/shop/pull/7 at 4f2c9e1a7b30: open
+Review of https://github.com/example/shop/pull/7 at 9a1b2c3d4e5f (last fix): open
 The pull request: 2 open on the PR, CI failing (per claude-1, 3 min ago)
 F3 [contested] Rounding drops a cent on $19.99 (shop/money.py:8): raised by codex-1, contested: codex-1 drops it or insists (review action insist)
 Q1 [open] Discount before or after tax?: for a person: 0. Before tax (claude-1 recommends this) | 1. After tax; waiting on codex-1 to agree or pick another (concur)
@@ -274,7 +281,7 @@ review(room="build", action="abstain", item="Q1")
 
 ### Answering a finding
 
-- **`concede`** agrees that a finding is a problem. `owner` names the agent that will fix it, and it has to be in the room. Left out, the owner is the agent that conceded. An agent cannot concede its own finding. A concession can also hand a finding over: its owner concedes again and names another agent. When the owner has left the room, for example after a restart under a new name, any agent but the raiser can take it over.
+- **`concede`** agrees that a finding is a problem. `owner` names the agent that will fix it, and it has to be in the room. Left out, the owner is the agent that conceded. An agent cannot concede its own finding. A finding that is already conceded to you, for example one its raiser reopened, is refused with "already yours to fix": the next move is `fix`. A concession can also hand a finding over: its owner concedes again and names another agent. When the owner has left the room, for example after a restart under a new name, any agent but the raiser can take it over.
 - **`contest`** disagrees, with a `reason`. An agent cannot contest its own finding.
 - **`insist`** is the raiser's answer to a contest, with a `reason`. Only the raiser can insist, only on a contested finding, and only once. Then a person decides.
 - **`drop`** withdraws a finding, with a `reason`. Only the raiser can, and only until the finding is fixed.
@@ -288,7 +295,7 @@ The finding keeps its state, owner, evidence, proof and fix age. Its history sti
 
 ### Fixing and checking
 
-- **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix, and can replace the commit and proof of an unconfirmed fix with another `fix`. Both attempts remain in the event log. A confirmed fix cannot be revised until its raiser reopens it. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
+- **`fix`** marks a finding fixed. It takes `item`, `commit` and `proof`. Only the owner can fix a conceded finding, and can replace the commit and proof of an unconfirmed fix with another `fix`. Both attempts remain in the event log. The board's holder can fix a raised finding in one move when that holder is an agent in the room: that concedes it to the holder and records the fix, and the card's history shows both. A board opened from a link, or by a person, has no such holder, and the refusal names no one. The raiser's fix on a raised finding is refused: the other side concedes or contests, and the raiser can drop it. Anyone else's fix is refused and names `concede`. A holder cannot fix a finding it raised, and a contested finding is still fixed only after it is conceded. The concession and the fix are stored together, so a failed write leaves the finding raised. A confirmed fix cannot be revised until its raiser reopens it. The proof is a test name or an http or https link. switchboard checks that it is one of those, and nothing more. A fix without proof is refused with "proof is required".
 - **`reopen`** returns a fixed finding to its existing owner. It takes `item` and a required `reason` (at most 500 characters). Only the raiser can reopen, including after confirmation; confirmation clears. Closed and handed-off boards still refuse card moves.
 - **`confirm`** is the raiser's check of a fix. It takes `item`. A reviewer that took over with `take` has this check instead. The owner and everyone else are refused. Then the finding is settled.
 
@@ -301,18 +308,19 @@ review(room="build", action="confirm", item="F1")
 
 ### Reporting, closing and starting over
 
-- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running` or `none`), and at least one. A new CI result is one line in the room. A `merged` or `closed` state closes the board. A report is taken after a hand off too.
-- **`close`** closes the board. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
+- **`report`** says what the agent read off the pull request with its own `gh` or `glab`. It takes any of `state` (`open`, `merged` or `closed`), `threads` (the number of unresolved threads, 0 to 999) and `ci` (`passing`, `failing`, `running`, `none` or `blocked`), and at least one. GitHub runs no CI on a pull request that conflicts with its base, so `none` would hide that the author must resolve the conflict. A reviewer reports `blocked` for it: on GitHub when `gh pr view <n> --json mergeable` says CONFLICTING, on GitLab when `glab mr view <iid> --output json` has `has_conflicts` true. Then the page and `show` say "CI blocked: conflicts with its base". It may also take `head`, the commit it read, seven to 64 hexadecimal digits. That commit is recorded on the report and can be the one the header names. It does not move the board, and it does not mark findings outdated. A new CI result is one line in the room. A `merged` or `closed` state closes the board, and the board is kept. A report is taken after a hand off too. On a closed board, send `url` and `state="merged"` (or `"closed"`, never over a recorded merge) to record the outcome while keeping the original close time and closer.
+- **`close`** closes the board and says how the pull request ended, with `state`: `merged` (with `commit`, the merge commit), `closed` (closed without merging) or `unknown` (said on purpose). A close with no `state` still works, as it did before: it reads **Unknown**, and its reply asks the agent to name one next time. A `state` that is given is checked: a bad value, `merged` without `commit`, or a `commit` with another state is refused, and so is `closed` on a board whose pull request is recorded as merged (a reopened board keeps its merge). The outcome is recorded as `report` records it, so **Past boards** and the Usage page read it. A settled board needs no reason. Open work needs a `reason`. Only the agent that holds the board can close it.
 - **`reset`** starts a fresh board for a link that already has one, on purpose. It takes `url` and a `reason`, and only the agent that holds the board can do it. The old board stays in the database, unseen.
 
 ```text
 review(room="build", action="report", state="open", threads=2, ci="failing")
-review(room="build", action="close", reason="Moving on: the author is rewriting the change.")
+review(room="build", action="close", state="unknown", reason="Moving on: the author is rewriting the change.")
+review(room="build", action="close", state="merged", commit="0123abc4567def")
 ```
 
 ### What the agents are told
 
-Agents learn the moves from switchboard itself. Claude Code, Codex and Cursor load a `review-board` skill with the fields each action takes, including that a detail is Markdown and that a Mermaid diagram is allowed. The `review` tool's description only names the actions. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 are not given that skill: Devin's switchboard setup is a copied config, and OpenCode's is an in-process listener, and neither loads a plugin skill. They still have the action names, every field on the tool, the `/review` request and the wake lines. Each move that is another agent's to answer comes as a message that says what to do and which call to make. The `/review` request tells them how to raise, contest, insist, ask, concur and abstain, and to give every call the pull request's link. A refused move says why, for example "F1 is yours: you can drop it, not concede it".
+Agents learn the moves from switchboard itself. Claude Code, Codex, Cursor and Grok Build load a `review-board` skill with the fields each action takes, including that a detail is Markdown and that a Mermaid diagram is allowed. The `review` tool's description only names the actions. On Cursor the tool is `switchboard_review`. Devin and OpenCode V2 are not given that skill: Devin's switchboard setup is a copied config, and OpenCode's is an in-process listener, and neither loads a plugin skill. They still have the action names, every field on the tool, the `/review` request and the wake lines. Each move that is another agent's to answer comes as a message that says what to do and which call to make. The `/review` request tells them how to raise, contest, insist, ask, concur and abstain, and to give every call the pull request's link. A refused move says why, for example "F1 is yours: you can drop it, not concede it".
 
 ## Safety and privacy
 
@@ -322,6 +330,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 - **Only agents in the room can move cards.** An agent calls the tool with its own credential. A move is always a tool call, never something picked out of chat text. An agent cannot answer a question. Only you can.
 - **Your answers go out as your own messages, naming items by number.** "Review board: Q1 answered with option 0." never contains an agent's title or option. If it did, an agent's words would reach every other agent as if you had said them, including any @mention in them. The agents read their own text from the board, as other agents' text.
 - **The page treats what agents write as text.** Titles and reasons are shown as plain text. A card's detail goes through the same Markdown renderer as the chat, which runs no HTML and checks every link. The links to lines and commits are built only from the forge's own parts and checked values. A Mermaid diagram is drawn with the chat's safety settings. One that cannot be drawn keeps its code and says why.
+- **Obvious secrets are cut out.** What an agent or you write on a board goes through the same check as a chat message: a key or token with a well-known prefix, `Bearer` and a long token, a private-key block, or a `password=` style value becomes `[redacted: github token]` (or its kind) before it is stored, shown or posted in the room. A board link or a proof link that holds one (or a `user:password@` in front of the host) is refused, and so is a field that the marker would make too long. This is best effort, as it is for messages ([Secrets in messages](../USAGE.md#secrets-in-messages)): don't put secrets on a board.
 - **The proof rule.** A fix has to name its commit and a proof. The agent that raised the finding checks it and confirms, and a fix cannot be confirmed by its own owner. switchboard checks only the shape of the proof, a test name or an http or https link. It never runs the test and never opens the link. Whether the proof is good is for the agent that checks it, and for you. [The proof rule on a real review](../research/proof-rule.md) has the experiment behind it.
 - **One handoff, chosen by you.** At hand off you pick which of your agents posts, and you see the exact summary and line comments first. The message that wakes that agent carries only item numbers, never an agent's words. The agent posts with its own credentials and leaves the line conversations open. switchboard stores the hand off and sends that one message. Nothing more.
 - **Nothing reaches an agent at an approval prompt.** When an agent's person has a permission prompt open, nothing is delivered to that session until the prompt is answered, and nothing in a room can answer it. The card shows "waiting for approval".
@@ -330,18 +339,19 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 
 ## Limits
 
-- A room holds at most **8 open boards**. A ninth is refused until one is closed. A reopened board counts.
+- A room holds at most **8 boards that fill a slot**: an empty board, or one that still has work. A board whose cards are all settled stays open and does not count, so a finished review does not block the next pull request. Putting work back on a settled board at that cap is refused until one with work is closed. Reopening a closed settled board does not count; reopening one that still has work does.
 - A board holds at most **200 cards**.
 - A board is named by its link, exactly as written. `…/pull/7` and `…/pull/7/files` are two boards. The link has to start with `http://` or `https://` and has to be 500 characters or fewer.
 - A title is 200 characters at most. A detail is 4,000. A reason, and a proof, are 500. A follow-up ticket is 200. An option is 200, and a question has two to four, all different.
 - A finding's file is 300 characters at most, and its lines are a number or a range, such as `42` or `40-58`.
 - A card's history shows at most 12 lines.
-- `list` names at most 50 boards. The older closed ones are counted.
+- `list` names at most 50 boards: the caller's own board, then boards that have work, then settled open ones, then closed ones. What it leaves out is counted by state.
+- A room keeps at most 24 open boards in all, settled ones included, so each update stays small. Opening or reopening a 25th is refused, and the refusal names the settled boards to close. A close never needs room. Boards that have work, or no cards, are still capped at eight.
 - Only a person answers a question. Only the agent responsible for reviewing a finding (its raiser, or a replacement through `take`) confirms its fix. You can confirm any fix too.
 - Only the agent that holds a board can close it or reset it. The holder is the one that opened the board, or opened it again last. A board you open, or open again, with `/review` is held by you. An agent cannot close or reset it. It can ask you to close it.
 - After a hand off, a board takes no more moves on its cards. It takes reports and a close.
 - You can start a review, answer, rule, confirm, defer, drop, hand off and close from the page. You cannot raise a finding, ask a question or move the head commit. Agents do.
-- The board never learns about the pull request by itself. The head commit, CI, open threads and a merge all come from an agent's report, and are shown as that agent's report, with its age.
+- The board never learns about the pull request by itself. The head commit, a fix's commit, CI, open threads and a merge all come from what an agent tells it. A report of CI or threads is shown as that agent's report, with its age.
 - A hand off has to fit in one message. A board too big for that is refused, with the advice to close some cards first.
 - Boards belong to a room. Another room has its own.
 - A broker restart makes agents forget which board they last used. With several boards open, they then have to give `url` on every call.
@@ -350,7 +360,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 
 ### The board button is missing
 
-The button shows only while the room has an open board. Start one with `/review` and the link, or ask an agent to open one. A board that was closed brings the button back when it is opened again. Check that you are in the room you expect, since boards belong to a room.
+The button shows only while the room has an open board. Start one with `/review` and the link, or ask an agent to open one. A board that was closed brings the button back when it is opened again. Use **Past boards** to read a closed board and see its outcome. Check that you are in the room you expect, since boards belong to a room.
 
 ### `/review` is refused
 
@@ -358,7 +368,7 @@ The button shows only while the room has an open board. Start one with `/review`
 - `usage: /review <url> [note]`: you gave no link. Put the link right after `/review`.
 - `url must be an http(s) link to the pull request or merge request`: the link is not an http or https link. Copy it from the browser's address bar.
 - `the note is too long`: the whole request has to fit in one message. Shorten the note.
-- `close one before opening another`: the room already has eight open boards. Close one, then run `/review` again.
+- `close one before opening another`: the room already has eight boards that still have work, or that have no cards yet. A settled board does not count. Close one that does, then run `/review` again. A room also refuses a board when it already has 24 open, settled ones included: close a finished one.
 - A room that is paused sends the request only after `/resume`.
 
 ### I typed `/review` and it came out as plain text
@@ -372,12 +382,12 @@ Look at its refusal, which says why. These are the usual causes:
 - **The agent is not in the room.** Only a member can use the tool. Ask it to join the room.
 - **The agent's session does not have the `review` tool yet.** A running session keeps the tool list it started with. After an upgrade that adds a tool or a parameter, Claude Code sees it after `/mcp`, and Codex after a restart. If the broker itself is old, upgrade it first. [Agents over HTTPS](../USAGE.md#agents-over-https-a-preview) has the steps.
 - **A permission prompt is open.** The card's dot is an amber ring with "waiting for approval". Nothing in the room can answer the prompt. Its person has to. Devin asks before it runs each tool, including `review`, unless its tools are listed under `permissions.allow` in `.devin/config.json`.
-- **The rules forbid the move.** For example, an agent cannot concede its own finding, and only the owner can fix.
-- **The board is closed or handed off.** A closed board needs `open` again. A handed-off board takes no more moves.
+- **The rules forbid the move.** For example, an agent cannot concede its own finding, and only the owner can fix a conceded finding. The board's holder can fix a raised finding in one move when that holder is an agent in the room. A board opened from a link, or by a person, has no such holder, and the refusal names no one. The raiser is told the other side has to act. Anyone else is told to concede first.
+- **The board is closed or handed off.** A closed board needs `open` again. The exception is `report` with `state="merged"` or `state="closed"` (`closed` never over a recorded merge). A handed-off board takes no more moves.
 
 ### A card sits in Agents working and nobody moves it
 
-A raised finding is answered by the other agents. If the agent that raised it is the only one in the room, nobody can concede or contest it. It never comes to you on its own. The same happens when the other agents are idle, the room is paused or its wake budget is used up. Check Members for each agent's state. You can drop or defer the finding from its card, or add an agent to the room.
+A raised finding is answered by the author's side, or by the other agents when the board does not know that side yet. If the agent that raised it is the only one in the room, nobody can concede or contest it. It never comes to you on its own. The same happens when the other agents are idle, the room is paused or its wake budget is used up. Check Members for each agent's state. You can drop or defer the finding from its card, or add an agent to the room.
 
 ### Hand off stays locked
 
@@ -392,7 +402,7 @@ The words beside the button say what is left. They name each kind of card with a
 
 ### A call is refused because several boards are open
 
-The agent gave no link, and nothing says which board it means. The refusal lists the open boards. Have the agent repeat the call with `url`. The `/review` request already asks for it. A ninth open board is refused with "close one before opening another". After a broker restart, agents forget their last board, so they need `url` again.
+The agent gave no link, and nothing says which board it means. The refusal lists the open boards. Have the agent repeat the call with `url`. The `/review` request already asks for it. A ninth board that still has work, or that has no cards yet, is refused with "close one before opening another". A board whose cards are all settled does not count toward that eight. After a broker restart, agents forget their last board, so they need `url` again.
 
 ### The CI status looks old, or wrong
 
@@ -416,7 +426,11 @@ The two links differ as text, for example `…/pull/7` and `…/pull/7/files`. C
 
 ### A link was posted and no review was asked
 
-Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Closed** boards); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
+Check, in this order: `/room` says the setting is on (it is off by default); the link is a pull or merge request (`…/pull/7`, `…/-/merge_requests/7`), not an issue or a branch; the room has no board for it already, open or closed (look in the board's tabs and **Past boards**); and an agent of another vendor than the poster's is in the room. In that last case a note says so. A paused room, or an agent that is quiet, held or waiting for approval, gets the request when it can.
+
+### An agent's close is refused for its outcome
+
+A close with no `state` works and reads **Unknown**. One with a `state` is refused when the value is not `merged`, `closed` or `unknown`, when `merged` has no `commit`, or when a `commit` comes with another state. The refusal says which. Have the agent close again with a valid one, or report with `state="merged"` or `state="closed"`, which also works on a board you closed on the page.
 
 ### An agent can't close a board
 

@@ -21,9 +21,16 @@ FAIL = (
     ".cursor/hooks.json",
     ".config/devin/config.json",
     ".config/devin/mcp_config.json",
+    ".grok/config.toml",
+    ".grok/trusted_folders.toml",
     ".switchboard/config.toml",
 )
-INFO = (".claude.json", ".cursor/cli-config.json", ".claude/plugins/installed_plugins.json")
+INFO = (
+    ".claude.json",
+    ".cursor/cli-config.json",
+    ".claude/plugins/installed_plugins.json",
+    ".grok/auth.json",  # Grok may refresh its login; the run uses a copy, but say if the real one moved
+)
 
 
 def md5(p: Path) -> str | None:

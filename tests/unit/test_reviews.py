@@ -76,7 +76,75 @@ def test_only_the_owner_marks_a_conceded_finding_fixed() -> None:
     with pytest.raises(ReviewError, match="claude-1's to fix"):
         reviews.agent_move(f, "fix", "codex-1")
     with pytest.raises(ReviewError, match="can't be fixed from there"):
-        reviews.agent_move(finding("raised"), "fix", "codex-1")
+        reviews.agent_move(finding("raised", raised_by="codex-1"), "fix", "devin-1")
+
+
+def test_the_holders_fix_on_a_raised_finding_concedes_and_fixes() -> None:
+    """#904: the author usually fixes a finding the moment it is raised. The board's holder may
+    fix that raised finding in one move, which is the concession and the fix. Anyone else is
+    refused and told to concede first. With no holder known, the move stays refused. The holder
+    cannot fix a finding it raised, which would concede its own finding. A contested finding is
+    still not fixed from there. Fails if a bystander is allowed, or if the holder is refused."""
+    raised = finding("raised", raised_by="codex-1")
+    assert reviews.agent_move(raised, "fix", "claude-1", holder="claude-1", holder_here=True) == "fixed"
+    with pytest.raises(
+        ReviewError, match=r'Concede it first with review\(action="concede", item="F1"\)'
+    ) as other:
+        reviews.agent_move(raised, "fix", "devin-1", holder="claude-1", holder_here=True)
+    assert "only claude-1, who holds the board" in str(other.value)
+    with pytest.raises(ReviewError, match="can't be fixed from there"):
+        reviews.agent_move(raised, "fix", "claude-1")  # holder unknown: fail closed
+    with pytest.raises(ReviewError, match="is yours"):
+        reviews.agent_move(raised, "fix", "codex-1", holder="codex-1")
+    # the raiser is not the holder: drop is its move, and concede is the other side's
+    with pytest.raises(ReviewError, match="The other side concedes or contests it") as raised_by:
+        reviews.agent_move(raised, "fix", "codex-1", holder="claude-1")
+    assert "Concede it first" not in str(raised_by.value)
+    assert "drop" in str(raised_by.value)
+    contested = finding("contested", raised_by="codex-1")
+    with pytest.raises(ReviewError, match="can't be fixed from there"):
+        reviews.agent_move(contested, "fix", "claude-1", holder="claude-1")
+
+
+def test_a_board_is_held_by_an_agent_only_when_its_last_open_records_one() -> None:
+    """#904 (F4): a display name is not who opened a board. A person's open, a link's, an open
+    recorded before openers were, an unknown opener, or none: not an agent's. The holder is set by
+    the last open, reopen or reset; a later kept or moved open does not change it. Fails while the
+    holder's kind is read from its name: a person renamed away from it, and an agent joined under
+    it, would hold the board."""
+    agent = {"open": "u", "by": "claude-1", "how": "opened", "opener": "agent"}
+    assert reviews.held_by_agent("claude-1", [agent])
+    assert reviews.held_by_agent("claude-1", [agent, {"open": "u", "by": "alice", "how": "kept"}])
+    assert reviews.held_by_agent("claude-1", [agent, {"open": "u", "by": "alice", "how": "moved"}])
+    assert reviews.held_by_agent("claude-1", [{"open": "u", "by": "claude-1", "opener": "agent"}])  # reset
+    assert not reviews.held_by_agent("alice", [{**agent, "by": "alice", "opener": "person"}])
+    assert not reviews.held_by_agent("switchboard", [{**agent, "by": "switchboard", "opener": "link"}])
+    assert not reviews.held_by_agent("claude-1", [{"open": "u", "by": "claude-1", "how": "opened"}])
+    assert not reviews.held_by_agent("claude-1", [{**agent, "opener": "Agent"}])
+    assert not reviews.held_by_agent("claude-1", [{**agent, "by": "claude-2"}])
+    assert not reviews.held_by_agent("claude-1", [])
+    assert not reviews.held_by_agent("", [agent])
+    reopened = {"open": "u", "by": "alice", "how": "reopened", "opener": "person"}
+    assert not reviews.held_by_agent("alice", [agent, {"close": "u", "by": "claude-1"}, reopened])
+    assert not reviews.held_by_agent("claude-1", ["not a dict", None, {"to": "fixed", "by": "claude-1"}])
+
+
+def test_a_holder_who_is_not_an_agent_in_the_room_is_not_named() -> None:
+    """#904: a link-opened board is held by the reserved opener, and a person's board by that
+    person. Neither is an agent in the room, so a raised fix is refused like an unknown holder
+    and the refusal names no one. The raiser is still told to drop it. Fails while the refusal
+    says only switchboard, who holds the board, can fix it from there."""
+    raised = finding("raised", raised_by="codex-1")
+    for who in ("switchboard", "alice"):
+        with pytest.raises(ReviewError, match="can't be fixed from there") as unnamed:
+            reviews.agent_move(raised, "fix", "claude-1", holder=who, holder_here=False)
+        text = str(unnamed.value)
+        assert 'review(action="concede", item="F1")' in text
+        assert who not in text
+    with pytest.raises(ReviewError, match="The other side concedes or contests it") as own:
+        reviews.agent_move(raised, "fix", "codex-1", holder="switchboard", holder_here=False)
+    assert "switchboard" not in str(own.value)
+    assert "Concede it first" not in str(own.value)
 
 
 def test_a_new_fix_waits_for_the_raiser_to_confirm_before_settling() -> None:
@@ -219,6 +287,105 @@ def test_the_board_text_puts_open_work_first_and_stays_short() -> None:
     assert lines[2].startswith("Q1 [open] before or after tax?")
     assert "0. before tax (codex-1 recommends this) | 1. after tax" in lines[2]  # asked by codex-1
     assert lines[3].startswith("F1 [fixed]") and len(lines) == 4
+
+
+def test_show_names_the_newest_commit_the_board_was_told_and_keeps_the_opened_one() -> None:
+    """#906: the first line kept the commit the board was opened at after fixes landed at newer
+    ones, so a reader could think the review was of that old commit. ``show`` names the latest
+    commit an open, a fix or a report told the board, and says which when it is not the board's
+    head. The stored head is left as open set it. Fails if the line still names the opened
+    commit after a later fix, if a later open or report does not take the line, or if opening
+    again at the same head hides the fix."""
+    url = "https://example.com/pr/7"
+    opened, fix, moved, reported = "4f2c9e1a7b30", "9a1b2c3d4e5f", "7b9c2a4d6e8f", "aeb613ed0011"
+    review = {"url": url, "head": opened, "opened_at": 1.0}
+    items = [replace(finding("fixed", owner="claude-1"), commit=fix)]
+    told = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {"ts": 2.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": fix, "proof": "t"}},
+    ]
+    present = ("claude-1", "codex-1")
+
+    def first(events: list[dict[str, object]], row: dict[str, object] | None = None) -> str:
+        return reviews.render(row or review, items, None, present, (), events).splitlines()[0]
+
+    assert reviews.header_commit(review, items, told) == (fix, "last fix")
+    assert first(told) == f"Review of {url} at {fix} (last fix): settled"
+    # a later fix replaces an earlier one; the tag stays "last fix"
+    later = "656cfb2d395b"
+    two = told + [
+        {"ts": 3.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": later, "proof": "t"}}
+    ]
+    assert reviews.header_commit(review, [replace(items[0], commit=later)], two) == (later, "last fix")
+    # opening again at the same head is not a newer commit, so the fix stays
+    kept = told + [{"ts": 4.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "kept"}}]
+    assert first(kept) == f"Review of {url} at {fix} (last fix): settled"
+    # a later open that moves the head wins, and the line names that head with no tag
+    moved_row = {**review, "head": moved}
+    moved_events = told + [{"ts": 5.0, "data": {"open": url, "head": moved, "by": "codex-1", "how": "moved"}}]
+    assert reviews.header_commit(moved_row, items, moved_events) == (moved, "")
+    assert first(moved_events, moved_row) == f"Review of {url} at {moved}: settled"
+    # a report's head is a commit the board was told, and it does not replace the stored one
+    reported_events = told + [
+        {"ts": 5.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": reported}}
+    ]
+    assert reviews.header_commit(review, items, reported_events) == (reported, "reported")
+    assert first(reported_events) == f"Review of {url} at {reported} (reported): settled"
+    assert review["head"] == opened
+    # a close's merge commit is a commit the board was told (#894), later than the fix
+    merged = "c0ffee123456"
+    merge_events = told + [
+        {"ts": 6.0, "data": {"report": {"pr_state": "merged", "commit": merged}, "by": "claude-1"}}
+    ]
+    assert reviews.header_commit(review, items, merge_events) == (merged, "merged")
+    assert first(merge_events) == f"Review of {url} at {merged} (merged): settled"
+    # a non-hex commit is ignored. It must not promote the row's older commit over a
+    # commit told since: the row still holds the first fix.
+    between = "abababababab"
+    junk = told + [
+        {"ts": 8.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": between}},
+        {"ts": 9.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": "main"}},
+    ]
+    assert reviews.header_commit(review, items, junk) == (between, "reported")
+    # an old agent fix event has no commit field: the finding's commit is what it named
+    legacy = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {"ts": 2.0, "data": {"item": "F1", "to": "fixed", "by": "claude-1", "proof": "t"}},
+    ]
+    assert reviews.header_commit(review, items, legacy) == (fix, "last fix")
+    # a person's mark-fixed names no commit. The row still holds A after a reopen, and
+    # that ruling must not put A back over a commit the board was told since (B).
+    fixed_at, told_b = "aaa1111aaa11", "bbb2222bbb22"
+    ruled = [
+        {"ts": 1.0, "data": {"open": url, "head": opened, "by": "codex-1", "how": "opened"}},
+        {
+            "ts": 2.0,
+            "data": {"item": "F1", "to": "fixed", "by": "claude-1", "commit": fixed_at, "proof": "t"},
+        },
+        {"ts": 3.0, "data": {"item": "F1", "to": "conceded", "by": "codex-1"}},
+        {"ts": 4.0, "data": {"report": {"pr_state": "open"}, "by": "claude-1", "head": told_b}},
+        {"ts": 5.0, "data": {"item": "F1", "to": "fixed", "by": "alice", "person": True}},
+    ]
+    assert reviews.header_commit(
+        review, [replace(finding("conceded", owner="claude-1"), commit=fixed_at)], ruled
+    ) == (told_b, "reported")
+    # a merge commit and a head on the same event: the merge commit is the one named
+    both = "dddddddddddd"
+    tie = [
+        {
+            "ts": 1.0,
+            "data": {
+                "report": {"pr_state": "merged", "commit": merged},
+                "by": "claude-1",
+                "head": both,
+            },
+        }
+    ]
+    assert reviews.header_commit(review, items, tie) == (merged, "merged")
+    # with no events the line is the stored head, as a caller that has not loaded history reads it
+    assert reviews.render(review, items, None, present).splitlines()[0] == (
+        f"Review of {url} at {opened}: settled"
+    )
 
 
 def test_the_handoff_plan_includes_all_settled_outcomes_in_one_summary() -> None:
@@ -525,6 +692,19 @@ def test_a_raised_finding_is_the_other_agents_to_answer() -> None:
     )
 
 
+def test_a_settled_board_with_cards_does_not_fill_an_open_slot_and_an_empty_one_does() -> None:
+    """The room's cap is for boards that still have work, or that nobody has started. A finished
+    review stays open without taking a slot; an empty board still takes one, because ``settled``
+    is true of no cards. Fails if a finished board keeps blocking new ones, or if empty boards
+    can be opened without limit."""
+    assert reviews.fills_open_slot([])
+    assert reviews.fills_open_slot([finding("raised")])
+    assert reviews.fills_open_slot([replace(finding("fixed", owner="claude-1"), confirmed_by="")])
+    done = replace(finding("dropped"), deferred_to="")
+    assert not reviews.fills_open_slot([done])
+    assert not reviews.fills_open_slot([done, replace(finding("fixed", owner="claude-1"), n=2)])
+
+
 def test_a_concession_wakes_another_owner_and_a_fix_wakes_its_raiser() -> None:
     conceded = finding("conceded", owner="claude-1")
     assert reviews.handoff(conceded, "codex-1", AGENTS) is not None
@@ -638,6 +818,22 @@ def test_a_report_takes_only_what_it_knows_and_says_whose_it_is() -> None:
     assert reviews.report_line(rv, 1000.0 + 180) == "2 open on the PR, CI failing (per claude-1, 3 min ago)"
     assert reviews.report_line({**rv, "pr_threads": 0, "pr_ci": ""}, 1010.0).startswith("no threads open")
     assert reviews.report_line({"reported_by": ""}, 0.0) == ""
+
+
+def test_a_report_can_say_ci_is_blocked_by_a_conflict_with_the_base() -> None:
+    """#907: a pull request that conflicts with its base runs no CI, so a reviewer reported ci "none" and
+    the board read "CI none", as if the PR had no CI, hiding that the author must resolve a conflict. `ci`
+    takes "blocked" for it, and the line says why; a value the board doesn't know is still refused.
+    Fails if "blocked" is refused, the line says only "CI blocked" or still "CI none", or a near miss
+    ("conflicting", "Blocked") is accepted."""
+    assert reviews.report({"ci": "blocked"}) == {"pr_ci": "blocked"}
+    for bad in ({"ci": "conflicting"}, {"ci": "Blocked"}, {"ci": "mergeable"}):
+        with pytest.raises(ReviewError, match="ci must be one of: .*blocked"):
+            reviews.report(bad)
+    rv = {"reported_by": "claude-1", "reported_at": 1000.0, "pr_ci": "blocked"}
+    assert reviews.report_line(rv, 1180.0) == "CI blocked: conflicts with its base (per claude-1, 3 min ago)"
+    mr = {**rv, "pr_threads": 1, "url": "https://gitlab.com/g/p/-/merge_requests/3"}
+    assert reviews.report_line(mr, 1180.0).startswith("1 open on the MR, CI blocked: conflicts with its base")
 
 
 def test_report_line_says_mr_for_a_gitlab_merge_request() -> None:
@@ -1074,7 +1270,7 @@ def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_
     old = board_row(url="https://example.com/old/pull/1", closed_at=1_700_000_000.0, closed_by="")
     text = reviews.list_text([live, gone, old], default_url=live["url"])
     lines = text.splitlines()
-    assert lines[0] == "3 review boards in this room, open ones first:"
+    assert lines[0] == "3 review boards in this room, boards with work first:"
     assert lines[1] == (
         "https://github.com/example/shop/pull/7 at abc1234def56 [open]: 3 open, 5 settled,"
         " opened by claude-1 on 2027-01-15 08:00 UTC <- your calls without url go here"
@@ -1087,7 +1283,9 @@ def test_list_names_every_board_with_its_state_counts_and_who_opened_and_closed_
     assert lines[3].endswith("closed on 2023-11-14 22:13 UTC") and "closed by" not in lines[3]
     assert lines[-1].startswith('review(action="show", url=...) reads any')
     many = reviews.list_text([board_row(url=f"https://example.com/p/{n}") for n in range(60)])
-    assert "... and 10 older closed boards" in many and many.count("[open]") == reviews.MAX_LISTED
+    assert (
+        "... and 10 more not listed: 10 open with work" in many and many.count("[open]") == reviews.MAX_LISTED
+    )
     assert reviews.list_text([]).startswith("This room has no review boards.")
     assert reviews.list_text([live]).startswith("1 review board in this room")
 
@@ -1235,9 +1433,10 @@ def test_only_the_raiser_reopens_a_fixed_finding(confirmed_by: str) -> None:
 
 
 def test_an_owner_can_replace_only_an_unconfirmed_fix() -> None:
-    """The move table permits revision; confirmation still protects an accepted fix."""
+    """The move table permits revision; confirmation still protects an accepted fix.
+    ``raised`` is the holder's one move (#904), checked on its own; it does not loosen a revision."""
     item = replace(finding("fixed", owner="claude-1"), confirmed_by="")
-    assert reviews.AGENT_MOVES["fix"] == (frozenset({"conceded", "fixed"}), "fixed")
+    assert reviews.AGENT_MOVES["fix"] == (frozenset({"raised", "conceded", "fixed"}), "fixed")
     assert reviews.agent_move(item, "fix", "claude-1") == "fixed"
     with pytest.raises(ReviewError, match="claude-1's to fix"):
         reviews.agent_move(item, "fix", "codex-1")
@@ -1338,3 +1537,45 @@ def test_stored_takeover_keeps_the_fix_age_and_each_agents_own_pick(tmp_path: Pa
     assert moved.raised_by == "devin-1" and moved.updated_at == item.updated_at
     assert moved.recommend is None and reviews.effective_picks(moved) == {"codex-1": 1, "devin-1": 0}
     assert reviews.consensus(moved, ["devin-1"]).by == ("devin-1",)
+
+
+def test_a_close_names_its_outcome_and_a_merged_one_its_commit() -> None:
+    """``close`` says what became of the pull request (#886); one that says nothing is a 1.x close and
+    reads unknown. Fails if a missing outcome is refused, an outcome of
+    another word, a merged one with no commit, or a commit with any other outcome is accepted."""
+    assert reviews.close_outcome({"state": "merged", "commit": "ABC1234"}) == ("merged", "abc1234", True)
+    assert reviews.close_outcome({"state": "closed"}) == ("closed", "", True)
+    assert reviews.close_outcome({"state": "unknown"}) == ("unknown", "", True)
+    assert reviews.close_outcome({}) == ("unknown", "", False)  # a 1.x close: unknown, and asked to say
+    assert reviews.close_outcome({"state": ""}) == ("unknown", "", False)
+    bad_closes = [
+        {"commit": "abc1234"},
+        {"state": "done"},
+        {"state": "merged"},
+        {"state": "merged", "commit": "xyz"},
+        {"state": "closed", "commit": "abc1234"},
+    ]
+    for bad in bad_closes:
+        with pytest.raises(reviews.ReviewError):
+            reviews.close_outcome(bad)
+
+
+def test_list_puts_the_default_board_and_boards_with_work_before_settled_and_closed_ones() -> None:
+    """``list`` shows the default board, then boards with work (or no cards), then settled open ones,
+    then closed ones, and counts what it leaves out by state (#886). Fails if 50 newer settled boards
+    push an older board with work, or the caller's default board, out of the listing."""
+    settled = {"needs_person": 0, "open": 0, "fixed": 2, "dropped": 0, "answered": 0}
+    rows = [board_row(url=f"https://example.com/p/{n}", counts=settled) for n in range(60)]
+    work = board_row(url="https://example.com/work/1")
+    empty = board_row(
+        url="https://example.com/work/2",
+        counts={"needs_person": 0, "open": 0, "fixed": 0, "dropped": 0, "answered": 0},
+    )
+    done = board_row(url="https://example.com/done/1", closed_at=1_800_000_000.0)
+    mine = board_row(url="https://example.com/mine/1", counts=settled)  # settled, but the default
+    text = reviews.list_text([*rows, work, empty, done, mine], default_url=mine["url"])
+    lines = text.splitlines()
+    assert lines[1].startswith(mine["url"]) and "<- your calls" in lines[1]
+    assert lines[2].startswith(work["url"]) and lines[3].startswith(empty["url"])
+    assert "https://example.com/done/1" not in text
+    assert "... and 14 more not listed: 13 open and settled, 1 closed" in text

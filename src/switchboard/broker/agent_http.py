@@ -10,9 +10,10 @@ runs on the agent's machine.
   token's last use is written at most once a minute.
 - **Who is calling** (``HttpTools.prime``): the token's person and device, the device being the
   host of its agents' sessions (§27.6). The harness is the client's own claim, from its
-  ``clientInfo`` (Codex, Claude Code, OpenCode, Cursor or Devin). The session is the
+  ``clientInfo`` (Codex, Claude Code, OpenCode, Cursor, Devin or Grok Build). The session is the
   harness's own. Codex names its thread on every call (``_meta.threadId``), OpenCode its session
-  (``_meta["ai.opencode/sessionID"]``, §49.12). Claude Code names
+  (``_meta["ai.opencode/sessionID"]``, §49.12), Grok Build its session in a header its MCP entry fills
+  from its own ``{{session_id}}`` template (§49.15). Claude Code names
   the call (``_meta["claudecode/toolUseId"]``), and its PreToolUse hook, a call of the hidden
   ``hook`` tool just before, reports which session made that call (``HookUses``). Cursor's
   command hook injects a checked conversation ID into its call's arguments. Any other client
@@ -42,10 +43,12 @@ runs on the agent's machine.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import itertools
 import json
 import logging
 import re
+import sqlite3
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
@@ -75,6 +78,7 @@ from switchboard.broker.hook_replies import (
 from switchboard.broker.oauth import challenge
 from switchboard.broker.restarts import RESTART_MESSAGE, RETRY_AFTER_S
 from switchboard.broker.service import ServiceError
+from switchboard.envelope import clean
 from switchboard.mcp.server import (
     CLIENT_INFO_META_KEY,
     TOOL_NAMES,
@@ -100,7 +104,9 @@ CLIENTS = {
     "rmcp": "devin",  # Devin's Rust transport; a matching input hook is still required
     "opencode": "opencode",
 }
-UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor and Devin"
+# Grok Build names its MCP client after the server: ``grok-shell-<server name>`` (recorded, 1.0.89, #851)
+CLIENT_PREFIXES = {"grok-shell-": "grok"}
+UNSUPPORTED = "switchboard over HTTPS works with Codex, Claude Code, OpenCode, Cursor, Devin and Grok Build"
 HUNG_UP = "the client closed the request before the wait ended"  # nobody reads it: the line is gone (#559)
 # the scripted test agent (§9.6): a client of this name on a test-mode broker, naming its session and
 # how its answers are confirmed in two headers. A broker that isn't in test mode never serves it.
@@ -128,10 +134,10 @@ HOOK_FIELDS = (
 )
 # a tool of switchboard's own server, by the name a harness gives it: Codex and a hand-made Claude
 # Code server say ``mcp__switchboard__<tool>``, Claude Code's plugin
-# ``mcp__plugin_switchboard_switchboard__<tool>``, Devin ``mcp__switchboard_https__<tool>`` and Cursor
-# ``MCP:switchboard_<tool>``
+# ``mcp__plugin_switchboard_switchboard__<tool>``, Devin ``mcp__switchboard_https__<tool>``, Cursor
+# ``MCP:switchboard_<tool>`` and Grok Build ``switchboard__<tool>`` (its plugin's server is ``switchboard``)
 OWN_TOOL_RE = re.compile(
-    r"mcp__(?:plugin_switchboard_)?switchboard__|mcp__switchboard_https__|MCP:switchboard_"
+    r"mcp__(?:plugin_switchboard_)?switchboard__|mcp__switchboard_https__|MCP:switchboard_|switchboard__"
 )
 LISTEN_PATH = "/mcp/listen"  # Claude Code's and OpenCode's listeners wait here (§49.4, §49.12)
 SESSION_PATH = "/mcp/session"  # Claude Code's SessionStart and SessionEnd, as command hooks (§49.4)
@@ -161,14 +167,31 @@ OPENCODE_STATUS_EVENTS = {
     "tool.execute.failed": "PostToolUseFailure",
 }
 OPENCODE_WAKE_EVENTS = frozenset({"wake.queued", "wake.dropped"})
+# What Grok Build's plugin reports at /mcp/event (§49.15), by the name Grok gives each event
+# (``hook_event_name``), and the event the broker reads it as. Nothing else is taken. A turn that ended
+# cancelled or failed is a Stop that is never held (only Grok's own Stop may wait for a message), marked
+# ``aborted`` so a follow-up it ended goes back to pending (§49.15).
+GROK_EVENTS = {
+    "SessionStart": "SessionStart",
+    "UserPromptSubmit": "UserPromptSubmit",
+    "PostToolUse": "PostToolUse",
+    "PostToolUseFailure": "PostToolUseFailure",
+    "Notification": "Notification",
+    "Stop": "Stop",
+    "StopCancelled": "Stop",
+    "StopFailure": "Stop",
+    "SessionEnd": "SessionEnd",
+}
 OPENCODE_STATUS_FIELDS = frozenset(
     {"event", "session_id", "tool_name", "tool_use_id", "tool_response", "batch_id", "ack"}
 )
 HARNESS_HEADER = b"x-switchboard-harness"  # absent means Claude, as before; OpenCode says so explicitly
 TOKEN_HEADER = b"x-switchboard-token"  # where the plugin sends a typed token: not Authorization (§49.5, #488)
-SESSION_HEADER = b"x-switchboard-session"  # the listener's session id, the only thing it sends
+# the listener's session id, the only thing it sends; and Grok Build's session on every MCP call (§49.15)
+SESSION_HEADER = b"x-switchboard-session"
 WAIT_HEADER = b"x-switchboard-wait"  # how long one round of the listener waits
 AGAIN_HEADER = b"x-switchboard-again"  # "1" on the listener's later rounds: only an idle session waits on
+RESUME_IDLE_HEADER = b"x-switchboard-resume-idle"  # Claude listener revocable by local hooks
 WAIT_MAX_S = 86400.0  # the longest any one wait is held (a Codex Stop hook may ask for a day)
 LISTEN_AGAIN = frozenset({"timeout", "paused"})  # a round that ended so: the listener waits again (408)
 # the states of a session whose turn is running or that has ended: a listener that reconnects (a later
@@ -184,6 +207,20 @@ USES_TTL_S = 120.0  # how long such a report is kept
 HOOK_WAIT_S = 2.0  # how long a Claude Code call waits for its PreToolUse report
 ID_MAX = 128  # a session id or a tool call's id, as a harness sends it
 SESSIONS_MAX = 4096  # MCP sessions remembered, each with the token that opened it
+# A session the broker opened for a token before it restarted is opened again for that token when its client
+# keeps the ID (Cursor does, #823): what opened it is kept for the token's newest, a month from when it was
+# opened or last opened again; a revoked token's go at once.
+REOPEN_KEEP = 100
+REOPEN_IDLE_S = 30 * 86400.0
+# The library's answers to a DELETE that mean its session is gone (§49.2): 200, it ended it
+# (`_handle_delete_request`); 404, it no longer has it (unknown, expired or already terminated). 202 and 204
+# are a session ended in other words. Every other status left the session alive, and the broker keeps it.
+DELETE_GONE = frozenset({200, 202, 204, 404})
+REOPEN_ID = "switchboard-reopen"  # the JSON-RPC id of the initialize the broker sends for the client
+SESSION_ID_RE = re.compile(r"[\x21-\x7e]{1,128}")  # an MCP session ID: visible ASCII, cut here
+PROTOCOL_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+REOPEN_REPLY_MAX = 65536  # the library's answer to that initialize is read only this far
+CLIENT_TEXT_MAX = 80  # a client's name or version, as kept (``mcp_sessions``' CHECK)
 TOUCH_S = 60.0  # a token's last use is written at most this often
 # the AgentService method behind each of the tools' calls (the socket's method table, §5.2)
 METHODS = {
@@ -235,6 +272,9 @@ class McpSession:
     token_id: int
     generation: int
     threads: set[str] = field(default_factory=set)
+    # the MCP library's ID for it, when that isn't the one its client sends: a session opened again after a
+    # restart (#823), whose client keeps the ID it had
+    inner: str | None = None
 
 
 def client_info(ctx: Context | None) -> dict[str, str]:
@@ -271,8 +311,98 @@ def _listener_harness(raw: bytes) -> str:
         meta = params.get("_meta")
         info = meta.get(CLIENT_INFO_META_KEY) if isinstance(meta, dict) else None
     name = info.get("name") if isinstance(info, dict) else None
-    harness = CLIENTS.get(name[:80]) if isinstance(name, str) else None
+    harness = harness_of(name[:80]) if isinstance(name, str) else None
     return harness if harness is not None and harness in ("claude", "codex") else "unknown"
+
+
+def _opening(raw: bytes) -> tuple[str, str, str] | None:
+    """The client's name and version, and the protocol it asks for, from an ``initialize`` (2025-era MCP) of a
+    bounded size: what the broker needs to open the same session again after a restart (#823). Each is the
+    client's own claim, made printable and cut (``_client_text``); anything else is None, and so is a name
+    whose cleaned form is classified otherwise than the raw one (a reopened session is classified from it)."""
+    if len(raw) > LISTENER_META_MAX:
+        return None
+    try:
+        message = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(message, dict) or message.get("method") != "initialize":
+        return None
+    params = message.get("params")
+    info = params.get("clientInfo") if isinstance(params, dict) else None
+    if not isinstance(info, dict) or not isinstance(info.get("name"), str):
+        return None
+    name = _client_text(info["name"])
+    if not name:  # nothing printable: nothing to open again as
+        return None
+    if _classified(name) != _classified(info["name"][:80]):
+        # the session was classified from the raw name (``prime``, ``InputIdentity``): one whose cleaned
+        # form reads as another client would reopen as someone else, so it is not kept at all (#903, F12)
+        return None
+    protocol = params.get("protocolVersion") if isinstance(params, dict) else None
+    if not isinstance(protocol, str) or not PROTOCOL_RE.fullmatch(protocol):
+        return None
+    version = info.get("version")
+    return name, _client_text(version) if isinstance(version, str) else "", protocol
+
+
+def _classified(name: str) -> str | None:
+    """What a session's client name decides (``prime``'s harness and ``InputIdentity``'s Cursor tools, from
+    the name as ``client_info`` cuts it): the name itself when it is one the broker knows, else None."""
+    return name if harness_of(name) is not None or name == TEST_CLIENT else None
+
+
+def harness_of(name: str) -> str | None:
+    """The harness a client's name says it is (a claim): an exact name of ``CLIENTS``, or a name that starts
+    with one of ``CLIENT_PREFIXES`` and has more after it. None for any other name."""
+    if name in CLIENTS:
+        return CLIENTS[name]
+    for prefix, harness in CLIENT_PREFIXES.items():
+        if name.startswith(prefix) and len(name) > len(prefix):
+            return harness
+    return None
+
+
+def _client_text(text: str) -> str:
+    """A client's name or version as it is kept: control and format characters dropped (``envelope.clean``,
+    so a NUL can't cut what SQLite measures), whitespace runs made one space, cut to ``CLIENT_TEXT_MAX``."""
+    return " ".join(clean(text[: CLIENT_TEXT_MAX * 4]).split())[:CLIENT_TEXT_MAX]
+
+
+def _negotiated(body: bytes | None) -> str | None:
+    """The protocol version the MCP library answered the broker's own ``initialize`` with (§49.2): from a JSON
+    body or the first SSE event that has data, read only within ``REOPEN_REPLY_MAX``. None if it can't be
+    read, or isn't a version."""
+    if body is None or len(body) > REOPEN_REPLY_MAX:
+        return None
+    text = body.decode("utf-8", "replace")
+    if not text.lstrip().startswith("{"):
+        data: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                data.append(line[5:].removeprefix(" "))
+            elif not line.strip() and any(d.strip() for d in data):
+                break  # the end of the first event with data
+            elif not line.strip():
+                data = []
+        text = "\n".join(data)
+    try:
+        message = json.loads(text)
+    except ValueError:
+        return None
+    result = message.get("result") if isinstance(message, dict) and message.get("id") == REOPEN_ID else None
+    protocol = result.get("protocolVersion") if isinstance(result, dict) else None
+    return protocol if isinstance(protocol, str) and PROTOCOL_RE.fullmatch(protocol) else None
+
+
+def _sid_hash(session_id: str) -> str:
+    return hashlib.sha256(session_id.encode("latin-1")).hexdigest()
+
+
+def _with_session(headers: list[tuple[bytes, bytes]], session_id: str | None) -> list[tuple[bytes, bytes]]:
+    """``headers`` with its ``Mcp-Session-Id`` replaced by ``session_id`` (removed for None)."""
+    out = [(k, v) for k, v in headers if k.lower() != b"mcp-session-id"]
+    return out if session_id is None else [*out, (b"mcp-session-id", session_id.encode("latin-1"))]
 
 
 def _id(value: Any) -> str | None:
@@ -449,7 +579,8 @@ class HttpTools:
 
     def _served(self) -> Caller | None:
         c = self._caller.get()
-        return c if c is not None and (c.harness in CLIENTS.values() or c.harness == "test") else None
+        served = {*CLIENTS.values(), *CLIENT_PREFIXES.values(), "test"}
+        return c if c is not None and c.harness in served else None
 
     async def prime(self, ctx: Context | None) -> None:
         try:
@@ -470,7 +601,7 @@ class HttpTools:
                 "ack": _header(scope, TEST_ACK_HEADER) or "",
             }
         else:
-            harness = CLIENTS.get(info.get("name", ""), "unknown")
+            harness = harness_of(info.get("name", "")) or "unknown"
         plugin = (_header(scope, plugin_versions.HEADER) or "")[:PLUGIN_RAW_MAX]
         conn = self.conn_for(token, harness, info, test=test, plugin=plugin)
         if harness == "test":
@@ -482,6 +613,10 @@ class HttpTools:
             thread = await self.uses.session(token.id, use) if use is not None else None
         elif harness == "opencode":
             thread = _id(request_meta(ctx).get(OPENCODE_SESSION_KEY))
+        elif harness == "grok":
+            # Grok Build fills this header from its own {{session_id}} template on every request (§49.15): the
+            # session id its hooks report too. A claim of the client, under the token's device, as Codex's is.
+            thread = _id(_header(scope, SESSION_HEADER))
         else:
             thread = self._thread_of(ctx)
         key = scope.get("state", {}).get("listener_key")
@@ -491,7 +626,9 @@ class HttpTools:
         if harness == "codex" and thread is not None and isinstance(key, str):
             self.state.listener_keys.name_codex_session(token, key, thread)
         if harness == "codex" and thread is not None and self.session_auth is not None:
-            sid = _header(scope, b"mcp-session-id")
+            sid = scope.get("state", {}).get(
+                "mcp_session_id"
+            )  # the client's ID (AgentAuth), not the library's
             if sid is not None and scope.get("method") == "POST":
                 self.session_auth.record_thread(sid, token.id, thread)
 
@@ -523,7 +660,9 @@ class HttpTools:
         session of the call it precedes; every other event goes to the session it names (§49.4),
         and the answer is the hook's reply, checked (``reply_for``)."""
         c = self._served()
-        if c is None or c.harness == "opencode":
+        if c is None or c.harness in ("opencode", "grok"):
+            # neither reports through this tool: OpenCode posts to /mcp/status, Grok Build's command hooks to
+            # /mcp/event (§49.15), so a call of it from either is the model's, and does nothing
             return "{}"
         event, sid = str(fields.get("event") or ""), _id(fields.get("session_id"))
         if c.harness == "claude" and c.key is not None and sid:
@@ -598,6 +737,10 @@ class HttpTools:
         """The caller's harness cap on ``wait()``: the one its adapter applies (``[claude] wait_cap_s`` and
         the like, §9.1), so a config value raises the tool's cap as well as lowers it (#547)."""
         return self.state.engine.adapter_for(self.harness or "unknown").caps().wait_cap_s
+
+    def wait_cap_note(self) -> str:
+        """What a capped ``wait()`` tells the caller to do for a longer wait: its adapter's line (#878)."""
+        return self.state.engine.adapter_for(self.harness or "unknown").long_wait_note
 
     async def call(self, method: str, params: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
         c = self._caller.get()
@@ -744,6 +887,13 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _plugin_raw(scope: Scope) -> str | None:
+    """The plugin-version header of a hook or listener request, cut, or None when it carried none: a
+    request without it says nothing about the plugin (§49.13)."""
+    raw = _header(scope, plugin_versions.HEADER)
+    return raw[:PLUGIN_RAW_MAX] if raw is not None else None
+
+
 @dataclass(frozen=True)
 class Door:
     """Who is at ``/mcp/listen`` or ``/mcp/session``: the token (a key's own token, when it came in with a
@@ -767,6 +917,8 @@ class AgentAuth:
         self.sessions: OrderedDict[str, McpSession] = OrderedDict()  # Mcp-Session-Id -> owner, threads
         self.latest: dict[tuple[int, str], str] = {}  # token and thread -> latest serving MCP session
         self.touched: dict[int, float] = {}  # token id -> when its last use was written
+        self._reopening = asyncio.Lock()  # one session is opened again at a time: the same ID, once
+        self._ending: set[asyncio.Future[None]] = set()  # SessionEnds of a DELETE that stopped unanswered
 
     def token(self, scope: Scope) -> AgentTokenRow | None:
         """The live agent token this request carries: ``Authorization: Bearer sbat_…`` (a hand-made server,
@@ -827,16 +979,20 @@ class AgentAuth:
             self.touched[row.id] = now
             self.state.store.agent_token_used(row.id)
 
-    def bind(self, session_id: str, token_id: int) -> None:
+    def bind(self, session_id: str, token_id: int, inner: str | None = None) -> McpSession:
         if session_id not in self.sessions:
-            self.sessions[session_id] = McpSession(token_id, next(self._session_numbers))
+            self.sessions[session_id] = McpSession(token_id, next(self._session_numbers), inner=inner)
+        session = self.sessions[session_id]
         self.sessions.move_to_end(session_id)
         while len(self.sessions) > SESSIONS_MAX:
             self.forget(next(iter(self.sessions)))
+        return session
 
-    def forget(self, session_id: str) -> McpSession | None:
+    def forget(self, session_id: str, *, ending: bool = False) -> McpSession | None:
+        """Forget a session. ``ending`` (its client's DELETE) leaves the threads it served last pointing at it
+        in ``latest`` until ``_end_served`` decides, thread by thread, whether it is still the newest."""
         session = self.sessions.pop(session_id, None)
-        if session is not None:
+        if session is not None and not ending:
             for thread in session.threads:
                 key = (session.token_id, thread)
                 if self.latest.get(key) == session_id:
@@ -853,6 +1009,143 @@ class AgentAuth:
             newer = self.sessions.get(previous) if previous is not None else None
             if newer is None or session.generation >= newer.generation:
                 self.latest[key] = session_id
+
+    async def reopen(self, scope: Scope, row: AgentTokenRow, sid: str) -> McpSession | None:
+        """Open again, for this token, a session the broker opened for it before a restart (§49.2, #823).
+
+        Session IDs live in the MCP library's memory, so after a restart every ID answers 404, and a client
+        must initialize a new session. Cursor never does: it keeps the ID and every switchboard tool fails
+        until it restarts. So the broker keeps which client opened each session (``mcp_sessions``, by the
+        ID's sha256) and, when one of the same token's IDs comes back unknown, initializes a session itself
+        as that client did, with nothing else. The client keeps its ID: the broker maps it to the new one.
+        Another token's ID, one the client deleted, one past its month, or one the broker never opened stays
+        unknown (404). The library may answer with another protocol than the one asked for: the session uses
+        the one it answered. A reopen that fails, or whose record went while it ran (the client's DELETE, a
+        revoked token), ends the library session it started, so none is left that nothing can reach: whatever
+        way it leaves after the library named that session (a refusal, an error, a cancellation, a database
+        error), only the bind keeps it."""
+        if not SESSION_ID_RE.fullmatch(sid):
+            return None
+        async with self._reopening:
+            session = self.sessions.get(sid)
+            if session is not None:  # opened again by a request that came at the same moment
+                return session if session.token_id == row.id else None
+            opened = self.state.store.mcp_session(row.id, _sid_hash(sid), REOPEN_IDLE_S)
+            if opened is None:
+                return None
+            asked = _header(scope, b"mcp-protocol-version")
+            protocol = asked if asked is not None and PROTOCOL_RE.fullmatch(asked) else opened.protocol
+            params = {
+                "protocolVersion": protocol,
+                "capabilities": {},
+                "clientInfo": {"name": opened.client_name, "version": opened.client_version},
+            }
+            initialize = {"jsonrpc": "2.0", "id": REOPEN_ID, "method": "initialize", "params": params}
+            status, inner, body = await self._inner(scope, initialize, None, None)
+            if inner is None:
+                log.warning("could not open an MCP session again after a restart (status %s)", status)
+                return None
+            # From here the library holds a session nothing else can reach: every way out but the bind ends
+            # it, an exception or a cancellation included (#903, F9)
+            negotiated: str | None = None
+            bound: McpSession | None = None
+            try:
+                negotiated = _negotiated(body) if status == 200 else None
+                if negotiated is None:
+                    log.warning("could not open an MCP session again after a restart (status %s)", status)
+                    return None
+                done = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                status, _, _ = await self._inner(scope, done, inner, negotiated)
+                if status != 202:
+                    log.warning("could not open an MCP session again after a restart (status %s)", status)
+                    return None
+                # read again, with no await before the bind: a DELETE or a revoke while the handshake ran wins
+                if not self.state.store.mcp_session_reopened(row.id, opened.sid_hash, negotiated):
+                    log.info("an MCP session was ended while it was being opened again")
+                    return None
+                log.info("opened an MCP session again after a restart")
+                bound = self.bind(sid, row.id, inner)
+                return bound
+            finally:
+                if bound is None:
+                    # on its own task, so a cancellation of this request can't stop it half way; the
+                    # cancellation goes on to the caller once the DELETE is done
+                    await asyncio.shield(self._end(scope, inner, negotiated))
+
+    async def _end(self, scope: Scope, inner: str, protocol: str | None) -> None:
+        """End a library session the broker opened and won't use (an MCP DELETE): nothing could reach it. It
+        never raises: an error ending it is logged by its type, and never hides the one the request had."""
+        try:
+            status, _, _ = await self._inner(scope, None, inner, protocol)
+        except Exception as e:
+            log.warning("could not end an MCP session the broker opened (%s)", type(e).__name__)
+            return
+        if status not in (200, 202, 204, 404):
+            log.warning("could not end an MCP session the broker opened (status %s)", status)
+
+    async def _inner(
+        self, scope: Scope, message: dict[str, Any] | None, session_id: str | None, protocol: str | None
+    ) -> tuple[int | None, str | None, bytes | None]:
+        """Send one JSON-RPC message to the MCP endpoint as the request in ``scope`` would (its host, its
+        token in the request state), or a DELETE of ``session_id`` for None, and return the answer's status,
+        the session ID it names and its body (None past ``REOPEN_REPLY_MAX``)."""
+        body = json.dumps(message).encode() if message is not None else b""
+        own = {b"mcp-session-id", b"mcp-protocol-version", b"mcp-method", b"last-event-id"}
+        own |= {b"content-length", b"content-type", b"accept"}
+        headers = [(k, v) for k, v in scope.get("headers", []) if k.lower() not in own]
+        headers += [
+            (b"accept", b"application/json, text/event-stream"),
+            (b"content-length", str(len(body)).encode()),
+        ]
+        if message is not None:
+            headers.append((b"content-type", b"application/json"))
+        if protocol is not None:
+            headers.append((b"mcp-protocol-version", protocol.encode()))
+        inner_scope = {
+            **scope,
+            "method": "POST" if message is not None else "DELETE",
+            "query_string": b"",
+            "headers": _with_session(headers, session_id),
+        }
+        finished = asyncio.Event()
+        delivered = False
+        status: int | None = None
+        named: str | None = None
+        answer: bytes | None = b""
+
+        async def receive() -> dict[str, Any]:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            await finished.wait()  # a stream that watches for the client hanging up sees it only now
+            return {"type": "http.disconnect"}
+
+        async def send(message: dict[str, Any]) -> None:
+            nonlocal status, named, answer
+            if message["type"] == "http.response.start":
+                status = message["status"]
+                named = next(
+                    (
+                        v.decode("latin-1")
+                        for k, v in message.get("headers", [])
+                        if k.lower() == b"mcp-session-id"
+                    ),
+                    None,
+                )
+            elif message["type"] == "http.response.body":
+                if answer is not None:
+                    answer += message.get("body", b"")
+                    if len(answer) > REOPEN_REPLY_MAX:
+                        answer = None  # read no further: the answer is too long to be one
+                if not message.get("more_body", False):
+                    finished.set()
+
+        try:
+            await self.app(inner_scope, receive, send)
+        finally:
+            finished.set()
+        return status, named, answer
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -878,15 +1171,30 @@ class AgentAuth:
             return
         sid = _header(scope, b"mcp-session-id")
         session = self.sessions.get(sid) if sid is not None else None
+        method = scope.get("method")
         if sid is not None and (
-            (session is not None and session.token_id != row.id)
-            or (scope.get("method") == "DELETE" and session is None)
+            (session is not None and session.token_id != row.id) or (method == "DELETE" and session is None)
         ):
             # another token's session: as if it didn't exist (the client starts a new one)
+            if session is None and SESSION_ID_RE.fullmatch(sid):
+                self.state.store.mcp_session_forget(row.id, _sid_hash(sid))  # its client ended it
             await _reply(send, 404, {"error": "not_found", "message": "no such MCP session"})
             return
         self.touch(row)
         scope.setdefault("state", {})["agent_token"] = row
+        if sid is not None and session is None and method in ("POST", "GET"):
+            session = await self.reopen(scope, row, sid)
+        if sid is not None and session is None:
+            # Fail closed (§49.2): an ID this token didn't open and the broker can't open again for it never
+            # reaches the library, which knows sessions by its own IDs and not by token. A reopened session's
+            # library ID is no key here, so it is unknown too: a client reaches one only through its own ID.
+            await _reply(send, 404, {"error": "not_found", "message": "no such MCP session"})
+            return
+        if sid is not None:
+            scope["state"]["mcp_session_id"] = sid  # the ID the client knows, whatever the library's is
+        inner = session.inner if session is not None else None
+        if inner is not None:
+            scope = {**scope, "headers": _with_session(list(scope.get("headers", [])), inner)}
         h = listener_keys.ListenerKeys.hash_in(_header(scope, listener_keys.HEADER))
         if h is not None:
             # the signed-in connection carries the sha256 of the key its machine made: the key is its token's
@@ -894,10 +1202,13 @@ class AgentAuth:
             scope["state"]["listener_key"] = h
 
         captured = b""
-        inspect_client = h is not None
+        # a request with no session may be an initialize: what it says is kept, to open it again (#823)
+        opens = sid is None and method == "POST"
+        inspect_client = h is not None or opens
+        opening: tuple[str, str, str] | None = None
 
         async def receive_claim() -> dict[str, Any]:
-            nonlocal captured, inspect_client
+            nonlocal captured, inspect_client, opening
             message = await receive()
             if inspect_client and message["type"] == "http.request":
                 body = message.get("body", b"")
@@ -909,6 +1220,8 @@ class AgentAuth:
                         kind = _listener_harness(captured)
                         if h is not None and kind != "unknown":
                             self.state.listener_keys.claim(row, h, harness=kind)
+                        if opens:
+                            opening = _opening(captured)
                         captured, inspect_client = b"", False
             return message
 
@@ -918,22 +1231,95 @@ class AgentAuth:
             nonlocal response_status
             if message["type"] == "http.response.start":
                 response_status = message["status"]
-                for k, v in message.get("headers", []):
-                    if k.lower() == b"mcp-session-id":
-                        self.bind(v.decode("latin-1"), row.id)
+                headers = list(message.get("headers", []))
+                for k, v in headers:
+                    if k.lower() != b"mcp-session-id":
+                        continue
+                    named = v.decode("latin-1")
+                    if sid is not None and inner is not None and named == inner:
+                        # a session opened again answers with the ID its client knows
+                        message = {**message, "headers": _with_session(headers, sid)}
+                        self.bind(sid, row.id)
+                    else:
+                        self.bind(named, row.id)
+                        if opening is not None and response_status == 200 and SESSION_ID_RE.fullmatch(named):
+                            try:
+                                self.state.store.mcp_session_opened(
+                                    row.id, _sid_hash(named), *opening, REOPEN_KEEP, REOPEN_IDLE_S
+                                )
+                            except sqlite3.Error as e:
+                                # the record only helps a restart: it never fails the client's own initialize
+                                log.warning(
+                                    "could not keep what opened an MCP session (%s)", type(e).__name__
+                                )
             await send(message)
 
-        await self.app(scope, receive_claim if h is not None else receive, send_binding)
-        if sid is not None and scope.get("method") == "DELETE" and response_status in (200, 202, 204):
-            # A resumed thread can use a newer MCP session before this old DELETE arrives.
-            # Only the session that served it most recently may take it offline.
-            for thread in session.threads if session is not None else ():
+        if sid is None or method != "DELETE" or session is None:
+            await self.app(scope, receive_claim if inspect_client else receive, send_binding)
+            return
+        # The client's DELETE of a session this token owns ends it for the broker only when the library says
+        # the session is gone. When the library answered, its status says so: it ended it, or no longer has
+        # it (its idle expiry, #903 F10); any other answer (a 405 from its stateless handler for a
+        # non-handshake protocol, a 400, 406, 5xx) left the live transport alone. When it sent no status (an
+        # exception, a cancellation), its own state says so: the pinned SDK marks the transport terminated
+        # before it awaits the streams' cleanup and only then sends its 200, so a DELETE stopped in between
+        # has already ended the session. Anything else, or a state that can't be read, keeps the ID and its
+        # record. A resumed thread can use a newer MCP session before this old DELETE arrives, or while its
+        # SessionEnds wait their turn: only the session that served a thread most recently may take it
+        # offline, checked for each thread as its SessionEnd runs (``_end_served``).
+        ending: asyncio.Future[None] | None = None
+        try:
+            await self.app(scope, receive_claim if inspect_client else receive, send_binding)
+        finally:
+            if response_status is None:
+                gone = self._library_ended(inner if inner is not None else sid)
+            else:
+                gone = response_status in DELETE_GONE
+            if gone:
+                self.forget(sid, ending=True)
+                self.state.store.mcp_session_forget(row.id, _sid_hash(sid))
+                # the SessionEnds run on a task of their own: the request may be unwinding (cancelled)
+                ending = asyncio.ensure_future(self._end_served(row, sid, sorted(session.threads)))
+                self._ending.add(ending)
+                ending.add_done_callback(self._ending.discard)
+        if ending is not None:
+            await asyncio.shield(ending)
+
+    def _library_ended(self, library_id: str) -> bool:
+        """Whether the MCP library ended this session (§49.2): its manager no longer holds the ID, or holds a
+        transport it marked terminated. Read from the library's own state, private to the pinned SDK, so a
+        shape it doesn't have (another app in front, a newer SDK) is unknown and answers no: the session is
+        kept, never forgotten on a guess."""
+        manager = getattr(self.app, "session_manager", None)
+        held = getattr(manager, "_server_instances", None)
+        if not isinstance(held, dict):
+            return False
+        transport = held.get(library_id)
+        if transport is None:
+            return True
+        return getattr(transport, "is_terminated", None) is True
+
+    async def _end_served(self, row: AgentTokenRow, sid: str, threads: list[str]) -> None:
+        """Report SessionEnd for each thread the deleted session ``sid`` still served last (§49.2, #903 F10).
+        Which threads is decided as each one's turn comes, not when the DELETE ended: a newer session that
+        served the thread in between owns it, and it stays online. The check and the engine's taking it
+        offline have no await between them (``http_hook`` reaches the engine before its first)."""
+        pending = list(threads)
+        try:
+            while pending:
+                thread = pending.pop(0)
+                key = (row.id, thread)
+                if self.latest.get(key) != sid:
+                    continue  # a newer session served it since, or another DELETE ended it
+                del self.latest[key]
+                conn = self.tools.conn_for(row, "codex")
+                await self.state.agents.http_hook(
+                    conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
+                )
+        finally:
+            for thread in pending:  # stopped part way: leave no thread pointing at a forgotten session
                 if self.latest.get((row.id, thread)) == sid:
-                    conn = self.tools.conn_for(row, "codex")
-                    await self.state.agents.http_hook(
-                        conn, "codex", "SessionEnd", {"sid": thread, "t": self.state.clock.now()}
-                    )
-            self.forget(sid)
+                    del self.latest[(row.id, thread)]
 
 
 class SessionHook:
@@ -1022,7 +1408,7 @@ class CommandHook:
             body = json.loads(raw)
         except ValueError:
             body = None
-        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin", "codex"):
+        if not isinstance(body, dict) or body.get("harness") not in ("cursor", "devin", "codex", "grok"):
             await _reply(send, 400, {"error": "bad_request"})
             return
         harness = body["harness"]
@@ -1031,8 +1417,9 @@ class CommandHook:
         if sid is None or not isinstance(event, str):
             await _reply(send, 400, {"error": "bad_request"})
             return
-        if harness == "codex" and scope.get("path") != EVENT_PATH:
-            # Codex's one command hook reports at /mcp/event, and nowhere else
+        if harness in ("codex", "grok") and scope.get("path") != EVENT_PATH:
+            # Codex's one command hook reports at /mcp/event, and nowhere else; so does every one of Grok's,
+            # whose MCP calls name their session themselves (§49.15)
             await _reply(send, 400, {"error": "bad_request"})
             return
         self.auth.touch(row)
@@ -1045,7 +1432,7 @@ class CommandHook:
                 return
             self.tools.input_uses.report(row.id, harness, sid, use, tool)
             if harness == "devin":
-                conn = self.tools.conn_for(row, harness)
+                conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
                 await self.tools.state.agents.http_hook(
                     conn,
                     harness,
@@ -1059,6 +1446,15 @@ class CommandHook:
                 )
             await _reply(send, 200, {})
             return
+        aborted = False
+        if harness == "grok":
+            if event not in GROK_EVENTS:
+                await _reply(send, 400, {"error": "bad_request"})
+                return
+            if GROK_EVENTS[event] == "Stop" and event != "Stop":
+                body = {k: v for k, v in body.items() if k != "wait_s"}  # a cancelled turn is never held
+                aborted = True  # and stays a cancel or a failure up to its verdict (§49.15)
+            event = GROK_EVENTS[event]
         ev = canonical_event(event)
         allowed = {
             "cursor": ("SessionStart", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"),
@@ -1071,6 +1467,7 @@ class CommandHook:
                 "SessionEnd",
             ),
             "codex": ("PermissionRequest",),  # its one command hook: the report-only one (§49.9)
+            "grok": tuple(dict.fromkeys(GROK_EVENTS.values())),
         }[harness]
         if ev not in allowed:
             await _reply(send, 400, {"error": "bad_request"})
@@ -1080,7 +1477,7 @@ class CommandHook:
             # session id and nothing else of the body (not the tool, its input or the rest of the hook's
             # payload, which the plugin's script doesn't send either), and the reply is always empty: the
             # hook's command discards it, and the server never writes a decision (§11).
-            conn = self.tools.conn_for(row, harness)
+            conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
             await self.tools.state.agents.http_hook(
                 conn, harness, ev, hook_params(ev, {"session_id": sid}, self.tools.state.clock.now())
             )
@@ -1094,10 +1491,23 @@ class CommandHook:
             await _reply(send, 200, {})
             return
         agents: Any = self.tools.state.agents
-        conn = self.tools.conn_for(row, harness)
-        res = await agents.http_hook(
-            conn, harness, ev, hook_params(event, fields, self.tools.state.clock.now())
-        )
+        conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
+        params = hook_params(event, fields, self.tools.state.clock.now())
+        if aborted:
+            params["aborted"] = True
+
+        async def gone() -> None:
+            # the hook's process went away while its Stop was held (Grok dropped it, Cursor quit): so does the
+            # park, at once, so no message is handed to a request nobody reads (as the listener's route)
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            agents.run(self.tools.state.engine.close_conn_sinks(conn.id))
+
+        watch = asyncio.create_task(gone())
+        try:
+            res = await agents.http_hook(conn, harness, ev, params)
+        finally:
+            watch.cancel()
         if res.get("ended") == "restarting":
             await _reply(
                 send,
@@ -1165,7 +1575,7 @@ class OpenCodeStatus:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
             self.auth.touch(row)
-            conn = self.tools.conn_for(row, "opencode")
+            conn = self.tools.conn_for(row, "opencode", plugin=_plugin_raw(scope))
             self.tools.state.agents.http_continue(
                 conn, sid, body["batch_id"], body["ack"], queued=event == "wake.queued"
             )
@@ -1193,7 +1603,7 @@ class OpenCodeStatus:
                 await _reply(send, 400, {"error": "bad_request"})
                 return
         self.auth.touch(row)
-        conn = self.tools.conn_for(row, "opencode")
+        conn = self.tools.conn_for(row, "opencode", plugin=_plugin_raw(scope))
         agents = self.tools.state.agents
         p = agents.http_session(conn, sid)
         ev = OPENCODE_STATUS_EVENTS[event]
@@ -1218,7 +1628,8 @@ class Listener:
     A later round (``X-Switchboard-Again: 1``) is the same listener coming back after a proxy cut its
     wait, so it is refused (409) only when the session has moved on (``MOVED_ON``: a turn started, or
     the session ended) and waits in any other state. A refusal ends the listener for good, so a state
-    that merely isn't "idle" must not cause one (#436). Each refusal is logged at warning level."""
+    that merely isn't "idle" must not cause one (#436). At startup, a session that was idle is offline
+    until its listener returns. Each refusal is logged at warning level."""
 
     def __init__(self, auth: AgentAuth, tools: HttpTools) -> None:
         self.auth = auth
@@ -1276,7 +1687,7 @@ class Listener:
             wait = 900.0
         state = self.tools.state
         agents: Any = state.agents  # an HttpConn stands in for the socket's Conn
-        conn = self.tools.conn_for(row, harness)
+        conn = self.tools.conn_for(row, harness, plugin=_plugin_raw(scope))
         # OpenCode has already reported idle. Even a first round must not turn a busy or
         # approval-blocked session idle when its state changed between that report and this POST.
         if harness == "opencode" or _header(scope, AGAIN_HEADER) == "1":
@@ -1291,8 +1702,13 @@ class Listener:
                 log.warning("listener refused for session %s: it is in no room (409)", sid)
                 await _reply(send, 409, {"error": "not_idle", "message": "in no room: its next Stop listens"})
                 return
-            retry = _header(scope, AGAIN_HEADER) == "1" and state.engine.adapter(p).listener_retry(
-                p, any(c.participant_id == p.id for c in state.engine.continues.values())
+            can_resume = harness == "opencode" or _header(scope, RESUME_IDLE_HEADER) == "1"
+            retry = (
+                _header(scope, AGAIN_HEADER) == "1"
+                and (not p.idle_at_restart or can_resume)
+                and state.engine.adapter(p).listener_retry(
+                    p, any(c.participant_id == p.id for c in state.engine.continues.values())
+                )
             )
             if p.status in MOVED_ON and not retry:
                 why = MOVED_ON[p.status]

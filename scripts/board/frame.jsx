@@ -14,7 +14,7 @@ const post = (action, extra = {}) => parent.postMessage({ t: 'sb-board', action,
 function flush() {
   clearTimeout(timer);
   if (!api || applying || pointer || !session || !dirty || playing) return;
-  const cleaned = rules.batch(api.getSceneElementsIncludingDeleted());
+  const cleaned = rules.batch(api.getSceneElementsIncludingDeleted(), true);
   if (!cleaned) { post('error', { text: 'The drawing exceeds the board limits.' }); return; }
   const changed = cleaned.filter(e => known.get(e.id) !== sig(e));
   dirty = false;
@@ -25,10 +25,13 @@ function flush() {
 }
 function apply(elements) {
   applying = true;
+  const before = known;
   known = new Map(elements.map(e => [e.id, sig(e)]));
   // Restore the full stored scene, not a skeleton conversion of new shapes in isolation.
   // This preserves both arrow bindings and the existing targets' exact dimensions.
-  const local = dirty ? rules.batch(api.getSceneElementsIncludingDeleted()) : null;
+  // Only what changed since it was last sent or received is merged in: a shape that was sent, was not kept
+  // and has not changed since is gone with the broker's board, while what is still being drawn stays (#893).
+  const local = dirty ? (rules.batch(api.getSceneElementsIncludingDeleted(), true) || []).filter(e => before.get(e.id) !== sig(e)) : null;
   const scene = local ? rules.merge(elements, local) : elements;
   fullScene = scene;
   const shown = playing ? scene.filter(e => e.id === playing || e.frameId === playing) : scene;
@@ -42,19 +45,19 @@ window.addEventListener('message', async ev => {
   const m = ev.data;
   if (ev.source !== parent || !m || m.t !== 'sb-board' || typeof m.session !== 'string' || typeof m.room !== 'string' || !api) return;
   if (m.action === 'init') {
-    const elements = rules.batch(m.elements);
+    const elements = rules.batch(m.elements, true);
     if (!elements) return;
     session = m.session; room = m.room;
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
     apply(elements);
     if (elements.some(e => !e.isDeleted)) api.scrollToContent(undefined, { fitToContent: true });
   } else if (m.session === session && m.room === room && m.action === 'elements') {
-    const elements = rules.batch(m.elements);
+    const elements = rules.batch(m.elements, true);
     if (elements) apply(elements);
   } else if (m.session === session && m.action === 'theme') {
     api.updateScene({ appState: { theme: m.dark === true ? 'dark' : 'light' } });
   } else if (m.session === session && m.room === room && m.action === 'present' && (m.id === null || (typeof m.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(m.id)))) {
-    if (!playing) { flush(); fullScene = rules.batch(api.getSceneElementsIncludingDeleted()) || fullScene; }
+    if (!playing) { flush(); fullScene = rules.batch(api.getSceneElementsIncludingDeleted(), true) || fullScene; }
     dirty = false; playing = m.id;
     api.updateScene({ appState: { viewModeEnabled: !!playing, selectedElementIds: {} } });
     apply(fullScene);
@@ -66,12 +69,15 @@ window.addEventListener('message', async ev => {
       post('converted', { request: m.request, elements });
     } catch { post('converted', { request: m.request, error: 'cannot_convert' }); }
   } else if (m.session === session && m.action === 'export' && typeof m.request === 'string') {
-    const blob = await exportToBlob({ elements: playing ? attachArrows(centerLabels(restoreElements(fullScene, null, { repairBindings: true, refreshDimensions: true }))) : api.getSceneElements(), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
+    // The picture is of the committed scene the parent sends, never the live drawing, which may hold text the broker has not read (#893).
+    const blob = await exportToBlob({ elements: attachArrows(centerLabels(restoreElements(rules.batch(m.elements, true) || [], null, { repairBindings: true, refreshDimensions: true }))), appState: { ...api.getAppState(), exportBackground: true }, files: {}, maxWidthOrHeight: 1200 });
     if (blob.size <= 600000) post('image', { request: m.request, bytes: await blob.arrayBuffer() });
   }
 });
 document.addEventListener('pointerdown', () => { pointer = true; dirty = true; });
-document.addEventListener('keydown', () => { dirty = true; });
+// Capture, so a key is counted before Excalidraw acts on it: Escape commits an open text inside Excalidraw's own
+// handler, and that change was dropped when the board was not yet dirty (a flush had just gone out, #933).
+document.addEventListener('keydown', () => { dirty = true; }, true);
 document.addEventListener('input', () => { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 250); });
 document.addEventListener('pointerup', () => { pointer = false; timer = setTimeout(flush, 0); });
 // Font loading is asynchronous in a cold browser. Remeasure after its metrics are available.

@@ -77,7 +77,7 @@ class Run:
     mid_paths = frozenset({"hook_ctx"})  # a message that reaches a busy one
     quit_command = "/exit"
     resume_needs_prompt = True  # a resumed session is back only once it has been given a prompt
-    helpers: tuple[str, ...] = ()  # words in the command line of a process the CLI itself leaves behind
+    helpers: tuple[preflight.Helper, ...] = ()  # a process the CLI itself starts or leaves behind
 
     def __init__(self, name: str, *, broker: Broker | None = None, device: str | None = None) -> None:
         """``broker`` and ``device`` are for the evals (tests/evals): several sessions in one room of one
@@ -104,17 +104,23 @@ class Run:
 
     # ----------------------------------------------------------------- setup
     def start(self) -> Run:
-        self.broker.start()
         self.base = self.broker.base
+        self.broker.start()
         self.credentials()
-        self.ws = self.base / "ws"
-        self.ws.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=self.ws, env=clean_env(self.path), check=True)
+        self.ws = self.workspace()
+        self.ws.mkdir(parents=True)
+        subprocess.run(
+            ["git", "init", "-q"], cwd=self.ws, env=clean_env(self.path, HOME=str(self.base)), check=True
+        )
         (self.ws / "README.md").write_text("scratch workspace for a switchboard live test\n")
         (self.ws / "hold.sh").write_text(HOLD_SH)
         self.results["version"] = self.version()
         self.prepare()
         return self
+
+    def workspace(self) -> Path:
+        """The scratch repository the CLI works in (a subclass may put it elsewhere in the run's temp dir)."""
+        return self.base / "ws"
 
     def credentials(self) -> None:
         """What the agent signs in with: an agent token made through the web API (a subclass whose agent signs
@@ -127,7 +133,7 @@ class Run:
     def version(self) -> str:
         r = subprocess.run(
             [self.binaries[0], "--version"],
-            env=clean_env(self.path),
+            env=clean_env(self.path, HOME=str(self.base)),
             capture_output=True,
             text=True,
             timeout=30,
@@ -384,9 +390,11 @@ class Run:
                 teardown_error = teardown_error or e
                 left = []
             self.results["leftover_processes"] = [
-                c[:100] for c in left if not any(h in c for h in self.helpers)
+                c[:100] for c in left if not preflight.is_helper(c, self.helpers)
             ]
-            self.results["cli_helpers_killed"] = [c[:100] for c in left if any(h in c for h in self.helpers)]
+            self.results["cli_helpers_killed"] = [
+                c[:100] for c in left if preflight.is_helper(c, self.helpers)
+            ]
             fail, info = drift.compare(self.drift_before, drift.snapshot())
             self.results["drift_fail"], self.results["drift_info"] = fail, info
             self.results["stray_prompts_declined"] = self.stray_declined

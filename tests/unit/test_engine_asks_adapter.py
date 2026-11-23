@@ -14,7 +14,7 @@ from conftest import FakeClock
 from engine_world import KEY, World
 
 from switchboard import envelope
-from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, PullAdapter
+from switchboard.adapters import HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_DEVIN, HTTPS_GROK, PullAdapter
 from switchboard.adapters.base import HOOK_CONTEXT_EVENTS
 from switchboard.adapters.https import steered
 from switchboard.models import HookEvent, Participant
@@ -242,7 +242,8 @@ def test_each_harness_answers_as_the_engine_did_by_name(w: World) -> None:
     clear = HookEvent(harness="claude", event="SessionEnd", t=0.0, reason="clear")
     assert {h for h, a in ads.items() if a.reports_session_id} == {HTTPS_DEVIN, "test"}
     # over HTTPS (§49.4) the mode comes with each hook, and /clear keeps a Claude session
-    assert {h for h, a in ads.items() if a.reports_approval_mode} == {HTTPS_CLAUDE, HTTPS_CODEX}
+    # Grok Build's hooks carry its permissionMode too (default, or bypassPermissions with --always-approve)
+    assert {h for h, a in ads.items() if a.reports_approval_mode} == {HTTPS_CLAUDE, HTTPS_CODEX, HTTPS_GROK}
     assert {h for h, a in ads.items() if not a.ends_session(clear)} == {HTTPS_CLAUDE}
     sub = HookEvent(harness="devin", event="PreToolUse", t=0.0, subagent_bg=True)
     assert {h for h, a in ads.items() if a.starts_subagent(sub)} == {HTTPS_DEVIN}

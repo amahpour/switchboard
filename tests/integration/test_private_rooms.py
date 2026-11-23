@@ -153,10 +153,11 @@ def test_people_come_and_go_and_the_last_one_stays(hosted: InProcBroker) -> None
         m["text"] for m in bob.get("/api/rooms/secret/messages").json()["messages"] if m["kind"] == "notice"
     ]
     assert "bob added alice to #secret" in notices
-    # a public room has no people to add
+    # a public room's people are its members, who are pinged there (§63): its creator adds bob to it
     admin.post("/api/rooms", {"name": "#open"})
     r = admin.post("/api/rooms/open/people", {"action": "add", "name": "bob"})
-    assert (r.status_code, r.json()["message"]) == (400, "#open isn't private: everyone signed in sees it")
+    assert (r.status_code, r.json()["text"]) == (200, "added bob")
+    assert r.json()["room"]["people"] == ["alice", "bob"]
 
 
 def test_the_admin_sees_names_and_people_and_a_removed_person_leaves(hosted: InProcBroker) -> None:
@@ -192,7 +193,7 @@ def test_a_desktop_broker_has_no_private_rooms(broker: InProcBroker) -> None:
 def test_existing_rooms_stay_public(hosted: InProcBroker) -> None:
     admin = set_up(hosted)
     room = admin.post("/api/rooms", {"name": "#build"}).json()["room"]
-    assert (room["private"], room["people"]) == (False, None)
+    assert (room["private"], room["people"]) == (False, ["alice"])  # its creator is its first member (§63)
     json.dumps(room)
 
 

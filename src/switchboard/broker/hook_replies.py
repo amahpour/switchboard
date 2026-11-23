@@ -36,14 +36,18 @@ CONTEXT_EVENTS = {
     "codex": ("PostToolUse",),
     "devin": ("PostToolUse",),
     "cursor": ("postToolUse", "postToolUseFailure"),
+    # Grok Build: a tool hook's additionalContext reaches the model as a system reminder; SessionStart's and
+    # UserPromptSubmit's output never does (measured with a stand-in model, 1.0.89, #851)
+    "grok": ("PostToolUse", "PostToolUseFailure"),
 }
-# ...and which may print a continue: the Stop of Devin and Cursor (Claude's Stop is its listener,
+# ...and which may print a continue: the Stop of Devin, Cursor and Grok Build (Claude's Stop is its listener,
 # and Codex's block is written by ``reply_for``).
 CONTINUE_EVENTS = {
     "devin": ("Stop",),
     "cursor": ("stop",),
+    "grok": ("Stop",),
 }
-CONTEXT_MAX = {"claude": 10000, "codex": 5000, "devin": 6000, "cursor": 8000}
+CONTEXT_MAX = {"claude": 10000, "codex": 5000, "devin": 6000, "cursor": 8000, "grok": 8000}
 
 
 def clip(value: Any, n: int = 128) -> str | None:
@@ -74,7 +78,8 @@ def render(harness: str, event: str, out: Any) -> dict[str, Any] | None:
             return {"additional_context": text}
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
     if kind == "continue" and event in CONTINUE_EVENTS.get(harness, ()):
-        if harness == "devin":
+        if harness in ("devin", "grok"):
+            # Grok Build shows a Stop block's reason to the model as "Stop hook feedback" and continues
             return {"decision": "block", "reason": text}
         if harness == "cursor":
             return {"followup_message": text}

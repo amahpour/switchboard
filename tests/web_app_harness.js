@@ -16,14 +16,23 @@ const STATIC = path.join(__dirname, '..', 'src', 'switchboard', 'web', 'static')
 const MD = path.join(STATIC, 'md.js');
 const APP = path.join(STATIC, 'app.js');
 
+// A class change tells its element's MutationObservers (the stand-in in makeWorld), as the class attribute's
+// change would in a browser.
 class ClassList {
-  constructor() { this.s = new Set(); }
-  add(...c) { for (const x of c) this.s.add(x); }
-  remove(...c) { for (const x of c) this.s.delete(x); }
+  constructor(owner) { this.s = new Set(); this.owner = owner || null; }
+  changed(before) {
+    const s = this.s;
+    if (s.size !== before.size || [...before].some(function (c) { return !s.has(c); })) this.mutated();
+  }
+  mutated() { if (this.owner && this.owner.mutated) this.owner.mutated('class'); }
+  add(...c) { const b = new Set(this.s); for (const x of c) this.s.add(x); this.changed(b); }
+  remove(...c) { const b = new Set(this.s); for (const x of c) this.s.delete(x); this.changed(b); }
   contains(c) { return this.s.has(c); }
   toggle(c, force) {
+    const b = new Set(this.s);
     const on = force === undefined ? !this.s.has(c) : !!force;
     if (on) this.s.add(c); else this.s.delete(c);
+    this.changed(b);
     return on;
   }
 }
@@ -32,7 +41,7 @@ class El {
   constructor(tag) {
     this.tag = tag;
     this.children = [];
-    this.classList = new ClassList();
+    this.classList = new ClassList(this);
     this.dataset = {};
     this.attrs = {};
     this.listeners = {};
@@ -48,8 +57,20 @@ class El {
   get firstChild() { return this.children.length ? this.children[0] : null; }
   get lastChild() { return this.children.length ? this.children[this.children.length - 1] : null; }
   set className(v) {
-    this.classList = new ClassList();
-    for (const c of String(v).split(/\s+/)) if (c) this.classList.add(c);
+    const list = new ClassList();
+    for (const c of String(v).split(/\s+/)) if (c) list.add(c);
+    list.owner = this;
+    this.classList = list;
+    list.mutated();
+  }
+  // What a MutationObserver watching this element's attributes hears (makeWorld's stand-in): a record a microtask
+  // later, as in a browser.
+  mutated(attr) {
+    for (const o of this.observers || []) {
+      if (o.filter && o.filter.indexOf(attr) < 0) continue;
+      o.obs.records.push({ type: 'attributes', target: this, attributeName: attr });
+      if (o.obs.records.length === 1) queueMicrotask(function () { o.obs.flush(); });
+    }
   }
   get className() { return Array.from(this.classList.s).join(' '); }
   set textContent(v) { this.children = []; this.own = String(v); }
@@ -67,6 +88,14 @@ class El {
   addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
   dispatch(t, ev) { for (const f of this.listeners[t] || []) f(ev || { preventDefault() {} }); }
   focus() {}
+  contains(n) {
+    if (n === this) return true;
+    return this.children.some(function (c) { return c instanceof El && c.contains(n); });
+  }
+  // No layout here (see layout in makeWorld): a node is visible unless it, or the log under a view that the
+  // stylesheet hides it behind, is hidden; its box is the whole window.
+  checkVisibility() { return !this.classList.contains('hidden') && !(this.layout && this.layout.logCovered(this)); }
+  getBoundingClientRect() { return { left: 0, top: 0, right: 1000, bottom: 800, width: 1000, height: 800 }; }
   showModal() { this.open = true; }
   close(value) { this.returnValue = value || ''; this.open = false; if (this.onclose) this.onclose(); }
   requestSubmit() { this.dispatch('submit', { preventDefault() {} }); }
@@ -75,8 +104,25 @@ class El {
 // ------------------------------------------------------------------ fakes
 function makeWorld(rooms) {
   const byId = new Map();
+  // The page's layout, made explicit (#914, §64.4): app.js reads from the page whether the log is on screen
+  // (checkVisibility, elementFromPoint, a painted frame). This stands in for style.css's rules that hide #log
+  // under a view (Search, Home, Usage, the whiteboard, a review board), and `cover` puts a node over the log's
+  // middle, as an overlay would. A scenario may set `hidden` to say the tab is in the background.
+  const layout = {
+    cover: null,
+    hidden: false,
+    logCovered(el) {
+      if (el.id !== 'log') return false;
+      const app = byId.get('app'), main = byId.get('main');
+      const on = function (n, c) { return !!n && n.classList.contains(c); };
+      return on(app, 'search-open') || on(app, 'home-open') || on(app, 'usage-open') ||
+        on(app, 'whiteboard-open') || on(main, 'board-open') || !!(main && main.inert);
+    },
+  };
   const document = {
     title: '',
+    get visibilityState() { return layout.hidden ? 'hidden' : 'visible'; },
+    elementFromPoint() { return layout.cover || byId.get('log') || null; },
     documentElement: new El('html'),
     activeElement: null,
     listeners: {},
@@ -85,9 +131,11 @@ function makeWorld(rooms) {
         const e = new El(id === 'app-dialog' ? 'dialog' : 'div');
         e.id = id;
         e.ownerDocument = document;
+        e.layout = layout;
         // as index.html starts them
         if (['empty', 'closed-panel', 'closed-rooms', 'room-empty', 'palette', 'mentions', 'scrim',
-             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home', 'usage'].includes(id)) e.classList.add('hidden');
+             'catchup-menu', 'insp-queue', 'passkeys-panel', 'home', 'usage', 'preview-bar', 'room-preview',
+             'room-menu', 'room-menu-wrap'].includes(id)) e.classList.add('hidden');
         byId.set(id, e);
       }
       return byId.get(id);
@@ -126,6 +174,9 @@ function makeWorld(rooms) {
     const d = { id: r.id, name: r.name, slug: r.name.slice(1), created_at: r.created_at, members: 0, last_id: 0,
                 settings: {} };
     if (r.private) { d.private = true; d.people = r.people; }  // a private room lists its people (§44)
+    else if (r.people) d.people = r.people;  // a public room's members (§63)
+    if (r.member === false) d.member = false;  // a room this person is not a member of (§63)
+    if (r.joined_with) d.joined_with = r.joined_with;
     return d;
   }
 
@@ -172,6 +223,18 @@ function makeWorld(rooms) {
       server.moves.push(Object.assign({ room: decodeURIComponent(mv[1]) }, body));
       return function () { return [server.moveFails ? 400 : 200, server.moveFails ? { message: server.moveFails } : { ok: true, boards: [] }]; };
     }
+    // join, add someone or leave a public room (§63): the listing follows, as the broker's does
+    const mp = /^\/api\/rooms\/([^/]+)\/people$/.exec(url);
+    if (method === 'POST' && mp) {
+      server.peopleCalls = (server.peopleCalls || []).concat([Object.assign({ room: decodeURIComponent(mp[1]) }, body)]);
+      const r = server.rooms.find(function (x) { return x.name === '#' + decodeURIComponent(mp[1]); });
+      if (r && body.name === 'alice') {
+        r.member = body.action === 'add';
+        r.joined_with = '';
+        r.people = (r.people || []).filter(function (n) { return n !== 'alice'; }).concat(r.member ? ['alice'] : []);
+      }
+      return function () { return [200, { text: 'ok', room: r ? roomDict(r) : null }]; };
+    }
     if (method === 'GET' && url === '/api/people') {
       return function () { return [200, { people: server.people || [] }]; };
     }
@@ -208,6 +271,16 @@ function makeWorld(rooms) {
       return function () {
         const d = server.details[key];
         return d ? [200, d] : [404, { error: 'not_found', message: key + ' is not in the room' }];
+      };
+    }
+    // a room's Mentions or Files (§64): onFilter(slug, params) answers, an empty page when a scenario sets none
+    const mf = /^\/api\/rooms\/([^/]+)\/filter\?(.*)$/.exec(url);
+    if (method === 'GET' && mf) {
+      server.filterGets = (server.filterGets || []).concat([url]);
+      const slug = decodeURIComponent(mf[1]);
+      const params = Object.fromEntries(new URLSearchParams(mf[2]));
+      return function () {
+        return [200, server.onFilter ? server.onFilter(slug, params) : { messages: [], next: null }];
       };
     }
     const mc = /^\/api\/rooms\/([^/]+)\/call$/.exec(url);
@@ -294,6 +367,19 @@ function makeWorld(rooms) {
     },
     setInterval: function () { return 0; }, clearInterval: function () {},  // the ping and refresh timers
     encodeURIComponent: encodeURIComponent, decodeURIComponent: decodeURIComponent, URL: URL,
+    URLSearchParams: URLSearchParams,
+    // a painted frame: the next setImmediate turn, which settle() runs
+    requestAnimationFrame: function (f) { return setImmediate(function () { f(0); }); },
+    // the attribute half of a MutationObserver: class changes on the elements it observes (ClassList tells them)
+    MutationObserver: class {
+      constructor(cb) { this.cb = cb; this.records = []; }
+      observe(el, opts) {
+        (el.observers = el.observers || []).push({ obs: this, filter: (opts && opts.attributeFilter) || null });
+      }
+      flush() { const r = this.records; this.records = []; if (r.length) this.cb(r, this); }
+      disconnect() {}
+    },
+    innerWidth: 1000, innerHeight: 800,
   };
   ctx.window = ctx;
   ctx.window.alert = function (m) { throw new Error('alert: ' + m); };
@@ -304,7 +390,7 @@ function makeWorld(rooms) {
   if (fs.existsSync(MD)) vm.runInContext(fs.readFileSync(MD, 'utf8'), ctx, { filename: 'md.js' });
   vm.runInContext(fs.readFileSync(APP, 'utf8'), ctx, { filename: 'app.js' });
 
-  return { document: document, server: server, sockets: sockets, location: location, window: ctx,
+  return { document: document, server: server, sockets: sockets, location: location, window: ctx, layout: layout,
            $: document.getElementById.bind(document) };
 }
 
@@ -807,6 +893,65 @@ const SCENARIOS = {
     };
     seen.inspector = { alice: await inspector('claude-1'), bob: await inspector('codex-1'), none: await inspector('devin-1') };
     return seen;
+  },
+
+  // A public room's members (§63): the sidebar lists the rooms alice is in, with "joined with" the first time,
+  // and folds the rest under Other rooms, with a dot when a call is live in one; a message there counts
+  // nothing. Opening one is a preview with a Join bar in place of the composer; Join makes it hers, and Leave
+  // (the room's menu, then a confirm) makes it a preview again.
+  async room_members() {
+    const w = makeWorld([
+      { id: 1, name: '#build', created_at: 100, people: ['alice', 'bob'] },
+      { id: 2, name: '#infra', created_at: 100, people: ['alice'], joined_with: 'claude-2' },
+      { id: 3, name: '#ops', created_at: 100, member: false, people: ['bob', 'carol'] },
+      { id: 4, name: '#random', created_at: 100, member: false, people: ['bob'] },
+    ]);
+    w.location.hash = '#build';
+    const ws = await boot(w);
+    ws.deliver({ t: 'people', people: ['alice', 'bob', 'carol'], online: ['alice'] });
+    await settle();
+    const side = function () {
+      return w.$('tabs').children.map(function (c) {
+        if (c.id === 'other-rooms') {
+          const live = findAll(c, function (n) { return n.classList.contains('live'); }).length ? ':live' : '';
+          return 'toggle:' + c.textContent + (c.attrs['aria-expanded'] === 'true' ? ':open' : '') + live;
+        }
+        if (c.id === 'other-rooms-list') return c.children.map(function (b) { return b.dataset.room + '|' + b.textContent; });
+        return c.dataset.room + '|' + c.textContent;
+      });
+    };
+    const shown = function (id) { return !w.$(id).classList.contains('hidden'); };
+    const out = { start: side() };
+    ws.deliver({ t: 'msg', room: '#ops', msg: chat(10, 'claude-1', '@humans ship it?', { sender_kind: 'agent', mentions: ['humans'] }) });
+    ws.deliver({ t: 'msg', room: '#infra', msg: chat(11, 'claude-2', '@humans look', { sender_kind: 'agent', mentions: ['humans'] }) });
+    ws.deliver({ t: 'room', room: '#random', settings: { meeting: { state: 'live', platform: 'zoom', source: 'bot' } } });
+    await settle();
+    out.counted = { title: w.document.title, tabs: side() };
+    click(findAll(w.$('tabs'), function (n) { return n.id === 'other-rooms'; })[0]);
+    await settle();
+    out.open = side();
+    click(findAll(w.$('tabs'), function (n) { return n.tag === 'button' && n.dataset.room === '#ops'; })[0]);
+    await settle();
+    out.preview = { composer: shown('composer'), bar: shown('preview-bar'), chip: shown('room-preview'),
+                    menu: shown('room-menu-wrap'), title: w.$('preview-title').textContent,
+                    join: w.$('preview-join').textContent };
+    click(w.$('preview-join'));
+    await settle();
+    out.joined = { composer: shown('composer'), bar: shown('preview-bar'), menu: shown('room-menu-wrap'),
+                   tabs: side(), calls: w.server.peopleCalls.slice() };
+    click(w.$('room-menu-btn'));
+    await settle();
+    const leave = findAll(w.$('room-menu'), function (n) { return n.id === 'room-menu-leave'; })[0];
+    out.menu = { open: shown('room-menu'), item: leave && leave.textContent };
+    click(leave);
+    await settle();
+    const dialog = w.$('app-dialog');
+    out.confirm = dialog.textContent;
+    click(findAll(dialog, function (n) { return n.id === 'app-dialog-action'; })[0]);
+    await settle();
+    out.left = { composer: shown('composer'), bar: shown('preview-bar'), menu: shown('room-menu-wrap'),
+                 calls: w.server.peopleCalls.slice(1), tabs: side() };
+    return out;
   },
 
   // The call as a member (#623): a room frame that carries an open call makes a Calls row after the agents
@@ -1596,10 +1741,90 @@ const SCENARIOS = {
     click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
     await settle();
     ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'a later one', { mentions: ['alice'] }) });
+    await settle();  // a frame is painted with it on screen
     w.server.trail.length = 0;
     click(w.$('home-nav'));
     await settle();
     return { afterGo: afterGo, afterHome: afterHome, all: w.server.roomSeen, trail: w.server.trail };
+  },
+
+  // The seen mark reads the page (#914, §64.4): a message that arrives while something covers the log's middle,
+  // or while the tab is in the background, is not marked seen when the person leaves for Home.
+  async seen_needs_the_log_on_screen() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'first', { mentions: ['alice'] }) });
+    await settle();
+    const openBuild = function () {
+      click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    };
+    openBuild();  // the room on screen: 7 is seen
+    await settle();
+    const out = {};
+    for (const how of ['covered', 'background']) {
+      if (how === 'covered') w.layout.cover = w.document.createElement('div');
+      else w.layout.hidden = true;
+      const id = how === 'covered' ? 11 : 13;
+      ws.deliver({ t: 'msg', room: '#build', msg: chat(id, 'codex-1', 'while ' + how, { mentions: ['alice'] }) });
+      await settle();
+      click(w.$('home-nav'));
+      await settle();
+      out[how] = w.server.roomSeen.map(function (b) { return b.id; });
+      w.layout.cover = null;
+      w.layout.hidden = false;
+      openBuild();
+      await settle();
+      out[how + 'Back'] = w.server.roomSeen.map(function (b) { return b.id; });
+    }
+    return out;
+  },
+
+  // #914 F4: a cover goes without a draw (Back to the conversation from a review board takes board-open off
+  // #main). The log is on screen again in the next frame, so a mention that came under the cover is seen.
+  async seen_when_a_cover_goes_without_a_draw() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'first', { mentions: ['alice'] }) });
+    await settle();
+    click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    await settle();
+    w.$('main').classList.add('board-open');  // a review board over the log
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'under the board', { mentions: ['alice'] }) });
+    await settle();
+    const covered = w.$('log').children.length;
+    w.$('main').classList.remove('board-open');  // uncovered, nothing drawn
+    await settle();
+    const drawn = w.$('log').children.length === covered;
+    click(w.$('home-nav'));
+    await settle();
+    return { seen: w.server.roomSeen.map(function (b) { return b.id; }), noRedraw: drawn };
+  },
+
+  // #914 F4, reopened: a modal dialog over the log (Rename room) blocks hit-testing, so a mention that comes
+  // meanwhile is not seen; closing the dialog changes none of the watched nodes, only fires its close event
+  // (captured on the document). That event alone asks for the check, and the next frame shows the mention.
+  async seen_when_a_dialog_closes() {
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    w.server.home = homeBody();
+    const ws = await boot(w);
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(7, 'codex-1', 'first', { mentions: ['alice'] }) });
+    await settle();
+    click(findAll(w.$('home'), function (n) { return n.classList.contains('home-rowbtn') && n.textContent.indexOf('build') >= 0; })[0]);
+    await settle();
+    w.layout.cover = w.document.createElement('dialog');  // a modal dialog over the log's middle
+    ws.deliver({ t: 'msg', room: '#build', msg: chat(11, 'codex-1', 'under the dialog', { mentions: ['alice'] }) });
+    await settle();
+    const covered = w.$('log').children.length;
+    w.layout.cover = null;  // the dialog closes: no watched node changes
+    for (const f of w.document.listeners.close || []) f({ type: 'close' });
+    await settle();
+    const noRedraw = w.$('log').children.length === covered;
+    click(w.$('home-nav'));
+    await settle();
+    return { seen: w.server.roomSeen.map(function (b) { return b.id; }), noRedraw: noRedraw };
   },
 
   // Not now on a board card posts the board's address to the room's route, and the card is gone once Home asks
@@ -1695,7 +1920,8 @@ const SCENARIOS = {
   // option id, what choosing inserts). Agents and a system line stay the name they posted under.
   // A later people frame with full_names redraws an open page. Typing the real name matches.
   async real_names_show() {
-    const w = makeWorld([{ id: 1, name: '#build', created_at: 100 }]);
+    // its members (§63): a public room's People list is who is in it
+    const w = makeWorld([{ id: 1, name: '#build', created_at: 100, people: ['alice', 'bob-lee', 'carol'] }]);
     w.server.me = {
       human: 'alice', admin: false, test_mode: false,
       full_names: { alice: 'Alice Ng', 'bob-lee': 'Bob Lee' },
@@ -1856,7 +2082,80 @@ const SCENARIOS = {
       saveDisabled: !!save.disabled,
     };
   },
+
+  // #914 F3: the socket brings A while the first page is on its way, and the page holds A and a later B; then the
+  // socket brings B. The log is A, B in id order, each once.
+  async filter_overlap() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const a = chat(600, 'claude-1', '@alice which branch?', { mentions: ['alice'] });
+    const b = chat(601, 'codex-1', '@alice and the tests?', { mentions: ['alice'] });
+    w.server.onFilter = function () { return { messages: [a, b], next: null }; };
+    w.server.holdNext.add('GET /api/rooms/build/filter?show=mentions');
+    click(w.$('filter-mentions'));
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: a });
+    await settle();
+    w.server.release('GET /api/rooms/build/filter?show=mentions');
+    await settle();
+    ws.deliver({ t: 'msg', room: '#build', msg: b });
+    await settle();
+    return { ids: logIds(w), note: w.$('room-filter-note').textContent };
+  },
+
+  // #914 F2: a message outside the page's history has one stored file when Files first asks; a second upload ends
+  // before that answer comes, and its file frame asks the broker for a fresh row. The first answer lands first,
+  // then the fresh row with both files. The row shows a download for each.
+  async filter_file_after_page() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const sha = 'sha256:' + '0'.repeat(64);
+    const one = { id: 'a'.repeat(32), name: 'one.txt', state: 'stored', size: 3 };
+    const two = { id: 'b'.repeat(32), name: 'two.txt', state: 'stored', size: 3 };
+    const text = 'artifact: one.txt | 3 | ' + sha + ' | /Users/someone/one.txt\n' +
+      'artifact: two.txt | 3 | ' + sha + ' | /Users/someone/two.txt';
+    const early = chat(700, 'claude-1', text, { files: [one] });
+    const late = chat(700, 'claude-1', text, { files: [one, two] });
+    w.server.onFilter = function (_slug, p) {
+      return p.limit === '1' ? { messages: [late], next: null } : { messages: [early], next: null };
+    };
+    w.server.holdNext.add('GET /api/rooms/build/filter?show=files');
+    w.server.holdNext.add('GET /api/rooms/build/filter?show=files&before=701&limit=1');
+    click(w.$('filter-files'));
+    await settle();
+    ws.deliver({ t: 'file', room: '#build', message_id: 700, file: two });
+    await settle();
+    w.server.release('GET /api/rooms/build/filter?show=files');
+    await settle();
+    w.server.release('GET /api/rooms/build/filter?show=files&before=701&limit=1');
+    await settle();
+    const row = w.$('log').children.find(function (c) { return c.dataset && c.dataset.id === '700'; });
+    const links = row ? findAll(row, function (n) { return n.tag === 'a' && n.classList.contains('md-file'); }) : [];
+    return { ids: logIds(w), downloads: links.map(function (a) { return a.href; }).sort(),
+             asked: w.server.filterGets };
+  },
+
+  // #914 F7: Files shows its newest page (more before it); an upload is stored for a much older message, and the
+  // broker's row for it comes in. The note counts what is shown without calling it the newest.
+  async filter_old_file_note() {
+    const { w, ws } = await buildRoom(MEMBERS);
+    const file = function (c) { return { id: c.repeat(32), name: c + '.txt', state: 'stored', size: 3 }; };
+    const page = [chat(800, 'claude-1', 'one', { files: [file('a')] }), chat(801, 'claude-1', 'two', { files: [file('b')] })];
+    const old = chat(300, 'claude-1', 'old', { files: [file('c')] });
+    w.server.onFilter = function (_slug, p) {
+      return p.limit === '1' ? { messages: [old], next: 299 } : { messages: page, next: 800 };
+    };
+    click(w.$('filter-files'));
+    await settle();
+    const before = w.$('room-filter-note').textContent;
+    ws.deliver({ t: 'file', room: '#build', message_id: 300, file: file('c') });
+    await settle();
+    return { before: before, ids: logIds(w), note: w.$('room-filter-note').textContent };
+  },
 };
+
+function logIds(w) {
+  return w.$('log').children.filter(function (c) { return c.dataset && c.dataset.id; })
+    .map(function (c) { return c.dataset.id; });
+}
 
 async function closeScenario(twoRooms, frameLate) {
   const rooms = [{ id: 1, name: '#build', created_at: 100 }];

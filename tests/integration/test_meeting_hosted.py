@@ -15,8 +15,10 @@ import asyncio
 import json
 import logging
 import secrets
+import shutil
 import socket
 import sqlite3
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -79,7 +81,10 @@ class Relay:
 
 
 class World:
-    """A desktop broker on a ``FakeClock`` with the owner's web session and two rooms."""
+    """A desktop broker on a ``FakeClock`` with the owner's web session and two rooms.
+
+    It owns ``home``: ``stop()`` removes it once the broker has stopped (#919), so every test and
+    fixture that makes a World with ``make_tmp_home()`` leaves nothing in /tmp."""
 
     def __init__(self, home: Path, clock: FakeClock, max_calls: int = 2, files_mb: int | None = None) -> None:
         cfg = Config(human_name="alice").replace(
@@ -91,19 +96,46 @@ class World:
             cfg = cfg.replace(files=FilesCfg(max_mb=files_mb))
         cfg = cfg.with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0, rate_limit_s=0.0)
         self.clock = clock
-        self.b = InProcBroker(home, cfg, clock=clock).start()
-        self.web = self.b.web_client()
-        for room in ("#build", "#uploads", "#third"):
-            assert (
-                self.web.post("/api/rooms", json={"name": room}, headers=self.b.write_headers()).status_code
-                == 200
-            )
-        self.relay = Relay(self.b)
+        self.home = home
+        self.b = InProcBroker(home, cfg, clock=clock)
+        try:
+            self.b.start()
+            self.web = self.b.web_client()
+            for room in ("#build", "#uploads", "#third"):
+                r = self.web.post("/api/rooms", json={"name": room}, headers=self.b.write_headers())
+                assert r.status_code == 200, r.text
+            self.relay = Relay(self.b)
+        except BaseException as e:
+            # The caller's ``try`` only starts once this returns: stop what was started and remove the home
+            # here, or a failed start leaves both (#919, review F3).
+            try:
+                self.stop()
+            except Exception as cleanup:
+                e.add_note(f"and stopping the World failed too: {cleanup!r}")
+            raise
 
     def stop(self) -> None:
-        self.relay.close()
-        self.web.close()
-        self.b.stop()
+        """Close the relay and the web client and stop the broker, each even if one before it raised, then
+        remove the home, but only once the broker's thread has ended: a broker still running under a removed
+        home fails with errors that hide why it would not stop (#832). A home kept is raised about, and
+        ``no_homes_left_behind`` names it too (#919)."""
+        errors: list[Exception] = []
+        # a World whose start failed has neither yet (``__init__``)
+        made = (getattr(self, "relay", None), getattr(self, "web", None))
+        for close in (*(c.close for c in made if c is not None), self.b.stop):
+            try:
+                close()
+            except Exception as e:
+                errors.append(e)
+        thread = self.b.thread
+        if thread is not None and thread.is_alive():
+            errors.append(RuntimeError(f"the broker did not stop, so its home {self.home} is kept"))
+        else:
+            shutil.rmtree(self.home, ignore_errors=True)
+        if len(errors) == 1:
+            raise errors[0]
+        if errors:
+            raise ExceptionGroup("stopping a meeting World", errors)
 
     # ---- what a person sees and does
     def command(self, text: str, room: str = "build", *, expect: int = 200) -> dict[str, Any]:
@@ -155,6 +187,107 @@ def world() -> Iterator[World]:
         yield w
     finally:
         w.stop()
+
+
+class _Closer:
+    """A stand-in for the relay or the web client: records that it was closed, and may raise."""
+
+    def __init__(self, fail: bool = False) -> None:
+        self.fail, self.closed = fail, False
+
+    def close(self) -> None:
+        self.closed = True
+        if self.fail:
+            raise OSError("close failed")
+
+
+class _Broker:
+    """A stand-in broker: its ``stop()`` is recorded, and its thread is a real one, ended or running."""
+
+    def __init__(self, thread: Any = None) -> None:
+        self.thread, self.stopped = thread, False
+
+    def stop(self) -> None:
+        self.stopped = True
+
+
+def _stand_in_world(home: Path, relay: _Closer, web: _Closer, b: _Broker) -> World:
+    w = World.__new__(World)
+    w.home, w.relay, w.web, w.b = home, relay, web, b  # type: ignore[assignment]
+    return w
+
+
+def test_world_stop_stops_the_broker_even_when_a_close_raises(tmp_path: Path) -> None:
+    """An error from the relay's or the web client's close still closes the other and stops the broker, and
+    the home goes once the broker's thread has ended; the error is raised after (#919, review F2).
+
+    Fails on a ``stop()`` that runs its closes in one ``try``: the relay's error skipped the web client and
+    ``b.stop()``, and the home was removed under a broker that was never told to stop."""
+    home = tmp_path / "home"
+    home.mkdir()
+    done = threading.Thread(target=lambda: None)
+    done.start()
+    done.join()
+    relay, web, b = _Closer(fail=True), _Closer(fail=True), _Broker(done)
+    with pytest.raises(ExceptionGroup) as raised:
+        _stand_in_world(home, relay, web, b).stop()
+    assert [str(e) for e in raised.value.exceptions] == ["close failed", "close failed"]
+    assert relay.closed and web.closed and b.stopped
+    assert not home.exists()
+
+
+def test_world_stop_keeps_the_home_of_a_broker_that_would_not_stop(tmp_path: Path) -> None:
+    """``InProcBroker.stop()`` joins its thread for 10 s and may return with it alive: then the home is kept
+    and ``stop()`` raises, naming it, rather than removing it from under the running broker (review F2).
+
+    Fails on a ``stop()`` that removes the home whatever the thread is doing."""
+    home = tmp_path / "home"
+    home.mkdir()
+    release = threading.Event()
+    running = threading.Thread(target=release.wait, daemon=True)
+    running.start()
+    try:
+        b = _Broker(running)
+        with pytest.raises(RuntimeError, match="did not stop") as raised:
+            _stand_in_world(home, _Closer(), _Closer(), b).stop()
+        assert str(home) in str(raised.value)
+        assert b.stopped and home.exists()
+    finally:
+        release.set()
+        running.join()
+
+
+def test_a_world_that_fails_to_provision_stops_its_broker_and_removes_its_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failure while ``World()`` makes its rooms stops the broker it started and removes its home before
+    the error goes on (#919, review F3).
+
+    Fails on a ``World.__init__`` with no cleanup of its own: the fixture's ``try`` starts only once
+    ``World()`` returns, so the home stayed in /tmp and the broker ran on."""
+    started: list[InProcBroker] = []
+    real_start = InProcBroker.start
+
+    def start(self: InProcBroker) -> InProcBroker:
+        started.append(self)
+        return real_start(self)
+
+    def refused(self: InProcBroker) -> dict[str, str]:
+        raise RuntimeError("provisioning failed")
+
+    monkeypatch.setattr(InProcBroker, "start", start)
+    monkeypatch.setattr(InProcBroker, "write_headers", refused)
+    home = make_tmp_home()
+    try:
+        with pytest.raises(RuntimeError, match="provisioning failed"):
+            World(home, FakeClock())
+        [b] = started
+        assert b.thread is not None and not b.thread.is_alive()
+        assert not home.exists()
+    finally:
+        for b in started:
+            b.stop()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def poll_waiting(w: World) -> bool:
@@ -360,6 +493,27 @@ async def test_with_voice_on_an_agents_at_call_line_is_given_to_the_relays_poll(
         assert "voice is off" in w.command("/meeting voice off")["text"]
         await claude.say("#build", "@call this one is not spoken")
         assert w.relay.speech().json()["lines"] == []
+    finally:
+        await claude.close()
+        await codex.close()
+
+
+async def test_a_hosted_calls_bar_never_says_who_is_speaking(world: World) -> None:
+    """The broker learns when it hands a hosted call's line to the relay and, from a newer relay, when the
+    relay says it ended; not when the speech starts, and an older relay never says it ended. So the bar
+    of a hosted call names nobody, before, while and after a line is out with the relay (§52.13). Fails if
+    a hosted call's frame says ``speaking``, which could be stale for the 90 seconds the slot is kept."""
+    w = world
+    claude, codex = await hosted_call(w)
+    try:
+        w.command("/meeting voice on")
+        await claude.say("#build", "@call the build is green")
+        got = w.relay.post(SPEECH, {"wait": 0, "turns": True}).json()
+        assert got["lines"] == ["the build is green"] and type(got["speech_id"]) is int
+        assert w.b.on_loop(lambda: any(c.turns.active for c in w.b.state.hosted_calls._calls.values()))
+        assert "speaking" not in w.settings()["meeting"]
+        w.relay.post(SPEECH, {"wait": 0, "turns": True, "done": got["speech_id"]})
+        assert "speaking" not in w.settings()["meeting"]
     finally:
         await claude.close()
         await codex.close()

@@ -5,6 +5,14 @@ merge is Excalidraw's own: per element, the higher ``version`` wins, a tie goes 
 ``versionNonce``, and a delete is a tombstone that stays in the list. Shapes from outside are a
 claim: known fields only, text cut, coordinates clamped, ``link`` forced null, and an image,
 embed or frame-of-a-page never stored.
+
+Every string that can reach a stored shape (a shape's or a label's ``text`` and ``originalText``, a frame's
+``name``) is read by ``_text`` (``read_text``), which cuts obvious secrets out with ``redact`` (§11, #893),
+and ``text`` is the read ``originalText`` whenever there is one (``_display_text``):
+the one place, so an agent's action, a Mermaid diagram and a person's page all pass it. The strings kept as
+written (an id, a group id, a reference, ``index``) are checked by ``_no_secret`` and refused when they hold
+one. ``customData`` and ``link`` are never kept, and a Mermaid source is never stored (only the shapes drawn
+from it), so there is nothing else to read.
 """
 
 from __future__ import annotations
@@ -20,6 +28,7 @@ from typing import Any
 from switchboard import board_checks, board_layout, board_style
 from switchboard.board_style import DEFAULT_STROKE, nearest_name
 from switchboard.envelope import clean
+from switchboard.redact import redact
 
 # The spike's caps (#622, question 7). Text is cut for everyone, so what an agent reads back
 # stays bounded; a person drawing by hand meets the same cut.
@@ -130,15 +139,59 @@ def _iint(v: Any, lo: int, hi: int) -> int | None:
     return v
 
 
+_SCAN_MAX = 100_000  # the most of one string that is read for secrets: text is cut at MAX_TEXT after
+
+
+def read_text(text: str) -> str:
+    """``text`` (already ``clean``) with obvious secrets cut out (``redact``, §11, #893), then cut to
+    ``MAX_TEXT``. The whole string is read first, then cut, so half a secret is never left at the cut. A
+    value that fit and that its marker would push past the limit is refused (``Reject``), naming the kind
+    and never the value: a cut would leave half a marker, and a silent one would hide the redaction."""
+    text = text[:_SCAN_MAX]
+    out, kinds = redact(text)
+    if kinds and len(text) <= MAX_TEXT < len(out):
+        raise Reject(
+            f"text is too long once what looks like a secret ({', '.join(kinds)}) is cut out: "
+            "leave the secret out"
+        )
+    return out[:MAX_TEXT]
+
+
+def _display_text(raw_text: str, raw_original: Any) -> str:
+    """A shape's ``text``, which Excalidraw keeps as ``originalText`` wrapped to the shape's width. With an
+    ``originalText`` the page's wrapped copy is ignored (#893): ``text`` is the read ``originalText``, and the
+    page wraps it again when it draws (Excalidraw's own restore wraps a bound or fixed-width text from the
+    words it is given). A wrap can break a token across lines where no pattern matches, and one string read
+    one way is the simplest thing that cannot be argued with. A ``text`` with a line break and no
+    ``originalText`` is refused: Excalidraw and the agents always send both, so only a hand-built client
+    meets it."""
+    if isinstance(raw_original, str):
+        return _text(raw_original)
+    if "\n" in raw_text:
+        raise Reject("text with line breaks needs its originalText")
+    return _text(raw_text)
+
+
 def _text(v: Any) -> str:
+    """A string from outside, cleaned and read by ``read_text``: the one reader of every stored text."""
     if not isinstance(v, str):
         return ""
-    return clean(v)[:MAX_TEXT]
+    return read_text(clean(v)[:_SCAN_MAX])
+
+
+def _no_secret(v: str) -> str:
+    """An id or a reference that is kept as written must hold no secret: one that does is refused, naming
+    the kind and never the value (#893). The character and length check is not enough: a complete token
+    (``ghp_`` and 36 letters) fits it."""
+    kinds = redact(v)[1]
+    if kinds:
+        raise Reject(f"an id holds what looks like a secret ({', '.join(kinds)}): use another id")
+    return v
 
 
 def _ident(v: Any) -> str | None:
     if isinstance(v, str) and _ID.fullmatch(v):
-        return v
+        return _no_secret(v)
     return None
 
 
@@ -221,7 +274,12 @@ def _bound_list(raw: Any) -> list[dict[str, str]] | None:
 
 
 def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
-    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all."""
+    """One element as it may be stored. Raises ``Reject`` when it must not be stored at all. A tombstone
+    (``isDeleted``) keeps no text: a delete copies the old fields, and nothing in them is checked or kept."""
+    return _clean_element(raw, agent=agent)
+
+
+def _clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise Reject("not an element")
     eid = _ident(raw.get("id"))
@@ -285,7 +343,7 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
         if "frameId" in raw:
             el["frameId"] = frame if frame is None else _ident(frame)
     if isinstance(raw.get("index"), str) and _INDEX.fullmatch(raw["index"]):
-        el["index"] = raw["index"]
+        el["index"] = _no_secret(raw["index"])
     rnd = raw.get("roundness")
     if isinstance(rnd, dict) and _iint(rnd.get("type"), 1, 3) is not None:
         el["roundness"] = {"type": rnd["type"]}
@@ -300,9 +358,11 @@ def clean_element(raw: Any, *, agent: bool) -> dict[str, Any]:
         el["updated"] = updated
     if isinstance(raw.get("locked"), bool):
         el["locked"] = raw["locked"]
-    for key in ("text", "originalText", "name"):
+    for key in ("originalText", "name"):
         if isinstance(raw.get(key), str):
-            el[key] = _text(raw[key])
+            el[key] = "" if deleted else _text(raw[key])
+    if isinstance(raw.get("text"), str):
+        el["text"] = "" if deleted else _display_text(raw["text"], raw.get("originalText"))
     size = _iint(raw.get("fontSize"), 8, 48)
     if size is not None:
         el["fontSize"] = size
@@ -1175,3 +1235,126 @@ def mermaid_elements(current: list[dict[str, Any]], raw: Any, *, now: float) -> 
     if _nbytes(elements) > MAX_BYTES:
         raise Reject("diagram exceeds the board byte limit")
     return elements
+
+
+# ----------------------------------------------------------------------------- stored data, cleaned once
+
+
+def _id_strings(el: dict[str, Any]) -> list[str]:
+    """Every string of an element that is kept as written and names a shape: its id, its group ids,
+    ``frameId``,
+    ``containerId``, the ids it is bound to (``boundElements``, ``startBinding``, ``endBinding``) and
+    ``index``."""
+    found: list[Any] = [el.get("id"), el.get("frameId"), el.get("containerId"), el.get("index")]
+    found += el["groupIds"] if isinstance(el.get("groupIds"), list) else []
+    found += (
+        [b.get("id") for b in el["boundElements"] if isinstance(b, dict)]
+        if isinstance(el.get("boundElements"), list)
+        else []
+    )
+    found += [el[k].get("elementId") for k in ("startBinding", "endBinding") if isinstance(el.get(k), dict)]
+    return [v for v in found if isinstance(v, str)]
+
+
+def _normal_text(v: Any) -> str:
+    """``_text`` that never refuses (a stored text is cut to the limit, not rejected): redacted, then cut."""
+    return redact(clean(v)[:_SCAN_MAX])[0][:MAX_TEXT] if isinstance(v, str) else ""
+
+
+def drop_references(el: dict[str, Any], dropped: set[str]) -> dict[str, Any]:
+    """``el`` without what points at a dropped id: its entry in a bound list or group list, and a binding
+    set to ``None``; a ``frameId`` or ``containerId`` is **deleted** (``null`` is longer than a one-character
+    id, and a shape at its size limit must not grow). ``el`` itself when nothing in it names a dropped id;
+    otherwise a copy, which has only lost entries, so it is never larger."""
+    if not dropped:
+        return el
+    new = dict(el)
+    if isinstance(new.get("boundElements"), list):
+        new["boundElements"] = [
+            b for b in new["boundElements"] if not (isinstance(b, dict) and b.get("id") in dropped)
+        ]
+    if isinstance(new.get("groupIds"), list):
+        new["groupIds"] = [g for g in new["groupIds"] if g not in dropped]
+    for key in ("startBinding", "endBinding"):
+        if isinstance(new.get(key), dict) and new[key].get("elementId") in dropped:
+            new[key] = None
+    for key in ("frameId", "containerId"):
+        if new.get(key) in dropped and new.get(key) is not None:
+            # deleted, not ``None``: "null" is longer than a one-character id, and a shape at its limit
+            # must not grow
+            del new[key]
+    return new if new != el else el
+
+
+def _is_wrap_of(text: str, original: str) -> bool:
+    """True when ``text`` is ``original`` wrapped by Excalidraw, read in order, with nothing left over (no
+    prefix, no cut). Every character of ``text`` that is not a line break equals the next one of
+    ``original``, and each ``"\\n"`` in ``text`` stands for one of these. A line break the person typed
+    (``original`` has ``"\\n"`` there). A wrap at spaces (``original`` has a run of one or more spaces
+    there, consumed whole): ``wrapText`` pushes a wrapped line with ``trimEnd()``, so the whole run is
+    dropped. A break inside a word (nothing in ``original``). Or a typed newline whose trailing spaces were
+    trimmed (``original`` has a run of spaces and then ``"\\n"``): ``wrapText`` splits on typed newlines and
+    wraps each segment alone, and the last line of a wrapped segment can lose its trailing spaces, wholly or
+    in part (checked in the vendored build). A break where ``original`` has a space is never mid-word, so a
+    text that drops a word boundary does not match. At the end, only trailing spaces of ``original`` may be
+    left over (the last segment's). An empty ``original`` matches nothing (#893, schema 56)."""
+    if not original:
+        return False
+    i, n = 0, len(original)
+    for ch in text:
+        if ch == "\n":
+            if i < n and original[i] == "\n":
+                i += 1
+            else:
+                j = i
+                while j < n and original[j] == " ":
+                    j += 1
+                # a run of spaces, then either the typed newline the break stands for (its trailing spaces
+                # were trimmed) or just the wrap at that run
+                i = j + 1 if j > i and j < n and original[j] == "\n" else j
+        elif i < n and original[i] == ch:
+            i += 1
+        else:
+            return False
+    return not original[i:].strip(" ")  # only trailing spaces of the last segment may be left over
+
+
+def _needs_cleaning(el: dict[str, Any]) -> bool:
+    """True when a stored shape is one the cleaning of a write would change in any way (#893, schema 56): an
+    id or an id-like string that holds a secret; a tombstone with text; a text, ``originalText`` or ``name``
+    that redaction or the cut would change; or a multi-line ``text`` that is neither equal to its clean
+    ``originalText`` nor a full wrap of it (``_is_wrap_of``): the old broker stored the two fields
+    independently, so only a full wrap shows nothing the clean original does not. A legacy text that was cut
+    (shorter than its original's wrap) is removed: the accepted, conservative cost."""
+    if not isinstance(el.get("id"), str) or any(redact(v)[1] for v in _id_strings(el)):
+        return True
+    fields = [el.get(k) for k in ("text", "originalText", "name") if isinstance(el.get(k), str)]
+    if el.get("isDeleted") is True:
+        return any(fields)
+    if any(_normal_text(v) != v for v in fields):
+        return True
+    text, original = el.get("text"), el.get("originalText")
+    if isinstance(text, str) and "\n" in text:
+        if not isinstance(original, str):
+            return True  # only ever stored wrapped: nothing verifies what the wrap did to a token
+        return text != original and not _is_wrap_of(text, original)
+    return False
+
+
+def clean_stored(elements: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
+    """A stored whiteboard cleaned once, for the upgrade that cleans old data (#893, schema 56). A shape
+    that needs any change (``_needs_cleaning``) is **removed**, not rewritten, and a shape that needs
+    none is kept as it is. The references the kept shapes held to a removed one go with it (its entry in
+    a bound list or group list, a binding set to ``None``, a ``frameId`` or ``containerId`` deleted). So
+    a board can only shrink: no size limit can be crossed. Returns the kept shapes and the ids removed,
+    which the caller also removes from the change records. Anything that is not a shape (not a dict, no
+    string id) is removed. Idempotent."""
+    shapes = [e for e in elements if isinstance(e, dict)]
+    dropped = {e["id"] for e in shapes if isinstance(e.get("id"), str) and _needs_cleaning(e)}
+    kept = [e for e in shapes if isinstance(e.get("id"), str) and e["id"] not in dropped]
+    return [drop_references(e, dropped) for e in kept], dropped
+
+
+def clean_change_ids(ids: list[Any], dropped: set[str]) -> list[str]:
+    """A change record's element ids without a dropped id or one that holds a secret (#893, schema 56)."""
+    return [i for i in ids if isinstance(i, str) and i not in dropped and not redact(i)[1]]

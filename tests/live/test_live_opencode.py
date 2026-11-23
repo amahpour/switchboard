@@ -43,9 +43,11 @@ def until(check: Any, timeout: float = 90) -> Any:
     raise AssertionError("private OpenCode probe did not reach the expected event")
 
 
-def test_real_opencode_join_wake_and_approval(broker: InProcBroker, tmp_path: Path) -> None:
+@pytest.mark.parametrize("scenario", ["approval", "idle_restart", "mid_turn_restart"])
+def test_real_opencode_join_wake_and_approval(broker: InProcBroker, tmp_path: Path, scenario: str) -> None:
     """Real tools join/say, the broker's idle envelope starts a second turn, and a real pending
-    permission blocks it."""
+    permission blocks it. For the two restart cases the same sessions stay running: a
+    mention posted after the broker returns must be heard and answered exactly once without a prompt."""
     broker.call("room.create", {"name": "#build"})
     token = broker.on_loop(agent_tokens.make, broker.state, None, "laptop", "alice")["token"]
     project = tmp_path / "project"
@@ -96,7 +98,8 @@ def test_real_opencode_join_wake_and_approval(broker: InProcBroker, tmp_path: Pa
                 "openai/gpt-5.4-nano",
                 "--format",
                 "json",
-                "Call probe_hold exactly once, wait for it, then reply LIVE_DONE. Do nothing else.",
+                'Call probe_hold with label "bootstrap" once, wait for it, '
+                "then reply LIVE_DONE. Do nothing else.",
             ],
             cwd=project,
             env=env,
@@ -153,6 +156,11 @@ def test_real_opencode_join_wake_and_approval(broker: InProcBroker, tmp_path: Pa
         until(lambda: history_has("LIVE_JOIN_OK"))
         until(listening)
         assert member()["status"] == "idle"
+        if scenario != "approval":
+            opencode_restart(broker, scenario, control, session, history_has, listening)
+            control("/release")
+            proc.wait(timeout=30)
+            return
         wake_at = time.monotonic()
         wake_unix_ms = time.time() * 1000
         broker.call(
@@ -209,3 +217,33 @@ def test_real_opencode_join_wake_and_approval(broker: InProcBroker, tmp_path: Pa
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=10)
+
+
+def opencode_restart(
+    broker: InProcBroker, scenario: str, control: Any, session: str, history_has: Any, listening: Any
+) -> None:
+    """Leave OpenCode's own plugin, process and MCP client running through the outage."""
+    mid_turn = scenario == "mid_turn_restart"
+    if mid_turn:
+        control(
+            "/prompt",
+            sessionID=session,
+            delivery="queue",
+            text='Call probe_hold with label "restart". When it returns, call read for #build, '
+            "follow the request it contains, and end your turn.",
+        )
+        until(lambda: control("/ready", label="restart")["holding"])
+    broker.stop()
+    time.sleep(30)  # the induced outage, independent of how long the broker takes to start
+    broker.start()
+    broker.call(
+        "human.say", {"room": "#build", "text": "@opencode-1 say LIVE_RESTART_OK exactly once and end."}
+    )
+    if mid_turn:
+        control("/release", label="restart")
+    until(lambda: history_has("LIVE_RESTART_OK"))
+    until(listening)
+    messages = broker.call("room.history", {"room": "#build"})["messages"]
+    replies = [m for m in messages if m.get("from") == "opencode-1" and "LIVE_RESTART_OK" in m["text"]]
+    assert len(replies) == 1
+    print(f"LIVE RESULTS opencode {scenario}: one reply after 30 seconds down")

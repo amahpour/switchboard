@@ -42,8 +42,9 @@
       return true;
     } });
     $('whiteboard-toggle').addEventListener('click', function () {
-      if (whiteboardOpen) { closeWhiteboard(); return; }
+      if (whiteboardOpen) { closeWhiteboard(); noteShown(); return; }
       if (!state.active) return;
+      state.pastBoards = null;
       state.boardOpen = false; renderBoard();
       whiteboardOpen = true;
       $('app').classList.add('whiteboard-open');
@@ -51,7 +52,11 @@
       $('whiteboard-toggle').setAttribute('aria-pressed', 'true');
       whiteboard.open(state.active);
     });
-    $('whiteboard-close').addEventListener('click', function () { closeWhiteboard(); $('whiteboard-toggle').focus(); });
+    $('whiteboard-close').addEventListener('click', function () {
+      closeWhiteboard();
+      noteShown();  // the log is back on screen
+      $('whiteboard-toggle').focus();
+    });
   }
   const MAX_LINES = 2000;
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
@@ -65,7 +70,7 @@
   //                  a word written under the glyph on the Inspector's large avatar]
   const HARNESS = {
     claude: ['CC', 'Claude Code', 'bubble', 'Claude'], codex: ['CX', 'Codex'], devin: ['DV', 'Devin'],
-    cursor: ['CU', 'Cursor'], opencode: ['OC', 'OpenCode', 'code', 'OC'],
+    cursor: ['CU', 'Cursor'], opencode: ['OC', 'OpenCode', 'code', 'OC'], grok: ['GK', 'Grok Build'],
     test: ['TS', 'Test'], unknown: ['??', 'Unknown'],
   };
   const STATUS_WORD = {
@@ -78,6 +83,7 @@
     //           unread: 0 (addressed to me: the red count), quiet: false (other new agent chat) }
     rooms: new Map(),
     ncOpen: false,     // the Members group "Not connected (n)" is unfolded (#814)
+    otherOpen: null,   // the sidebar's Other rooms is unfolded (§63); null: open only when they are in no room
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
     usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
     usageData: null,   // the last GET /api/usage
@@ -100,6 +106,7 @@
     wsEverOpen: false,  // a socket was up once: a close now is a drop, not the first connect (#129)
     backoff: 500,
     pingTimer: null,
+    offlineTimer: null,
     sendQueue: null,   // sends (typed or from the Inspector) go out one at a time, in order
     // Inspector: which agent, the latest member-detail GET, and its UI toggles
     inspect: null,     // { room, name, host } for an agent, { room, call: true } for the room's call, or null (Members)
@@ -118,6 +125,7 @@
     mentionIntent: false, // an @ query can have no matches until a members frame arrives (#505)
     sheetOpener: null, // the control that opened the Closed or People sheet (focus returns to it)
     passkeyBusy: false, // an Add a passkey ceremony is under way
+    pastBoards: null,  // the room's past boards, list or selected read-only board
     boardOpen: false,  // the active room's review board is shown instead of its log (#80)
     everyone: [],        // every person on a hosted broker, from the `people` frame (#354); empty on a desktop
     online: new Set(),   // those of them with a page open now
@@ -192,6 +200,7 @@
           body.id = 'app-dialog-body';
           form.append(body);
         }
+        if (options.note) form.append(el('p', 'app-dialog-note', options.note));  // a smaller second line
         let name = null;
         let validName = null;
         let rulesInput = null;
@@ -670,6 +679,15 @@
 
   function activeRoom() { return state.active ? state.rooms.get(state.active) || null : null; }
 
+  // A public room's members are who is pinged there (§63, #843): the rooms someone is in fill the sidebar,
+  // and the others wait under Other rooms, to read and join. A broker that says nothing (an older one) makes
+  // every room theirs, and so does one with a single person, whose list says member for every room.
+  function isMember(r) { return !!r && r.member !== false; }
+
+  // Leave is for a member of a public room on a switchboard with people (§63): with one person every room
+  // is theirs, and a private room's own Leave is in Members, as before (§44).
+  function canLeave(r) { return isMember(r) && !r.private && state.everyone.length > 1; }
+
   function memberOf(r, name, host) {
     if (!r) return null;
     return r.members.find(function (m) { return m.name === name && (m.host || '') === (host || ''); }) || null;
@@ -812,7 +830,8 @@
     'claude:https': 'Claude Code over HTTPS: its Stop hook waits for messages and wakes it when it is idle',
     'codex:https': 'Codex over HTTPS: its Stop hook waits for messages and starts its next turn when it is idle',
     'opencode:https': 'OpenCode over HTTPS: its plugin waits while idle and queues the broker’s wake as a new turn',
-    'cursor:https': 'Cursor over HTTPS: its Stop hook waits about 10 minutes for messages and hands it the next one. After that, type in Cursor to start listening again.',
+    'cursor:https': 'Cursor over HTTPS: its Stop hook waits up to an hour for messages (10 minutes with an older plugin copy) and hands it the next one. After that, type in Cursor to start listening again.',
+    'grok:https': 'Grok Build over HTTPS: its Stop hook waits up to an hour for messages and wakes it, at most 7 times before you next type. After that, type in Grok to start listening again.',
     'devin:https': 'Devin hears idle mentions only while wait() is open. Stop reminders are capped; when they run out, type in Devin to restart listening.',
     'mcp-only': 'switchboard can’t wake it: it gets messages when it calls read() or wait()',
   };
@@ -916,7 +935,11 @@
     const log = $('log');
     const stick = nearBottom(log);
     const top = log.scrollTop;
+    // a control in the text (a download link) that had the keyboard gets it back on its new node, found by
+    // what it is (a link by its file id), not by its place: a file stored above it adds a link before it
+    const spot = hasFocusIn(old) ? rowFocusSpot(log) : null;
     old.replaceWith(mdBody(m.text, m.mentions, m.files));
+    if (spot) rowFocusBack(log, spot);
     if (stick) log.scrollTop = log.scrollHeight;
     else log.scrollTop = top;
   }
@@ -1309,7 +1332,8 @@
     if (typeof log.querySelectorAll !== 'function') return;
     const cards = Array.from(log.querySelectorAll('.call-card'));
     if (!cards.length) return;
-    const windowed = !!(state.around && r && state.around.room === r.name);  // a window around a search hit
+    // a window around a search hit, or a filtered room (#914): not the room's latest, so no live call
+    const windowed = !!(state.around && r && state.around.room === r.name) || !!filterOf(r);
     const cur = r && !windowed ? callOf(r) : null;
     const known = !!(r && r.settings) && !windowed;
     const seen = r && r.callSeen;
@@ -1459,8 +1483,11 @@
     let prev = null;
     let open = null;  // the call card the last row went into, until a message of any other kind
     const frag = document.createDocumentFragment();
-    // a room opened at a search result shows the window around it, not its latest (#724, §58.5)
-    for (const m of (state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
+    // a room opened at a search result shows the window around it, not its latest (#724, §58.5);
+    // a room filtered to its Mentions or Files shows the broker's answer (#914, §64)
+    const f = filterOf(r);
+    if (f) frag.append(filterHead(f));
+    for (const m of (f ? f.msgs : state.around && state.around.room === r.name ? state.around.msgs : r.msgs)) {
       const k = dayKey(m.ts);
       if (k !== lastDay) {
         frag.append(dayRow(m.ts));
@@ -1502,11 +1529,13 @@
     $('attach-btn').disabled = noRooms;
     composerPlaceholder();
     updateRoomEmpty();
+    renderFilters();
     renderRows(r);
     renderPins();
     renderClaimBoard();
     log.scrollTop = log.scrollHeight;
     syncAround();
+    noteShown();
   }
 
   // Focus mode (#99): collapse agent chat not addressed to you to one line, so what needs you
@@ -1538,7 +1567,8 @@
       // a person's message counts only when it's another person's @mention of you (#418) or
       // @humans (#138); otherwise a person's messages are left out, as they were before (#109).
       // What this person already read (the broker's mark, §55.8) never counts again.
-      const unseen = m.id > (r.seenId || 0);
+      // A room they are not a member of counts nothing at all: they read it, it doesn't ping them (§63).
+      const unseen = m.id > (r.seenId || 0) && isMember(r);
       if (unseen && m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m))) {
         if (addressedToMe(r, m)) r.unread += 1;  // an @mention or a reply to you: the red count
         else r.quiet = true;                     // other agent chatter: a quiet marker, no number
@@ -1547,6 +1577,7 @@
       return;
     }
     if (state.around && state.around.room === r.name) return;  // a window around a search result stays as it is
+    if (filterOf(r)) { filterTake(r, m); return; }  // a filtered room draws only what its filter takes
     const log = $('log');
     const stick = nearBottom(log);
     const newDay = !prev || dayKey(prev.ts) !== dayKey(m.ts);
@@ -1562,6 +1593,7 @@
     if (part) syncCallCards(r);
     if (m.kind === 'chat') updateRoomEmpty();
     if (stick) log.scrollTop = log.scrollHeight;
+    noteShown();
   }
 
   // mark the inspected agent's chat rows (.sel) without redrawing the log
@@ -1581,35 +1613,94 @@
   }
 
   // ------------------------------------------------------- sidebar, title
+  // One room's row in the sidebar. A room they are a member of has its red count, "joined with <agent>" the
+  // first time (§63), or a quiet dot. One under Other rooms pings them for nothing, so it has no count: what
+  // is live there (a call), or how many people are in it.
+  function roomButton(r, other) {
+    const name = r.name;
+    const b = btn('room' + (other ? ' room-other' : ''));
+    b.dataset.room = name;
+    b.dataset.focus = 'room:' + name;  // a redraw (a message, a join) keeps the keyboard on it
+    b.title = name;
+    if (name === state.active) b.setAttribute('aria-current', 'page');
+    b.append(icon(r.private ? 'lock' : 'hash'), el('span', 'room-name', name.replace(/^#/, '')));
+    if (r.private) b.title = name + ' (private: only its people see it)';
+    if (other) {
+      let aside = '';
+      if (callOf(r)) {
+        aside = 'call';
+        b.append(el('span', 'room-aside room-live', 'call'));
+      } else if (r.people && r.people.length) {
+        aside = plural(r.people.length, 'person', 'people');
+        b.append(el('span', 'room-aside', aside));
+      }
+      b.title = name + ': you are not a member' + (aside === 'call' ? ' (a call is live)' : aside ? ' (' + aside + ')' : '');
+    } else if (r.unread > 0 && name !== state.active) {
+      const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
+      badge.setAttribute('aria-label', plural(r.unread, 'message', 'messages') + ' for you');
+      b.append(badge);
+    } else if (r.joinedWith && name !== state.active && state.everyone.length > 1) {
+      b.append(el('span', 'room-aside', 'joined with ' + r.joinedWith));
+      b.title = name + ': you are a member because ' + r.joinedWith + ' joined it';
+    } else if (r.quiet && name !== state.active) {
+      const dot = el('span', 'dot quiet');
+      dot.setAttribute('aria-label', 'new activity');
+      b.append(dot);
+    }
+    b.addEventListener('click', function () {
+      setNav(false);
+      selectRoom(name);
+    });
+    return b;
+  }
+
   function renderTabs() {
     const tabs = $('tabs');
+    const focused = focusKey(tabs);
     tabs.replaceChildren();
     const names = Array.from(state.rooms.keys()).sort();
     let total = 0;
+    const others = [];
     for (const name of names) {
       const r = state.rooms.get(name);
-      const b = btn('room');
-      b.dataset.room = name;
-      b.title = name;
-      if (name === state.active) b.setAttribute('aria-current', 'page');
-      b.append(icon(r.private ? 'lock' : 'hash'), el('span', 'room-name', name.replace(/^#/, '')));
-      if (r.private) b.title = name + ' (private: only its people see it)';
-      if (r.unread > 0 && name !== state.active) {
-        total += r.unread;
-        const badge = el('span', 'badge', r.unread > 99 ? '99+' : r.unread);
-        badge.setAttribute('aria-label', plural(r.unread, 'message', 'messages') + ' for you');
-        b.append(badge);
-      } else if (r.quiet && name !== state.active) {
-        const dot = el('span', 'dot quiet');
-        dot.setAttribute('aria-label', 'new activity');
-        b.append(dot);
-      }
-      b.addEventListener('click', function () {
-        setNav(false);
-        selectRoom(name);
-      });
-      tabs.append(b);
+      if (!isMember(r)) { others.push(r); continue; }
+      if (r.unread > 0 && name !== state.active) total += r.unread;
+      tabs.append(roomButton(r, false));
     }
+    if (others.length) {
+      // Other rooms (§63): the public rooms they are not a member of, folded under one row. It is open by
+      // itself when they are in none, and opened when one of them is the room on screen (selectRoom).
+      const mine = names.length - others.length;
+      const open = state.otherOpen === null ? mine === 0 : state.otherOpen;
+      const toggle = btn('room room-other-toggle' + (open ? ' open' : ''));
+      toggle.id = 'other-rooms';
+      toggle.dataset.focus = 'other-rooms';
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.append(icon('chev-right'), el('span', 'room-name', 'Other rooms (' + others.length + ')'));
+      toggle.title = open ? 'Hide the rooms you are not a member of'
+        : 'Public rooms you are not a member of: read one, or join it';
+      const live = others.filter(function (r) { return !!callOf(r); });
+      if (!open && live.length) {
+        const dot = el('span', 'dot live');
+        dot.setAttribute('role', 'img');
+        dot.setAttribute('aria-label', (live.length === 1 ? 'a call is live in ' + live[0].name
+          : 'calls are live in ' + live.length + ' of them'));
+        toggle.append(dot);
+      }
+      toggle.addEventListener('click', function () {
+        state.otherOpen = !open;
+        renderTabs();
+      });
+      tabs.append(toggle);
+      if (open) {
+        const list = el('div', 'room-list other-rooms');
+        list.id = 'other-rooms-list';
+        toggle.setAttribute('aria-controls', 'other-rooms-list');
+        for (const r of others) list.append(roomButton(r, true));
+        tabs.append(list);
+      }
+    }
+    refocus(tabs, focused);
     const rb = $('rooms-badge');
     rb.textContent = total > 99 ? '99+' : String(total);
     rb.classList.toggle('hidden', total === 0);
@@ -1814,18 +1905,18 @@
     renderCalls();  // after People and Agents, and in the Members total
   }
 
-  // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person.
-  // A public room on a hosted broker lists everyone signed up, since everyone sees it (#354):
-  // before, it showed nobody, and the other people in a room were only names on messages. Each
-  // row has a dot for a page open now, and those people come first. A desktop broker has one
-  // person and shows no list.
+  // A room's people. A private room's (§44) are who sees it, with Remove, Leave and Add a person. A public
+  // room's are its members (§63): who @humans, the unread badges and notifications reach there, with Leave
+  // on your own row and Add a person for a member. Before #843 a public room listed everyone signed up
+  // (#354). Each row has a dot for a page open now, and those people come first. A broker with one person
+  // shows no list.
   const PEOPLE_SHOWN = 10;  // a longer public list starts with this many, then "N more"
 
   function renderRoomPeople() {
     const r = activeRoom();
     const box = $('room-people');
     const isPrivate = !!(r && r.private && r.people);
-    const everyone = isPrivate ? r.people : (r && state.everyone.length > 1 ? state.everyone : null);
+    const everyone = r && Array.isArray(r.people) && (isPrivate || state.everyone.length > 1) ? r.people : null;
     const show = !!everyone;
     box.classList.toggle('hidden', !show);
     if (!show) { box.replaceChildren(); return; }
@@ -1835,6 +1926,7 @@
       'People (' + everyone.length + ')' + (isPrivate ? ' · private' : '') + (stale ? ' · last known' : ''));
     const list = el('ul', 'member-list');
     list.classList.toggle('stale', stale);
+    if (!everyone.length) list.append(el('li', 'member-empty', 'Nobody has joined ' + r.name + ' yet.'));
     const here = function (n) { return state.online.has(n); };
     // those with a page open first, each group in the order it came
     const ordered = everyone.filter(here).concat(everyone.filter(function (n) { return !here(n); }));
@@ -1849,12 +1941,20 @@
       const names = el('span', 'p-names');
       appendShownPerson(names, n);  // the real name, then @username; data-name stays the username
       li.append(dot, names);
+      const mine = !!state.me && n === state.me.human;
       if (!isPrivate) {
-        if (state.me && n === state.me.human) li.append(el('span', 'p-you', 'you'));
+        if (mine) li.append(el('span', 'p-you', 'you'));
+        if (mine && canLeave(r)) {
+          const leave = btn('btn btn-ghost-sm', 'Leave');
+          leave.id = 'room-people-leave';
+          leave.dataset.focus = 'room-person:' + n;
+          leave.setAttribute('aria-label', 'Leave ' + r.name);
+          leave.addEventListener('click', function () { leaveRoom(r); });
+          li.append(leave);
+        }
         list.append(li);
         continue;
       }
-      const mine = state.me && n === state.me.human;
       const b = btn('btn btn-ghost-sm', mine ? 'Leave' : 'Remove');
       b.dataset.focus = 'room-person:' + n;
       b.setAttribute('aria-label', mine ? 'Leave ' + r.name : 'Remove ' + n + ' from ' + r.name);
@@ -1862,13 +1962,8 @@
       li.append(b);
       list.append(li);
     }
-    if (isPrivate) {
-      const add = btn('btn invite-btn', 'Add a person');
-      add.id = 'room-people-add';
-      add.dataset.focus = 'room-people-add';
-      add.addEventListener('click', function () { addRoomPerson(r); });
-      box.replaceChildren(title, list, add);
-    } else if (ordered.length > PEOPLE_SHOWN) {
+    const parts = [title, list];
+    if (!isPrivate && ordered.length > PEOPLE_SHOWN) {
       const more = btn('btn btn-ghost-sm', cut ? (ordered.length - PEOPLE_SHOWN) + ' more' : 'Show fewer');
       more.id = 'room-people-more';
       more.dataset.focus = 'room-people-more';
@@ -1877,8 +1972,20 @@
         state.peopleAll = !state.peopleAll;
         renderRoomPeople();
       });
-      box.replaceChildren(title, list, more);
-    } else box.replaceChildren(title, list);
+      parts.push(more);
+    }
+    if (!isPrivate) {
+      parts.push(el('p', 'people-note',
+        'People here get @humans, unread badges and notifications. Agents still answer to everyone.'));
+    }
+    if (isPrivate || isMember(r)) {
+      const add = btn('btn invite-btn', 'Add a person');
+      add.id = 'room-people-add';
+      add.dataset.focus = 'room-people-add';
+      add.addEventListener('click', function () { addRoomPerson(r); });
+      parts.push(add);
+    }
+    box.replaceChildren(...parts);
     refocus(box, focused);
   }
 
@@ -1888,8 +1995,10 @@
         { action: action, name: name });
       if (res.room) { r.people = res.room.people; renderRoomPeople(); }
       await loadRooms().catch(function () {});
+      return true;
     } catch (e) {
       await openDialog({ kind: 'notice', title: 'People not changed', body: String(e.message || e), action: 'Close' });
+      return false;
     }
   }
 
@@ -1898,15 +2007,88 @@
     try {
       everyone = (await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/members')).people || [];
     } catch (e) { everyone = []; }
-    const others = everyone.filter(function (n) { return r.people.indexOf(n) < 0; });
+    const others = everyone.filter(function (n) { return (r.people || []).indexOf(n) < 0; });
     if (!others.length) {
       await openDialog({ kind: 'notice', title: 'Everyone is in it', body: 'Everyone on this switchboard is in ' + r.name + ' already.', action: 'Close' });
       return;
     }
     const answer = await openDialog({ kind: 'person', title: 'Add a person to ' + r.name,
-      body: 'They see the room, its history and its agents, and their agents can join it.',
+      body: r.private ? 'They see the room, its history and its agents, and their agents can join it.'
+        : 'They get @humans, unread badges and notifications from ' + r.name + '. Agents there answer to them already.',
       people: others, action: 'Add' });
     if (answer) roomPeople(r, 'add', answer);
+  }
+
+  // ----------------------------------------------------- joining and leaving (§63)
+  // A public room they are not a member of is read-only: a Preview chip in the header and a Join bar in
+  // place of the composer. A member's room has the "..." menu with Leave (and Leave on their own row in
+  // Members). Called whenever the room on screen, the room list or the number of people changes.
+  function syncRoomActions() {
+    const r = activeRoom();
+    const preview = !!r && !isMember(r);
+    $('composer').classList.toggle('hidden', preview);
+    $('preview-bar').classList.toggle('hidden', !preview);
+    $('room-preview').classList.toggle('hidden', !preview);
+    if (r) {
+      $('preview-title').textContent = 'You’re viewing ' + r.name;
+      $('preview-join').textContent = 'Join ' + r.name;
+    }
+    const leave = canLeave(r);
+    $('room-menu-wrap').classList.toggle('hidden', !leave);
+    if (!leave) setRoomMenu(false);
+  }
+
+  function roomMenuOpen() { return !$('room-menu').classList.contains('hidden'); }
+
+  function setRoomMenu(open) {
+    const menu = $('room-menu');
+    const b = $('room-menu-btn');
+    const r = activeRoom();
+    if (!open || !canLeave(r)) {
+      menu.classList.add('hidden');
+      menu.replaceChildren();
+      b.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const leave = btn('menu-item menu-danger', 'Leave ' + r.name);
+    leave.id = 'room-menu-leave';
+    leave.setAttribute('role', 'menuitem');
+    leave.addEventListener('click', function () {
+      setRoomMenu(false);
+      leaveRoom(r);
+    });
+    menu.replaceChildren(el('div', 'group-label', r.name), leave);
+    menu.classList.remove('hidden');
+    b.setAttribute('aria-expanded', 'true');
+    leave.focus();
+  }
+
+  // Leave, after a confirm that says what changes. They stay in the room, now a preview, and the keyboard
+  // goes to its Join button. From their row under People on a phone, Members is a sheet that keeps the page
+  // behind it inert, so it closes first: Join could not take the keyboard under it.
+  async function leaveRoom(r) {
+    if (!state.me || !canLeave(r)) return;
+    const ok = await openDialog({ title: 'Leave ' + r.name + '?',
+      body: 'You will stop getting @humans, unread badges and notifications from ' + r.name +
+        '. Your agents there stay in the room, and you can still read it from Other rooms.',
+      note: 'Your unread count for ' + r.name + ' is cleared, and anything waiting on you there leaves Home.',
+      action: 'Leave ' + r.name, danger: true });
+    if (!ok) return;
+    if (r.name === state.active) state.otherOpen = true;  // the room on screen stays in view, under Other rooms
+    if (await roomPeople(r, 'remove', state.me.human) && r.name === state.active && !isMember(r)) {
+      if (narrow()) setSheet(false);
+      $('preview-join').focus();
+    }
+  }
+
+  async function joinRoom() {
+    const r = activeRoom();
+    if (!r || !state.me || isMember(r)) return;
+    const b = $('preview-join');
+    b.disabled = true;
+    const ok = await roomPeople(r, 'add', state.me.human);
+    b.disabled = false;
+    if (ok && r.name === state.active && isMember(r)) $('input').focus();
   }
 
   // narrow: the Members pill (people icon, count, and a red badge for agents needing attention)
@@ -2096,7 +2278,18 @@
     }
     // a picture shown in the call (/meeting share): the broker's own bot only, and it says so until it stops
     const sharing = !hosted && call.sharing === true;
-    $('banner-meeting-text').textContent = text + (voice ? ' · agents can speak' : '') + (sharing ? ' · sharing a picture' : '');
+    // the agent whose @call line is being spoken now (§52.13): the broker's own bot only, and only a name; a hosted
+    // call, or anything else in the field, shows nothing rather than a "has the mic" that may be stale
+    const speaker = !hosted && typeof call.speaking === 'string' ? call.speaking.trim().slice(0, 64) : '';
+    const words = $('banner-meeting-text');
+    words.textContent = text + (voice ? ' · agents can speak' : '') + (sharing ? ' · sharing a picture' : '');
+    if (speaker) {
+      // the name stays on one line (claude-1 must not break at its hyphen), cut with an ellipsis on a narrow bar
+      const who = document.createElement('span');
+      who.className = 'call-speaker';
+      who.textContent = speaker;
+      words.append(' · ', who, ' has the mic');
+    }
     $('meeting-share-stop').classList.toggle('hidden', !sharing);
     // the switch's name stays "Voice": aria-checked says which, so a screen reader doesn't hear both
     $('meeting-voice').setAttribute('aria-checked', String(voice));
@@ -2231,19 +2424,21 @@
     if (state.searchOn) closeSearch(false);
     if (state.around) { state.around = null; resetSearch(); }  // going anywhere leaves a window around a result
     if (around) state.around = around;
+    state.filter = null;  // a room opens on All (#914)
     if (state.home) leaveHome();
     if (state.usage) leaveUsage();
     if (state.inspect && state.inspect.room !== name) closeInspector(false);
     closePop();
     if (state.active !== name) {
+      state.pastBoards = null;
       state.boardOpen = false;
       state.boardSel = null;
     }
     if (state.active !== name) closeWhiteboard();
     state.active = name;
     const activeR = state.rooms.get(name);
+    if (!isMember(activeR)) state.otherOpen = true;  // its row stays in view, under Other rooms (§63)
     if (!state.around) {  // a window around a search result has not shown the room's latest
-      markRoomSeen(activeR, true);  // opening a room is seeing what it holds (#663, §55.8)
       activeR.unread = 0;
       activeR.quiet = false;
     }
@@ -2254,12 +2449,16 @@
     $('mentions').setAttribute('aria-label', 'Agents in ' + name);
     renderTabs();
     renderLog();
+    // opening a room is seeing what it holds (#663, §55.8): as far as the log just drawn is on screen (§64.4)
+    if (!state.around) markRoomSeen(activeR, true);
     renderBuddies();
     renderStatus();
     renderBoard();
     loadBoard(state.rooms.get(name));
     renderComposerMentions();  // the known-names set just changed with the room
-    $('input').focus();
+    syncRoomActions();
+    // a room they only read has no composer: its Join button has the keyboard instead (§63)
+    (isMember(activeR) ? $('input') : $('preview-join')).focus();
   }
 
   // ------------------------------------------------ pane, drawers, sheets
@@ -2295,6 +2494,7 @@
     // the phone sheet is open, the page behind the scrim takes no focus (Esc and the scrim close it)
     $('main').inert = modal;
     $('sidebar').inert = modal;
+    noteShown();  // a phone sheet that closed uncovers the log
   }
 
   // Is keyboard focus somewhere inside `box`? (activeElement is null in the node harness.)
@@ -3613,6 +3813,9 @@
   }
 
   // ---------------------------------------------------------- websocket
+  const LONG_OUTAGE_MS = 120000;
+  const RECONNECTING_TEXT = 'Disconnected: reconnecting… What you see may be out of date.';
+
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     const ws = new WebSocket(proto + location.host + '/ws');
@@ -3621,6 +3824,9 @@
       const reopened = state.wsEverOpen;
       state.wsOpen = true;
       state.wsEverOpen = true;
+      clearTimeout(state.offlineTimer);
+      state.offlineTimer = null;
+      $('banner-offline-text').textContent = RECONNECTING_TEXT;
       if (reopened) refreshAgentIcons();  // an avatar may have changed while the socket was down
       state.backoff = 500;
       // a close, reopen, create or delete missed while the socket was down: resync, then hello all.
@@ -3642,6 +3848,12 @@
     ws.addEventListener('close', function () {
       state.wsOpen = false;
       clearInterval(state.pingTimer);
+      if (state.wsEverOpen && state.offlineTimer === null) {
+        state.offlineTimer = setTimeout(function () {
+          $('banner-offline-text').textContent =
+            'Switchboard has been unreachable for at least 2 minutes. Still trying to reconnect.';
+        }, LONG_OUTAGE_MS);
+      }
       renderStatus();
       renderBuddies();
       const wait = state.backoff;
@@ -3690,14 +3902,19 @@
     } else if (f.t === 'file') {
       if (!r || !f.file || !f.file.id) return;
       const m = r.msgs.find(function (x) { return x.id === f.message_id; });
-      if (!m) return;
-      m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
-      m.files.push(f.file);
-      if (r.name === state.active) refreshMsgText(m);
+      if (m) {
+        m.files = (m.files || []).filter(function (x) { return x.id !== f.file.id; });
+        m.files.push(f.file);
+      }
+      // a filtered log holds its own copies of its rows (#914), which can have files the live copy lacks (one
+      // stored during a disconnect): the row on screen is drawn once, from the copy it shows, after the merge
+      const held = filterFile(r, f.message_id, f.file, m);
+      const drawn = held || (filterOf(r) ? null : m);
+      if (drawn && r.name === state.active) refreshMsgText(drawn);
     } else if (f.t === 'board') {
       if (r && whiteboard) {
         if (f.task) whiteboard.task(f.room, f.task);
-        else whiteboard.receive(f.room, f.elements, f.full === true);
+        else whiteboard.receive(f.room, f.elements, f.full === true, f.seq);
       }
     } else if (f.t === 'members') {
       if (!r) return;
@@ -3728,6 +3945,7 @@
       if (!r) return;
       r.settings = f.settings || {};
       if (f.room === state.active) renderStatus();
+      if (!isMember(r)) renderTabs();  // a call there shows under Other rooms (§63)
     } else if (f.t === 'pins') {
       if (!r) return;
       r.pins = Array.isArray(f.pins) ? f.pins : [];
@@ -3751,7 +3969,10 @@
       // An older HTTP board read may still be in flight. Keep this live frame authoritative.
       r.boardGeneration = (r.boardGeneration || 0) + 1;
       setBoards(r, f.boards);
-      if (f.room === state.active) renderBoard();
+      if (f.room === state.active) {
+        if (state.pastBoards) loadPastBoards(state.pastBoards);
+        else renderBoard();
+      }
     } else if (f.t === 'icons') {
       // an agent's avatar was set or reset (§29.11): the stylesheet, and the list if Settings shows it
       refreshAgentIcons();
@@ -3775,6 +3996,8 @@
       }
       renderComposerMentions();  // who can be @mentioned (and their dot in the popover) changed
       if (state.pop && state.pop.kind === 'mentions') updatePopover();
+      renderTabs();  // "joined with" shows only with people (§63)
+      syncRoomActions();  // a second person makes Leave possible, the last other one takes it away (§63)
       noteOwnAdmin(f);
     }
   }
@@ -4351,6 +4574,335 @@
       show();
     });
     show();
+    buildWebhookSetting(box);
+  }
+
+  // Settings → Profile → Webhook (#723, DESIGN.md §62): a URL the broker posts "you're needed" to when something has
+  // waited on you and you have not opened it. The address is a secret: the page never gets it back, only its host.
+  function buildWebhookSetting(box) {
+    const w = function () { return (state.me && state.me.webhook) || { set: false, wait_min: 5, last: null }; };
+    box.append(el('h3', null, 'Webhook'),
+      el('p', 'fine', 'When something needs you (a message to you, a review that needs your call, an agent waiting for your'
+        + ' approval) and you have not opened it after the wait below, switchboard sends one short JSON POST to this address:'
+        + ' who and where, and a link. Never the message. Opening the item stops it. A Slack incoming webhook, a Discord'
+        + ' webhook or an ntfy topic works. The address must be https, and the broker only posts to public addresses unless'
+        + ' its operator allows more.'));
+    const urlLabel = el('label', 'settings-label', 'Webhook address');
+    urlLabel.setAttribute('for', 'settings-webhook-url');
+    const url = el('input');
+    url.type = 'text';
+    url.id = 'settings-webhook-url';
+    url.autocomplete = 'off';
+    url.spellcheck = false;
+    url.maxLength = 500;
+    url.autocapitalize = 'none';
+    const waitLabel = el('label', 'settings-label', 'Wait before sending (minutes)');
+    waitLabel.setAttribute('for', 'settings-webhook-wait');
+    const wait = el('input');
+    wait.type = 'number';
+    wait.id = 'settings-webhook-wait';
+    wait.min = '1';
+    wait.max = '120';
+    wait.step = '1';
+    const note = el('p', 'fine');
+    note.id = 'settings-webhook-note';
+    // a stored webhook that fails today's checks is not used, and says why here (#923, F12)
+    const problem = el('p', 'fine bad');
+    problem.id = 'settings-webhook-problem';
+    problem.hidden = true;
+    const status = el('p', 'fine');
+    status.id = 'settings-webhook-status';
+    status.setAttribute('role', 'status');
+    const save = btn('btn-primary', 'Save');
+    save.id = 'settings-webhook-save';
+    const test = btn('btn', 'Send a test');
+    test.id = 'settings-webhook-test';
+    const remove = btn('btn', 'Remove');
+    remove.id = 'settings-webhook-remove';
+    const bar = el('div', 'settings-actions');
+    bar.append(save, test, remove);
+    box.append(problem, urlLabel, url, waitLabel, wait, note, bar, status);
+    function say(text, bad) {
+      status.textContent = text;
+      status.classList.toggle('bad', !!bad);
+    }
+    // why a saved webhook is not used, and what fixes it; every part of it is set as text, never as HTML
+    function problemText(cur) {
+      if (!cur.set || cur.usable !== false) return '';
+      const zone = (cur.quiet && cur.quiet.tz) || '';
+      if (cur.problem === 'zone') {
+        return 'This webhook is not used: its quiet hours are in a time zone this switchboard does not know ('
+          + zone + '). Turn quiet hours off, or save a time zone it knows, below.';
+      }
+      if (cur.problem === 'address') {
+        return 'This webhook is not used: its address is not one switchboard accepts now. Paste a new address'
+          + ' and save it, or remove the webhook.';
+      }
+      if (cur.problem === 'second_address') {
+        return 'This webhook is not used: its second address is not one switchboard accepts now. Save a new'
+          + ' second address or remove the second alert, below.';
+      }
+      return 'This webhook is not used: one of its saved settings is not valid now. Save each section again, or'
+        + ' remove the webhook.';
+    }
+    // full: the form is filled again from what is saved, and the status is the last post's; otherwise only
+    // the labels and what can be pressed, so a draft typed here survives a save in another section (#923)
+    function showFirst(full) {
+      const cur = w();
+      const usable = cur.set && cur.usable !== false;
+      url.placeholder = cur.set ? 'Set. Paste a new address to replace it.' : 'https://…';
+      const host = cur.host ? ' ' + cur.host : '';
+      if (!cur.set) note.textContent = 'No webhook yet.';
+      else if (usable) note.textContent = 'Posting to' + host + ' (the rest of the address is kept secret).';
+      else note.textContent = 'Saved for' + (host || ' an address') + ', and not used until it is fixed.';
+      problem.textContent = problemText(cur);
+      problem.hidden = !problem.textContent;
+      test.disabled = !usable;
+      remove.disabled = !cur.set;
+      if (!full) return;
+      url.value = '';
+      wait.value = String(cur.wait_min || 5);
+      const last = cur.last;
+      if (last) say(last.ok ? 'The last post went through.' : 'The last post failed: ' + last.error, !last.ok);
+      else say('', false);
+    }
+    // while a request is out every button of the webhook section waits; afterwards show() sets them again
+    async function call(method, path, body) {
+      const buttons = Array.from(box.querySelectorAll('button[id^="settings-webhook-"]'));
+      const was = buttons.map(function (b) { return b.disabled; });
+      for (const b of buttons) b.disabled = true;
+      try {
+        return await api(method, path, body);
+      } finally {
+        buttons.forEach(function (b, i) { b.disabled = was[i]; });
+      }
+    }
+    save.addEventListener('click', async function () {
+      const body = { wait_min: Number(wait.value) };
+      if (url.value.trim()) body.url = url.value.trim();
+      else if (!w().set) { say('Paste the address to post to.', true); return; }
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', body);
+        refresh('first');
+        say('Saved.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    // each address's result is shown in its own section, from this answer, never from a stored status (#923)
+    test.addEventListener('click', async function () {
+      try {
+        const res = await call('POST', '/api/me/webhook/test', {});
+        state.me.webhook = res.webhook;
+        refresh(null);
+        const two = res.second;
+        if (!two) say(res.ok ? 'The test went through.' : 'The test failed: ' + res.error, !res.ok);
+        else {
+          say(res.ok ? 'The test went through to the first address.'
+            : 'The test failed at the first address: ' + res.error, !res.ok);
+          second.say(two.ok ? 'The test went through to the second address.'
+            : 'The test failed at the second address: ' + two.error, !two.ok);
+        }
+      } catch (e) {
+        // a test that stopped (the settings changed while it ran, #923 F15) has no result for either address:
+        // its one line takes the place of both, so an earlier test's second result is not left showing
+        say(String(e.message || e), true);
+        second.say('', false);
+      }
+    });
+    remove.addEventListener('click', async function () {
+      try {
+        state.me.webhook = await call('DELETE', '/api/me/webhook');
+        refresh('all');
+        say('Removed.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    // after a save only that section is filled again; the others get their labels (#923)
+    function refresh(which) {
+      showFirst(which === 'first' || which === 'all');
+      second.show(which === 'second' || which === 'all');
+      quiet.show(which === 'quiet' || which === 'all');
+    }
+    const second = buildWebhookSecond(box, w, call, refresh);
+    const quiet = buildWebhookQuiet(box, w, call, refresh);
+    refresh('all');
+  }
+
+  // Webhook → Second alert (#923, DESIGN.md §62.4): another address, posted once if the item still waits a set time
+  // after the first alert. The same rules as the first address: https, public, never shown back (its host only).
+  function buildWebhookSecond(box, w, call, refresh) {
+    box.append(el('h4', 'settings-sub', 'Second alert'),
+      el('p', 'fine', 'If something still needs you this long after the first alert, switchboard posts once more, to a'
+        + ' second address: an ntfy topic at top priority, or a flow that texts you or rings your phone. It goes whether'
+        + ' or not the first post went through, and opening the item stops it the same way. Both addresses share the'
+        + ' limit of 12 posts an hour.'));
+    const urlLabel = el('label', 'settings-label', 'Second address');
+    urlLabel.setAttribute('for', 'settings-webhook-second-url');
+    const url = el('input');
+    url.type = 'text';
+    url.id = 'settings-webhook-second-url';
+    url.autocomplete = 'off';
+    url.spellcheck = false;
+    url.maxLength = 500;
+    url.autocapitalize = 'none';
+    const afterLabel = el('label', 'settings-label', 'Minutes after the first alert');
+    afterLabel.setAttribute('for', 'settings-webhook-second-after');
+    const after = el('input');
+    after.type = 'number';
+    after.id = 'settings-webhook-second-after';
+    after.min = '5';
+    after.max = '240';
+    after.step = '1';
+    const note = el('p', 'fine');
+    note.id = 'settings-webhook-second-note';
+    const status = el('p', 'fine');
+    status.id = 'settings-webhook-second-status';
+    status.setAttribute('role', 'status');
+    const save = btn('btn', 'Save second alert');
+    save.id = 'settings-webhook-second-save';
+    const remove = btn('btn', 'Remove second alert');
+    remove.id = 'settings-webhook-second-remove';
+    const bar = el('div', 'settings-actions');
+    bar.append(save, remove);
+    box.append(urlLabel, url, afterLabel, after, note, bar, status);
+    function say(text, bad) {
+      status.textContent = text;
+      status.classList.toggle('bad', !!bad);
+    }
+    function show(full) {
+      const cur = w();
+      const two = cur.second || { set: false, after_min: 20, last: null };
+      url.placeholder = two.set ? 'Set. Paste a new address to replace it.' : 'https://…';
+      url.disabled = after.disabled = save.disabled = !cur.set;
+      remove.disabled = !cur.set || !two.set;
+      if (!cur.set) note.textContent = 'Save a webhook address above first.';
+      else if (two.set) {
+        note.textContent = 'Second alert to ' + (two.host || 'an address') + ' (the rest of the address is kept secret).';
+      }
+      else note.textContent = 'No second alert.';
+      if (!full) return;
+      url.value = '';
+      after.value = String(two.after_min || 20);
+      const last = two.set ? two.last : null;
+      if (last) say(last.ok ? 'The last second alert went through.' : 'The last second alert failed: ' + last.error, !last.ok);
+      else say('', false);
+    }
+    save.addEventListener('click', async function () {
+      const body = { second_after_min: Number(after.value) };
+      if (url.value.trim()) body.second_url = url.value.trim();
+      else if (!(w().second || {}).set) { say('Paste the second address.', true); return; }
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', body);
+        refresh('second');
+        say('Second alert saved.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    remove.addEventListener('click', async function () {
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', { second_url: null });
+        refresh('second');
+        say('Second alert removed.', false);
+        save.focus();
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    return { show: show, say: say };
+  }
+
+  // Webhook → Quiet hours (#923, DESIGN.md §62.4): a span in the person's own time zone when nothing is sent but the
+  // kinds they mark. The zone is proposed from the browser and kept as its IANA name; the server refuses one it does
+  // not know.
+  function buildWebhookQuiet(box, w, call, refresh) {
+    const kinds = [['approval', 'An agent waiting for your approval'], ['question', 'A message to you'],
+      ['board', 'A review that needs your call']];
+    box.append(el('h4', 'settings-sub', 'Quiet hours'),
+      el('p', 'fine', 'Between these times nothing is sent, first or second alert, except what you tick below. What waited'
+        + ' is sent when they end, if it still needs you. Send a test always goes.'));
+    const times = el('div', 'settings-quiet-times');
+    function timeField(id, text) {
+      const wrap = el('div', 'settings-quiet-time');
+      const label = el('label', 'settings-label', text);
+      label.setAttribute('for', id);
+      const input = el('input');
+      input.type = 'time';
+      input.id = id;
+      wrap.append(label, input);
+      times.append(wrap);
+      return input;
+    }
+    const from = timeField('settings-webhook-quiet-from', 'From');
+    const to = timeField('settings-webhook-quiet-to', 'To');
+    const tzLabel = el('label', 'settings-label', 'Time zone');
+    tzLabel.setAttribute('for', 'settings-webhook-quiet-tz');
+    const tz = el('input');
+    tz.type = 'text';
+    tz.id = 'settings-webhook-quiet-tz';
+    tz.autocomplete = 'off';
+    tz.spellcheck = false;
+    tz.maxLength = 64;
+    tz.autocapitalize = 'none';
+    const group = el('fieldset', 'settings-quiet-always');
+    group.append(el('legend', 'settings-label', 'Sent anyway'));
+    const boxes = {};
+    for (const [kind, text] of kinds) {
+      const row = el('label', 'check-row');
+      const c = el('input');
+      c.type = 'checkbox';
+      c.id = 'settings-webhook-quiet-always-' + kind;
+      boxes[kind] = c;
+      row.append(c, el('span', null, text));
+      group.append(row);
+    }
+    const note = el('p', 'fine');
+    note.id = 'settings-webhook-quiet-note';
+    const status = el('p', 'fine');
+    status.id = 'settings-webhook-quiet-status';
+    status.setAttribute('role', 'status');
+    const save = btn('btn', 'Save quiet hours');
+    save.id = 'settings-webhook-quiet-save';
+    const remove = btn('btn', 'Turn off quiet hours');
+    remove.id = 'settings-webhook-quiet-remove';
+    const bar = el('div', 'settings-actions');
+    bar.append(save, remove);
+    box.append(times, tzLabel, tz, group, note, bar, status);
+    function browserZone() {
+      try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) { return ''; }
+    }
+    function say(text, bad) {
+      status.textContent = text;
+      status.classList.toggle('bad', !!bad);
+    }
+    function show(full) {
+      const cur = w();
+      const q = cur.quiet || { set: false, from: '22:00', to: '07:00', tz: null, always: ['approval'] };
+      if (full) {
+        from.value = q.from || '22:00';
+        to.value = q.to || '07:00';
+        tz.value = q.tz || browserZone();
+        for (const [kind] of kinds) boxes[kind].checked = (q.always || []).indexOf(kind) >= 0;
+      }
+      for (const f of [from, to, tz, save].concat(Object.values(boxes))) f.disabled = !cur.set;
+      remove.disabled = !cur.set || !q.set;
+      if (!cur.set) note.textContent = 'Save a webhook address above first.';
+      else if (q.set) note.textContent = 'Quiet from ' + q.from + ' to ' + q.to + ', ' + q.tz + '.';
+      else note.textContent = 'No quiet hours.';
+    }
+    save.addEventListener('click', async function () {
+      if (!from.value || !to.value) { say('Give a start and an end time.', true); return; }
+      const always = kinds.map(function (k) { return k[0]; }).filter(function (k) { return boxes[k].checked; });
+      const body = { quiet: { from: from.value.slice(0, 5), to: to.value.slice(0, 5), tz: tz.value.trim(), always: always } };
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', body);
+        refresh('quiet');
+        say('Quiet hours saved.', false);
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    remove.addEventListener('click', async function () {
+      try {
+        state.me.webhook = await call('PUT', '/api/me/webhook', { quiet: null });
+        refresh('quiet');
+        say('Quiet hours turned off.', false);
+        save.focus();
+      } catch (e) { say(String(e.message || e), true); }
+    });
+    return { show: show };
   }
 
   function buildSettingsAppearance(panel) {
@@ -4854,8 +5406,8 @@
       + ' The member’s tier note shows the broker’s configured limits.');
     devinLimit.id = 'agent-devin-idle-limit';
     body.append(devinLimit);
-    const cursorLimit = el('p', 'fine', 'Cursor hears an idle session for about 10 minutes after each turn ends:'
-      + ' its Stop hook waits that long for a message. Past that, later mentions stay queued until you type in'
+    const cursorLimit = el('p', 'fine', 'Cursor hears an idle session for up to an hour after each turn ends (10 minutes with an older plugin copy):'
+      + ' its Stop hook waits that long for a message. While it waits, something you type in Cursor during a busy turn is queued until a room message arrives or the wait ends. Past that, later mentions stay queued until you type in'
       + ' Cursor; its next Stop starts a new wait. The member’s tier note says so too.');
     cursorLimit.id = 'agent-cursor-idle-limit';
     body.append(cursorLimit);
@@ -6431,6 +6983,7 @@
       return false;
     }
     if (state.around) exitAround(false);  // what is posted belongs to the live log
+    if (state.filter) leaveFilter(false);  // so does the room under a filter (#914)
     // /close removes every agent and the room row: ask first (false gives the text back)
     if (text.split(/\s+/)[0].toLowerCase() === '/close' &&
         !await confirmDialog('Close ' + r.name + '?',
@@ -6453,6 +7006,7 @@
         renderLocal(verb, !res.ok, res.text);
         // a person's /review opened the room's board (#248): show it, in this page only
         if (res.ok && verb.toLowerCase() === '/review' && r.name === state.active) {
+          state.pastBoards = null;
           state.boardOpen = true;
           r.boardUrl = text.split(/\s+/)[1];  // the board it opened, or brought back, is the one on show
           loadBoard(r);
@@ -6563,7 +7117,7 @@
     }) : [];
     r.board = r.boards.find(function (x) { return x.url === r.boardUrl; }) || r.boards[0] || null;
     r.boardUrl = r.board ? r.board.url : null;
-    if (r.name === state.active && r.boardUrl !== before) state.boardSel = null;
+    if (r.name === state.active && !state.pastBoards && r.boardUrl !== before) state.boardSel = null;
   }
 
   function selectBoard(r, url) {
@@ -6675,6 +7229,93 @@
     return 'raised by ' + i.raised_by;
   }
 
+  async function loadPastBoards(view, focus) {
+    if (focus) view.focus = focus;
+    const generation = ++view.generation;
+    const path = '/api/rooms/' + encodeURIComponent(view.room.slug) + '/review/past';
+    try {
+      const res = await api('GET', path + (view.url ? '?url=' + encodeURIComponent(view.url) : ''));
+      if (state.pastBoards !== view || generation !== view.generation) return;
+      view.error = '';
+      view.board = res.board || null;
+      view.boards = res.boards || view.boards;
+    } catch (e) {
+      if (state.pastBoards !== view || generation !== view.generation) return;
+      view.error = view.url ? 'Could not load this past board.' : 'Could not load past boards.';
+      view.board = null;
+      view.boards = null;
+    }
+    renderBoard();
+    const after = view.focus;
+    view.focus = null;
+    if (after) after();
+  }
+
+  function pastBoardList(box, view) {
+    boardParts = null;
+    boardDetailCache = null;
+    const focused = document.activeElement;
+    const focusedId = focused && focused.dataset && focused.dataset.pastBoard;
+    const head = el('div', 'board-head');
+    head.append(el('h2', 'past-boards-title', 'Past boards'));
+    if (view.url) head.append(pastBoardsBack(view));
+    const list = el('ul', 'past-boards-list');
+    list.setAttribute('aria-label', 'Past boards');
+    let restore = null;
+    for (const b of view.url ? [] : view.boards || []) {
+      const row = el('li', 'past-board-row');
+      const f = b.forge;
+      const label = f && FORGE_NAME[f.kind] ? f.repo + ' ' + (f.kind === 'gitlab' ? '!' : '#') + f.number : b.url;
+      const open = btn('btn past-board-link', label);
+      open.dataset.pastBoard = String(b.id);
+      open.title = b.url;
+      open.addEventListener('click', function () {
+        view.url = b.url;
+        view.selected = String(b.id);
+        loadPastBoards(view, function () { tryFocus($('past-boards-back')); });
+      });
+      if (focusedId === String(b.id)) restore = open;
+      const merged = b.outcome === 'merged';
+      const outcome = el('span', 'chip' + (merged ? ' chip-ok' : ''),
+        merged ? 'Merged' : b.outcome === 'closed' ? 'Closed' : 'Unknown');
+      const dates = el('dl', 'past-board-dates');
+      for (const [label, ts] of [['Opened', b.opened_at], ['Settled', b.settled_at], ['Closed', b.closed_at]]) {
+        const value = el('dd');
+        if (typeof ts !== 'number') value.textContent = '—';
+        else {
+          const day = new Date(ts * 1000);
+          const time = el('time', null, day.toLocaleString());
+          time.dateTime = day.toISOString();
+          value.append(time);
+        }
+        dates.append(el('dt', null, label), value);
+      }
+      row.append(open, outcome, dates);
+      list.append(row);
+    }
+    const message = view.error || (view.boards ? 'No past boards in this room.' : 'Loading past boards…');
+    box.replaceChildren(head, list.childNodes.length ? list : el('p', 'board-empty', message));
+    if (restore) tryFocus(restore);
+    else if (focused && focused.id === 'past-boards-back') tryFocus($('past-boards-back'));
+  }
+
+  function pastBoardsBack(view) {
+    const back = btn('btn', 'Back to past boards');
+    back.id = 'past-boards-back';
+    back.addEventListener('click', function () {
+      view.url = null;
+      view.board = null;
+      state.boardSel = null;
+      loadPastBoards(view, function () {
+        const row = Array.from(document.querySelectorAll('.past-board-link')).find(function (button) {
+          return button.dataset.pastBoard === view.selected;
+        });
+        tryFocus(row || $('past-boards-toggle'));
+      });
+    });
+    return back;
+  }
+
   function renderBoard() {
     // Hand off is in the header (#425); its button, or the line that replaced it, keeps the focus
     const handoffFocus = document.activeElement && (document.activeElement.id === 'board-handoff'
@@ -6683,6 +7324,7 @@
     // Close board is rebuilt with the rest of the header (#430): a keyboard user who tabbed to it
     // would otherwise be dropped to the top of the page by the next members or review frame
     const closeFocused = !!document.activeElement && document.activeElement.id === 'board-close';
+    const focusedBack = !!document.activeElement && document.activeElement.id === 'past-boards-back';
     // a card with keyboard focus keeps it through the rebuild: a members frame rebuilds the board on
     // every busy/idle change (#407), and a keyboard or screen-reader user would lose their place
     const focusedCard = document.activeElement && document.activeElement.closest
@@ -6692,21 +7334,31 @@
     const focusedTab = document.activeElement && document.activeElement.closest
       ? document.activeElement.closest('#board .board-tab') : null;
     const focusedBoard = focusedTab ? focusedTab.dataset.board : null;
-    const r = activeRoom();
+    const room = activeRoom();
+    const past = state.pastBoards;
+    const r = past ? Object.assign({}, room, { board: past.board }) : room;
     const b = r ? r.board : null;
     const toggle = $('board-toggle');
-    toggle.classList.toggle('hidden', !b);
-    if (!b) state.boardOpen = false;
-    const open = !!(b && state.boardOpen);
+    toggle.classList.toggle('hidden', !(room && room.board));
+    const pastToggle = $('past-boards-toggle');
+    pastToggle.classList.toggle('hidden', !room);
+    pastToggle.setAttribute('aria-pressed', String(!!past));
+    if (!room || !room.board) state.boardOpen = false;
+    const open = !!(b && (state.boardOpen || past));
     // keyboard focus inside the open card (a drawn diagram's button, the drop reason) survives the
     // rebuild below along with the card itself (boardDetailFor)
     const detailFocus = open && boardDetailCache && document.activeElement && boardDetailCache.el.contains
       && boardDetailCache.el.contains(document.activeElement) ? document.activeElement : null;
-    toggle.setAttribute('aria-pressed', String(open));
-    toggle.title = open ? 'Back to the conversation' : "Show this room's review board";
-    $('main').classList.toggle('board-open', open);
+    toggle.setAttribute('aria-pressed', String(open && !past));
+    toggle.title = open && !past ? 'Back to the conversation' : "Show this room's review board";
+    $('main').classList.toggle('board-open', open || !!past);
     const box = $('board');
-    box.classList.toggle('hidden', !open);
+    box.classList.toggle('hidden', !open && !past);
+    if (past && !b) {
+      box.classList.remove('has-tabs');
+      pastBoardList(box, past);
+      return;
+    }
     if (!open) {
       boardParts = null;
       boardDetailCache = null;
@@ -6731,14 +7383,24 @@
       link.replaceChildren(mark(f.kind), el('span', 'board-pr-repo', f.repo), el('span', 'board-pr-num', ref));
     }
     title.append(name, link);
-    if (b.head) {
-      const sha = el('code', 'board-head-sha', b.head.slice(0, 7));
-      sha.title = b.head;
-      title.append(sha);
+    // the newest commit an open, a fix or a report named (#906). ``head`` stays the one the
+    // board was opened or moved to: the outdated mark and a GitLab line link keep using it.
+    // A note is one of two fixed strings; anything else is dropped.
+    const shown = typeof b.head_sha === 'string' && b.head_sha ? b.head_sha : (b.head || '');
+    const note = b.head_note === 'last fix' || b.head_note === 'reported' || b.head_note === 'merged'
+      ? b.head_note : '';
+    if (shown) {
+      // one phrase, so the note stays with the commit instead of wrapping under the title
+      const commit = el('span', 'board-head-commit');
+      const sha = el('code', 'board-head-sha', shown.slice(0, 7));
+      sha.title = note ? shown + ' (' + note + ')' : shown;
+      commit.append(sha);
+      if (note) commit.append(el('span', 'board-head-note', '(' + note + ')'));
+      title.append(commit);
     }
     // what an agent last read off the pull request (#291): its claim, named as its, never checked
     if (b.report) {
-      const rep = el('span', 'board-report', b.report);
+      const rep = el('span', 'board-report' + (b.pr_ci === 'blocked' ? ' conflict' : ''), b.report);
       rep.id = 'board-report';
       rep.title = b.reported_by + ' read this off the pull request with its own tools; switchboard fetches nothing';
       title.append(rep);
@@ -6761,9 +7423,15 @@
       if (ok) boardMove({ action: 'close', url: b.url });
     });
     // two or more open boards: tabs, on the header's first row (§37.14)
-    const tabbed = (r.boards || []).length > 1;
+    const tabbed = !past && (r.boards || []).length > 1;
     if (tabbed) head.append(boardTabs(r));
-    head.append(title, status, boardHandoff(r, b), close);
+    if (past) {
+      head.append(pastBoardsBack(past), title, el('span', 'chip', 'Read-only'),
+        el('span', 'chip' + (b.pr_state === 'merged' ? ' chip-ok' : ''),
+          b.pr_state === 'merged' ? 'Merged' : b.pr_state === 'closed' ? 'Closed' : 'Unknown'));
+    } else {
+      head.append(title, status, boardHandoff(r, b), close);
+    }
     box.classList.toggle('has-tabs', tabbed);
 
     const lanes = el('div', 'board-lanes');
@@ -6784,7 +7452,7 @@
         card.setAttribute('aria-pressed', String(state.boardSel === i.label));
         const top = el('span', 'board-card-top');
         top.append(el('span', 'board-label', i.label), el('span', boardStateClass(i), boardStateWord(i)));
-        const next = boardNext(i);
+        const next = !past && boardNext(i);
         if (next) top.append(boardPulse(next, (r.members || []).find(function (m) { return m.name === next; })));
         // a settled fix reads as done (#427): the check sits in the corner, only once someone has
         // confirmed it. icon() hides it from a screen reader; the card says "Fixed" and "confirmed by".
@@ -6837,6 +7505,7 @@
     }
     // every board event redraws the board: the divider and Close board keep the focus they had
     if (dividerFocused && boardParts) boardParts.divider.focus();
+    if (past && focusedBack) tryFocus($('past-boards-back'));
     if (closeFocused) {
       const again = $('board-close');
       if (again) again.focus();
@@ -6862,7 +7531,7 @@
   let boardDetailCache = null;  // { key, el } of the card on show, or null
   function boardDetailFor(r, i) {
     const key = JSON.stringify([i, (r.members || []).map(function (m) { return m.name; }), r.board.url,
-      r.board.forge]);
+      r.board.forge, r.board.closed_at]);
     if (boardDetailCache && boardDetailCache.key === key) return boardDetailCache.el;
     const card = boardDetail(r, i);
     boardDetailCache = { key: key, el: card };
@@ -7232,6 +7901,16 @@
       }
       d.append(ol);
     }
+    if (typeof b.closed_at === 'number') {
+      if (i.kind === 'question' && i.state === 'open') {
+        const options = el('ul', 'board-readonly-options');
+        for (const n of boardOptionOrder(i)) options.append(el('li', null, i.options[n] + boardOptionNote(i, n)));
+        d.append(options);
+        const consensus = boardConsensusLine(i);
+        if (consensus) d.append(consensus);
+      }
+      return d;
+    }
     const acts = el('div', 'board-actions');
     if (i.kind === 'question' && i.state === 'open') {
       // each option says what it is, the agreed one first and in the primary color (#423): an
@@ -7479,6 +8158,7 @@
     state.home = true;
     closeWhiteboard();
     state.active = null;
+    state.pastBoards = null;
     state.boardOpen = false;
     state.boardSel = null;
     $('app').classList.add('home-open');
@@ -7498,14 +8178,22 @@
     homeAgeTimer = setInterval(tickHomeAges, HOME_AGE_MS);
   }
 
-  // Tell the broker how far this person has read a room: the newest message this page holds (#663, §55.8). The
-  // broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
+  // Tell the broker how far this person has read a room: the newest message its live log has shown them
+  // (r.shownId, noteShown; #663, §55.8, §64.4), never one a filter, Search or the whiteboard kept off screen.
+  // The broker keeps it per person, so it holds across browsers; it only moves forward and is cut to what the room
   // has, so a stale or repeated post does nothing. A question card counts only messages after it. `refresh`: ask
   // for Home again once it is stored, so the sidebar's count drops (Home itself waits for it in loadHome).
   function markRoomSeen(r, refresh) {
-    if (!r || !r.lastId || (r.seenSent || 0) >= r.lastId) return;
-    const upto = r.lastId;
-    r.seenSent = upto;
+    // "joined with <agent>" (§63) is seen once the room is opened, even with nothing new in it to mark
+    const note = !!(r && r.joinedWith);
+    if (!r) return;
+    const upto = Math.min(r.lastId || 0, r.shownId || 0);
+    // capped short of the newest: noteShown sends the rest once a painted frame shows the log on screen
+    if ((r.shownId || 0) < (r.lastId || 0)) r.seenWanted = !!(refresh || r.seenWanted);
+    else r.seenWanted = undefined;
+    if (!note && (!upto || (r.seenSent || 0) >= upto)) return;
+    r.seenSent = Math.max(r.seenSent || 0, upto);
+    r.joinedWith = '';
     const p = api('POST', '/api/rooms/' + encodeURIComponent(r.slug) + '/seen', { id: upto });
     state.seenWait.add(p);
     p.then(function () { r.seenId = Math.max(r.seenId || 0, upto); }, function () { if (r.seenSent === upto) r.seenSent = 0; }).then(function () {
@@ -7608,9 +8296,9 @@
     return notifyIcons;
   }
 
-  // The sender's avatar, from this page's own origin: an uploaded one (§29.11), or the built-in image of Codex, Cursor
-  // and Devin, in the scheme the page is showing; for the rest (Claude Code, OpenCode, a person) a tile the page draws
-  // itself, the harness's color and its letters. No address but the broker's own.
+  // The sender's avatar, from this page's own origin: an uploaded one (§29.11), or the built-in image of Codex, Cursor,
+  // Devin and Grok Build, in the scheme the page is showing; for the rest (Claude Code, OpenCode, a person) a tile
+  // the page draws itself, the harness's color and its letters. No address but the broker's own.
   async function notifyIconFor(who) {
     if (!who) return undefined;
     const theme = document.documentElement.getAttribute('data-theme');
@@ -7622,7 +8310,9 @@
       const mine = (await notifyIconList()).filter(function (i) { return i.harness === harness; });
       const pick = mine.find(function (i) { return i.scheme === want; }) || mine[0];
       if (pick) return '/api/agent-icons/' + harness + '/' + pick.scheme + '?v=' + encodeURIComponent(pick.v);
-      if (harness === 'codex' || harness === 'cursor' || harness === 'devin') return '/static/agents/' + harness + '-' + want + '.png';
+      if (harness === 'codex' || harness === 'cursor' || harness === 'devin' || harness === 'grok') {
+        return '/static/agents/' + harness + '-' + want + '.png';
+      }
     }
     try {
       const c = document.createElement('canvas');
@@ -8168,7 +8858,8 @@
   function renderHome(error, again, focusKey) {
     const root = $('home');
     const d = state.homeData;
-    const rooms = Array.from(state.rooms.values()).map(function (r) {
+    // the rooms the sidebar lists as theirs (§63): Other rooms are not on Home
+    const rooms = Array.from(state.rooms.values()).filter(isMember).map(function (r) {
       const last = roomSummary(r);
       return { r: r, last: last, ts: last ? last.ts : 0 };
     }).sort(function (a, b) { return b.ts - a.ts || (a.r.name < b.r.name ? -1 : 1); });
@@ -8327,8 +9018,14 @@
     if ($('app-dialog').open || $('confirm-dialog').open) return;
     if (state.searchOn) {  // Esc clears the box and goes back to the page under it
       closeSearch(false);
+      noteShown();  // the page under it is on screen again: the room's log, unless the whiteboard covers it
       updateTitle();
       searchFocusBack();
+      return;
+    }
+    if (roomMenuOpen()) {  // the room's menu (§63): closed, and the keyboard back on its button
+      setRoomMenu(false);
+      $('room-menu-btn').focus();
       return;
     }
     const ui = state.inspUi;
@@ -8545,11 +9242,24 @@
       submitText('/meeting share stop');
     });
     $('room-rules').addEventListener('click', openRoomRules);
+    $('room-menu-btn').addEventListener('click', function () { setRoomMenu(!roomMenuOpen()); });
+    $('preview-join').addEventListener('click', joinRoom);
     $('room-wake').addEventListener('click', openRoomWake);
     $('room-calls').addEventListener('click', openRoomCalls);
     if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
+    $('past-boards-toggle').addEventListener('click', function () {
+      const room = activeRoom();
+      if (!room) return;
+      closeWhiteboard();
+      state.boardOpen = false;
+      state.boardSel = null;
+      state.pastBoards = state.pastBoards ? null : { room: room, generation: 0 };
+      renderBoard();
+      if (state.pastBoards) loadPastBoards(state.pastBoards);
+    });
     $('board-toggle').addEventListener('click', function () {
       closeWhiteboard();
+      state.pastBoards = null;
       state.boardOpen = !state.boardOpen;
       state.boardSel = null;
       renderBoard();
@@ -8595,6 +9305,12 @@
         ev.preventDefault();  // "/" focuses the search box, unless a field has it (the composer's own "/" is a command)
         focusSearch();
       }
+    });
+    // a click outside the room's menu closes it (§63)
+    document.addEventListener('click', function (ev) {
+      const t = ev.target;
+      if (!roomMenuOpen() || (t && typeof t.closest === 'function' && t.closest('#room-menu-wrap'))) return;
+      setRoomMenu(false);
     });
     // a click outside the catch-up menu closes it (click-driven: closest is fine here)
     document.addEventListener('click', function (ev) {
@@ -8668,7 +9384,9 @@
     if (state.searchOn) return;
     closePop();
     if (state.inspect) closeInspector(false);
+    // Search lies over the log first, so the All drawn under it is not on screen (§64.4)
     state.searchOn = true;
+    if (state.filter) leaveFilter(false);  // Search returns to All, not to a filtered log (#914, §64.4)
     $('app').classList.add('search-open');
     $('app').classList.remove('sheet-open');
     $('search').classList.remove('hidden');
@@ -9141,6 +9859,376 @@
     });
   }
 
+  // ----------------------------------------------- a room's filters (#914, DESIGN.md §64)
+  // All is the live log. Mentions (what is addressed to this person) and Files (messages with a stored file)
+  // are the broker's answer, GET /api/rooms/{slug}/filter, so a message older than the loaded history is
+  // found too; "Show older" asks for the page before. The room stays open under a filter: posting, opening
+  // another room or a search result, or All, goes back to the live log.
+  state.filter = null;  // { room, show, msgs, next, busy, failed }: the active room under a filter
+
+  // The one rule of the seen mark (§64.4, §55.8): it goes only as far as the person could have seen the room's
+  // live log. r.shownId is the newest line All held in a painted frame where the log was on screen; markRoomSeen
+  // goes no further. Which views cover the log is read from the page itself (logOnScreen), not from a list of app
+  // states: every list so far missed one (a review board, a phone sheet, Search over a click that drew the log).
+  // The check runs in the next animation frame, so a view a click opens after drawing the log (Back to results
+  // opens Search) has already covered it. What the log holds is still the app's to say: a filter or the window
+  // around a search result draws into the same #log, but neither is the live log.
+  function liveLogOf(r) {
+    return !!r && state.active === r.name && !state.around && !filterOf(r);
+  }
+
+  // Is #log rendered, visible, uncovered at its middle, in a visible document? Any check that can't run fails
+  // closed (false): the mark then waits for a frame that can show it was seen.
+  function logOnScreen() {
+    const log = $('log');
+    if (!log || document.visibilityState !== 'visible') return false;
+    if (typeof log.getBoundingClientRect !== 'function' || typeof document.elementFromPoint !== 'function' ||
+        typeof log.contains !== 'function') return false;
+    if (typeof log.checkVisibility === 'function') {
+      if (!log.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true, opacityProperty: true,
+                                 visibilityProperty: true })) return false;
+    } else if (typeof window.getComputedStyle === 'function') {
+      for (let n = log; n && n.nodeType === 1; n = n.parentElement) {
+        const cs = window.getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse' ||
+            Number(cs.opacity) === 0) return false;
+      }
+    } else {
+      return false;
+    }
+    for (let n = log; n && n.nodeType === 1; n = n.parentElement) if (n.hidden || n.inert) return false;
+    const b = log.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (!(vw > 0) || !(vh > 0)) return false;
+    const left = Math.max(b.left, 0), right = Math.min(b.right, vw);
+    const top = Math.max(b.top, 0), bottom = Math.min(b.bottom, vh);
+    if (!(right > left) || !(bottom > top)) return false;
+    const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+    return !!hit && (hit === log || log.contains(hit));
+  }
+
+  // Called wherever the live log was drawn or uncovered. In the next painted frame, if the active room's live log
+  // is on screen, what it holds was seen; a mark asked for meanwhile (markRoomSeen, capped then) is sent on.
+  let shownFrame = false;
+  function noteShown() {
+    if (shownFrame) return;
+    if (typeof window.requestAnimationFrame !== 'function') return;  // no frames to check: fail closed
+    shownFrame = true;
+    window.requestAnimationFrame(function () {
+      shownFrame = false;
+      const room = activeRoom();
+      if (!liveLogOf(room) || !logOnScreen()) return;
+      room.shownId = Math.max(room.shownId || 0, room.lastId || 0);
+      if (room.seenWanted !== undefined) markRoomSeen(room, room.seenWanted);
+    });
+  }
+
+  // The general trigger of that check (§64.4): a view that covers or reveals the log without drawing it (Back to
+  // the conversation from a review board, a sheet or a dialog closing, the tab coming back) changes a class, the
+  // hidden or inert attribute of #log, one of its ancestors, #app or #main, or the document's visibility. Each
+  // such change asks for the same painted-frame check; noteShown coalesces them to one frame. Without a
+  // MutationObserver nothing is watched, and the mark waits for a draw: closed, never open.
+  // A cover can also go with none of those nodes changing: a modal <dialog> (Rename room) closing changes only
+  // the dialog's own open state. So the events that end something drawn over the page ask too, caught on the
+  // document in the capture phase since close and toggle do not bubble: close and cancel (dialogs), toggle
+  // (popovers, details), and transitionend, a cover that slides away (the phone's Rooms drawer, whose class
+  // changes 260 ms before it has gone, so the frame that class change asks for still finds the log covered, #941),
+  // and, as a backstop for any cover not named here, focusin, pointerup and keyup. Each only schedules the one
+  // coalesced check, which still fails closed.
+  const COVER_ENDS = ['close', 'cancel', 'toggle', 'transitionend', 'focusin', 'pointerup', 'keyup'];
+  function watchLogCover() {
+    document.addEventListener('visibilitychange', noteShown);
+    for (const t of COVER_ENDS) document.addEventListener(t, function () { noteShown(); }, true);
+    if (typeof window.MutationObserver !== 'function') return;
+    const watched = new Set();
+    for (let n = $('log'); n && n.nodeType === 1; n = n.parentElement) watched.add(n);
+    for (const id of ['app', 'main']) if ($(id)) watched.add($(id));
+    const obs = new window.MutationObserver(noteShown);
+    watched.forEach(function (n) {
+      obs.observe(n, { attributes: true, attributeFilter: ['class', 'hidden', 'inert'] });
+    });
+  }
+
+  const FILTER_SHOWS = ['all', 'mentions', 'files'];  // each button's id is filter-<show>
+  const FILTER_EMPTY = {
+    mentions: 'Nothing in this room is addressed to you yet.',
+    files: 'No files in this room yet.',
+  };
+
+  function filterOf(r) {
+    const f = state.filter;
+    return f && r && f.room === r.name ? f : null;
+  }
+
+  // The test of the unread count (#109, #418), which is the broker's home.addressed_to too: an @mention of this
+  // person, @humans, or an agent's reply to something they said, and never their own message.
+  function forMe(r, m) {
+    return m.kind === 'chat' && (m.sender_kind !== 'human' || mentionsMe(m) || addressesHumans(m)) && addressedToMe(r, m);
+  }
+
+  function filterNote(f) {
+    if (f.busy && !f.msgs.length) return 'Loading…';
+    if (f.failed) return 'Could not load this filter. Choose it again to retry.';
+    const n = f.msgs.length;
+    if (!n) return FILTER_EMPTY[f.show];
+    const what = f.show === 'mentions'
+      ? (n === 1 ? ' message addressed to you' : ' messages addressed to you')
+      : (n === 1 ? ' message with a file' : ' messages with files');
+    if (!f.next) return n + what;
+    // a stored file can bring in a message older than the pages loaded (before the cursor): what is shown is then
+    // not the newest n, so it is only counted
+    const cut = Number(f.next);
+    if (f.msgs.some(function (m) { return m.id < cut; })) return n + what + ' shown';
+    return 'The newest ' + n + what;
+  }
+
+  // The row above the log: which button is pressed, and what the filter shows.
+  function renderFilters() {
+    const r = activeRoom();
+    const row = $('room-filters');
+    row.classList.toggle('hidden', !r || state.rooms.size === 0);
+    if (state.filter && (!r || state.filter.room !== r.name)) state.filter = null;
+    const f = filterOf(r);
+    const show = f ? f.show : 'all';
+    for (const s of FILTER_SHOWS) $('filter-' + s).setAttribute('aria-pressed', String(s === show));
+    const note = $('room-filter-note');
+    const text = f ? filterNote(f) : '';
+    if (note.textContent !== text) note.textContent = text;
+  }
+
+  // The log's first row under a filter: "Show older" while the broker has more, or what an empty one means.
+  function filterHead(f) {
+    if (f.next) {
+      const box = el('div', 'filter-more');
+      const b = el('button', 'btn filter-older', f.busy ? 'Loading…' : 'Show older');
+      b.type = 'button';
+      b.dataset.focus = 'filter-older';
+      b.disabled = f.busy;
+      b.addEventListener('click', function () { loadFilter(f, true); });
+      box.append(b);
+      return box;
+    }
+    if (!f.msgs.length && !f.busy && !f.failed) return el('div', 'filter-empty', FILTER_EMPTY[f.show]);
+    return document.createDocumentFragment();
+  }
+
+  async function loadFilter(f, older) {
+    const r = state.rooms.get(f.room);
+    if (!r || f.busy && older) return;
+    f.busy = true;
+    f.failed = false;
+    const log = $('log');
+    const fromBottom = log.scrollHeight - log.scrollTop;
+    if (older) renderRows(r);
+    let data;
+    try {
+      const q = '?show=' + f.show + (older && f.next ? '&before=' + String(Number(f.next)) : '');
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/filter' + q);
+    } catch (e) {
+      data = null;
+    }
+    if (state.filter !== f) return;  // the person moved on meanwhile
+    f.busy = false;
+    if (!data) f.failed = true;
+    else {
+      filterMerge(f, data.messages);
+      f.next = data.next;
+    }
+    // a row drawn while the page was on its way (a live line) may have the keyboard: it gets it back, as in
+    // filterAdd, on the same control
+    const key = older ? null : focusKey(log);
+    const spot = older || key ? null : rowFocusSpot(log);
+    renderFilters();
+    renderRows(r);
+    if (key) refocus(log, key);
+    else if (spot) rowFocusBack(log, spot);
+    // older lines go above: what the person was reading stays where it was; a first page opens at its newest
+    log.scrollTop = older ? log.scrollHeight - fromBottom : log.scrollHeight;
+    if (older && !refocus(log, 'filter-older')) {
+      const first = log.querySelector('[data-id]');
+      if (first) { first.tabIndex = -1; first.focus({ preventScroll: true }); }
+    }
+  }
+
+  function setFilter(show) {
+    const r = activeRoom();
+    if (!r) return;
+    if (show === 'all' || !FILTER_EMPTY[show]) { leaveFilter(true); return; }
+    const was = filterOf(r);
+    if (was && was.show === show && !was.failed) return;
+    if (state.around) { state.around = null; resetSearch(); }  // a filter replaces a window around a result
+    const f = { room: r.name, show: show, msgs: [], next: null, busy: false, failed: false };
+    state.filter = f;
+    renderLog();
+    loadFilter(f, false);
+  }
+
+  // Back to the live log (All). `stay`: the person chose All, so the keyboard stays on the row.
+  function leaveFilter(stay) {
+    if (!state.filter) { renderFilters(); return; }
+    state.filter = null;
+    renderLog();
+    if (stay) $('filter-all').focus();
+  }
+
+  // What the broker answered and what the socket brought, as one list in id order: a message is kept once, as
+  // it first arrived, whichever source that was, so a live line that came before the page holding it is neither
+  // moved after newer ones nor lost. Its files are the exception: a file is stored after its message, so two
+  // copies of one message can each hold files the other lacks (an answer read before a second upload ended, and
+  // the one asked for after it), and the row keeps every file of both, the later copy's winning by file id.
+  // True when something was added or a held row gained a file.
+  function filterMerge(f, list) {
+    const byId = new Map(f.msgs.map(function (m) { return [m.id, m]; }));
+    let added = false;
+    let grew = false;
+    for (const m of list) {
+      const had = byId.get(m.id);
+      if (had) {
+        if (filterFilesInto(had, m.files)) grew = true;
+        continue;
+      }
+      byId.set(m.id, m);
+      added = true;
+    }
+    if (added) f.msgs = Array.from(byId.values()).sort(function (a, b) { return a.id - b.id; });
+    return added || grew;
+  }
+
+  // Put `files` into the held row `had`, each replacing the one of its id. True when the row changed.
+  function filterFilesInto(had, files) {
+    if (!Array.isArray(files) || !files.length) return false;
+    const mine = Array.isArray(had.files) ? had.files : [];
+    const ids = new Set(files.map(function (x) { return x && x.id; }));
+    const next = mine.filter(function (x) { return !ids.has(x && x.id); }).concat(files);
+    const same = next.length === mine.length && next.every(function (x) {
+      const old = mine.find(function (y) { return y && x && y.id === x.id; });
+      return old && JSON.stringify(old) === JSON.stringify(x);
+    });
+    if (same) return false;
+    had.files = next;
+    return true;
+  }
+
+  // Draw what a filter gained while it is on screen. The log is drawn again, so whatever in it had the keyboard
+  // (Show older, a message row, or a control inside a row: a download link, a Message button) gets it back on
+  // its new node: a live line never drops the focus to the page.
+  function filterAdd(r, f, list) {
+    if (state.filter !== f || !filterMerge(f, list)) return;
+    const log = $('log');
+    const stick = nearBottom(log);
+    const key = focusKey(log);
+    const spot = key ? null : rowFocusSpot(log);
+    renderFilters();
+    renderRows(r);
+    if (key) refocus(log, key);
+    else if (spot) rowFocusBack(log, spot);
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+
+  // What can take the keyboard inside a log row, in document order: the same row drawn again gives the same list.
+  const ROW_FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]';
+
+  const FILE_HREF = /^\/api\/files\/([0-9a-f]{32})$/;  // md.js's fileLink: the only href a download link has
+
+  // What a control in a row is, the same however often the row is drawn: a download link by its file id, then
+  // its data-focus, its href, or its kind, class and label. Never its place: a file stored above a focused link
+  // adds a link before it, and the place would then name the wrong file.
+  function controlKey(c) {
+    const href = typeof c.getAttribute === 'function' ? c.getAttribute('href') : null;
+    const file = href ? FILE_HREF.exec(href) : null;
+    if (file) return 'file:' + file[1];
+    if (c.dataset && c.dataset.focus) return 'focus:' + c.dataset.focus;
+    if (href) return 'href:' + href;
+    const name = (typeof c.getAttribute === 'function' && c.getAttribute('aria-label')) || c.textContent || '';
+    return String(c.tagName) + '|' + String(c.className || '') + '|' + name;
+  }
+
+  // Where the keyboard is in the log, by row: { id, key, nth }, the message row holding the focused element, the
+  // element's identity (controlKey; null: the row itself) and which of the row's controls with that identity it
+  // is. Null when the focus is not in a row.
+  function rowFocusSpot(log) {
+    const had = document.activeElement;
+    if (!had || had === log || !log.contains(had) || typeof had.closest !== 'function') return null;
+    const row = had.closest('[data-id]');
+    if (!row || !log.contains(row)) return null;
+    const id = String(Number(row.dataset.id));
+    if (row === had) return { id: id, key: null, nth: 0 };
+    const key = controlKey(had);
+    const same = Array.from(row.querySelectorAll(ROW_FOCUSABLE))
+      .filter(function (c) { return controlKey(c) === key; });
+    return { id: id, key: key, nth: Math.max(0, same.indexOf(had)) };
+  }
+
+  // Focus the control `spot` names in its row as drawn now, else the row itself.
+  function rowFocusBack(log, spot) {
+    const n = log.querySelector('[data-id="' + spot.id + '"]');
+    if (!n) return;
+    const same = spot.key === null ? [] :
+      Array.from(n.querySelectorAll(ROW_FOCUSABLE)).filter(function (c) { return controlKey(c) === spot.key; });
+    const t = same[Math.min(spot.nth, same.length - 1)] || null;
+    if (t && tryFocusQuiet(t)) return;
+    n.tabIndex = -1;
+    n.focus({ preventScroll: true });
+  }
+
+  function tryFocusQuiet(n) {
+    n.focus({ preventScroll: true });
+    return document.activeElement === n;
+  }
+
+  // A message that arrives while the room is filtered: drawn when the filter would have answered with it. A reply
+  // whose parent this page does not hold (older than its history) cannot be judged here, so the broker is asked
+  // about that one message, with its own rule (home.addressed_to): no second copy of the rule.
+  function filterTake(r, m) {
+    const f = filterOf(r);
+    if (f.show !== 'mentions') {
+      if (Array.isArray(m.files) && m.files.length > 0) filterAdd(r, f, [m]);
+      return;
+    }
+    if (forMe(r, m)) filterAdd(r, f, [m]);
+    else if (m.kind === 'chat' && m.reply_to && !r.msgs.some(function (x) { return x.id === m.reply_to; })) {
+      filterAsk(r, f, m.id);
+    }
+  }
+
+  // A file of message `id` was stored (an agent's upload ends after its message arrived, §53). A filtered log
+  // holds the broker's copies of its rows, so the row there is brought up to date; under Files, a message that
+  // came while its upload was pending now has a stored file and is taken (or, when this page does not hold it,
+  // asked for). `m` is the page's own copy, if it has one. Returns the filter's copy of the row when it holds one,
+  // for the caller to draw (once, after both copies are merged); null otherwise.
+  function filterFile(r, id, file, m) {
+    const f = filterOf(r);
+    if (!f) return null;
+    const had = f.msgs.find(function (x) { return x.id === id; });
+    if (had) {
+      if (had !== m) filterFilesInto(had, [file]);
+      return had;
+    }
+    if (f.show === 'files') {
+      if (m) filterAdd(r, f, [m]);
+      else filterAsk(r, f, id);
+    }
+    return null;
+  }
+
+  // Ask the filter route whether the one message `id` is in this filter, and draw the broker's answer if it is.
+  async function filterAsk(r, f, id) {
+    let data;
+    try {
+      const q = '?show=' + f.show + '&before=' + String(Number(id) + 1) + '&limit=1';
+      data = await api('GET', '/api/rooms/' + encodeURIComponent(r.slug) + '/filter' + q);
+    } catch (e) {
+      return;  // the line is still in the room's history, and All shows it
+    }
+    const list = data && Array.isArray(data.messages) ? data.messages : [];
+    const got = list.filter(function (x) { return x.id === id; });
+    if (got.length) filterAdd(r, f, got);
+  }
+
+  function bindRoomFilters() {
+    for (const s of FILTER_SHOWS) $('filter-' + s).addEventListener('click', function () { setFilter(s); });
+  }
+
   // --------------------------------------------------------------- boot
   // The open rooms, from the broker. A room whose room is gone, or was replaced under the same
   // name (another id, or the same id reused after a delete: another created_at), is dropped;
@@ -9159,6 +10247,7 @@
       for (const [old, r] of state.rooms) {
         if (r.id !== l.id || r.createdAt !== l.created_at) continue;
         state.rooms.delete(old);
+        if (state.filter && state.filter.room === old) state.filter.room = l.name;
         r.name = l.name;
         r.slug = l.slug;
         state.rooms.set(l.name, r);
@@ -9191,6 +10280,10 @@
       r.pins = Array.isArray(l.pins) ? l.pins : [];  // the room's pinned messages (#292)
       r.private = !!l.private;  // seen only by its people (§44)
       r.people = Array.isArray(l.people) ? l.people : null;
+      // whether this person is a member, pinged here, and the agent that made them one until they open it (§63)
+      r.member = l.member !== false;
+      r.joinedWith = r.member && typeof l.joined_with === 'string' ? l.joined_with : '';
+      if (!r.member) { r.unread = 0; r.quiet = false; }  // a room they left, or never joined, counts nothing
       // how far this person has read the room, on any browser (§55.8): older messages the history replays
       // don't count toward the badge again, and the page doesn't post a mark it already has
       const seen = typeof l.seen === 'number' && l.seen > 0 ? l.seen : 0;
@@ -9224,6 +10317,7 @@
       if (activeRoom()) markPinned(activeRoom());
     }
     if (pruned) renderLocal(was + ' is no longer open (closed or deleted); Closed rooms can reopen a closed room');
+    syncRoomActions();  // joined or left (§63): the composer or the Join bar, and the menu
     return fresh;
   }
 
@@ -9281,6 +10375,101 @@
     const today = el('span', 'usage-counts', countLine('Today', whole(row.wakes_today), whole(row.posts_today)));
     const week = el('span', 'usage-counts', countLine('7 days', whole(row.wakes_week), whole(row.posts_week)));
     return [today, week];
+  }
+
+  // A span of seconds the way a person reads it: "40 s", "12 min", "3.5 h", "2 d". Anything that is
+  // not a finite, non-negative number is not shown (the broker sends null when there is no data).
+  function usageSpan(v) {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
+    const one = function (n) { return String(Math.round(n * 10) / 10); };
+    if (v < 60) return Math.round(v) + ' s';
+    if (v < 3600) return Math.round(v / 60) + ' min';
+    if (v < 86400) return one(v / 3600) + ' h';
+    return one(v / 86400) + ' d';
+  }
+
+  // The lines of one window of the review figures (#863, §61.5). A window with nothing says so.
+  function reviewLines(w) {
+    w = w || {};
+    const lines = [];
+    const opened = whole(w.opened), settled = whole(w.settled), raised = whole(w.raised);
+    const reopened = whole(w.reopened), merged = whole(w.merged), unknown = whole(w.unknown);
+    if (opened || settled) {
+      let t = 'Boards: ' + opened + ' opened, ' + settled + ' settled';
+      const span = usageSpan(w.settle_s);
+      if (span) t += ', median ' + span + ' to settle';
+      lines.push(t);
+    }
+    if (raised) {
+      let t = 'Findings: ' + raised + ' raised, ' + whole(w.confirmed) + ' confirmed, '
+        + whole(w.contested) + ' contested, ' + whole(w.dropped) + ' dropped';
+      if (typeof w.share_confirmed === 'number' && Number.isFinite(w.share_confirmed)) {
+        t += ' \u00b7 ' + Math.round(w.share_confirmed * 100) + '% confirmed';
+      }
+      lines.push(t);
+    }
+    if (reopened || settled) {
+      let t = 'Fixes: ' + reopened + ' reopened';
+      if (typeof w.heads === 'number' && Number.isFinite(w.heads)) {
+        t += ', median ' + (Math.round(w.heads * 10) / 10) + (w.heads === 1 ? ' commit' : ' commits') + ' before settling';
+      }
+      lines.push(t);
+    }
+    const stages = [['first finding', w.first_finding_s], ['settled', w.to_settled_s], ['merged', w.to_merged_s]]
+      .map(function (s) { return [s[0], usageSpan(s[1])]; })
+      .filter(function (s) { return s[1]; });
+    if (stages.length) {
+      lines.push('Time to merge: ' + stages.map(function (s) { return s[0] + ' ' + s[1]; }).join(' \u2192 '));
+    }
+    if (merged || unknown) lines.push('Merged: ' + merged + ' reported, ' + unknown + ' unknown');
+    return lines.length ? lines : ['No review activity'];
+  }
+
+  function reviewWindow(title, w) {
+    const box = el('div', 'usage-counts usage-review');
+    box.append(el('strong', 'usage-review-h', title));
+    for (const t of reviewLines(w)) box.append(el('span', 'usage-review-line', t));
+    return box;
+  }
+
+  function renderReviews(root, reviews) {
+    root.append(el('h2', 'usage-h', 'Reviews'));
+    root.append(el('p', 'usage-note', 'How review boards went. A finding counts in the window it was raised in, '
+      + 'for the agent that raised it. The share confirmed is confirmed over confirmed plus dropped: a rough '
+      + 'measure of a reviewer\u2019s precision. Merged is what an agent reported, so it reads unknown until then.'));
+    const rooms = reviews && Array.isArray(reviews.rooms) ? reviews.rooms : [];
+    const agents = reviews && Array.isArray(reviews.agents) ? reviews.agents : [];
+    if (!rooms.length) {
+      root.append(el('p', 'usage-none', 'No review board moved in the last 7 days.'));
+      return;
+    }
+    for (const [id, title, rows] of [['usage-review-rooms', 'By room', rooms], ['usage-review-agents', 'By agent', agents]]) {
+      root.append(el('h3', 'usage-h3', title));
+      if (!rows.length) {
+        root.append(el('p', 'usage-none', 'No agent held or raised anything.'));
+        continue;
+      }
+      const list = el('ol', 'usage-list');
+      list.id = id;
+      for (const row of rows) {
+        const li = el('li');
+        const line = el('div', 'usage-row usage-review-row');
+        const who = el('div', 'usage-name');
+        if (row.room !== undefined) {
+          who.textContent = label(row.name || '', row.host || '') + ' \u00b7 ' + harnessOf(row.harness)[1];
+          const room = el('div', 'usage-name');
+          room.append(usageJump(typeof row.room === 'string' ? row.room : ''));
+          line.append(who, room);
+        } else {
+          who.append(usageJump(typeof row.name === 'string' ? row.name : ''));
+          line.append(who, el('div'));
+        }
+        line.append(reviewWindow('Today', row.today), reviewWindow('7 days', row.week));
+        li.append(line);
+        list.append(li);
+      }
+      root.append(list);
+    }
   }
 
   function renderUsage() {
@@ -9351,6 +10540,7 @@
       }
       root.append(list);
     }
+    renderReviews(root, data.reviews);
   }
 
   function showUsage() {
@@ -9364,6 +10554,7 @@
     state.usage = true;
     closeWhiteboard();
     state.active = null;
+    state.pastBoards = null;
     state.boardOpen = false;
     state.boardSel = null;
     $('app').classList.add('usage-open');
@@ -9404,6 +10595,7 @@
   async function boot() {
     bindInput();
     bindSearch();
+    bindRoomFilters();
     $('pins-toggle').addEventListener('click', function () {
       state.pinsOpen = !state.pinsOpen;
       renderPins();
@@ -9423,6 +10615,7 @@
       $('usage').focus();
     });
     keepLogPinned();
+    watchLogCover();
     try {
       state.me = await api('GET', '/api/me');
     } catch (e) {

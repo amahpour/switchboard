@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import PHASE_REPORTS, TEST_HUMAN, sanitize_env
+from conftest import PHASE_REPORTS, TEST_HUMAN, InProcBroker, sanitize_env
 from fakes.waiting import wait_for
 from playwright.sync_api import (
     Browser,
@@ -497,6 +497,52 @@ def test_a_dropped_socket_shows_everywhere_until_it_is_back(ui: UI) -> None:
         back_up()  # nothing left waiting when the context closes
 
 
+def test_a_tab_reports_a_long_broker_restart_and_catches_up(ui: UI, broker: InProcBroker) -> None:
+    """A real shutdown leaves the tab open. After two minutes it explains the outage, then
+    catches up to a message posted before the socket returned, exactly once without reloading."""
+    browser = ui.context()
+    page = browser.new_page()
+    page.clock.install()
+    broker.call("room.create", {"name": "#restart"})
+    page.goto(broker.login_url())
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    open_room(page, "restart")
+    broker.call("human.say", {"room": "#restart", "text": "before the restart"})
+    expect(page.get_by_text("before the restart", exact=True)).to_be_visible()
+    held: list[Route] = []
+    restarting = True
+
+    def hold(route: Route) -> None:
+        # Keep the reconnect check paused so a message can arrive before the new socket.
+        if restarting:
+            held.append(route)
+        else:
+            route.continue_()
+
+    page.route("**/api/**", hold)
+    navigations = []
+    page.on("framenavigated", lambda frame: navigations.append(frame) if frame == page.main_frame else None)
+
+    with page.expect_request("**/api/me"):
+        broker.stop()
+    expect(page.locator("#st-conn")).to_have_text("Reconnecting…")
+    banner = page.locator("#banner-offline")
+    expect(banner).to_contain_text("reconnecting…")
+    page.clock.fast_forward(120_000)
+    expect(banner).to_contain_text("Switchboard has been unreachable for at least 2 minutes.")
+
+    broker.start()
+    broker.call("human.say", {"room": "#restart", "text": "after the restart"})
+    restarting = False
+    while held:
+        held.pop().continue_()
+    expect(page.locator("#st-conn")).to_have_text("Connected")
+    expect(banner).to_be_hidden()
+    expect(page.get_by_text("before the restart", exact=True)).to_have_count(1)
+    expect(page.get_by_text("after the restart", exact=True)).to_have_count(1)
+    assert not navigations
+
+
 def test_room_badges_count_only_what_is_addressed_to_you(ui: UI) -> None:
     """Issue #109: the room list's red badge counts only an @mention or a reply to the human's
     own message; other agent chatter in a room you aren't viewing gets the quiet dot instead,
@@ -931,6 +977,84 @@ def test_devin_s_logo_follows_the_theme_setting(ui: UI) -> None:
         page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
         look = devin.evaluate(AVATAR_LOOK)
         assert look["img"] == f"/static/agents/devin-{want}.png", (theme, scheme, look)
+
+
+def a_grok_room(ui: UI, room: str) -> None:
+    """A room with one agent, grok-1, that is a Grok Build session, and two messages from it (the second
+    replies to the first), so every place an avatar shows has one."""
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("grok-1",))
+    first = ui.world.agent_say(f"#{room}", "grok-1", "Looking at the failing test.")
+    ui.world.agent_say(f"#{room}", "grok-1", "Found it.", reply_to=first)
+    ui.world.set_member_harness(f"#{room}", "grok-1", "grok")
+
+
+@pytest.mark.parametrize("phone", [False, True])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_grok_s_logo_shows_everywhere_its_avatar_does(ui: UI, scheme: str, phone: bool) -> None:
+    """#930: a Grok Build session shows xAI's Grok mark for the scheme (the dark mark on a white tile in a
+    light page, the white mark on a black tile in a dark one), not its GK letters, in the log, a reply's
+    preview, the @ list, Members and the Inspector, at the sizes every harness uses there, on a desktop and
+    on a phone. The mark sits inside the tile, so the rounded corners don't cut its tips. Fails if any place
+    still draws the monogram tile, the scheme picks the other file (a mark the tile hides), or the file is
+    missing or blocked."""
+    room = f"grok-{scheme}-{'phone' if phone else 'desk'}"
+    a_grok_room(ui, room)
+    page = ui.open(room=room, color_scheme=scheme, **(PHONE if phone else {}))
+    tile = "rgb(255, 255, 255)" if scheme == "light" else "rgb(0, 0, 0)"
+    sizes = {"member": 32, "log": 28 if phone else 32, "inspector": 40}
+
+    def check(where: str, avatar: Locator) -> None:
+        expect(avatar).to_be_visible()
+        look = avatar.evaluate(ICON_LOOK)
+        assert look["img"] == f"/static/agents/grok-{scheme}.png" and look["tile"] == tile, (where, look)
+        look = avatar.evaluate(AVATAR_LOOK)
+        assert look["width"] == 1024 and look["color"] == "rgba(0, 0, 0, 0)", (where, look)
+        expect(avatar).to_contain_text("GK")  # the monogram stays in the element, unseen
+        assert avatar.evaluate("el => getComputedStyle(el).backgroundSize") == "72% auto", where
+        if where in sizes:
+            box = avatar.evaluate(AVATAR_BOX)
+            assert box == {"w": sizes[where], "h": sizes[where]}, (where, box)
+
+    line = page.locator('#log .line[data-from="grok-1"]').last
+    line.scroll_into_view_if_needed()
+    check("log", line.locator("> .avatar.h-grok"))
+    check("reply", page.locator("#log .reply-to .avatar.mini.h-grok").first)
+    box = page.locator("#input")
+    box.focus()
+    page.keyboard.type("@")
+    option = page.locator("#mentions [role=option]").filter(has_text="grok-1")
+    check("mention", option.locator(".avatar.h-grok"))
+    box.fill("")
+    if phone:
+        page.click("#buddy-toggle")
+    member = page.locator('#buddy-list .member[data-name="grok-1"]')
+    check("member", member.locator(".avatar.h-grok"))
+    with page.expect_response(lambda r: "/members/grok-1" in r.url and r.request.method == "GET"):
+        member.click()
+    expect(page.locator("#insp-name")).to_contain_text("grok-1")
+    check("inspector", page.locator("#insp-body .insp-id > .avatar.h-grok"))
+
+
+def test_grok_s_logo_follows_the_theme_setting(ui: UI) -> None:
+    """#930: the saved Theme (the page's data-theme) picks Grok's file and tile, not only the system's
+    scheme: Dark on a light system shows the white mark on black, Light on a dark system the dark mark on
+    white, and System follows the system. Fails if the explicit Dark block lacks the tokens, so a person who
+    chose Dark gets a white tile in a dark page."""
+    a_grok_room(ui, "grok-theme")
+    page = ui.open(room="grok-theme", color_scheme="light")
+    grok = page.locator('#buddy-list .member[data-name="grok-1"] .avatar')
+    for theme, scheme, want, tile in (
+        ("system", "light", "light", "rgb(255, 255, 255)"),
+        ("dark", "light", "dark", "rgb(0, 0, 0)"),
+        ("light", "dark", "light", "rgb(255, 255, 255)"),
+        ("system", "dark", "dark", "rgb(0, 0, 0)"),
+    ):
+        page.emulate_media(color_scheme=scheme)
+        page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+        look = grok.evaluate(ICON_LOOK)
+        assert look["img"] == f"/static/agents/grok-{want}.png", (theme, scheme, look)
+        assert look["tile"] == tile, (theme, scheme, look)
 
 
 # the four tokens #443 set under the explicit Dark theme: the icon files, Codex's tile and the ring
@@ -2553,7 +2677,13 @@ def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
         " css: [...r.querySelectorAll('style')].map(s => s.textContent).join('') }; }"
     )
     assert found["unsafe"] == 0 and found["links"] == 0, found
-    assert '<img src="x"' in found["text"] and "onerror" not in found["text"]  # a label is text
+    drawn = "".join(found["text"].replace("\u200b", "").split())
+    assert "<imgsrc=xonerror=window.__pwned=1>" in drawn, found["text"]  # the tag, as text
+    handlers = box.evaluate(
+        f"(b) => [...({root})(b).querySelectorAll('svg, svg *')]"
+        ".flatMap(e => [...e.attributes].map(a => a.name)).filter(n => /^on/i.test(n))"
+    )
+    assert handlers == [], handlers  # no element drawn holds a handler attribute
     assert "display: none" not in found["css"] and "#cde498" not in found["css"]  # no themeCSS, not forest
     # clicking either node does nothing: no callback was bound (an alert() would have opened, and
     # been recorded, before the click returned) and there is no href to follow (above)
@@ -2566,6 +2696,68 @@ def test_a_hostile_diagram_cannot_reach_the_page(ui: UI) -> None:
     assert dialogs == [] and page.evaluate("window.__pwned") is None
     assert page.evaluate("fetch('/api/me').then(r => r.status)") == 200
     expect(page.locator("#log")).to_be_visible()
+
+
+def test_a_comparison_in_a_label_before_an_arrow_still_draws(ui: UI) -> None:
+    """The review's case on #918: a quoted label holding `a<b only` on the line of an edge's
+    `-->` lost its closing quote and bracket to the handler strip, and Mermaid refused it. It
+    draws, with no error, and both nodes are there."""
+    source = 'flowchart TD\n  A["if a<b only"] --> B["done"]'
+    page = diagram_room(ui, "e2e-diagram-comparison", f"{FENCE}mermaid\n{source}\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box.locator(".md-diagram-error")).to_have_text("")
+    text = box.evaluate(
+        "(b) => [...b.querySelector('.md-diagram').shadowRoot.querySelectorAll('text')]"
+        ".map(t => t.textContent).join(' ')"
+    )
+    assert "if a" in text and "done" in text, text
+
+
+def test_a_diagram_whose_quoted_value_spans_two_labels_keeps_its_edge(ui: UI) -> None:
+    """The review's case on #918 (F1): `x<limit one="` reads as a tag whose quoted value runs from
+    A's closing quote to B's opening one, and removing that attribute took `] --> B["` with it:
+    one node and no edge. Nothing is removed now, so both nodes and the edge are drawn. Mermaid
+    drops the leading `>` of B's label as Markdown (as it does on main), and a wrapped label's
+    tspans drop the spaces between words, so the text is compared without whitespace."""
+    source = 'flowchart TD\n  A["check x<limit one="] --> B[" > threshold"]'
+    page = diagram_room(ui, "e2e-diagram-spanning-value", f"{FENCE}mermaid\n{source}\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box.locator(".md-diagram-error")).to_have_text("")
+    found = box.evaluate(
+        "(b) => { const r = b.querySelector('.md-diagram').shadowRoot; return {"
+        " nodes: r.querySelectorAll('g.node').length,"
+        " edges: r.querySelectorAll('path.flowchart-link').length,"
+        " text: [...r.querySelectorAll('text')].map(t => t.textContent).join(' ') }; }"
+    )
+    assert found["nodes"] == 2 and found["edges"] == 1, found
+    drawn = "".join(found["text"].replace("\u200b", "").split())
+    assert "checkx<limitone=" in drawn and "threshold" in drawn, found
+
+
+def test_a_diagram_with_a_closing_tag_in_the_next_label_draws_that_label_as_on_main(ui: UI) -> None:
+    """The review's F4 on #918: `x<b one="` reads as a tag that ends at the first `>` in B's label,
+    and at 53238e08 the clean-up also marked B's own `</b>`, so B's `<b>` lost its closer when
+    Mermaid sanitized B's label on its own and B drew `<b>innertail</b>`. Only A's `<` is marked
+    now, so B draws as it does on main (no clean-up at all), measured in Chromium 157: two nodes,
+    one edge, and no console error (the fixture's watch). Whitespace is left out of the compare,
+    since a wrapped label's tspans drop the spaces between words."""
+    source = 'flowchart TD\n  A["check x<b one="] --> B[" > threshold <b>inner</b> tail"]'
+    page = diagram_room(ui, "e2e-diagram-closer-next-label", f"{FENCE}mermaid\n{source}\n{FENCE}")
+    box = show(page)
+    expect(box.locator("button.md-show-diagram")).to_have_text("Show code")
+    expect(box.locator(".md-diagram-error")).to_have_text("")
+    found = box.evaluate(
+        "(b) => { const r = b.querySelector('.md-diagram').shadowRoot; return {"
+        " nodes: [...r.querySelectorAll('g.node')].map(n => [n.id,"
+        " [...n.querySelectorAll('text')].map(t => t.textContent).join(' ')]),"
+        " edges: r.querySelectorAll('path.flowchart-link').length }; }"
+    )
+    assert len(found["nodes"]) == 2 and found["edges"] == 1, found
+    drawn = {re.sub(r"^.*-flowchart-([A-Z])-\d+$", r"\1", i): "".join(t.split()) for i, t in found["nodes"]}
+    assert drawn["B"] == ">threshold<b>inner</b>tail", found  # what main draws for B
+    assert drawn["A"].replace("\u200b", "") == "checkx<bone=", found
 
 
 def test_a_broken_diagram_says_why_and_keeps_its_code(ui: UI) -> None:
@@ -3615,6 +3807,48 @@ def test_the_board_header_says_what_an_agent_reported_and_whose_it_is(ui: UI) ->
     expect(report).to_have_attribute("title", re.compile(r"^claude-1 read this off the pull request"))
 
 
+def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -> None:
+    """#907: a conflicting pull request runs no CI, so the header read "CI none" and hid that the author
+    must act. It says "CI blocked: conflicts with its base" and is not muted; a later passing report goes
+    back to muted. Fails if the header shows only "CI none" or the conflict looks like any other report: the
+    computed color is the page's --danger, then --muted-2 again."""
+    page = review_room(ui, "e2e-board-conflict")
+    room = "#e2e-board-conflict"
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked")
+    page.click("#board-toggle")
+    report = page.locator("#board-report")
+    expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
+    expect(report).to_have_class(re.compile(r"\bconflict\b"))
+    # the page's own colors, resolved to rgb() as computed style reports them, so the test reads the
+    # rule's effect and fails if the .board-report.conflict rule is gone (#910)
+    resolve = """name => { const probe = document.createElement('span');
+        probe.style.color = `var(${name})`; document.body.append(probe);
+        const c = getComputedStyle(probe).color; probe.remove(); return c; }"""
+    danger, muted = page.evaluate(resolve, "--danger"), page.evaluate(resolve, "--muted-2")
+    assert danger != muted
+    expect(report).to_have_css("color", danger)
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="passing")
+    expect(report).to_have_text(re.compile(r"^CI passing \(per claude-1, "))
+    expect(report).not_to_have_class(re.compile(r"\bconflict\b"))
+    expect(report).to_have_css("color", muted)
+
+
+def test_the_board_header_shows_a_reported_commit_beside_ci_blocked_on_a_phone(ui: UI) -> None:
+    """#906 with #907: a report that names a newer commit and says CI is blocked puts both in the header,
+    the commit with "(reported)" and the conflict in red, and on a phone nothing scrolls sideways. Fails
+    if one replaces the other or the longer header pushes the page wider than the screen."""
+    page = review_room(ui, "e2e-board-conflict-head", **PHONE)
+    room = "#e2e-board-conflict-head"
+    ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked", head="c0ffee0c0ffee0")
+    page.click("#board-toggle")
+    expect(page.locator("#board .board-head-sha")).to_have_text("c0ffee0")
+    expect(page.locator("#board .board-head-note")).to_have_text("(reported)")
+    report = page.locator("#board-report")
+    expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
+    expect(report).to_have_class(re.compile(r"\bconflict\b"))
+    no_horizontal_scroll(page)
+
+
 def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> None:
     """#786: Edit opens the card's text, Save writes the fields that changed, and the history
     names them. Fails while a card has no edit, so a wrong title stays on the card."""
@@ -3929,13 +4163,54 @@ def test_the_board_header_names_the_forge_repository_and_number(
     expect(link.locator(".board-pr-num")).to_have_text(ref)
     name = "GitHub pull request" if kind == "github" else "GitLab merge request"
     expect(link).to_have_attribute("aria-label", f"{name} {repo} {ref}")
+    # the seed fixes F2 at a later commit than the one the board was opened at (#906)
     sha = page.locator("#board .board-head-sha")
-    expect(sha).to_have_text("4f2c9e1")
-    expect(sha).to_have_attribute("title", "4f2c9e1a7b30")
+    expect(sha).to_have_text("9a1b2c3")
+    expect(sha).to_have_attribute("title", "9a1b2c3d4e5f (last fix)")
+    expect(page.locator("#board .board-head-note")).to_have_text("(last fix)")
     cut = "e => e.scrollWidth > e.clientWidth"
     assert not link.locator(".board-pr-num").evaluate(cut)  # the number is never cut
     assert not link.locator(".board-pr-repo").evaluate(cut)  # nor a name this short, on a phone too
     no_horizontal_scroll(page)
+
+
+def test_the_board_header_names_the_newest_commit_it_was_told(ui: UI) -> None:
+    """#906: the header kept the commit the board was opened at after a fix landed at a newer
+    one. It names the newest commit a fix or an open told it, and the note is there only when
+    that commit is not the board's head. A later open at a new head takes the line back."""
+    slug = "e2e-board-header-commit"
+    room = "#" + slug
+    page = review_room(ui, slug)
+    page.click("#board-toggle")
+    sha = page.locator("#board .board-head-sha")
+    note = page.locator("#board .board-head-note")
+    expect(sha).to_have_text("9a1b2c3")
+    expect(note).to_have_text("(last fix)")
+    wait_for(
+        lambda: ui.world.broker.on_loop(
+            lambda: any(
+                room in sub.rooms and "review" in sub.kinds and not sub.closed
+                for sub in ui.world.broker.state.hub.subs
+            )
+        ),
+        what="the browser's review subscription",
+    )
+    newer = "656cfb2d395b"
+    ui.world.agent_call(
+        room, "codex-1", "review", action="fix", item="F4", commit=newer, proof="tests/test_codes.py"
+    )
+    expect(sha).to_have_text(newer[:7])
+    expect(sha).to_have_attribute("title", f"{newer} (last fix)")
+    expect(note).to_have_text("(last fix)")
+    moved = "7b9c2a4d6e8f"
+    ui.world.agent_call(
+        room, "codex-1", "review", action="open", url="https://example.com/shop/pull/7", head=moved
+    )
+    expect(sha).to_have_text(moved[:7])
+    expect(sha).to_have_attribute("title", moved)
+    expect(note).to_have_count(0)
+    # the line links stay on the commit the board was moved to, not the last fix
+    expect(page.locator("#board .board-outdated").first).to_be_visible()
 
 
 def test_a_url_that_names_no_forge_is_shown_as_it_is(ui: UI) -> None:
@@ -4420,3 +4695,70 @@ def test_a_posted_secret_is_removed_and_the_page_says_what_kind_under_the_messag
     expect(note).to_have_count(1)
     expect(note.locator(".cmd-out")).to_contain_text("github token")
     assert token not in page.locator("#log").inner_text()
+
+
+@pytest.mark.parametrize("mode", ["light", "dark", "phone"])
+def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str) -> None:
+    """The room lists past reviews after its last open board closes, with evidence and no moves."""
+    room = f"#past-reviews-{mode}"
+    unknown = "https://github.com/example/shop/pull/7"
+    merged = "https://github.com/example/shop/pull/8"
+    abandoned = "https://github.com/example/shop/pull/9"
+    ui.world.create_room(room)
+    ui.world.add_agents(room, ("codex-1",))
+
+    def move(**args: Any) -> None:
+        result = ui.world.agent_call(room, "codex-1", "review", **args)
+        assert result["ok"], result
+
+    move(action="open", url=unknown)
+    move(action="ask", title="When should discounts apply?", options=["Before tax", "After tax"], recommend=0)
+    move(action="close", state="unknown", reason="Review paused")
+    move(action="open", url=merged)
+    move(action="raise", title="Check rounding")
+    move(action="drop", item="F1", reason="Already covered")
+    move(action="report", state="merged")
+    move(action="open", url=abandoned)
+    move(action="close", state="closed")
+
+    page = ui.open(
+        room=room[1:],
+        color_scheme="dark" if mode == "dark" else "light",
+        **(PHONE if mode == "phone" else {}),
+    )
+    page.get_by_role("button", name="Past boards", exact=True).click()
+    history = page.get_by_role("list", name="Past boards")
+    expect(history.get_by_role("button", name="example/shop #7")).to_be_visible()
+    unknown_row = history.get_by_role("listitem").filter(has_text="example/shop #7")
+    merged_row = history.get_by_role("listitem").filter(has_text="example/shop #8")
+    expect(unknown_row).to_contain_text("Unknown")
+    expect(merged_row).to_contain_text("Merged")
+    # a pull request closed without merging is not "Unknown" (#886)
+    expect(history.get_by_role("listitem").filter(has_text="example/shop #9").locator(".chip")).to_have_text(
+        "Closed"
+    )
+    for label in ("Opened", "Settled", "Closed"):
+        expect(merged_row).to_contain_text(label)
+    expect(unknown_row.locator("time")).to_have_count(2)
+    expect(merged_row.locator("time")).to_have_count(3)
+    no_horizontal_scroll(page)
+
+    history.get_by_role("button", name="example/shop #7").press("Enter")
+    expect(page.get_by_text("Read-only", exact=True)).to_be_visible()
+    page.locator('#board .board-card[data-item="Q1"]').click()
+    expect(page.locator(".board-detail")).to_contain_text("When should discounts apply?")
+    expect(page.locator(".board-detail")).to_contain_text("Before tax")
+    expect(page.locator("#board-close, #board-handoff, .board-actions")).to_have_count(0)
+    page.get_by_role("button", name="Back to past boards").click()
+    expect(history.get_by_role("button", name="example/shop #7")).to_be_focused()
+    # the read-only head of a board closed without merging says Closed too, not Unknown (#886):
+    # the chip right after "Read-only", so the list rows' "Closed" date labels can't satisfy it
+    history.get_by_role("button", name="example/shop #9").press("Enter")
+    expect(page.get_by_text("Read-only", exact=True)).to_be_visible()
+    expect(
+        page.get_by_text("Read-only", exact=True).locator("xpath=following-sibling::span[1]")
+    ).to_have_text("Closed")
+    page.get_by_role("button", name="Back to past boards").click()
+    expect(history.get_by_role("button", name="example/shop #9")).to_be_focused()
+    move(action="report", url=unknown, state="merged")
+    expect(unknown_row).to_contain_text("Merged")

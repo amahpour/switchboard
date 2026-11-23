@@ -35,6 +35,7 @@ from switchboard.models import (
     FileGrant,
     Item,
     ListenerKeyRow,
+    McpSessionRow,
     Meeting,
     Member,
     Membership,
@@ -55,8 +56,19 @@ from switchboard.search import SNIPPET_TOKENS, markers
 
 OPEN_DELIVERY_STATES = ("pending", "offered", "in_context")
 # What deleting a room removes (DESIGN.md §28.6): the keys of ``room_delete_counts`` and
-# of ``delete_room``'s result. Participants are never deleted.
-ROOM_DELETE_TABLES = ("rooms", "messages", "memberships", "deliveries", "batches", "events", "files")
+# of ``delete_room``'s result, which its plan, its output and its ``room_delete`` record show; the
+# people's rows (``room_people``, §44, §63) beside the agents' memberships. Every other row naming the
+# room goes too (``_ROOM_ROWS``), uncounted. Participants are never deleted.
+ROOM_DELETE_TABLES = (
+    "rooms",
+    "messages",
+    "memberships",
+    "deliveries",
+    "batches",
+    "events",
+    "files",
+    "room_people",
+)
 STATUS_LINE_STALE_S = 30 * 60
 # Enough time for a broker rollout and a client retry, with short-lived receipts.
 SAY_KEY_TTL_S = 5 * 60
@@ -100,11 +112,14 @@ class Store:
         rules_text: str = "",
         *,
         private_for: int | None = None,
+        member: int | None = None,
     ) -> Room:
         """``private_for``: a private room (§44), whose first person is this one (0: the owner),
-        in the same transaction, so it's never private with nobody in it."""
+        in the same transaction, so it's never private with nobody in it. ``member``: a public
+        room's first member, its creator (§63)."""
         now = self.clock.now()
         private = int(private_for is not None)
+        first = private_for if private_for is not None else member
         with db.tx(self.con):
             if self.get_room(name) is not None or self.room_by_alias(name) is not None:
                 raise Conflict(f"{name} already exists")
@@ -125,10 +140,10 @@ class Store:
                 ),
             )
             rid = cur.lastrowid
-            if private_for is not None and rid is not None:
+            if first is not None and rid is not None:
                 self.con.execute(
                     "INSERT INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
-                    (rid, private_for, private_for, now),
+                    (rid, first, first, now),
                 )
         if rid is None:
             raise StoreError("room insert returned no id")
@@ -136,22 +151,110 @@ class Store:
         assert room is not None
         return room
 
-    # ------------------------------------------------------------ a private room's people (§44)
+    # ----------------------------------------- a room's people: private (§44) and public (§63)
     def room_people(self, room_id: int) -> list[int]:
-        """A private room's people, by id (0: the owner), in the order they were added."""
+        """A room's people, by id (0: the owner), in the order they were added: a private room's are
+        who sees it (§44), a public room's its members, who are pinged there (§63)."""
         rows = self.con.execute(
             "SELECT person_id FROM room_people WHERE room_id=? ORDER BY added_at, rowid", (room_id,)
         ).fetchall()
         return [r[0] for r in rows]
 
-    def room_person_add(self, room_id: int, person_id: int, added_by: int) -> bool:
-        """False if they were in it already."""
+    def room_person_add(
+        self, room_id: int, person_id: int, added_by: int, joined_with: str | None = None
+    ) -> bool:
+        """False if they were in it already. ``joined_with``: the agent whose join made them a member
+        (§63), shown to them once."""
         with db.tx(self.con):
             cur = self.con.execute(
-                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at) VALUES(?,?,?,?)",
-                (room_id, person_id, added_by, self.clock.now()),
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at, joined_with)"
+                " VALUES(?,?,?,?,?)",
+                (room_id, person_id, added_by, self.clock.now(), joined_with),
             )
             return cur.rowcount == 1
+
+    def person_rooms(self, person_id: int) -> dict[int, str | None]:
+        """Every room ``person_id`` is in, private or public, by id, with the agent that made them a
+        member there while they have not opened it since (§63), else None."""
+        rows = self.con.execute(
+            "SELECT room_id, joined_with FROM room_people WHERE person_id=?", (person_id,)
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def room_person_used(self, room_id: int, person_id: int) -> bool:
+        """The one person on the broker opened ``room_id`` or posted in it: a member of it from now, quietly
+        (§63), the way day one counts use, so that the day a second person is added the rooms they used
+        are rows (while they are alone every public room is theirs, row or not). Never a room they left
+        once (its ``room_people`` leave event): that Leave stands until they join it again by hand. True
+        when a row was added."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT ?, ?, ?, ?"
+                " WHERE NOT EXISTS (SELECT 1 FROM room_people WHERE room_id=? AND person_id=?)"
+                " AND NOT EXISTS (SELECT 1 FROM events WHERE kind='room_people' AND room_id=?"
+                "  AND json_valid(data) AND json_extract(data, '$.what')='leave'"
+                "  AND json_extract(data, '$.person')=?)",
+                (room_id, person_id, person_id, self.clock.now(), room_id, person_id, room_id, person_id),
+            )
+            return cur.rowcount == 1
+
+    def room_opened(self, person_key: int, room_id: int, seen_id: int, *, used: bool = False) -> int:
+        """The person read ``room_id`` up to the message ``seen_id`` (the page's seen request, §55.8): their
+        mark moves forward as ``home_mark_seen`` moves it, and the "joined with" note (§63) goes once the
+        mark moves past where it stood. An agent's join made the note and set the mark to the room's newest
+        message in one transaction, before the agent's join line, so a request for what a page showed
+        before that join (sent late, or from another browser) leaves the note, and one that reaches the
+        join line clears it. ``used``: the person is the broker's one, and opening the room is recorded
+        as membership (``room_person_used``). One transaction. Returns the mark now."""
+        with db.tx(self.con):
+            if used:
+                self.room_person_used(room_id, person_key)
+            r = self.con.execute(
+                "SELECT seen_id FROM home_seen WHERE person_key=? AND room_id=?", (person_key, room_id)
+            ).fetchone()
+            if r is None or max(0, min(int(seen_id), self.last_message_id(room_id))) > int(r[0]):
+                self.con.execute(
+                    "UPDATE room_people SET joined_with=NULL WHERE room_id=? AND person_id=?"
+                    " AND joined_with IS NOT NULL",
+                    (room_id, person_key),
+                )
+            return self.home_mark_seen(person_key, room_id, seen_id)
+
+    # The meta key that says the day-one members were filled in (§63): once, so a person who left a
+    # room they had posted in is not put back at the next start.
+    DAY_ONE_KEY = "room_people_day_one"
+
+    def join_day_one(self) -> int:
+        """Join each person to every public room they opened (a seen mark, §55.8), posted in, or have an
+        agent in, on any day, once (§63, #843): what was already recorded, so nobody's sidebar empties
+        when membership starts to count. An agent on this machine (no host) is the owner's (0); one on a
+        device is the person's whose token that device had when the agent joined: a device name is unique
+        only among live tokens, so today's token may be someone else's. An agent no token placed then
+        joins nobody to anything, the owner included. A removed person joins nothing. Runs at the
+        broker's start; a database that has done it says so in ``meta`` and is never filled again. The
+        rows added, 0 when it had run already."""
+        with db.tx(self.con):
+            if self.con.execute("SELECT 1 FROM meta WHERE key=?", (self.DAY_ONE_KEY,)).fetchone():
+                return 0
+            now = self.clock.now()
+            cur = self.con.execute(
+                "INSERT OR IGNORE INTO room_people(room_id, person_id, added_by, added_at)"
+                " SELECT DISTINCT e.room_id, e.person, e.person, ? FROM ("
+                "  SELECT room_id, person_key AS person FROM home_seen"
+                "  UNION SELECT room_id, COALESCE(sender_person_id, 0) FROM messages"
+                "   WHERE sender_kind='human'"
+                "  UNION SELECT m.room_id, CASE WHEN p.host='' THEN 0 ELSE ("
+                "    SELECT COALESCE(t.person_id, 0) FROM agent_tokens t WHERE t.device=p.host"
+                "     AND t.created_at<=m.joined_at AND (t.revoked_at IS NULL OR t.revoked_at>m.joined_at)"
+                "     ORDER BY t.created_at DESC, t.id DESC LIMIT 1) END"
+                "   FROM memberships m JOIN participants p ON p.id=m.participant_id"
+                " ) e JOIN rooms r ON r.id=e.room_id AND r.private=0"
+                " WHERE e.person=0 OR e.person IN (SELECT id FROM people WHERE removed_at IS NULL)",
+                (now,),
+            )
+            self.con.execute("INSERT INTO meta(key, value) VALUES(?,?)", (self.DAY_ONE_KEY, repr(now)))
+            return cur.rowcount
 
     def room_person_remove(self, room_id: int, person_id: int) -> bool:
         with db.tx(self.con):
@@ -161,7 +264,7 @@ class Store:
             return cur.rowcount == 1
 
     def rooms_of_person(self, person_id: int) -> list[int]:
-        """The private rooms ``person_id`` is in, by id."""
+        """The rooms ``person_id`` is in, private and public (§63), by id."""
         rows = self.con.execute("SELECT room_id FROM room_people WHERE person_id=?", (person_id,)).fetchall()
         return [r[0] for r in rows]
 
@@ -319,6 +422,7 @@ class Store:
         ("pins", "pins WHERE room_id=?", 1),
         ("home_seen", "home_seen WHERE room_id=?", 1),
         ("home_snoozes", "home_snoozes WHERE room_id=?", 1),
+        ("room_people", "room_people WHERE room_id=?", 1),
         ("say_keys", f"say_keys WHERE membership_id IN ({_ROOM_MEMBERSHIPS})", 1),
         ("messages", "messages WHERE room_id=?", 1),
         ("claims", "claims WHERE room_id=?", 1),
@@ -482,6 +586,7 @@ class Store:
         deliver_notice: bool = False,
         meeting_id: int | None = None,
         say_key_hash: str | None = None,
+        addressed_only: bool = False,
     ) -> Message:
         """Persist a message and its per-recipient delivery rows in one transaction.
 
@@ -499,6 +604,8 @@ class Store:
         ``meeting_id`` identifies the call whose source supplied a line (§52, §54): the line is stored
         with it, and the call's count of lines goes up in the same transaction.
         ``say_key_hash`` records an authenticated member's retry receipt in that same transaction (§8.4).
+        ``addressed_only``: a member the message does not address (no @mention, no live claim it names)
+        gets no delivery row: a review board's line for whoever acts next (§37.4, #884) reaches nobody else.
         """
         if sender_host is not None and not valid_host(sender_host):
             raise ValueError(f"not a host name: {sender_host!r}")
@@ -580,6 +687,8 @@ class Store:
                     ] in skip:
                         continue
                     mentioned = r["screen_name"].lower() in mentions_l or r["id"] in watching
+                    if addressed_only and not mentioned:
+                        continue
                     prio = 2 if sender_kind == "human" else (1 if mentioned else 0)
                     self.con.execute(
                         "INSERT INTO deliveries(membership_id, message_id, prio, mentioned) VALUES(?,?,?,?)",
@@ -757,6 +866,45 @@ class Store:
             "SELECT * FROM (SELECT * FROM messages WHERE room_id=? AND kind='chat' AND id<?"
             " ORDER BY id DESC LIMIT ?) ORDER BY id",
             (room_id, int(before), limit),
+        ).fetchall()
+        return [Message.from_row(r) for r in rows]
+
+    def room_addressed(self, room_id: int, me: str, before: int, limit: int) -> list[tuple[Message, bool]]:
+        """A room's chat messages addressed to the person ``me``, newest first, ``id < before``: the
+        Mentions filter (DESIGN.md §64). Each comes as ``(message, replies_to_me)`` for ``home.addressed_to``,
+        the one test of "addressed to me", which the caller applies; the SQL here finds the same rows (a
+        screen name is ASCII without quotes, so its quoted form in the JSON text of ``mentions`` is exact)
+        and only narrows. The first terms are ``messages_addressed``'s own condition, so SQLite walks that
+        partial index (schema 59) and not the room's whole history."""
+        rows = self.con.execute(
+            "SELECT m.*, EXISTS (SELECT 1 FROM messages p WHERE p.id=m.reply_to AND p.room_id=m.room_id"
+            "  AND p.sender_kind='human' AND lower(p.sender_name)=:me) AS to_me"
+            " FROM messages m WHERE m.room_id=:room AND m.id<:before"
+            " AND m.kind='chat' AND (m.mentions!='[]' OR m.reply_to IS NOT NULL)"
+            " AND NOT (m.sender_kind='human' AND lower(m.sender_name)=:me)"
+            " AND (instr(lower(m.mentions), :mention)>0 OR instr(lower(m.mentions), '\"humans\"')>0"
+            "  OR (m.sender_kind!='human' AND EXISTS (SELECT 1 FROM messages p WHERE p.id=m.reply_to"
+            "   AND p.room_id=m.room_id AND p.sender_kind='human' AND lower(p.sender_name)=:me)))"
+            " ORDER BY m.id DESC LIMIT :n",
+            {
+                "room": room_id,
+                "me": me.lower(),
+                "mention": f'"{me.lower()}"',
+                "before": int(before),
+                "n": max(1, min(int(limit), 1000)),
+            },
+        ).fetchall()
+        return [(Message.from_row(r), bool(r["to_me"])) for r in rows]
+
+    def room_with_files(self, room_id: int, before: int, limit: int) -> list[Message]:
+        """A room's messages that carry a stored file (an attachment, a call's snapshot), newest first,
+        ``id < before``: the Files filter (DESIGN.md §64). It starts from the room's files (``files_room``),
+        so it reads the room's files and not its history; a file still uploading is not one."""
+        rows = self.con.execute(
+            "SELECT m.* FROM files f CROSS JOIN messages m ON m.id=f.message_id"
+            " WHERE f.room_id=:room AND f.state='stored' AND f.message_id<:before AND m.room_id=:room"
+            " GROUP BY m.id ORDER BY m.id DESC LIMIT :n",
+            {"room": room_id, "before": int(before), "n": max(1, min(int(limit), 1000))},
         ).fetchall()
         return [Message.from_row(r) for r in rows]
 
@@ -1138,8 +1286,8 @@ class Store:
             " p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
-            " MAX(COALESCE(p.last_seen, 0), COALESCE(p.status_at, 0),"
-            "   COALESCE(p.last_say_at, 0)) AS heard_at,"
+            # not status_at: a status the broker sets (its restart) is not the session heard (#948)
+            " MAX(COALESCE(p.last_seen, 0), COALESCE(p.last_say_at, 0)) AS heard_at,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
             "   AND d.state='pending') AS queued,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -1916,6 +2064,11 @@ class Store:
                 "UPDATE agent_tokens SET revoked_at=? WHERE person_id=? AND revoked_at IS NULL",
                 (now, person_id),
             )
+            # their revoked tokens open nothing again, as one revoked alone doesn't (#823)
+            self.con.execute(
+                "DELETE FROM mcp_sessions WHERE token_id IN (SELECT id FROM agent_tokens WHERE person_id=?)",
+                (person_id,),
+            )
             return self.web_session_delete_person(person_id)
 
     def person_set_admin(self, person_id: int, admin: bool) -> bool:
@@ -2000,6 +2153,8 @@ class Store:
                 != 1
             ):
                 return None
+            # a revoked token opens nothing again: what its MCP sessions were goes with it (#823)
+            self.con.execute("DELETE FROM mcp_sessions WHERE token_id=?", (token_id,))
             r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
         return AgentTokenRow.from_row(r)
 
@@ -2015,6 +2170,8 @@ class Store:
                 != 1
             ):
                 return None
+            # a revoked token opens nothing again: what its MCP sessions were goes with it (#823)
+            self.con.execute("DELETE FROM mcp_sessions WHERE token_id=?", (token_id,))
             r = self.con.execute("SELECT * FROM agent_tokens WHERE id=?", (token_id,)).fetchone()
         return AgentTokenRow.from_row(r)
 
@@ -2025,6 +2182,70 @@ class Store:
                 "UPDATE agent_tokens SET last_used_at=? WHERE id=? AND revoked_at IS NULL",
                 (self.clock.now(), token_id),
             )
+
+    # ------------------------------------------- MCP sessions a restart reopens (#823, §49.2)
+    # Only the sha256 of a session's ID is kept: the ID is the client's handle, and nothing it opens.
+    def mcp_session_opened(
+        self, token_id: int, sid_hash: str, name: str, version: str, protocol: str, keep: int, idle_s: float
+    ) -> None:
+        """Record which client opened one of ``token_id``'s MCP sessions. A new one first removes the rows
+        older than ``idle_s`` and the token's oldest past ``keep``, so a client that opens a session at every
+        start can't grow the table without end. A token revoked since its request was let in (a revoke, a
+        person's removal, while the library answered the initialize) writes nothing: the check is in the same
+        transaction as the insert, so a revoked token keeps no row (#903, F11)."""
+        now = self.clock.now()
+        with db.tx(self.con):
+            live = self.con.execute(
+                "SELECT 1 FROM agent_tokens WHERE id=? AND revoked_at IS NULL", (token_id,)
+            ).fetchone()
+            if live is None:
+                return
+            self.con.execute("DELETE FROM mcp_sessions WHERE opened_at < ?", (now - idle_s,))
+            self.con.execute(
+                "DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash IN (SELECT sid_hash FROM mcp_sessions"
+                " WHERE token_id=? ORDER BY opened_at DESC, sid_hash LIMIT -1 OFFSET ?)",
+                (token_id, token_id, max(keep - 1, 0)),
+            )
+            self.con.execute(
+                "INSERT OR REPLACE INTO mcp_sessions(token_id, sid_hash, client_name, client_version,"
+                " protocol, opened_at) VALUES(?,?,?,?,?,?)",
+                (token_id, sid_hash, name, version, protocol, now),
+            )
+
+    def mcp_session(self, token_id: int, sid_hash: str, idle_s: float) -> McpSessionRow | None:
+        """The client that opened this token's session whose ID has this sha256, or None. One opened (or
+        opened again) more than ``idle_s`` ago is past its time whether or not a sweep ran: it is deleted,
+        and None."""
+        with db.tx(self.con):
+            self.con.execute(
+                "DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash=? AND opened_at < ?",
+                (token_id, sid_hash, self.clock.now() - idle_s),
+            )
+            r = self.con.execute(
+                "SELECT * FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash)
+            ).fetchone()
+        return McpSessionRow.from_row(r) if r is not None else None
+
+    def mcp_session_reopened(self, token_id: int, sid_hash: str, protocol: str) -> bool:
+        """The broker opened this session again after a restart, with the protocol the MCP library
+        answered: its month starts again from now, so a session in use through several restarts is not
+        swept while its client still holds the ID. False when the record is gone (the client deleted the
+        session, or its token was revoked, while it was being opened), or when the token isn't live (checked
+        in the same transaction, should a row ever outlive its token): it must not be opened then."""
+        with db.tx(self.con):
+            return (
+                self.con.execute(
+                    "UPDATE mcp_sessions SET opened_at=?, protocol=? WHERE token_id=? AND sid_hash=?"
+                    " AND EXISTS(SELECT 1 FROM agent_tokens WHERE id=? AND revoked_at IS NULL)",
+                    (self.clock.now(), protocol, token_id, sid_hash, token_id),
+                ).rowcount
+                == 1
+            )
+
+    def mcp_session_forget(self, token_id: int, sid_hash: str) -> None:
+        """The client ended this session (an MCP DELETE): it is never opened again."""
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM mcp_sessions WHERE token_id=? AND sid_hash=?", (token_id, sid_hash))
 
     # ------------------------------------------- listener keys (#488, §49.11)
     # Only the sha256 of a key is kept: the key itself is made on the agent's machine and never sent.
@@ -2294,7 +2515,8 @@ class Store:
         """Restart semantics (§4): expire open offers and mark everyone offline. A session over HTTPS
         is not tied to a process the broker could probe (§49.3), so none ends here: each comes back
         with its next hook or call, and one that never does is ended by its device (the token's
-        revocation, a kick, a closed room)."""
+        revocation, a kick, a closed room). Remember the last idle state so a returning listener can
+        repark without overriding a busy or approval-blocked session."""
         now = self.clock.now()
         with db.tx(self.con):
             reverted = self.con.execute(
@@ -2306,7 +2528,8 @@ class Store:
                 (now,),
             ).rowcount
             offline = self.con.execute(
-                "UPDATE participants SET status='offline', status_at=?, status_src='restart'"
+                "UPDATE participants SET status='offline', status_at=?, status_src="
+                " CASE WHEN status='idle' OR status_src='restart:idle' THEN 'restart:idle' ELSE 'restart' END"
                 " WHERE ended_at IS NULL",
                 (now,),
             ).rowcount
@@ -3170,6 +3393,68 @@ class Store:
         ).fetchall()
         return [Event.from_row(r) for r in rows]
 
+    def review_lines_open(
+        self, room_id: int, review_id: int, since: float
+    ) -> list[tuple[int, list[tuple[str, str]], list[tuple[int, str]], list[str] | None]]:
+        """One board's lines for whoever acts next that some current member still has open (#884): each
+        as its message id, the cards it named (label, and the card's state then), the members it
+        reached whose delivery is pending, offered or in context, with their screen names, and the
+        agents it was addressed to (None when the record does not say). ``since``: when the board was
+        opened. A line is recorded by a ``review_line`` event (``{board, msg, items, states, to}``)
+        once its message is posted."""
+        lines: dict[int, tuple[int, list[tuple[str, str]], list[tuple[int, str]], list[str] | None]] = {}
+        for r in self.con.execute(
+            "SELECT data FROM events WHERE kind='review_line' AND ts>=? AND room_id=? AND json_valid(data)"
+            " AND json_extract(data, '$.board')=? ORDER BY id",
+            (since, room_id, review_id),
+        ):
+            data = json.loads(r["data"])
+            msg, labels, states = data.get("msg"), data.get("items"), data.get("states")
+            if type(msg) is not int or not isinstance(labels, list):
+                continue
+            if not isinstance(states, list) or len(states) != len(labels):
+                states = [""] * len(labels)
+            to = data.get("to")
+            names = [str(x) for x in to] if isinstance(to, list) else None
+            lines[msg] = (msg, [(str(a), str(b)) for a, b in zip(labels, states, strict=True)], [], names)
+        ids = list(lines)
+        # the room's current members, then their delivery of each line by its key (membership, message):
+        # never a scan of every delivery for a message id
+        for at in range(0, len(ids), 500):
+            chunk = ids[at : at + 500]
+            marks = ",".join("?" * len(chunk))
+            for r in self.con.execute(
+                "SELECT d.membership_id AS membership_id, d.message_id AS message_id, mb.screen_name AS name"
+                " FROM memberships mb JOIN deliveries d ON d.membership_id=mb.id"
+                f" WHERE mb.room_id=? AND mb.left_at IS NULL AND d.message_id IN ({marks})"
+                " AND d.state IN ('pending','offered','in_context') ORDER BY d.message_id, mb.screen_name",
+                (room_id, *chunk),
+            ):
+                lines[int(r["message_id"])][2].append((int(r["membership_id"]), str(r["name"])))
+        return [line for line in lines.values() if line[2]]
+
+    def answer_deliveries(self, pairs: Iterable[tuple[int, int]]) -> int:
+        """Those ``(membership_id, message_id)`` deliveries become handled, wherever they are short of
+        that: a board's line answered on the board (#884), as a say or a pass answers what reached a
+        member (``mark_handled``). One still offered is handled too: the batch's confirmation and expiry
+        move only offered rows, so it stays handled, and its member is not woken again for it."""
+        now = self.clock.now()
+        n = 0
+        members: set[int] = set()
+        with db.tx(self.con):
+            for membership_id, message_id in sorted(set(pairs)):
+                done = self.con.execute(
+                    "UPDATE deliveries SET state='handled', handled_at=? WHERE membership_id=?"
+                    " AND message_id=? AND state IN ('pending','offered','in_context')",
+                    (now, membership_id, message_id),
+                ).rowcount
+                if done:
+                    n += done
+                    members.add(membership_id)
+            for membership_id in sorted(members):
+                self._advance_cursor(membership_id)
+        return n
+
     def review_items(self, review_id: int) -> list[reviews.Item]:
         rows = self.con.execute(
             "SELECT * FROM review_items WHERE review_id=? ORDER BY kind, n", (review_id,)
@@ -3422,6 +3707,79 @@ class Store:
         )
         return {int(r["room_id"]): int(r["n"]) for r in rows}
 
+    def usage_reviews(
+        self, room_ids: Sequence[int], *, since: float, until: float
+    ) -> tuple[list[dict[str, Any]], list[tuple[int, reviews.Item]], list[tuple[int, float, dict[str, Any]]]]:
+        """The review boards that did anything in ``[since, until]``, with their items and events (§61.5).
+
+        A board is in when it was opened in the window, when one of its ``review`` events falls in
+        it (``events_kind_ts`` serves ``kind`` and the ``ts`` bounds), or when it gained an item in
+        it (searched per board through ``reviews_room`` and the items' own key, so a room's boards
+        are read and no message or batch is). Then every item of those boards and every ``review``
+        event of them, however old: a board that settled today was opened last week. Read only.
+        Returns ``(boards, [(board id, item)], [(board id, ts, data)])``.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return [], [], []
+        marks = ",".join("?" * len(ids))
+        board_of = "CASE WHEN json_valid(e.data) THEN json_extract(e.data, '$.board') END"
+        boards = [
+            dict(r)
+            for r in self.con.execute(
+                f"SELECT * FROM reviews r WHERE r.room_id IN ({marks}) AND ("
+                " r.opened_at BETWEEN ? AND ?"
+                f" OR r.id IN (SELECT {board_of} FROM events e"
+                "   WHERE e.kind = 'review' AND e.ts BETWEEN ? AND ?)"
+                " OR EXISTS (SELECT 1 FROM review_items i WHERE i.review_id = r.id"
+                "   AND i.created_at BETWEEN ? AND ?))",
+                (*ids, since, until, since, until, since, until),
+            )
+        ]
+        if not boards:
+            return [], [], []
+        board_ids = [int(b["id"]) for b in boards]
+        bmarks = ",".join("?" * len(board_ids))
+        items = [
+            (int(r["review_id"]), _review_item(r))
+            for r in self.con.execute(
+                f"SELECT * FROM review_items WHERE review_id IN ({bmarks}) ORDER BY review_id, kind, n",
+                board_ids,
+            )
+        ]
+        low = min(float(b["opened_at"]) for b in boards)
+        events: list[tuple[int, float, dict[str, Any]]] = []
+        for r in self.con.execute(
+            f"SELECT e.ts AS ts, e.data AS data, {board_of} AS board FROM events e"
+            f" WHERE e.kind = 'review' AND e.ts >= ? AND e.ts <= ? AND e.room_id IN ({marks})"
+            f" AND {board_of} IN ({bmarks}) ORDER BY e.id",
+            (low, until, *ids, *board_ids),
+        ):
+            try:
+                data = json.loads(r["data"] or "{}")
+            except ValueError:
+                continue
+            if isinstance(data, dict) and isinstance(r["board"], int):
+                events.append((r["board"], r["ts"], data))
+        return boards, items, events
+
+    def usage_agents(self, room_ids: Sequence[int]) -> dict[tuple[int, str], tuple[str, str]]:
+        """The harness and host of each agent name in those rooms, the newest membership winning,
+        keyed ``(room id, lower-cased name)``: who an agent on the review figures is."""
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        out: dict[tuple[int, str], tuple[str, str]] = {}
+        for r in self.con.execute(
+            "SELECT m.room_id AS room_id, m.screen_name AS name, p.harness AS harness, p.host AS host"
+            " FROM memberships m JOIN participants p ON p.id = m.participant_id"
+            f" WHERE m.room_id IN ({marks}) ORDER BY m.id",
+            ids,
+        ):
+            out[(int(r["room_id"]), str(r["name"]).casefold())] = (r["harness"] or "", r["host"] or "")
+        return out
+
     # ------------------------------------------------------------------ report (§12.5, §12.6; #167)
     # Read-only queries behind `switchboard report` (report.py), on its own query-only
     # connection (``db.connect_query_only``), which the report never migrates: a report must
@@ -3534,6 +3892,10 @@ class Store:
                 (key, value),
             )
 
+    def setting_delete(self, key: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("DELETE FROM broker_settings WHERE key=?", (key,))
+
     def settings_with_prefix(self, prefix: str) -> list[tuple[str, str]]:
         """The broker settings whose key starts with ``prefix``, by key (a literal prefix, not a LIKE)."""
         rows = self.con.execute(
@@ -3549,6 +3911,144 @@ class Store:
             self.con.execute("DELETE FROM broker_settings WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
             for key, value in values.items():
                 self.con.execute("INSERT INTO broker_settings(key, value) VALUES(?, ?)", (key, value))
+
+    # ---------------------------------------------------------------- a person's webhook (§62.4)
+    def webhook_get(self, person: int) -> dict[str, Any] | None:
+        """The person's ``webhooks`` row as a dict (with its ``id`` and each lane's ``*_gen``), or None."""
+        row = self.con.execute("SELECT * FROM webhooks WHERE person=?", (person,)).fetchone()
+        return None if row is None else dict(row)
+
+    def webhook_people(self) -> list[int]:
+        return [int(r[0]) for r in self.con.execute("SELECT person FROM webhooks ORDER BY person")]
+
+    def webhook_ids(self) -> set[int]:
+        return {int(r[0]) for r in self.con.execute("SELECT id FROM webhooks")}
+
+    def webhook_set(self, person: int, changes: dict[str, Any], *, second_default_s: float) -> str:
+        """Apply only the fields in ``changes`` to the person's row, in one transaction (#923, §62.4):
+        ``url``, ``wait_s``, ``second_url`` (None removes the second alert), ``second_after_s``, ``quiet``
+        (``{from, to, tz, always}`` or None). Only a change with ``url`` (the primary save) makes the row:
+        any other on a row that is not there, removed meanwhile in another tab, changes nothing and is
+        ``"none"``. A person (any key but the owner's 0) who is no longer an active person, removed while
+        the addresses were checked, gets nothing written and ``"gone"`` (#923, F14). A new, replaced or
+        removed address clears its own lane's last status, which was about the old one, and bumps that
+        lane's ``*_gen``, so what a post to the old one writes when it is back lands nowhere (F4, F10); a
+        delay with no second address is ``"no_second"``. Checked by the caller first; the CHECKs hold
+        whatever gets past it."""
+        sets: list[str] = []
+        args: list[Any] = []
+        where = "person=?"
+        if "url" in changes:
+            sets += ["url=?", "first_at=NULL", "first_ok=NULL", "first_error=NULL", "first_gen=first_gen+1"]
+            args.append(changes["url"])
+        if "wait_s" in changes:
+            sets.append("wait_s=?")
+            args.append(changes["wait_s"])
+        second_url, after = changes.get("second_url"), changes.get("second_after_s")
+        if "second_url" in changes:
+            sets += ["second_at=NULL", "second_ok=NULL", "second_error=NULL", "second_gen=second_gen+1"]
+            if second_url is None:
+                sets += ["second_url=NULL", "second_after_s=NULL"]
+            else:
+                sets += ["second_url=?", "second_after_s=COALESCE(?, second_after_s, ?)"]
+                args += [second_url, after, second_default_s]
+        elif "second_after_s" in changes:
+            sets.append("second_after_s=?")
+            args.append(after)
+            where += " AND second_url IS NOT NULL"
+        quiet_cols = ("quiet_from", "quiet_to", "quiet_tz", "quiet_always")
+        if "quiet" in changes:
+            q = changes["quiet"]
+            values = (
+                (None,) * 4 if q is None else (q["from"], q["to"], q["tz"], ",".join(sorted(q["always"])))
+            )
+            sets += [f"{c}=?" for c in quiet_cols]
+            args += values
+        if not sets:
+            return "ok"
+        with db.tx(self.con):
+            if person != 0 and (
+                self.con.execute(
+                    "SELECT 1 FROM people WHERE id=? AND removed_at IS NULL", (person,)
+                ).fetchone()
+                is None
+            ):
+                return "gone"
+            cur = self.con.execute(f"UPDATE webhooks SET {', '.join(sets)} WHERE {where}", (*args, person))
+            if cur.rowcount:
+                return "ok"
+            there = self.con.execute("SELECT 1 FROM webhooks WHERE person=?", (person,)).fetchone()
+            if there is not None:
+                return "no_second"
+            if "url" not in changes:
+                return "none"
+            cols: dict[str, Any] = {"person": person, "url": changes["url"]}
+            if "wait_s" in changes:
+                cols["wait_s"] = changes["wait_s"]
+            if second_url is not None:
+                cols |= {"second_url": second_url, "second_after_s": after or second_default_s}
+            if changes.get("quiet") is not None:
+                cols |= dict(zip(quiet_cols, values, strict=True))
+            marks = ", ".join("?" for _ in cols)
+            self.con.execute(f"INSERT INTO webhooks({', '.join(cols)}) VALUES({marks})", tuple(cols.values()))
+            return "ok"
+
+    @staticmethod
+    def _webhook_lane(lane: str) -> str:
+        if lane not in ("first", "second"):
+            raise ValueError("a webhook lane is first or second")
+        return lane
+
+    def webhook_status_set(
+        self, webhook: int, lane: str, gen: int, at: float, ok: bool, error: str | None
+    ) -> None:
+        """How the last post on ``lane`` went, kept only while the webhook ``webhook`` is still there and
+        that lane's address is still the one it was sent to (generation ``gen``): a post that was out when
+        the address was replaced, or the webhook removed and made again, is not about the new one."""
+        p = self._webhook_lane(lane)
+        with db.tx(self.con):
+            self.con.execute(
+                f"UPDATE webhooks SET {p}_at=?, {p}_ok=?, {p}_error=? WHERE id=? AND {p}_gen=?",
+                (at, int(ok), None if ok else error, webhook, gen),
+            )
+
+    def webhook_sent_keys(self, webhook: int, lane: str) -> list[str]:
+        rows = self.con.execute(
+            "SELECT key FROM webhook_sent WHERE webhook=? AND lane=? ORDER BY key", (webhook, lane)
+        )
+        return [str(r[0]) for r in rows]
+
+    def webhook_keep_sent(self, webhook: int, lane: str, gen: int, keys: Iterable[str], at: float) -> None:
+        """Make the webhook's sent keys on ``lane`` exactly ``keys`` (what still needs the person, of what was
+        sent), in one transaction, only while the webhook ``webhook`` is there with that lane's address at
+        generation ``gen``: a tick that read the settings before the address changed, or before the webhook
+        was removed and made again, writes nothing (#923, F4, F10). A key no longer kept is deleted, a new
+        one is added at ``at``. A key longer than the column holds is not kept."""
+        p = self._webhook_lane(lane)
+        want = {k for k in keys if 1 <= len(k) <= 1000}
+        with db.tx(self.con):
+            live = self.con.execute(f"SELECT 1 FROM webhooks WHERE id=? AND {p}_gen=?", (webhook, gen))
+            if live.fetchone() is None:
+                return
+            have = set(self.webhook_sent_keys(webhook, lane))
+            for k in sorted(have - want):
+                self.con.execute(
+                    "DELETE FROM webhook_sent WHERE webhook=? AND lane=? AND key=?", (webhook, lane, k)
+                )
+            for k in sorted(want - have):
+                self.con.execute(
+                    "INSERT INTO webhook_sent(webhook, lane, key, at)"
+                    f" SELECT ?, ?, ?, ? WHERE EXISTS(SELECT 1 FROM webhooks WHERE id=? AND {p}_gen=?)",
+                    (webhook, lane, k, at, webhook, gen),
+                )
+
+    def webhook_remove(self, person: int) -> None:
+        with db.tx(self.con):
+            self.con.execute(
+                "DELETE FROM webhook_sent WHERE webhook IN (SELECT id FROM webhooks WHERE person=?)",
+                (person,),
+            )
+            self.con.execute("DELETE FROM webhooks WHERE person=?", (person,))
 
     def file_insert(
         self,

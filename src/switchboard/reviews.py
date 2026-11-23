@@ -5,19 +5,24 @@ board is settled, what the agents' picks among an item's options add up to (§37
 a board (§37.14), and how a board reads as text. The store keeps the rows (``store.py``), the
 broker applies the moves (``broker/reviews.py``). switchboard never fetches the pull request,
 judges a finding, holds a token or posts anything: the agents and the people do (§37.1).
+
+Every string a board takes from outside is read through ``text`` (``url``, ``proof``, ``head``, ``where``
+and ``options`` call it too), which cuts obvious secrets out with ``say``'s patterns (``redact``, §11,
+#890), so a card, a move's event, a notice and a line posted in the room never hold one.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 from switchboard import envelope
+from switchboard.redact import redact
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
 MAX_URL = 500
@@ -32,10 +37,14 @@ MAX_OPTION = 200
 MAX_OPTIONS = 4
 MAX_ITEMS = 200  # per review: a board, not a log
 MAX_OPEN_BOARDS = 8  # open boards in one room (§37.14): a room holds several, not any number
+MAX_OPEN_BOARDS_TOTAL = 24  # every open board of a room, settled ones too (§37.14, #886): bounds each update
 MAX_LISTED = 50  # boards `list` names, open ones first
 FIX_CONFIRM_TIMEOUT_S = 24 * 60 * 60
 
 HEAD_RE = re.compile(r"^[0-9a-f]{7,64}$")
+# what the header may say a commit is, besides the board's own head (#906). Fixed strings: a
+# stored event cannot put its own words next to the sha.
+HEADER_NOTES = ("last fix", "reported", "merged")
 LINES_RE = re.compile(r"^[1-9][0-9]{0,6}(-[1-9][0-9]{0,6})?$")
 URL_RE = re.compile(r"^https?://[^\s<>\"']+$")
 # The forge a board's URL names, from its path (forge()): a GitHub pull request, or a GitLab
@@ -62,7 +71,8 @@ AGENT_MOVES: dict[str, tuple[frozenset[str], str | None]] = {
     "concede": (frozenset({"raised", "contested", "conceded"}), "conceded"),
     "contest": (frozenset({"raised"}), "contested"),
     "insist": (frozenset({"contested"}), "contested"),
-    "fix": (frozenset({"conceded", "fixed"}), "fixed"),
+    # raised: only the board's holder, and the history records the concession too (#904)
+    "fix": (frozenset({"raised", "conceded", "fixed"}), "fixed"),
     "reopen": (frozenset({"fixed"}), "conceded"),
     "drop": (frozenset({"raised", "contested", "conceded"}), "dropped"),
     "confirm": (frozenset({"fixed"}), "fixed"),
@@ -143,8 +153,8 @@ class Item:
         )
 
 
-def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
-    """A string from outside: stripped, and refused (not cut) when it's too long."""
+def _string(value: Any, what: str, limit: int, *, required: bool = False) -> str:
+    """A string from outside: stripped, and refused (not cut) when it's too long. Not yet redacted."""
     if value is None:
         value = ""
     if not isinstance(value, str):
@@ -157,20 +167,113 @@ def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
     return value
 
 
+def _redacted(value: str, what: str, limit: int) -> tuple[str, list[str]]:
+    """``value`` with each obvious secret replaced by its marker, and the kinds removed (#890). After the
+    length check, so text over the limit is refused before anything searches it, as for ``say``; and the
+    limit again after, since a card's column has it as a CHECK (§37.3) and a marker can be a little
+    longer than the secret it replaced. That refusal names the kind, never the value."""
+    out, kinds = redact(value)
+    if len(out) > limit:
+        raise ReviewError(
+            f"{what} is too long once what looks like a secret ({', '.join(kinds)}) is cut out"
+            f" ({len(out)} > {limit} characters): leave the secret out"
+        )
+    return out, kinds
+
+
+def text(value: Any, what: str, limit: int, *, required: bool = False) -> str:
+    """A string from outside: stripped, refused (not cut) when it's too long, and with every obvious
+    secret cut out (``redact``, DESIGN.md §11, #890). Every field of a board, an agent's or a person's,
+    is read here, so what is stored, shown on the page and posted in the room holds ``[redacted: <kind>]``
+    and never the value."""
+    return _redacted(_string(value, what, limit, required=required), what, limit)[0]
+
+
+def _link(what: str, kinds: list[str]) -> None:
+    """A link is refused when it held a secret: a marker can't stand in a link, and a board's URL is the
+    board's name (§37.14), so a redacted one would name nothing that opens."""
+    if kinds:
+        raise ReviewError(
+            f"{what} holds what looks like a secret ({', '.join(kinds)}): give the link without it"
+        )
+
+
+# the authority of an http(s) link: everything up to the first /, ? or #. Credentials are all of it up to the
+# LAST @, as a URL parser reads it, so ``user:p@ss@host`` loses all of ``user:p@ss@``.
+_AUTHORITY_RE = re.compile(r"(?i)\b(https?://)([^\s/?#<>\"']*)")
+# a marker as redact writes it, whose space can't be in a link
+_MARKER_RE = re.compile(r"\[redacted: [^\]]*\]")
+
+
+def _credentials_out(value: str, replacement: str) -> str:
+    """``value`` with the user name and password of each http(s) link in it replaced (``replacement``, which
+    is put in front of the host's ``@``, or nothing)."""
+
+    def host_only(m: re.Match[str]) -> str:
+        authority = m.group(2)
+        if "@" not in authority:
+            return m.group(0)
+        return m.group(1) + replacement + authority.rsplit("@", 1)[1]
+
+    return _AUTHORITY_RE.sub(host_only, value)
+
+
+def scrub(value: str) -> str:
+    """``value`` with every obvious secret cut out, and the credentials of any http(s) link in it (#890).
+    Never refuses and never fails, and applying it twice changes nothing. What a board takes in goes through
+    ``text`` (which refuses what it can't repair); this is for text composed from stored words, which is
+    posted as a message (``Boards._say``), and for the one-time cleaning of rows stored before the check
+    (``clean_url``, ``clean_text``, ``db.clean_review_rows``)."""
+    # the credentials first: a marker has a space in it, and a space would end the authority's match
+    return redact(_credentials_out(value, "[redacted: url credentials]@"))[0]
+
+
+def clean_url(value: str) -> str:
+    """A stored board's or proof's URL as the upgrade keeps it: no credentials, no secret, and still a link
+    that ``url`` takes (a marker has no space in it: ``[redacted]``), so a cleaned board still opens by it."""
+    return _MARKER_RE.sub("[redacted]", redact(_credentials_out(value, ""))[0])
+
+
+def clean_text(value: str, limit: int) -> str:
+    """Stored text as the upgrade keeps it: ``scrub``, and cut to the column's ``limit`` since a marker can
+    be longer than what it replaced (a cleaned value is cut, never refused: nothing can be asked of whoever
+    wrote it)."""
+    return scrub(value)[:limit]
+
+
+def _no_credentials(what: str, link: str) -> None:
+    """A link with ``user:password@`` in it is refused: it would store a password, show it as a link
+    and post it (§37.14, #890)."""
+    try:
+        netloc = urlsplit(link).netloc
+    except ValueError:
+        raise ReviewError(f"{what} is not a valid http(s) link") from None
+    if "@" in netloc:
+        raise ReviewError(
+            f"{what} must not carry a user name or password (user:password@host): leave them out"
+        )
+
+
 def url(value: Any) -> str:
-    u = text(value, "url", MAX_URL, required=True)
+    u, kinds = _redacted(_string(value, "url", MAX_URL, required=True), "url", MAX_URL)
+    _link("url", kinds)
     if not URL_RE.match(u):
         raise ReviewError("url must be an http(s) link to the pull request or merge request")
+    _no_credentials("url", u)
     return u
 
 
 def proof(value: Any) -> str:
-    """A test's name or an http(s) proof link; the broker checks shape, not its contents."""
-    p = text(value, "proof", MAX_PROOF)
+    """A test's name or an http(s) proof link; the broker checks shape, not its contents. A name is
+    redacted like any text, and a link that held a secret is refused (``_link``)."""
+    p, kinds = _redacted(_string(value, "proof", MAX_PROOF), "proof", MAX_PROOF)
     if not p:
         raise ProofRequired("proof is required")
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p) and not URL_RE.fullmatch(p):
-        raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", p):
+        _link("proof link", kinds)
+        if not URL_RE.fullmatch(p):
+            raise ReviewError("proof link must be an http(s) URL, or give the test's name")
+        _no_credentials("proof link", p)
     return p
 
 
@@ -178,7 +281,9 @@ def proof(value: Any) -> str:
 # switchboard holds no token and polls no forge, so these are the reporting agent's claims, shown
 # as theirs. A value it doesn't know is refused, never taken for one it does.
 PR_STATES = ("open", "merged", "closed")
-CI_STATES = ("passing", "failing", "running", "none")
+# "blocked" (#907): the pull request conflicts with its base, so GitHub runs no CI on it. Reported as ci
+# beside the others, since "none" hid that the author has to resolve a conflict before any CI runs.
+CI_STATES = ("passing", "failing", "running", "none", "blocked")
 MAX_THREADS = 999
 
 
@@ -225,7 +330,9 @@ def report_line(review: dict[str, Any], now: float) -> str:
     if review.get("pr_threads") is not None:
         n = int(review["pr_threads"])
         bits.append(f"{n} open on the {pr}" if n else f"no threads open on the {pr}")
-    if review.get("pr_ci"):
+    if review.get("pr_ci") == "blocked":
+        bits.append("CI blocked: conflicts with its base")
+    elif review.get("pr_ci"):
         bits.append(f"CI {review['pr_ci']}")
     age = envelope.ago(float(review.get("reported_at") or now), now)
     return f"{', '.join(bits) or review.get('pr_state') or 'reported'} (per {review['reported_by']}, {age})"
@@ -250,11 +357,20 @@ def lines(value: Any) -> str:
 
 
 def where(value: Any) -> tuple[str, str]:
-    """Split a compact finding location, then apply the existing file and line checks."""
-    location = text(value, "where", MAX_FILE + MAX_LINES + 1)
+    """Split a compact finding location, then apply the existing file and line checks. It is split before
+    either part is redacted: a marker has a colon in it, and the last colon is the one before the lines.
+    The whole value is searched too (#890): a secret whose pattern reaches across that colon (``"token":``
+    and its value) is in neither part, so the parts alone would keep it. A match across the colon is
+    refused, so a marker never moves the split."""
+    location = _string(value, "where", MAX_FILE + MAX_LINES + 1)
     if not location:
         return "", ""
     path, sep, span = location.rpartition(":")
+    whole, kinds = redact(location)
+    if sep and whole != redact(path)[0] + sep + redact(span)[0]:
+        raise ReviewError(
+            f"where holds what looks like a secret ({', '.join(kinds)}) across its colon: leave it out"
+        )
     if not sep:
         return text(location, "file", MAX_FILE), ""
     return text(path, "file", MAX_FILE), lines(span)
@@ -584,9 +700,41 @@ def ref(f: dict[str, Any] | None) -> str:
 
 
 def holder(review: dict[str, Any]) -> str:
-    """Who holds a board: the agent that opened it, or opened it again last (§37.14). Only the
-    holder or a person closes or resets it."""
+    """Who holds a board: who opened it, or opened it again last (§37.14). An agent, a person, or
+    the reserved opener of a link. Only the holder or a person closes or resets it."""
     return str(review.get("reopened_by") or review.get("opened_by") or "")
+
+
+def holder_in_room(name: str, agents: Collection[str]) -> bool:
+    """Whether ``name`` is an agent in the room (``agents``: its active screen names).
+
+    The holder comes off the board row (``holder``). A board opened from a posted link is held by
+    the reserved opener, and one a person opened or last reopened is held by that person. Neither
+    is a membership, so the spelling is not a kind: only a name the room's agents hold counts.
+    Empty does not. Compared case-folded, as members are."""
+    if not name:
+        return False
+    folded = name.casefold()
+    return any(isinstance(agent, str) and agent.casefold() == folded for agent in agents)
+
+
+def held_by_agent(name: str, events: Iterable[Any]) -> bool:
+    """Whether the board's own record shows its holder ``name`` opened it as an agent (#904).
+
+    ``events``: the board's ``review`` event data, oldest first. The holder is set by the last
+    open, reopen or reset (an open move whose ``how`` is not ``kept`` or ``moved``), and that move
+    records its ``opener``: ``agent``, ``person`` or ``link``. True only when it says ``agent``
+    and names ``name``. A person's open, a link's, one recorded before openers were (no
+    ``opener``), a value this code does not know, or no open at all: False. That fails closed,
+    since a display name may since belong to someone else (a person renamed, an agent joined
+    under the old name)."""
+    if not name:
+        return False
+    last: dict[str, Any] | None = None
+    for data in events:
+        if isinstance(data, dict) and "open" in data and data.get("how") not in ("kept", "moved"):
+            last = data
+    return last is not None and last.get("opener") == "agent" and last.get("by") == name
 
 
 def when(ts: float | None) -> str:
@@ -618,16 +766,38 @@ def list_line(board: dict[str, Any], default: bool = False) -> str:
     return f"{board['url']}{head_s} [{state}]: {', '.join(bits)}{mark}"
 
 
+def _list_rank(board: dict[str, Any], default_url: str | None) -> int:
+    """Where a board sorts in ``list``: the caller's default board, then boards that fill a slot
+    (work left, or no cards), then settled open ones, then closed ones (§37.14, #886)."""
+    if board.get("closed_at") is not None:
+        return 3
+    if board["url"] == default_url:
+        return 0
+    n = board["counts"]
+    empty = not (n["open"] or n["fixed"] or n["dropped"] or n["answered"])
+    return 1 if n["open"] or empty else 2
+
+
 def list_text(boards: Sequence[dict[str, Any]], default_url: str | None = None) -> str:
-    """The room's boards, open first, as an agent reads them. ``boards`` come from the broker with
-    ``counts`` and the row's own columns. At most ``MAX_LISTED``; the rest are counted."""
+    """The room's boards as an agent reads them: its default board, the boards with work, the
+    settled open ones, then the closed ones, each group newest first. ``boards`` come from the broker
+    with ``counts`` and the row's own columns. At most ``MAX_LISTED``; the rest are counted by state."""
     if not boards:
         return 'This room has no review boards. review(action="open", url=...) starts one.'
-    shown = boards[:MAX_LISTED]
-    out = [f"{len(boards)} review board{'s' if len(boards) != 1 else ''} in this room, open ones first:"]
+    ordered = sorted(boards, key=lambda b: _list_rank(b, default_url))  # stable: newest first kept
+    shown = ordered[:MAX_LISTED]
+    out = [
+        f"{len(boards)} review board{'s' if len(boards) != 1 else ''} in this room, boards with work first:"
+    ]
     out.extend(list_line(b, b["url"] == default_url) for b in shown)
-    if len(boards) > len(shown):
-        out.append(f"... and {len(boards) - len(shown)} older closed boards")
+    left = ordered[len(shown) :]
+    if left:
+        parts = []
+        for rank, what in ((0, "open"), (1, "open with work"), (2, "open and settled"), (3, "closed")):
+            n = sum(1 for b in left if _list_rank(b, default_url) == rank)
+            if n:
+                parts.append(f"{n} {what}")
+        out.append(f"... and {len(left)} more not listed: {', '.join(parts)}")
     out.append(
         'review(action="show", url=...) reads any, closed ones too; open(url) brings a closed one back.'
     )
@@ -704,12 +874,23 @@ def parse_label(value: Any) -> tuple[str, int]:
 
 
 def agent_move(
-    item: Item, move: str, actor: str, owner_here: bool = True, *, raiser_here: bool = True
+    item: Item,
+    move: str,
+    actor: str,
+    owner_here: bool = True,
+    *,
+    raiser_here: bool = True,
+    holder: str = "",
+    holder_here: bool = False,
 ) -> str:
     """The state an agent's ``move`` takes ``item`` to, or ReviewError. Rules beyond the
     table: a question is a person's to answer or drop; whoever raised a finding can't concede
     or contest it (that's the other side's call). Dropping, deferring and insisting belong to
-    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The owner may
+    its raiser (#424: insisting once, on a contest); only its owner marks it fixed. The board's
+    holder may fix a raised finding in one move, which is that concession to itself and the fix
+    (#904), only when ``holder_here``: that holder is an agent in the room, and the board's own
+    open or reopen records it as one (``held_by_agent``), not its name alone. A holder that is not
+    (empty, a person, or the reserved opener of a link) is refused without being named. The owner may
     revise an unconfirmed fix; the raiser may reopen any fixed finding, clearing confirmation (#783).
     A conceded finding moves to another owner (#371) when its owner hands it over, or when the
     owner has left the room (``owner_here`` False: a restart brings an agent back under a new
@@ -748,7 +929,27 @@ def agent_move(
         raise ReviewError(
             f"{item.label} is {item.owner}'s: {item.owner} can hand it over, or a person can reassign it"
         )
-    if move == "fix" and actor != item.owner:
+    if move == "fix" and item.state == "raised":
+        # #904: the holder concedes and fixes a raised finding in one move, when that holder is an
+        # agent in the room. The raiser is checked first: it cannot concede its own finding, so the
+        # refusal names drop and the other side. A holder that is not an agent (a person, the reserved
+        # opener of a link, or unknown) is refused without being named. Anyone else is told to concede.
+        if actor == item.raised_by:
+            raise ReviewError(
+                f"{item.label} is yours: you can drop it, not fix it from raised. "
+                "The other side concedes or contests it."
+            )
+        if not holder or not holder_here or actor != holder:
+            named = (
+                f"only {holder}, who holds the board, can fix it from there. "
+                if holder and holder_here
+                else "it can't be fixed from there. "
+            )
+            raise ReviewError(
+                f"{item.label} is raised: {named}"
+                f'Concede it first with review(action="concede", item="{item.label}"), then fix it.'
+            )
+    elif move == "fix" and actor != item.owner:
         if not owner_here:
             raise ReviewError(
                 f"{item.label} is {item.owner}'s to fix, and {item.owner} isn't in the room: take it"
@@ -771,51 +972,202 @@ def agent_move(
     return to
 
 
-def handoff(
-    item: Item, actor: str, agents: Sequence[str], board_url: str = "", *, action: str = ""
-) -> tuple[tuple[str, ...], str] | None:
-    """After an agent's move on ``item`` (its state now), who has to act next and the line
-    that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding
-    is the other agents' to concede or contest; a finding conceded to another agent is that
-    owner's to fix; a fix is its raiser's to check. A question just asked is the other agents' to
-    agree with or answer with another pick (#423: "recommended" means they all agree), before it
-    is a person's. A contested finding goes back to its raiser (#424), to drop or insist on; once
-    insisted on it waits for a person, who sees it on the page, and a move that leaves the next
-    step with the mover wakes nobody. ``agents``: the room's active agents. ``board_url``: given
+# ------------------------------------------------------- who acts next (#884)
+# the moves of a board's ``review`` events that answer a finding: whoever made one is on the author's side
+SIDE_MOVES = frozenset({"conceded", "reassigned", "contested"})
+# an ``open`` that changed the board: it opened it, brought it back, or moved it to a commit just pushed.
+# A call that found it open as it was ("kept") says nothing about who wrote the pull request.
+SIDE_OPENS = frozenset({"opened", "reopened", "moved"})
+
+
+def author_side(
+    holder: str,
+    items: Sequence[Item],
+    events: Sequence[dict[str, Any]],
+    agents: Sequence[str],
+    offline: Collection[str] = (),
+) -> tuple[str, ...]:
+    """The agents of the room (``agents``, its active ones) that the board records on the author's
+    side, the side that concedes or contests a finding (#884), in the room's order. Always: every
+    owner of one of its findings, and the agent that posted the link switchboard opened the board for
+    (§37.16, its ``open`` event's ``author``). And, unless it has raised a finding here, which makes
+    it a reviewer: whoever opened the board (its ``holder``, or an agent an ``open`` event that opened,
+    reopened or moved the board names as its ``by``), and every agent that conceded, reassigned or
+    contested a finding (an agent's ``review`` event, not a person's). An agent that is ``offline``
+    is not counted either: it would not answer. Empty when the board does not know: then a raise asks
+    every other agent, as it always did (``acts_next``). ``events`` are the board's, as
+    ``{"data": {...}}`` or the data alone."""
+    owners = {i.owner for i in items if i.kind == "finding" and i.owner}
+    raisers = {i.raised_by for i in items if i.kind == "finding" and i.raised_by}
+    sure = set(owners)
+    maybe = {holder} if holder else set()
+    for event in events:
+        data = event.get("data", event) if isinstance(event, dict) else {}
+        if not isinstance(data, dict) or data.get("person"):
+            continue
+        by = data.get("by")
+        if not isinstance(by, str) or not by:
+            continue
+        if data.get("to") in SIDE_MOVES:
+            maybe.add(by)
+        if "open" in data:
+            if data.get("how") in SIDE_OPENS:
+                maybe.add(by)
+            author = data.get("author")
+            if isinstance(author, str) and author:
+                sure.add(author)
+    side = sure | (maybe - raisers)
+    gone = set(offline)
+    return tuple(a for a in dict.fromkeys(agents) if a in side and a not in gone)
+
+
+def _first(item: Item, here: Sequence[str], side: Sequence[str]) -> list[str]:
+    """Whose move a finding's state makes next (§37.4): a raised one is the author's side's to
+    concede or contest (every other agent's when the board doesn't know that side, #884), a contested
+    one its raiser's (#424), a conceded one its owner's, an unconfirmed fix its raiser's."""
+    if item.kind != "finding":
+        return []
+    if item.state == "raised":
+        mine = [a for a in side if a in here and a != item.raised_by]
+        return mine or [a for a in here if a != item.raised_by]
+    if item.state == "contested" and not item.insisted:
+        return [item.raised_by] if item.raised_by in here else []
+    if item.state == "conceded":
+        return [item.owner] if item.owner and item.owner in here else []
+    if item.state == "fixed" and not item.confirmed_by:
+        return [item.raised_by] if item.raised_by in here else []
+    return []
+
+
+def _pickers(item: Item, here: Sequence[str]) -> list[str]:
+    """The agents asked to agree with ``item``'s options who have neither picked nor abstained, while
+    it is still being decided (§37.12: every agent in the room counts)."""
+    if not item.options:
+        return []
+    deciding = item.state == "open" if item.kind == "question" else item.state in OPEN_FINDING
+    if not deciding:
+        return []
+    spoken = set(effective_picks(item)) | set(item.abstentions)
+    return [a for a in here if a != item.raised_by and a not in spoken]
+
+
+def acts_next(item: Item, agents: Sequence[str], side: Sequence[str] = ()) -> tuple[str, ...]:
+    """Who of ``agents`` (the room's) has a move on ``item`` now (#884): its state's next move
+    (``_first``), and every agent still to pick among its options. A board's line about an item stays
+    owed by an agent it reached only while that agent is here: once the item has moved on (an agent
+    conceded it, the raiser dropped it, a person ruled), its line is answered for the others."""
+    here = list(dict.fromkeys(agents))
+    who = set(_first(item, here, side)) | set(_pickers(item, here))
+    return tuple(a for a in here if a in who)
+
+
+def answered(
+    cards: Sequence[tuple[str, str]],
+    items: dict[str, Item],
+    recipients: Sequence[str],
+    agents: Sequence[str],
+    side: Sequence[str],
+) -> list[str]:
+    """Of the agents a board's line reached (``recipients``), those for whom it is answered (#884),
+    though they said nothing, since a move on the board is the answer. A line names ``cards``, each as
+    its label and the state it was in when the line was posted (read now in ``items`` by label). An
+    agent still owes the line while one of its cards is in that state and the agent has a move on it
+    (``acts_next``). Once a card has moved on, what the line asked of it was done by someone, and
+    whatever is next has a line of its own (or was the mover's own doing, as a concession to itself
+    is); a card the board no longer has is nobody's. A state the line did not record (``""``) asks only
+    whether the agent has a move. A raise or an ask with options asked every agent to pick (§37.12),
+    and a pick is due until the card is decided, whatever state it has moved to: an agent still to
+    pick owes that line until it picks or abstains."""
+    here = list(dict.fromkeys(agents))
+    owed: set[str] = set()
+    for label, state in cards:
+        item = items.get(label)
+        if item is None:
+            continue
+        if not state or item.state == state:
+            owed.update(acts_next(item, here, side))
+        if state in ("raised", "open"):  # the line that asked for the picks
+            owed.update(_pickers(item, here))
+    return [r for r in recipients if r not in owed]
+
+
+@dataclass(frozen=True)
+class Told:
+    """One move's line for whoever acts next (§37.4): ``who`` they are, and its parts. ``body`` is the
+    line between its board and its ``show``: "F1 raised: off by one. @claude-1: concede or contest it."
+    ``state``: the item's state the line is about; the line is answered once the item moves on."""
+
+    who: tuple[str, ...]
+    label: str
+    kind: str
+    title: str
+    body: str
+    on: str
+    show: str
+    state: str = ""
+
+    @property
+    def line(self) -> str:
+        return f"{self.on} {self.body} {self.show}"
+
+
+def told(
+    item: Item,
+    actor: str,
+    agents: Sequence[str],
+    board_url: str = "",
+    *,
+    action: str = "",
+    side: Sequence[str] = (),
+) -> Told | None:
+    """After an agent's move on ``item`` (its state now), who has to act next and the parts of the
+    line that tells them, or None when it's nobody's move or a person's (§37.4). A raised finding is
+    the author's side's to concede or contest (``author_side``, #884), every other agent's while the
+    board doesn't know that side; a finding conceded to another agent is that owner's to fix; a fix
+    is its raiser's to check. A question just asked, and a finding's fix options, are every other
+    agent's to agree with or answer with another pick (#423: "recommended" means they all agree),
+    before it is a person's. A contested finding goes back to its raiser (#424), to drop or insist
+    on; once insisted on it waits for a person, who sees it on the page, and a move that leaves the
+    next step with the mover wakes nobody. ``agents``: the room's active agents. ``board_url``: given
     when the room has several open boards (§37.14), so the line names the board and every call it
-    suggests carries its ``url``; the line is the mover's own message, so the board's URL, which
-    the mover wrote, may be in it."""
+    suggests carries its ``url``; the line is the mover's own message, so the board's URL, which the
+    mover wrote, may be in it."""
     on = f"Review board {board_url}:" if board_url else "Review board:"
     pass_url = f', url="{board_url}"' if board_url else ""
     show = f'review(action="show"{pass_url}) shows the board.'
+    here = list(dict.fromkeys(agents))
     if item.kind == "question":
-        who = tuple(a for a in agents if a != actor) if item.state == "open" and item.options else ()
-        if not who:
+        who = tuple(a for a in _pickers(item, here) if a != actor)
+        if item.state != "open" or not who:
             return None
         concur_s = f'review(action="concur", item="{item.label}", recommend=<index>{pass_url})'
         abstain_s = f'review(action="abstain", item="{item.label}"{pass_url})'
         stop = "" if item.title.endswith((".", "?", "!")) else "."  # a question usually ends in one
         mention = " ".join("@" + a for a in who)
-        return who, (
-            f"{on} {item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
-            f" or pick another option, {concur_s}, or abstain if you have no view, {abstain_s}. {show}"
+        body = (
+            f"{item.label} asked: {item.title}{stop} {mention}: agree with {actor}'s pick"
+            f" or pick another option, {concur_s}, or abstain if you have no view, {abstain_s}."
         )
+        return Told(who, item.label, item.kind, item.title, body, on, show, state=item.state)
+    first = [a for a in _first(item, here, side) if a != actor]
     if item.state == "raised":
-        who = tuple(a for a in agents if a != actor)
+        # its fix options are every other agent's to agree with too (#423)
+        pick = set(_pickers(item, here))
+        who = tuple(a for a in here if (a in first or a in pick) and a != actor)
         verb, then = f"raised: {item.title}", "concede or contest it"
-        if item.options:  # its fix options are theirs to agree with too (#423)
+        if item.options:
             then += ", and agree with its fix option, pick another, or abstain (concur or abstain)"
     elif item.state == "contested" and not item.insisted:
         # a contest is the raiser's to answer (#424): drop it, or insist with a reason, and only an
         # insisted finding is a person's. The reason itself is read on the board, not repeated here
-        who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
+        who = tuple(first)
         verb = f"contested: {item.title}"
         then = (
             f'drop it if the contest convinces you, or insist with your reason (review(action="insist", '
             f'item="{item.label}", reason=...{pass_url})): only an insisted finding goes to a person'
         )
     elif item.state == "conceded":
-        who = (item.owner,) if item.owner and item.owner != actor and item.owner in agents else ()
+        who = tuple(first)
         verb = (
             f"reopened, owner {item.owner}: {item.reason}"
             if action == "reopen"
@@ -823,13 +1175,29 @@ def handoff(
         )
         then = "it's yours to fix"
     elif item.state == "fixed" and not item.confirmed_by:
-        who = (item.raised_by,) if item.raised_by != actor and item.raised_by in agents else ()
+        who = tuple(first)
         verb, then = f"fixed in {item.commit[:12]}", "check the fix"
     else:
         return None
     if not who:
         return None
-    return who, f"{on} {item.label} {verb}. {' '.join('@' + a for a in who)}: {then}. {show}"
+    body = f"{item.label} {verb}. {' '.join('@' + a for a in who)}: {then}."
+    return Told(who, item.label, item.kind, item.title, body, on, show, item.state)
+
+
+def handoff(
+    item: Item,
+    actor: str,
+    agents: Sequence[str],
+    board_url: str = "",
+    *,
+    action: str = "",
+    side: Sequence[str] = (),
+) -> tuple[tuple[str, ...], str] | None:
+    """Who has to act next after an agent's move on ``item``, and the one line that tells them, or
+    None (``told``)."""
+    t = told(item, actor, agents, board_url, action=action, side=side)
+    return None if t is None else (t.who, t.line)
 
 
 def person_move(item: Item, move: str) -> str:
@@ -846,6 +1214,45 @@ def person_move(item: Item, move: str) -> str:
 def settled(items: list[Item]) -> bool:
     """Nothing left to do: every finding fixed or dropped, every question answered or dropped."""
     return not open_items(items)
+
+
+def fills_open_slot(items: list[Item]) -> bool:
+    """Whether an open board takes one of the room's ``MAX_OPEN_BOARDS`` slots (§37.14, #886).
+
+    A board with cards, every one settled, does not: the review is finished, and leaving it open
+    must not block another pull request. An empty board does. ``settled`` is true of no cards, and
+    opening boards must not run past the cap.
+    """
+    return not items or not settled(items)
+
+
+# What a close says about the pull request (#886): merged (with its merge commit), closed without
+# merging, or unknown. A close without one still works, as it did in 1.x, and reads unknown; its
+# reply asks for the outcome next time.
+CLOSE_OUTCOMES = ("merged", "closed", "unknown")
+CLOSE_OUTCOME_HELP = (
+    'name the outcome: state="merged" with commit=<merge commit>, state="closed" (closed'
+    ' without merging) or state="unknown"; report(state=...) still records it on the closed board'
+)
+
+
+def close_outcome(params: dict[str, Any]) -> tuple[str, str, bool]:
+    """A close's ``(outcome, merge commit, given)``, checked. No ``state`` is a 1.x close: unknown,
+    ``given`` False. A ``state`` that is given is checked: one of three, a merged one names its
+    commit (7 to 64 hex digits, as a head), and a commit with another outcome is refused."""
+    outcome = params.get("state")
+    commit = head(params.get("commit"))
+    if outcome in (None, ""):
+        if commit:
+            raise ReviewError('commit is the merge commit: give it with state="merged"')
+        return "unknown", "", False
+    if outcome not in CLOSE_OUTCOMES:
+        raise ReviewError(f"state must be one of: {', '.join(CLOSE_OUTCOMES)}")
+    if outcome == "merged" and not commit:
+        raise ReviewError('state="merged" needs commit=<the merge commit>, 7 to 64 hex digits')
+    if outcome != "merged" and commit:
+        raise ReviewError('commit is the merge commit: give it with state="merged" only')
+    return str(outcome), commit, True
 
 
 def open_items(items: list[Item]) -> list[Item]:
@@ -958,18 +1365,129 @@ def options_text(item: Item, present: Sequence[str]) -> str:
     return text
 
 
+def _told_sha(value: Any) -> str:
+    """A commit a row or an event claims, or "" when it is not 7 to 64 hex digits. The header
+    shows only a commit; anything else in a stored event is left out rather than printed."""
+    if not isinstance(value, str) or not HEAD_RE.fullmatch(value.strip().lower()):
+        return ""
+    return value.strip().lower()
+
+
+def _event_time(event: dict[str, Any], index: int) -> tuple[float, int]:
+    """When the board was told ``event``, then its order, so two at one moment stay in order.
+    A missing or non-numeric time sorts first: it cannot outrank a commit that has one."""
+    ts = event.get("ts")
+    when = float(ts) if type(ts) is int or type(ts) is float else 0.0
+    return when, index
+
+
+def header_commit(
+    review: dict[str, Any], items: Sequence[Item], events: Sequence[dict[str, Any]] = ()
+) -> tuple[str, str]:
+    """The commit the header and ``show`` name, and a tag for what named it (#906).
+
+    ``("", "")`` when the board was told no commit. The tag is ``""`` when the commit is the
+    board's head (what ``open`` set or moved it to), ``"last fix"`` when a fix named a later
+    one, ``"reported"`` when a report's ``head`` did, and ``"merged"`` when a close stored a
+    merge commit on its report. The latest is the one told last, from the board's own events:
+    switchboard never asks a forge, and it cannot know git order.
+
+    An ``open`` that keeps the head already stored (``how`` ``kept``, or a reopen that passes
+    it again) is not a newer commit, so it does not hide a fix told since. A fix or a report
+    never replaces the stored head: that commit stays what history, ``list``, the outdated
+    mark and a GitLab line link use. With no events, the stored head is the answer, so a
+    caller that has not loaded the history reads the board as it did before.
+
+    A person's mark-fixed (``person`` true) names no commit and is skipped: the finding's
+    row can still hold an older one. An agent fix event with no ``commit`` field is an old
+    event and uses the finding's commit; a ``commit`` that is not a hash is ignored, not
+    replaced by the row. A merge commit on the same event as a head outranks that head.
+    """
+    stored = _told_sha(review.get("head"))
+    if not events:
+        return stored, ""
+    current = ""
+    # when, event order, then a rank so a merge commit beats a head on the same event.
+    # A sha is never part of the order: hex order is not git order.
+    candidates: list[tuple[float, int, int, str, str]] = []
+    by_label = {item.label: item for item in items}
+    for index, event in enumerate(events):
+        data = event.get("data") if isinstance(event, dict) else None
+        if not isinstance(data, dict):
+            continue
+        when, order = _event_time(event, index)
+        named = _told_sha(data.get("head"))
+        how = data.get("how") if isinstance(data.get("how"), str) else ""
+        if "open" in data and named and how != "kept" and (how in ("opened", "moved") or named != current):
+            current = named
+            candidates.append((when, order, 0, named, ""))
+        if data.get("to") == "fixed" and data.get("person") is not True:
+            if "commit" in data:
+                commit = _told_sha(data.get("commit"))
+            elif isinstance(data.get("item"), str):
+                item = by_label.get(data["item"])
+                commit = _told_sha(item.commit) if item is not None else ""
+            else:
+                commit = ""
+            if commit:
+                candidates.append((when, order, 0, commit, "last fix"))
+        if "report" in data:
+            # a report's own head, or the merge commit a close stores inside the report (#894)
+            reported = _told_sha(data.get("head"))
+            body = data.get("report")
+            merged = _told_sha(body.get("commit")) if isinstance(body, dict) else ""
+            if reported:
+                candidates.append((when, order, 0, reported, "reported"))
+            if merged:
+                candidates.append((when, order, 1, merged, "merged"))
+    if stored and not any(sha == stored and note == "" for _, _, _, sha, note in candidates):
+        opened = review.get("opened_at")
+        when = float(opened) if type(opened) is int or type(opened) is float else 0.0
+        candidates.append((when, -1, 0, stored, ""))
+    if not candidates:
+        return "", ""
+    _, _, _, sha, note = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+    if sha == stored:
+        note = ""
+    return sha, note
+
+
+def header_phrase(
+    review: dict[str, Any], items: Sequence[Item], events: Sequence[dict[str, Any]] = ()
+) -> str:
+    """`` at <sha>`` for the header line, plus `` (last fix)``, `` (reported)`` or `` (merged)``
+    when that is what named a commit other than the board's head. Empty when there is none.
+
+    A board dict the broker built carries ``head_sha`` and ``head_note``, the same answer
+    ``header_commit`` gave the page, so ``show`` and the page cannot drift. A value that is
+    not a commit is dropped. Without those fields the events are read here."""
+    if "head_sha" in review:
+        raw = review.get("head_sha")
+        sha = _told_sha(raw) if isinstance(raw, str) else ""
+        note = review.get("head_note") if review.get("head_note") in HEADER_NOTES else ""
+        if sha == _told_sha(review.get("head")):
+            note = ""
+    else:
+        sha, note = header_commit(review, items, events)
+    if not sha:
+        return ""
+    return f" at {sha[:12]}" + (f" ({note})" if note else "")
+
+
 def render(
     review: dict[str, Any],
     items: list[Item],
     now: float | None = None,
     present: Sequence[str] = (),
     offline: Collection[str] = (),
+    events: Sequence[dict[str, Any]] = (),
 ) -> str:
     """The board as an agent reads it: one line per item, open work first. Short on purpose:
     the board replaces a wall of text in the room, it mustn't become one. ``present``: the room's
     agents, who must all pick an option for it to read "recommended by" (``consensus``), and whose
-    raiser a contested finding waits on; ``offline``: those among them who are not there (#424)."""
-    head_s = f" at {review['head'][:12]}" if review.get("head") else ""
+    raiser a contested finding waits on; ``offline``: those among them who are not there (#424).
+    The first line names the newest commit the board was told (#906, ``header_commit``)."""
+    head_s = header_phrase(review, items, events)
     closed = review.get("closed_at") is not None
     state = "settled" if settled(items) else "open"
     if review.get("posted_by"):
@@ -1027,7 +1545,7 @@ def render_item(
     offline: Collection[str] = (),
 ) -> str:
     """One card in full (#782), with the same bounded history the page reads."""
-    out = [render({**review, "plan": None}, [item], now, present, offline)]
+    out = [render({**review, "plan": None}, [item], now, present, offline, events)]
     for label, value in (
         ("Detail", item.detail),
         ("Owner", item.owner),

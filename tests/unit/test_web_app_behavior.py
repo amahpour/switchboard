@@ -701,7 +701,7 @@ def test_a_person_is_shown_by_their_real_name() -> None:
     assert "nick-system" in out["before"]["system"]["cls"]
     assert out["before"]["you"] == {"name": "Alice Ng", "handle": "@alice"}
     assert out["before"]["people"] == [
-        {"name": "alice", "text": "Alice Ng@aliceyou", "handle": "@alice"},
+        {"name": "alice", "text": "Alice Ng@aliceyouLeave", "handle": "@alice"},  # a member leaves (§63)
         {"name": "bob-lee", "text": "Bob Lee@bob-lee", "handle": "@bob-lee"},
         {"name": "carol", "text": "carol", "handle": ""},
     ]
@@ -828,6 +828,37 @@ def test_opening_a_room_tells_the_broker_how_far_it_was_read_and_home_waits_for_
     assert out["trail"] == ["seen:build:11", "home"]
 
 
+def test_the_seen_mark_moves_only_while_the_log_is_on_screen() -> None:
+    """#914, §64.4: whether the log was seen is read from the page, not from a list of views. A message that
+    came while something covered the log's middle, or while the tab was in the background, is not marked when
+    the person goes to Home; opening the room again, with the log on screen, marks it. Fails if the mark moves
+    on the app's state alone (the log is the active room's live log, so a state list says it is on screen)."""
+    out = run("seen_needs_the_log_on_screen")
+    assert out["covered"] == [7]
+    assert out["coveredBack"] == [7, 11]
+    assert out["background"] == [7, 11]
+    assert out["backgroundBack"] == [7, 11, 13]
+
+
+def test_the_seen_mark_moves_when_a_cover_goes_without_a_draw() -> None:
+    """#914 F4: a mention comes while a review board covers the log; the board's class comes off #main with
+    nothing drawn (Back to the conversation), and the person goes Home. The mark reaches the mention, since a
+    painted frame showed it. Fails if only a draw schedules the check: the mark then stops at 7."""
+    out = run("seen_when_a_cover_goes_without_a_draw")
+    assert out["noRedraw"] is True
+    assert out["seen"] == [7, 11]
+
+
+def test_the_seen_mark_moves_when_a_dialog_closes_without_a_watched_change() -> None:
+    """#914 F4, reopened: a mention comes while a modal dialog covers the log (the hit test fails); the dialog
+    closes, which changes none of the nodes the MutationObserver watches and only fires a close event on the
+    document. The person goes Home and the mark reaches the mention. Fails if only a draw or a watched class
+    change schedules the check: the mark then stops at 7."""
+    out = run("seen_when_a_dialog_closes")
+    assert out["noRedraw"] is True
+    assert out["seen"] == [7, 11]
+
+
 def test_not_now_on_a_board_card_posts_the_board_and_the_card_goes_when_home_asks_again() -> None:
     """#663: Not now sends the board's address to its room's route and, when the broker answers, Home asks
     again and the card is gone; a refusal keeps the card and says why in the status line. Fails if the button
@@ -853,3 +884,69 @@ def test_a_room_on_screen_refreshes_the_home_count_only_for_what_can_change_it()
     assert out["afterAddressed"] == 1 and out["afterReview"] == 1  # two messages and a review: one refresh
     assert out["fetched"] == 1
     assert out["onHome"] == 1 and out["fetchedOnHome"] == 1
+
+
+def test_the_sidebar_lists_your_rooms_and_folds_the_others_and_join_and_leave_move_a_room() -> None:
+    """§63 (#843): the rooms alice is a member of are listed, #infra with "joined with claude-2" the first
+    time, and the public rooms she is not in fold under Other rooms, with a dot while a call is live in one.
+    @humans in a room she is not in counts nothing (no badge, no title count); in her own it does. Opening
+    one is a preview: no composer, a Join bar and a Preview chip, no room menu. Join posts her own name and
+    makes it hers; Leave, from the room's menu and after a confirm that says what changes, posts it again and
+    makes it a preview. Fails if a room she is not in pings her, the composer shows where she can't post, or
+    Join and Leave send anything else."""
+    out = run("room_members")
+    assert out["start"] == ["#build|build", "#infra|infrajoined with claude-2", "toggle:Other rooms (2)"]
+    assert out["counted"]["title"] == "(1) switchboard — #build"  # #infra's @humans; #ops's counts nothing
+    assert out["counted"]["tabs"] == ["#build|build", "#infra|infra1", "toggle:Other rooms (2):live"]
+    assert out["open"][-1] == ["#ops|ops2 people", "#random|randomcall"]
+    assert out["preview"] == {
+        "composer": False,
+        "bar": True,
+        "chip": True,
+        "menu": False,
+        "title": "You’re viewing #ops",
+        "join": "Join #ops",
+    }
+    assert out["joined"]["calls"] == [{"room": "ops", "action": "add", "name": "alice"}]
+    assert (out["joined"]["composer"], out["joined"]["bar"], out["joined"]["menu"]) == (True, False, True)
+    assert "#ops|ops" in out["joined"]["tabs"]
+    assert out["menu"] == {"open": True, "item": "Leave #ops"}
+    assert out["confirm"].startswith(
+        "Leave #ops?You will stop getting @humans, unread badges and notifications"
+    )
+    assert "Your agents there stay in the room" in out["confirm"]
+    assert out["left"]["calls"] == [{"room": "ops", "action": "remove", "name": "alice"}]
+    assert (out["left"]["composer"], out["left"]["bar"], out["left"]["menu"]) == (False, True, False)
+    assert out["left"]["tabs"][-1] == ["#ops|ops2 people", "#random|random1 person"]
+
+
+def test_a_filter_merges_the_brokers_page_and_live_lines_by_id() -> None:
+    """#914: while the first Mentions page is on its way, the socket brings A; the page holds A and a later
+    B, and then the socket brings B. The log shows A then B, each once, and counts two. Fails if the live A
+    is put after B (merged by arrival, not by id), or B is dropped as a duplicate."""
+    out = run("filter_overlap")
+    assert out["ids"] == ["600", "601"]
+    assert out["note"] == "2 messages addressed to you"
+
+
+def test_a_filter_row_keeps_a_file_stored_after_the_page_read_it() -> None:
+    """#914 F2: under Files, a message outside the page's history is read with one file; a second upload ends
+    before that answer arrives, and its file frame asks for the fresh row with both. The first answer lands
+    first. The row offers both downloads. Fails if the later copy is dropped because its id is held."""
+    out = run("filter_file_after_page")
+    assert out["asked"] == [
+        "/api/rooms/build/filter?show=files",
+        "/api/rooms/build/filter?show=files&before=701&limit=1",
+    ]
+    assert out["ids"] == ["700"]
+    assert out["downloads"] == ["/api/files/" + "a" * 32, "/api/files/" + "b" * 32]
+
+
+def test_a_filter_note_does_not_call_an_older_admitted_row_the_newest() -> None:
+    """#914 F7: Files shows its newest two messages with more before them; then a file is stored for a much
+    older message and its row is taken. The note says "3 messages with files shown", since what is shown is
+    not the newest three. Fails if the note still says "The newest 3"."""
+    out = run("filter_old_file_note")
+    assert out["before"] == "The newest 2 messages with files"
+    assert out["ids"] == ["300", "800", "801"]
+    assert out["note"] == "3 messages with files shown"

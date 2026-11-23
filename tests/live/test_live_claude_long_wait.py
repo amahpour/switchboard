@@ -7,18 +7,15 @@ all CLI configuration, transcripts and plugin data belong to the run's temporary
 from __future__ import annotations
 
 import json
-import shutil
 import time
 from collections.abc import Iterator
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import pytest
-from harness import scenarios, screens
-from harness.claude import ClaudeRun, project_dir_name
-from harness.claude_signin import login_only
-from harness.tmuxdrv import REAL_HOME
+from harness import scenarios
+from harness.claude import project_dir_name
+from harness.claude_signin import PrivateClaudeRun
 from harness.world import ROOM, skip_reason
 
 pytestmark = pytest.mark.live
@@ -28,43 +25,14 @@ if _why:
     pytest.skip(_why, allow_module_level=True)
 
 
-class PrivateClaudeRun(ClaudeRun):
-    @property
-    def claude_home(self) -> Path:
-        return self.base / "claude-config"
-
-    def prepare(self) -> None:
-        self.claude_home.mkdir(mode=0o700)
-        try:
-            login = login_only(json.loads((Path(REAL_HOME) / ".claude" / ".credentials.json").read_text()))
-        except (OSError, ValueError, KeyError):
-            pytest.skip("Claude Code is not signed in: no account login available for the private run")
-        self.write_private(self.claude_home / ".credentials.json", json.dumps(login))
-        super().prepare()
-
-    def env(self) -> dict[str, str]:
-        return {
-            **super().env(),
-            "HOME": str(self.base),
-            "CLAUDE_CONFIG_DIR": str(self.claude_home),
-        }
-
-    def ready_step(self, screen: str) -> bool:
-        key = screens.claude_onboarding(screen)
-        if key is not None:
-            self.tmux.key(self.session, key)
-            return False
-        return super().ready_step(screen)
-
-    def scrub(self) -> None:
-        shutil.rmtree(self.claude_home, ignore_errors=True)
-
-
 @pytest.fixture(scope="module")
 def run() -> Iterator[PrivateClaudeRun]:
     r = PrivateClaudeRun("claude-long")
     try:
-        r.start()
+        try:
+            r.start()
+        except FileNotFoundError as e:
+            pytest.skip(str(e))
         yield r
     finally:
         r.stop()

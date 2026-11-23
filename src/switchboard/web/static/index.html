@@ -121,6 +121,8 @@
         <h1 id="room-title"><button type="button" id="room-title-button" aria-haspopup="dialog"
               aria-controls="app-dialog" title="Rename this room"></button></h1>
         <span class="room-sub" id="room-sub"></span>
+        <!-- a public room this person is not a member of, read from Other rooms (§63) -->
+        <span class="chip chip-preview hidden" id="room-preview">Preview</span>
       </div>
 
       <span class="head-spacer"></span>
@@ -144,6 +146,10 @@
                 aria-pressed="false" aria-label="Review board" title="Show this room's review board">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M6 2.5v11M10 2.5v11"/></svg>
         </button>
+        <button type="button" class="icon-btn head-btn hidden" id="past-boards-toggle" aria-controls="board"
+                aria-pressed="false" aria-label="Past boards" title="Past boards">
+          <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 7a6 6 0 1 1 1 5M2 3v4h4m2-2v3l2 1"/></svg>
+        </button>
         <button type="button" class="icon-btn head-btn" id="room-rules" aria-label="Room rules"
                 title="Edit this room's rules">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h10v11H3zM5 5.5h6M5 8h6M5 10.5h4"/></svg>
@@ -166,6 +172,14 @@
                 title="Edit what this room's calls start with: Voice and listening">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.2 2.5h2.3l1 3-1.5 1a8 8 0 0 0 3.5 3.5l1-1.5 3 1v2.3a1.5 1.5 0 0 1-1.6 1.5A10.6 10.6 0 0 1 2.7 4.1 1.5 1.5 0 0 1 4.2 2.5Z"/></svg>
         </button>
+        <!-- the room's menu (§63): Leave, for a member of a public room on a switchboard with people -->
+        <div class="room-menu-wrap hidden" id="room-menu-wrap">
+          <button type="button" class="icon-btn head-btn" id="room-menu-btn" aria-haspopup="menu"
+                  aria-expanded="false" aria-controls="room-menu" aria-label="Room menu" title="More for this room">
+            <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01"/></svg>
+          </button>
+          <div class="menu room-menu hidden" id="room-menu" role="menu" aria-labelledby="room-menu-btn"></div>
+        </div>
         <button type="button" class="icon-btn head-btn" id="pane-toggle" aria-controls="pane" aria-pressed="true"
                 aria-label="Hide members" title="Hide members">
           <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="2"/><path d="M10 3v10"/></svg>
@@ -205,6 +219,17 @@
       <ul class="claim-board-list hidden" id="claim-board-list"></ul>
     </section>
 
+    <!-- A room filtered to what was said to you or to its files (#914, DESIGN.md §64). All is the live log;
+         Mentions and Files are the broker's answer, older history included. Drawn by app.js. -->
+    <div class="room-filters hidden" id="room-filters" role="group" aria-label="Show in this room">
+      <button type="button" class="room-filter" id="filter-all" data-show="all" aria-pressed="true">All</button>
+      <button type="button" class="room-filter" id="filter-mentions" data-show="mentions" aria-pressed="false"
+              title="Messages addressed to you: an @mention of you, @humans, or an agent's reply to you">Mentions</button>
+      <button type="button" class="room-filter" id="filter-files" data-show="files" aria-pressed="false"
+              title="Messages with a file: an attachment or a call's snapshot">Files</button>
+      <span class="room-filter-note" id="room-filter-note" role="status" aria-live="polite"></span>
+    </div>
+
     <!-- Bands: shown by app.js. A band without an icon gets a glyph from CSS instead. -->
     <div class="band band-test band-amber hidden" id="banner-test" role="status">
       <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 7.2v4M8 4.9h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/></svg>
@@ -238,7 +263,7 @@
     </div>
     <div class="band band-amber hidden" id="banner-offline" role="status">
       <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 7.2v4M8 4.9h.01M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z"/></svg>
-      <span>Disconnected: reconnecting… What you see may be out of date.</span>
+      <span id="banner-offline-text">Disconnected: reconnecting… What you see may be out of date.</span>
     </div>
 
     <div class="band band-around hidden" id="banner-around" role="status">
@@ -376,7 +401,7 @@
               <div class="harness-head"><span class="avatar mini h-cursor" aria-hidden="true">CU</span>
                 <strong>Cursor</strong><code class="tier">cursor:https</code></div>
               <p>Start a new agent session after connecting: hooks don&rsquo;t reload in a running one. An idle
-                Cursor is heard for about 10 minutes after its turn ends; after that, mentions wait until you type
+                Cursor is heard for up to an hour after its turn ends (10 minutes with an older plugin copy); after that, mentions wait until you type
                 in Cursor (it shows <strong>parked &mdash; needs a poke</strong>). Not run live yet.</p>
             </div>
             <p class="fine">More in docs/USAGE.md.</p>
@@ -422,6 +447,15 @@
         </div>
       </div>
     </form>
+    <!-- In place of the composer in a public room this person is not a member of (§63) -->
+    <section class="preview-bar hidden" id="preview-bar" aria-labelledby="preview-title">
+      <div class="preview-text">
+        <h2 class="preview-title" id="preview-title">You&rsquo;re viewing this room</h2>
+        <p class="preview-sub">You can read and search this room. @humans here won&rsquo;t reach you, and it stays
+          out of your unread count, until you join.</p>
+      </div>
+      <button type="button" class="btn-primary" id="preview-join">Join</button>
+    </section>
   </main>
 
   <!-- ============ Right pane: Members, sliding to the Inspector ============ -->

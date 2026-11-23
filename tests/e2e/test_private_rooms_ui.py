@@ -1,7 +1,7 @@
 """Private rooms in the page (#74, DESIGN.md §44), on a hosted broker: the New room dialog's
 Private box, the lock in the sidebar, the room's people with Add and Leave, and the admin's
-list of private rooms in People. A public room lists everyone on the broker, with who is here
-now (#354)."""
+list of private rooms in People. A public room lists its members, with who is here now (#354,
+§63)."""
 
 from __future__ import annotations
 
@@ -93,11 +93,11 @@ def test_a_private_room_shows_its_lock_and_its_people(ui: UI, hosted: tuple[InPr
     page.click("#app-dialog-action")
     expect(people.locator(".group-label")).to_have_text("People (2) · private")
     expect(people.locator('.person-row[data-name="bob"]')).to_contain_text("Remove")
-    # a public room has no people list: everyone signed in sees it
+    # a public room lists its members (#354, §63), without a private room's Remove
     page.locator('#tabs .room[data-room="#build"]').click()
-    # a public room lists people too (#354), without the private room's actions
     expect(people.locator(".group-label")).not_to_contain_text("private")
-    expect(people.locator("button")).to_have_count(0)
+    expect(people.locator('.person-row[data-name="alice"]')).to_contain_text("Leave")
+    expect(people.locator("button", has_text="Remove")).to_have_count(0)
     expect(page.locator('#tabs .room[data-room="#build"] svg.ic-hash')).to_have_count(1)
     # the admin's list: names and people
     page.click("#open-people")
@@ -130,13 +130,18 @@ def test_a_public_room_lists_people_and_who_is_here(
     ui: UI, hosted: tuple[InProcBroker, str], phone: bool
 ) -> None:
     """#354: a public room showed You and the agents, and nobody else: the other people on the
-    broker were only names on messages. It now lists everyone signed up (everyone sees a public
-    room), each with a dot for a page open now, those people first, and none of a private room's
-    Add, Remove or Leave. The list follows people as they open and close the page. Fails if a
-    public room shows no people, or if the dot doesn't follow a second person's page."""
+    broker were only names on messages. It lists its members (§63), each with a dot for a page open
+    now, those people first, and no Remove: only your own row has Leave. The list follows people as
+    they open and close the page. Fails if a public room shows no people, or if the dot doesn't
+    follow a second person's page."""
     b, _admin = hosted
     name = "carol" + ("p" if phone else "")
     cookie = person_cookie(hosted, name)
+    origin = b.state.web_origin.origin
+    h = {"Origin": origin, "X-Switchboard": "1"}
+    with httpx.Client(base_url=origin, headers=h, cookies={"switchboard_session": cookie}) as c:
+        joined = c.post("/api/rooms/build/people", json={"action": "add", "name": name})  # a member (§63)
+        assert joined.status_code == 200, joined.text
     page = admin_page(ui, hosted, **(PHONE if phone else {}))
     if phone:
         page.click("#rooms-toggle")
@@ -146,7 +151,7 @@ def test_a_public_room_lists_people_and_who_is_here(
     people = page.locator("#room-people")
     expect(people).to_be_visible()
     expect(people.locator(".group-label")).to_contain_text("People (")
-    expect(people.locator("button")).to_have_count(0)  # nothing to add or remove: everyone sees it
+    expect(people.locator("button", has_text="Remove")).to_have_count(0)  # nobody takes anyone out
     me = people.locator('.person-row[data-name="alice"]')
     expect(me.locator(".p-dot.on")).to_have_count(1)
     expect(me).to_contain_text("you")

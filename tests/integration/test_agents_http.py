@@ -232,14 +232,19 @@ def test_two_codex_threads_join_talk_and_read_as_two_members(build: InProcBroker
     assert (line["from"], line["host"]) == ("codex-1", "laptop")
 
 
-def test_a_new_mcp_session_keeps_the_memberships(build: InProcBroker) -> None:
+@pytest.mark.parametrize("restart", [False, True])
+def test_a_new_mcp_session_keeps_the_memberships(build: InProcBroker, restart: bool) -> None:
     """Nothing about a membership lives in memory: a second MCP session (a restarted Codex, or
     any session after a broker restart) speaks for the same thread at once, with no join. Fails
-    if the endpoint keeps credentials per MCP session."""
+    if the endpoint keeps credentials per MCP session. After a broker restart the old session is
+    opened again for its token (#823, §49.2), so the first client is served too."""
     token = make_token(build, "laptop")
     first = Codex(build, token)
     first.start()
     assert first.call("join", THREAD_A, room="#build", screen_name="codex-1")["ok"]
+    if restart:
+        build.restart()
+        assert first.raw("who", THREAD_A, room="#build").status_code == 200  # reopened, not 404
     again = Codex(build, token)
     again.start()
     assert again.sid != first.sid

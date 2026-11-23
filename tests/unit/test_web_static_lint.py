@@ -129,6 +129,10 @@ AGENT_ICONS = {
     # Cognition's own avatar files from its brand kit (devin.ai/brand), byte for byte (#441)
     "agents/devin-light.png": "3afb7f4c0e2c233a6e3a1956e4c9606a0ac3f774972bc7085f17d1b48dca6ee2",
     "agents/devin-dark.png": "b604b099bcdb8d09455368e67eb7ae74962871eac87524eddc3b30e3a31b4e2d",
+    # xAI's own Grok logomarks from its brand kit (x.ai/legal/brand-guidelines), byte for byte (#930):
+    # Grok_Logomark_Dark.png (the #0A0A0A mark, the light theme's) and Grok_Logomark_Light.png (the white one)
+    "agents/grok-light.png": "37ddbcb6e2a7f2e4b3be78a7d41296a3bc7edf6926362434efc00df5a56a3586",
+    "agents/grok-dark.png": "359056ee8983cfa0ba7e72795078c7c0ddf6c5d7a1870401ab960ed4f9df9e53",
 }
 # The call platforms' logos (#623, DESIGN.md §29.9): Zoom's, Google's and Microsoft's artwork, unaltered,
 # which the maintainer chose to ship (2026-11-05). Pinned by hash the same way, and CSS may load exactly these
@@ -427,9 +431,9 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("d9af4ae3081fb55c9cbb2d602e956273b6b6562c2f2ed39b497e1741597b73e7"),
+    "vendor/board/NOTICE": ("f90363a83e49d97734b5944b34ccc03fcfb1576c4ec093359c3a672c741068cc"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("f2602ade4304b4679edef674e79467814d068ce842ede6810bdc1e86639b41a4"),
+    "vendor/board/board.js": ("2a54064114b6fe601d0a2d34312a5eba138da1e3bfb80c3a2e46e97e2cfbf383"),
     "vendor/board/chunks/chunk-42LTX363.js": (
         "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
@@ -437,7 +441,7 @@ BOARD_ASSETS = {
         "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31"
     ),
     "vendor/board/chunks/chunk-4RIBWQVO.js": (
-        "b645f17fa47e923dce21b42bda8abeb5373053be11d8e9f351fa18eb2f1ffe4b"
+        "c37e81a8d2e6fe0a68f555566221e9beba41dc8147f63c83e006fb2c0447c59a"
     ),
     "vendor/board/chunks/chunk-4RIBWQVO.js.LEGAL.txt": (
         "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"
@@ -577,6 +581,23 @@ def test_board_assets_are_exactly_the_reviewed_bytes_with_notices() -> None:
     for file in (STATIC / "vendor/board").rglob("*.js"):
         text = file.read_text()
         assert "https://esm.sh/" not in text
+
+
+def test_the_board_marks_itself_dirty_on_a_key_in_the_capture_phase() -> None:
+    """Escape commits an open text inside Excalidraw's own key handler, which runs before a bubble-phase
+    listener on the document. A frame that marked itself dirty only in the bubble phase saw that change
+    while still clean, when a flush had just gone out, and never sent it: the author's tab kept the secret
+    the broker had cut out (#933). Fails if `scripts/board/frame.jsx` or the committed `board.js` built
+    from it registers the dirty-marking keydown listener without capture."""
+    source = (STATIC.parents[3] / "scripts" / "board" / "frame.jsx").read_text()
+    listeners = re.findall(r"addEventListener\('keydown', \(\) => \{ dirty = true; \}(, true)?\);", source)
+    assert listeners == [", true"], listeners
+    bundle = (STATIC / "vendor/board/board.js").read_text()
+    pointer = re.search(r'addEventListener\("pointerdown",\(\)=>\{\w+=!0,(\w+)=!0\}\)', bundle)
+    assert pointer is not None, "the frame's pointerdown listener, which names the dirty flag"
+    dirty = re.escape(pointer.group(1))
+    bundled = re.findall(r'addEventListener\("keydown",\(\)=>\{' + dirty + r"=!0\}(,!0)?\)", bundle)
+    assert bundled == [",!0"], bundled
 
 
 def test_the_board_ships_none_of_excalidraw_coms_service_settings() -> None:

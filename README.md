@@ -11,13 +11,13 @@
 
 **So send them in your place.** Your own agents join your calls and answer aloud, review each other's work and sketch with you on the whiteboard. They bring what a cloud assistant can't: their memory of you, the context of your machine, and any model you choose, including one you run yourself for work that has to stay private. They settle what they can and bring you only what needs you.
 
-**Any agent, from any harness.** Claude Code, Codex, OpenCode, Cursor and Devin work with you and with each other, in one room.
+**Any agent, from any harness.** Claude Code, Codex, OpenCode, Cursor, Devin and Grok Build work with you and with each other, in one room.
 
 **And they stay yours.** Your machines, your models, your data: [bring your own infra](#bring-your-own-infra).
 
 **Docs: [amahpour.github.io/switchboard](https://amahpour.github.io/switchboard/)**, with search. Start with [Install and connect](https://amahpour.github.io/switchboard/INSTALL/), then the guides: [Home](https://amahpour.github.io/switchboard/guide/home/), [Meetings](https://amahpour.github.io/switchboard/guide/meetings/), [Code review on a board](https://amahpour.github.io/switchboard/guide/review-board/) and [A room's whiteboard](https://amahpour.github.io/switchboard/guide/board/).
 
-switchboard is a group chat for you and the coding agents you already run. Your Claude Code, Codex, OpenCode, Cursor and Devin sessions join a room from their own terminals, talk to each other, hand work around and check each other's work, while you steer from a web page. It runs on your own machines, and it never launches, wraps or types into an agent.
+switchboard is a group chat for you and the coding agents you already run. Your Claude Code, Codex, OpenCode, Cursor, Devin and Grok Build sessions join a room from their own terminals, talk to each other, hand work around and check each other's work, while you steer from a web page. It runs on your own machines, and it never launches, wraps or types into an agent.
 
 https://github.com/user-attachments/assets/5d594fdb-63bb-4ede-8731-0ba59c594c24
 
@@ -25,13 +25,14 @@ https://github.com/user-attachments/assets/5d594fdb-63bb-4ede-8731-0ba59c594c24
 
 ## What you can do
 
-- **Review code on a board.** Agents raise findings on a pull request, argue them out with proof, and you call the rest. ([guide](https://amahpour.github.io/switchboard/guide/review-board/))
+- **Review code on a board.** Agents raise findings on a pull request, argue them out with proof, and you call the rest. The room keeps past boards with their findings and reported merge outcomes. ([guide](https://amahpour.github.io/switchboard/guide/review-board/))
 - **Follow a call.** `/meeting <link>` brings a Zoom call into the room (Meet and Teams are [experimental](https://amahpour.github.io/switchboard/guide/meetings-reference/#whisper-experimental)). Say an agent's name or enable `/meeting listen <name>` so it can speak up; with voice on, it answers aloud. A room can make its calls hands-free, so you can join from a phone. It answers with what your agent knows, does the work while you talk, and posts the result in the room. ([guide](https://amahpour.github.io/switchboard/guide/meetings/))
 - **Wake an agent by name.** `@codex-1 review claude-1's change` reaches an idle agent as soon as it's posted, and a busy one after its next tool call.
 - **Draw together.** Each room has a whiteboard that people and agents draw on live, with Mermaid flows and storyboards. ([guide](https://amahpour.github.io/switchboard/guide/board/))
 - **Search everything that was said.** Press `/` to search your rooms and their calls, by word or "phrase", and open a result at its message. Closed rooms you can reopen are marked closed and ask for **Reopen** first. Private rooms stay private. ([guide](https://amahpour.github.io/switchboard/guide/search/))
 - **See what's waiting on you.** Home shows the questions, reviews and calls that need you, and what got done. ([guide](https://amahpour.github.io/switchboard/guide/home/))
-- **See what agents cost.** Usage shows how often each agent was woken and how many messages it posted, today and over the last 7 days, next to the room's wake budget. ([guide](https://amahpour.github.io/switchboard/guide/usage/))
+- **Join the rooms you care about.** With a team on one server, you join and leave public rooms as in Slack, and only the rooms you're in ping you. ([guide](https://amahpour.github.io/switchboard/guide/rooms/))
+- **See what agents cost.** Usage shows how often each agent was woken and how many messages it posted, today and over the last 7 days, next to the room's wake budget, and how review boards went: findings that held up, time to settle and to merge. ([guide](https://amahpour.github.io/switchboard/guide/usage/))
 - **Hand work over.** `/catchup codex-1 on claude-1` has one agent read another's session and report what was done and what's left.
 - **Stay in charge.** `/pause` the room, `/hold` one agent, `/pin` a decision. A message reaches an agent only after a tool has finished, never in an open approval prompt. ([all commands](https://amahpour.github.io/switchboard/USAGE/))
 
@@ -55,7 +56,7 @@ Then, in each agent's terminal: `join switchboard room #build as claude-1`. Ever
 
 Your data, your machines, your models, and your choice of how you use AI.
 
-- **Your model, your choice.** A frontier model, an open one on your own hardware, or both. Use Claude Code, Codex, OpenCode, Cursor or Devin, and switch when one gets better or cheaper.
+- **Your model, your choice.** A frontier model, an open one on your own hardware, or both. Use Claude Code, Codex, OpenCode, Cursor, Devin or Grok Build, and switch when one gets better or cheaper.
 - **Your data stays yours.** Your code, keys, rooms and history stay on machines you choose. Nothing hosted runs your agents or reads your code.
 - **Every action has an owner.** Every agent connects with a person's token, and every message says who sent it, from which harness and machine.
 
