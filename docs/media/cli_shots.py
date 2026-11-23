@@ -15,7 +15,8 @@ What it does:
   what they print. ``status``, ``who``, ``tail`` and ``report`` run against that broker;
   ``uninstall`` (``--dry-run``) runs against a throwaway user home that holds what an old
   ``switchboard install`` wrote (the fixtures of ``tests/fixtures/install/``). ``start``
-  shows a local broker.
+  shows a local broker, and once more a start that times out, in a throwaway home with the
+  stand-in broker of ``tests/integration/test_start_gives_up.py`` that never opens its socket.
 - **Stand-ins, never this machine.** The hooks an old install wrote run an interpreter; the diff
   shows ``/opt/switchboard/bin/python3`` in place of the venv the fixtures were made with. Your
   own harness configs are never read or written.
@@ -31,10 +32,14 @@ from __future__ import annotations
 import argparse
 import contextlib
 import html
+import importlib.util
 import io
 import os
 import re
+import select
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -168,6 +173,55 @@ def capture(argv: list[str]) -> str:
     return buf.getvalue()
 
 
+def capture_slow_start(home: Path) -> str:
+    """What ``switchboard start`` prints, on stderr, when its broker never answers: ``daemon.start``
+    launches the stand-in broker of ``test_start_gives_up.py`` (reused, never a second one) in
+    ``home``, waits out ``START_WAIT_S`` and gives up; the stand-in's group is stopped after. Its pid
+    is shown as ``<pid>``."""
+    from switchboard import cli
+    from switchboard.broker import daemon
+
+    path = ROOT / "tests" / "integration" / "test_start_gives_up.py"
+    spec = importlib.util.spec_from_file_location("test_start_gives_up", path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    real_popen = subprocess.Popen
+    children: list[subprocess.Popen[bytes]] = []
+
+    def popen(cmd: list[str], **kw: Any) -> subprocess.Popen[bytes]:
+        r, w = os.pipe()
+        try:
+            kw["pass_fds"] = (w,)
+            children.append(real_popen([sys.executable, "-I", "-c", mod.STAND_IN, str(w)], **kw))
+            os.close(w)
+            w = -1
+            # its ready line, the event that it runs, with a bound
+            if not select.select([r], [], [], 30)[0] or not os.read(r, 4096).startswith(b"ready"):
+                raise RuntimeError("the stand-in broker did not say it was ready")
+        finally:
+            os.close(r)
+            if w >= 0:
+                os.close(w)
+        return children[-1]
+
+    buf = io.StringIO()
+    daemon.subprocess.Popen = popen  # type: ignore[assignment]
+    try:
+        with contextlib.redirect_stderr(buf):
+            cli.main(["start", "--home", str(home), "--color", "always"])
+    finally:
+        daemon.subprocess.Popen = real_popen  # type: ignore[assignment]
+        for c in children:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(c.pid, signal.SIGKILL)
+            c.wait(timeout=30)
+    text = buf.getvalue()
+    for c in children:
+        text = text.replace(str(c.pid), "<pid>")
+    return text
+
+
 # the fixture of what an old ``switchboard install`` wrote, per file of a user home
 OLD_INSTALL = {
     ".claude/settings.json": "claude/merge.settings.after.json",
@@ -218,6 +272,7 @@ def collect(world: Any, base: Path) -> list[tuple[str, str, str, tuple[str, ...]
 
     add("status", "switchboard status", ["status", *h, *c])
     add("start-broker", "switchboard start", ["start", *h, *c], ("dark", "light"))
+    shots.append(("start-timeout", "switchboard start", capture_slow_start(base / "slow"), ("dark",)))
     add("who", "switchboard who '#build'", ["who", "#build", *h, *c])
     add(
         "tail",
