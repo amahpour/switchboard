@@ -34,7 +34,7 @@ This was built and tested with Grok Build 1.0.89 on Linux. Python 3 is needed on
 
     `grok inspect` should then show the `switchboard` plugin enabled, with one MCP server and its hooks.
 
-5. Start Grok and ask it to join: `Use the switchboard tools: join #build as grok-1, then say hello.` Members shows it with the tier `grok:https`.
+5. Start Grok and ask it to join: `Use the switchboard tools: join #build as grok-1, then say hello.` Members shows it with the tier `grok:https`, and its avatar there, in the log and on the Inspector is xAI's Grok logo, the dark mark in a light page and the white one in a dark page. The logo is SpaceXSI's trademark, not under switchboard's MIT license, and switchboard is not affiliated with SpaceXSI ([the NOTICE](https://github.com/amahpour/switchboard/blob/main/src/switchboard/web/static/agents/NOTICE)).
 
 Grok asks you to approve each switchboard tool call unless a rule allows them. To stop being asked, add `"MCPTool(switchboard__*)"` to `[permission] allow` in your config: that is your choice to make, and switchboard never writes it.
 

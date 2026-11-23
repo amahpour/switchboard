@@ -979,6 +979,84 @@ def test_devin_s_logo_follows_the_theme_setting(ui: UI) -> None:
         assert look["img"] == f"/static/agents/devin-{want}.png", (theme, scheme, look)
 
 
+def a_grok_room(ui: UI, room: str) -> None:
+    """A room with one agent, grok-1, that is a Grok Build session, and two messages from it (the second
+    replies to the first), so every place an avatar shows has one."""
+    ui.world.create_room(f"#{room}")
+    ui.world.add_agents(f"#{room}", ("grok-1",))
+    first = ui.world.agent_say(f"#{room}", "grok-1", "Looking at the failing test.")
+    ui.world.agent_say(f"#{room}", "grok-1", "Found it.", reply_to=first)
+    ui.world.set_member_harness(f"#{room}", "grok-1", "grok")
+
+
+@pytest.mark.parametrize("phone", [False, True])
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_grok_s_logo_shows_everywhere_its_avatar_does(ui: UI, scheme: str, phone: bool) -> None:
+    """#930: a Grok Build session shows xAI's Grok mark for the scheme (the dark mark on a white tile in a
+    light page, the white mark on a black tile in a dark one), not its GK letters, in the log, a reply's
+    preview, the @ list, Members and the Inspector, at the sizes every harness uses there, on a desktop and
+    on a phone. The mark sits inside the tile, so the rounded corners don't cut its tips. Fails if any place
+    still draws the monogram tile, the scheme picks the other file (a mark the tile hides), or the file is
+    missing or blocked."""
+    room = f"grok-{scheme}-{'phone' if phone else 'desk'}"
+    a_grok_room(ui, room)
+    page = ui.open(room=room, color_scheme=scheme, **(PHONE if phone else {}))
+    tile = "rgb(255, 255, 255)" if scheme == "light" else "rgb(0, 0, 0)"
+    sizes = {"member": 32, "log": 28 if phone else 32, "inspector": 40}
+
+    def check(where: str, avatar: Locator) -> None:
+        expect(avatar).to_be_visible()
+        look = avatar.evaluate(ICON_LOOK)
+        assert look["img"] == f"/static/agents/grok-{scheme}.png" and look["tile"] == tile, (where, look)
+        look = avatar.evaluate(AVATAR_LOOK)
+        assert look["width"] == 1024 and look["color"] == "rgba(0, 0, 0, 0)", (where, look)
+        expect(avatar).to_contain_text("GK")  # the monogram stays in the element, unseen
+        assert avatar.evaluate("el => getComputedStyle(el).backgroundSize") == "72% auto", where
+        if where in sizes:
+            box = avatar.evaluate(AVATAR_BOX)
+            assert box == {"w": sizes[where], "h": sizes[where]}, (where, box)
+
+    line = page.locator('#log .line[data-from="grok-1"]').last
+    line.scroll_into_view_if_needed()
+    check("log", line.locator("> .avatar.h-grok"))
+    check("reply", page.locator("#log .reply-to .avatar.mini.h-grok").first)
+    box = page.locator("#input")
+    box.focus()
+    page.keyboard.type("@")
+    option = page.locator("#mentions [role=option]").filter(has_text="grok-1")
+    check("mention", option.locator(".avatar.h-grok"))
+    box.fill("")
+    if phone:
+        page.click("#buddy-toggle")
+    member = page.locator('#buddy-list .member[data-name="grok-1"]')
+    check("member", member.locator(".avatar.h-grok"))
+    with page.expect_response(lambda r: "/members/grok-1" in r.url and r.request.method == "GET"):
+        member.click()
+    expect(page.locator("#insp-name")).to_contain_text("grok-1")
+    check("inspector", page.locator("#insp-body .insp-id > .avatar.h-grok"))
+
+
+def test_grok_s_logo_follows_the_theme_setting(ui: UI) -> None:
+    """#930: the saved Theme (the page's data-theme) picks Grok's file and tile, not only the system's
+    scheme: Dark on a light system shows the white mark on black, Light on a dark system the dark mark on
+    white, and System follows the system. Fails if the explicit Dark block lacks the tokens, so a person who
+    chose Dark gets a white tile in a dark page."""
+    a_grok_room(ui, "grok-theme")
+    page = ui.open(room="grok-theme", color_scheme="light")
+    grok = page.locator('#buddy-list .member[data-name="grok-1"] .avatar')
+    for theme, scheme, want, tile in (
+        ("system", "light", "light", "rgb(255, 255, 255)"),
+        ("dark", "light", "dark", "rgb(0, 0, 0)"),
+        ("light", "dark", "light", "rgb(255, 255, 255)"),
+        ("system", "dark", "dark", "rgb(0, 0, 0)"),
+    ):
+        page.emulate_media(color_scheme=scheme)
+        page.evaluate("t => { document.documentElement.dataset.theme = t; }", theme)
+        look = grok.evaluate(ICON_LOOK)
+        assert look["img"] == f"/static/agents/grok-{want}.png", (theme, scheme, look)
+        assert look["tile"] == tile, (theme, scheme, look)
+
+
 # the four tokens #443 set under the explicit Dark theme: the icon files, Codex's tile and the ring
 ICON_LOOK = """async (el) => {
   const s = getComputedStyle(el);
