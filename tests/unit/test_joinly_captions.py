@@ -671,18 +671,91 @@ async def test_a_person_with_initials_still_cuts_playback(joinly_types: None) ->
     assert not c.no_speech_event.is_set()
 
 
-async def test_a_picture_person_is_heard_once_the_active_speaker_names_them(joinly_types: None) -> None:
-    """On Zoom a person with a profile picture has no initials and no label (#810): only the call's
-    active-speaker detection names them. While the bot plays, their row does not count until that evidence is
-    enough (PIC_MIN_SAMPLES), then it does. Fails if a picture row can never interrupt (a person is unheard)
-    or if it counts from its first frame (the bug)."""
-    c = _playing(controller(Page([None])))
+class _Line:
+    """Whether the bot is playing a line, for the controller to ask."""
+
+    on = False
+
+    def __call__(self) -> bool:
+        return self.on
+
+
+def _with_line(c: Any) -> _Line:
+    line = _Line()
+    c.attach(c._provider, c._bot, line)
+    return line
+
+
+async def _change(c: Any, key_row: dict[str, Any], n: int, now: float) -> None:
+    await c._take([{**key_row, "t": "word " * n}], now)
+
+
+async def test_the_bots_picture_row_is_never_named_as_the_person_the_active_speaker_shows(
+    joinly_types: None,
+) -> None:
+    """joinly's observer names the first speaker-bar tile that is not the bot, usually a person, for the whole
+    of the bot's line. The bot's anonymous picture row changes five or more times meanwhile: playback is never
+    cut and the row is not named as that person (#852). Fails if playback samples count for a picture row:
+    after three changes the row is named, and the bot cuts itself."""
+    c = controller(Page([None]))
+    line = _with_line(c)
     c._provider._platform_controller.active_speaker = "Alice Brown"
-    for n in range(1, cap.PIC_MIN_SAMPLES):
-        await c._take([{**LIVE_OWN_ROW, "t": "word " * n}], float(n))
-        assert c.no_speech_event.is_set()  # not yet named
-    await c._take([{**LIVE_OWN_ROW, "t": "word " * cap.PIC_MIN_SAMPLES}], float(cap.PIC_MIN_SAMPLES))
+    line.on = True
+    for n in range(1, 8):
+        await _change(c, LIVE_OWN_ROW, n, float(n))
+        assert c.no_speech_event.is_set()
+    key = "|rgba(0, 0, 0, 0)||137b8afd3423"
+    assert c._name_of(key) is None
+
+
+async def test_the_bots_row_changing_after_its_line_ends_is_not_named_either(joinly_types: None) -> None:
+    """Zoom's captions lag: the bot's row can keep changing after playback ended. Those reads still must not
+    name it as the active speaker's person, or the next line is cut by it (#852). Fails if only reads during
+    playback are set aside."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    c._provider._platform_controller.active_speaker = "Alice Brown"
+    line.on = True
+    await _change(c, LIVE_OWN_ROW, 1, 1.0)
+    line.on = False
+    for n in range(2, 8):  # all within QUIET_S of the last read that saw the line playing
+        await _change(c, LIVE_OWN_ROW, n, 1.0 + 0.25 * (n - 1))
+        assert c.no_speech_event.is_set()  # the lag also does not clear the signal
+    assert c._name_of("|rgba(0, 0, 0, 0)||137b8afd3423") is None
+    line.on = True  # the next line
+    await _change(c, LIVE_OWN_ROW, 9, 4.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_a_picture_person_named_before_the_line_cuts_it_at_once(joinly_types: None) -> None:
+    """A person with a profile picture (#810) the active speaker named from their speech while the bot was
+    quiet is known, so their first change during a line cuts it with no wait. Fails if a known person is
+    treated like an unnamed row."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    c._provider._platform_controller.active_speaker = "Alice Brown"
+    for n in range(1, cap.PIC_MIN_SAMPLES + 1):
+        await _change(c, LIVE_OWN_ROW, n, float(n))
+    line.on = True
+    await _change(c, LIVE_OWN_ROW, 9, 20.0)
     assert not c.no_speech_event.is_set()
+
+
+async def test_a_picture_person_first_heard_in_a_line_is_named_from_later_speech(joinly_types: None) -> None:
+    """The limit, and that it is only that: someone with a picture who first speaks during the bot's line is
+    not noticed for that line, but once the bot is quiet their speech names them as before (#810). Fails if
+    the evidence set aside during the line is also kept from them afterwards."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    c._provider._platform_controller.active_speaker = "Alice Brown"
+    line.on = True
+    for n in range(1, 6):
+        await _change(c, LIVE_OWN_ROW, n, float(n))
+        assert c.no_speech_event.is_set()  # not noticed during this line
+    line.on = False
+    for n in range(6, 6 + cap.PIC_MIN_SAMPLES):  # well after QUIET_S
+        await _change(c, LIVE_OWN_ROW, n, 30.0 + n)
+    assert c._name_of("|rgba(0, 0, 0, 0)||137b8afd3423") == "Alice Brown"
 
 
 async def test_an_anonymous_row_that_resolves_to_the_bots_own_never_cuts_playback(joinly_types: None) -> None:
