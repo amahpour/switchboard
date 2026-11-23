@@ -2213,7 +2213,7 @@ wheels = [
 
 [[package]]
 name = "switchboard-chat"
-version = "1.15.1"
+version = "1.16.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

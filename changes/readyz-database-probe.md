@@ -1,3 +1,0 @@
-### Added
-
-- **`/readyz` reads the database, and the probes use it.** `/healthz` answered `ok` even when the broker could not read its database (a `disk I/O error` on a volume it was locked out of), so nothing restarted it. `GET` and `HEAD /readyz` do one read and answer 200 `ok`, or 503 with no detail. The Helm chart, the Kubernetes example, the image's `HEALTHCHECK` and the Render blueprint use it for liveness and readiness; the startup probe stays on `/healthz`. If you run your own probes, point liveness and readiness at `/readyz`. [Health checks and logs](https://amahpour.github.io/switchboard/DEPLOY/#health-checks-and-logs) also says to give every pod that mounts the volume the same SELinux level.
