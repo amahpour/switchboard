@@ -10,12 +10,18 @@ Every inner run is given ``SWITCHBOARD_TEST_SWEEP_ROOT``, a root this test owns,
 abandons on purpose are made (and swept) there, never directly in /tmp, where every other run's
 session-start sweep looks and where a specimen could be swept, or counted, by someone else (#922's
 fifth round).
+
+The root is given its sweep lock before an inner run starts, as a real run's is: there the controller's
+session-start sweep creates ``SWEEP_LOCK`` before xdist starts a worker (its hook runs last), but the inner
+conftest has no sweep, so the inner workers' first ``make_tmp_home()`` calls created it at once, and macOS
+can answer one of two concurrent ``open(O_CREAT)`` calls of a new name ENOENT (#942).
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -24,6 +30,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from conftest import TMP_HOME_ROOT, homes_left_behind
+from tmp_homes import SWEEP_LOCK
 
 from switchboard.paths import TEST_MARKER
 
@@ -81,13 +88,24 @@ def test_leaks_its_home():
 @pytest.fixture
 def root(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """The inner runs' root, given them as ``SWITCHBOARD_TEST_SWEEP_ROOT``: a directory of this
-    test's own, short (a socket under a home in it must fit sun_path), not named ``yk-*``."""
+    test's own, short (a socket under a home in it must fit sun_path), not named ``yk-*``, with its
+    sweep lock already made, as a real run's root has it before any worker starts (module docstring)."""
     d = Path(tempfile.mkdtemp(prefix="ykleak-", dir="/tmp"))
+    os.close(os.open(d / SWEEP_LOCK, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600))
     monkeypatch.setenv("SWITCHBOARD_TEST_SWEEP_ROOT", str(d))
     try:
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_the_inner_runs_root_has_its_sweep_lock_before_any_worker_starts(root: Path) -> None:
+    """The root an inner run is given already holds ``SWEEP_LOCK``, a 0600 regular file of this user's,
+    so two inner workers never create it at once: macOS can answer one of two concurrent
+    ``open(O_CREAT)`` calls of a new name ENOENT, and that worker's ``make_tmp_home()`` failed (#942).
+    Fails if the ``root`` fixture leaves the lock to the inner run."""
+    st = os.lstat(root / SWEEP_LOCK)
+    assert stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600 and st.st_uid == os.geteuid()
 
 
 def _run(
