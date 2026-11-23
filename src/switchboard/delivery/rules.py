@@ -649,10 +649,15 @@ NOT_CONNECTED_END_DAYS_MAX = 365
 DAY_S = 86400.0
 
 
-def heard_at(*times: float | None) -> float | None:
-    """The newest of the times a session showed it was there (``last_seen``, ``status_at``, ``last_say_at``),
-    or None when none is known."""
-    known = [t for t in times if t]
+def heard_at(last_seen: float | None, last_say_at: float | None) -> float | None:
+    """The newer of the times a session showed it was there (``last_seen``, ``last_say_at``), or None when
+    neither is known.
+
+    Not ``status_at``: the broker sets a status itself (its restart, ``restart`` and ``restart:idle``; a
+    dropped wait, ``wait:dropped``; a timer undoing a follow-up's busy; a wait opening or closing), and that
+    is not the session being there. Every status the session's own hook or call sets also writes
+    ``last_seen`` (``claim_for_hook``, ``touch``, ``upsert_participant``), so nothing heard is lost (#948)."""
+    known = [t for t in (last_seen, last_say_at) if t]
     return max(known) if known else None
 
 

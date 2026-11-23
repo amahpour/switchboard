@@ -85,7 +85,7 @@ def build(state: Any, rooms: list[Room], now: float) -> dict[str, Any]:
             gone = delivery.not_connected_for(
                 pid,
                 first["status"],
-                rules.heard_at(first["last_seen"], first["status_at"], first["last_say_at"]),
+                rules.heard_at(first["last_seen"], first["last_say_at"]),
             )
         if gone is not None:
             st = "not_connected"  # a session that vanished keeps its last state; it is shown as not there

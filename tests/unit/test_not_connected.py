@@ -61,8 +61,8 @@ def test_an_open_wait_means_connected_however_long_ago_it_was_heard() -> None:
 def test_nothing_known_is_never_not_connected() -> None:
     """A row never heard from has no 'since'. Fails if None were read as the epoch (gone since 1970)."""
     assert rules.not_connected_since("idle", None, False, 10 * DAY) is None
-    assert rules.heard_at(None, 0, None) is None
-    assert rules.heard_at(3.0, 9.0, None) == 9.0
+    assert rules.heard_at(None, 0) is None
+    assert rules.heard_at(3.0, 9.0) == 9.0
 
 
 def test_the_cleanup_waits_for_the_days_and_zero_is_never() -> None:
@@ -205,3 +205,90 @@ def test_a_stored_setting_that_is_garbage_is_the_default(w: World) -> None:
     assert w.engine.not_connected_end_days() == rules.NOT_CONNECTED_END_DAYS
     w.store.setting_set(rules.NOT_CONNECTED_END_KEY, "9999")
     assert w.engine.not_connected_end_days() == rules.NOT_CONNECTED_END_DAYS
+
+
+# ------------------------------------------------------------------ statuses the broker sets (#948)
+def members_pane_since(w: World, p_id: int) -> float | None:
+    """What the Members pane's row shows: ``Store.members``' heard_at through ``not_connected_for``, as
+    ``RoomService.member_rows`` asks it (the second copy of the rule, in SQL)."""
+    (row,) = [r for r in w.store.members(w.room.id) if r.participant_id == p_id]
+    return w.engine.not_connected_for(p_id, row.status, row.heard_at)
+
+
+def test_a_restart_is_not_hearing_from_a_member_last_seen_hours_before_it(w: World, clock: FakeClock) -> None:
+    """The broker's restart sets every session offline with ``status_at`` now (§4). That is the broker,
+    not the session: a member last heard from hours before is still not connected right after the
+    restart, since the time it was last heard. Fails if status_at counts as a sign of life: after every
+    restart (an upgrade) the whole Not connected fold emptied for 30 minutes (#948)."""
+    p, _m = session(w, status="idle")
+    seen = clock.now()
+    clock.advance(5 * 3600)
+    w.store.recover_on_start()
+    assert w.p(p).status == "offline" and w.p(p).status_src == "restart:idle"  # the restart as before
+    assert w.p(p).status_at == clock.now()
+    assert w.engine.not_connected_since(w.p(p)) == seen
+    assert members_pane_since(w, p.id) == seen
+
+
+def test_a_member_heard_a_minute_before_a_restart_is_connected_after_it_until_its_own_30_minutes(
+    w: World, clock: FakeClock
+) -> None:
+    """The other edge: a member heard from a minute before the restart keeps the rest of its idle 30
+    minutes, counted from when it was heard and not from the restart. Fails if the fix made everyone
+    not connected at the restart, or if the restart still moved the clock."""
+    p, _m = session(w, status="busy")
+    clock.advance(3600)
+    w.hook(p, "PostToolUse", tool="Bash")  # heard: a tool call of its turn
+    seen = clock.now()
+    clock.advance(60)
+    w.store.recover_on_start()
+    assert w.p(p).status_src == "restart"
+    assert w.engine.not_connected_since(w.p(p)) is None
+    assert members_pane_since(w, p.id) is None
+    clock.advance(IDLE - 60 - 1)
+    assert w.engine.not_connected_since(w.p(p)) is None
+    clock.advance(1)
+    assert w.engine.not_connected_since(w.p(p)) == seen
+    assert members_pane_since(w, p.id) == seen
+
+
+def test_a_dropped_wait_taking_a_session_offline_is_not_hearing_from_it(w: World, clock: FakeClock) -> None:
+    """A Devin whose wait() lost its connection is taken offline by the tick (``wait:dropped``, #448)
+    130 seconds later. The drop is the last time it was there; the broker's offline is not. Fails if
+    that status moved the clock: it would show as gone 130 seconds late, from a time it wasn't heard."""
+    p, m = w.agent("dv-https", harness="devin", status="busy", hooks=True, host="laptop")
+    w.actions += w.engine.open_wait(w.p(p), w.m(m), "w1", 600)[1]
+    clock.advance(600)
+    w.actions += w.engine.unwait(w.p(p), "w1")
+    w.actions += w.engine.wait_dropped(w.p(p))
+    dropped_at = clock.now()
+    clock.advance(rules.WAIT_DROP_GRACE_S)
+    w.actions += w.engine.tick()
+    assert w.p(p).status == "offline" and w.p(p).status_src == "wait:dropped"
+    assert w.p(p).status_at == clock.now()
+    clock.advance(IDLE - rules.WAIT_DROP_GRACE_S)
+    assert w.engine.not_connected_since(w.p(p)) == dropped_at
+    assert members_pane_since(w, p.id) == dropped_at
+
+
+@pytest.mark.parametrize("src", ["expired:no_hook", "rearm:no_hook", "stop:followup", "sink"])
+def test_no_status_the_broker_sets_on_its_own_moves_when_a_member_was_heard(
+    w: World, clock: FakeClock, src: str
+) -> None:
+    """The other statuses the engine sets with no hook or call of the session at that moment: a timer
+    undoing a follow-up's busy (``expired:*``, ``rearm:no_hook``), a follow-up offered into a park
+    (``stop:followup``), a wait's status for a harness whose status comes from its sinks (``sink``).
+    None of them is the session being there. Fails if any of them moved heard_at."""
+    p, _m = session(w, status="idle")
+    seen = clock.now()
+    clock.advance(IDLE - 10)
+    w.store.set_status(p.id, "busy" if src in ("stop:followup", "sink") else "idle", src, bump_boundary=True)
+    assert w.p(p).status_at == clock.now() and w.p(p).status_src == src
+    clock.advance(10)
+    assert rules.heard_at(w.p(p).last_seen, w.p(p).last_say_at) == seen
+    expected = None if src in ("stop:followup", "sink") else seen  # busy gets its 2 hours
+    assert w.engine.not_connected_since(w.p(p)) == expected
+    assert members_pane_since(w, p.id) == expected
+    clock.advance(BUSY)
+    assert w.engine.not_connected_since(w.p(p)) == seen
+    assert members_pane_since(w, p.id) == seen

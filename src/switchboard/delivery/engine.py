@@ -1193,7 +1193,7 @@ class Engine:
         )
 
     def not_connected_since(self, p: Participant) -> float | None:
-        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.status_at, p.last_say_at))
+        return self.not_connected_for(p.id, p.status, rules.heard_at(p.last_seen, p.last_say_at))
 
     def touch(self, p: Participant) -> list[Action]:
         """A call from the session, or a wait of its opening or closing: proof it is there. Stored at most
