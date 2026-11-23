@@ -431,9 +431,9 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("b5947bab0c18b632a88a60144f3c32cb167b6117f1b5bd2b87abc49666106933"),
+    "vendor/board/NOTICE": ("2596fcfe1a24f28dc5162251a26eb12fdc71460235ad0ad4c8af15801858a07f"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("bc7400f45edff47920d5fd472d589de8f062e4db9b2a34e88fcb85276135f8fb"),
+    "vendor/board/board.js": ("c9978bc731717c72d5aff75bdfa258c9e3eb48f87d5724ba4b3fb5b04ef4f285"),
     "vendor/board/chunks/chunk-42LTX363.js": (
         "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
     ),
@@ -602,18 +602,18 @@ def test_the_board_marks_itself_dirty_on_a_key_in_the_capture_phase() -> None:
 
 def test_the_board_frame_ignores_a_board_copy_older_than_the_one_it_has() -> None:
     """The app's board messages say which version of the broker's board a copy is (`seq`), and the frame
-    applies none that is older than what it has, or one equal to it once it has sent a change (#937: an
-    older copy arriving after newer keystrokes replaced the text a person was typing). Fails if
+    applies none that is older than what it has (an equal one is applied: the answer to a refused write
+    carries the same `seq`; #937: an older copy arriving after newer keystrokes replaced the text a person
+    was typing). Fails if
     `scripts/board/frame.jsx` or the committed `board.js` takes `init` or `elements` without an integer
     `seq`, or applies an older one, or if the app sends either without it. The behavior is
     `tests/e2e/test_board_ui.py`'s."""
     source = (STATIC.parents[3] / "scripts" / "board" / "frame.jsx").read_text()
     assert "!Number.isInteger(m.seq) || m.seq < 0" in source
-    assert "!Number.isInteger(m.seq) || m.seq < copySeq || (sent && m.seq === copySeq)" in source
+    assert "!Number.isInteger(m.seq) || m.seq < copySeq" in source
     bundle = (STATIC / "vendor/board/board.js").read_text()
-    assert "if(!e||!Number.isInteger(r.seq)||r.seq<0)return;sq=r.seq,sn=!1," in bundle
-    assert "if(!e||!Number.isInteger(r.seq)||r.seq<sq||sn&&r.seq===sq)return;sq=r.seq,_(e)" in bundle
-    assert "r.length&&(sn=!0," in bundle
+    assert "if(!e||!Number.isInteger(r.seq)||r.seq<0)return;sq=r.seq," in bundle
+    assert "if(!e||!Number.isInteger(r.seq)||r.seq<sq)return;sq=r.seq,_(e)" in bundle
     app = (STATIC / "whiteboard.js").read_text()
     assert (
         "post('init', { elements: cache.get(current) || [], dark: dark(), seq: seqs.get(current) || 0 })"
