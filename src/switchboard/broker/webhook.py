@@ -14,18 +14,25 @@ room, and a failure is kept as a fixed sentence, never an exception's text, whic
 
 The POST is made as safely as a request from a server can be: https only; the host is resolved at every
 send and every address it resolves to must be allowed (``notify.address_problem``), then the connection goes
-to that checked address, not to the name, so the name cannot change between the check and the connect; a
-short timeout; a redirect is a failure, never followed; the answer is read to a small cap and thrown away.
+to that checked address, not to the name, so the name cannot change between the check and the connect; one
+deadline of ``TIMEOUT_S`` for the whole send (resolve, connect, TLS, request, response), every step given only
+the time left; a redirect is a failure, never followed; the answer is read to a small cap and thrown away.
+
+A send counts once against the hourly cap (``Notifier._send``), so it makes at most one POST: the next address
+a name resolves to is tried only while nothing of the request has gone out (connect or TLS failed). Once the
+request may have reached the receiver, whatever happens to the response ends the send (#927).
 """
 
 from __future__ import annotations
 
 import asyncio
 import http.client
+import io
 import json
 import logging
 import socket
 import ssl
+import time
 import urllib.parse
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -43,10 +50,13 @@ TIMEOUT_S = 5.0
 READ_MAX = 1024
 
 Resolver = Callable[[str, int], list[str]]
+monotonic: Callable[[], float] = time.monotonic  # what a send's deadline is measured on (a test's fake)
 
 
 class SendError(Exception):
-    """A send that did not happen; ``code`` is a key of ``notify.fail_reason``."""
+    """A send that failed; ``code`` is a key of ``notify.fail_reason``. Once the request may have
+    gone out (the answer failed), the receiver may or may not have the POST: a failed send may have
+    arrived."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -83,17 +93,85 @@ def checked_addresses(url: str, allow_private: bool, resolve: Resolver) -> tuple
     return host, port, ips
 
 
+class _Deadline:
+    """The time left of one send's deadline. ``left`` raises ``TimeoutError`` once it is spent, so a step
+    never starts with no time, and is never given more than what remains (#927)."""
+
+    def __init__(self) -> None:
+        self._end = monotonic() + TIMEOUT_S
+
+    def left(self) -> float:
+        t = self._end - monotonic()
+        if t <= 0:
+            raise TimeoutError
+        return t
+
+
+class _DeadlineSocket:
+    """The connection's socket as ``http.client`` uses it (``sendall``, ``makefile``, ``close``), with its
+    timeout set to the time left before every send and every read. A socket timeout alone is per operation,
+    so a receiver that answers a byte at a time would hold a send for many of them. Like a socket, it closes
+    once it is closed and no file made from it is still open: ``http.client`` closes the connection before
+    the body of an answer that ends the connection is read."""
+
+    def __init__(self, sock: ssl.SSLSocket, deadline: _Deadline) -> None:
+        self._sock = sock
+        self._deadline = deadline
+        self._files = 0
+        self._closed = False
+
+    def _arm(self) -> None:
+        self._sock.settimeout(self._deadline.left())
+
+    def sendall(self, data: Any) -> None:
+        self._arm()
+        self._sock.sendall(data)
+
+    def recv_into(self, buf: Any, nbytes: int = 0) -> int:
+        self._arm()
+        return self._sock.recv_into(buf, nbytes)
+
+    def makefile(self, mode: str = "rb", *args: Any, **kwargs: Any) -> Any:
+        self._files += 1
+        return io.BufferedReader(socket.SocketIO(self, "rb"))  # type: ignore[arg-type]
+
+    def _decref_socketios(self) -> None:  # ``SocketIO.close`` calls it
+        self._files = max(0, self._files - 1)
+        if self._closed and self._files == 0:
+            self._sock.close()
+
+    def close(self) -> None:
+        self._closed = True
+        if self._files == 0:
+            self._sock.close()
+
+
 class _Pinned(http.client.HTTPSConnection):
     """An HTTPS connection that goes to a given, already checked address, and verifies the certificate for
-    the name in the URL."""
+    the name in the URL, within the send's deadline."""
 
-    def __init__(self, host: str, port: int, ip: str, context: ssl.SSLContext) -> None:
-        super().__init__(host, port, timeout=TIMEOUT_S, context=context)
+    def __init__(self, host: str, port: int, ip: str, context: ssl.SSLContext, deadline: _Deadline) -> None:
+        super().__init__(host, port, timeout=deadline.left(), context=context)
         self._pinned_ip = ip
+        self._deadline = deadline
 
     def connect(self) -> None:
-        sock = socket.create_connection((self._pinned_ip, self.port), TIMEOUT_S)
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)  # type: ignore[attr-defined]
+        sock = socket.create_connection((self._pinned_ip, self.port), self._deadline.left())
+        try:
+            sock.settimeout(self._deadline.left())  # the handshake has what is left after the connect
+            tls = self._context.wrap_socket(sock, server_hostname=self.host)  # type: ignore[attr-defined]
+        except BaseException:
+            sock.close()
+            raise
+        self.sock = _DeadlineSocket(tls, self._deadline)
+
+
+def _code_of(e: BaseException) -> str:
+    if isinstance(e, ssl.SSLError):
+        return "tls"
+    if isinstance(e, TimeoutError):
+        return "timeout"
+    return "connect"
 
 
 def post_blocking(
@@ -104,33 +182,42 @@ def post_blocking(
     resolve: Resolver = system_resolve,
     context: ssl.SSLContext | None = None,
 ) -> None:
-    """POST ``body`` to ``url`` or raise ``SendError``. Blocking: run it in a thread."""
+    """POST ``body`` to ``url`` or raise ``SendError``, all within ``TIMEOUT_S`` of the call. Blocking: run it
+    in a thread. The resolver's time counts too; it cannot be cut short (``getaddrinfo`` has no timeout), so
+    what it leaves is all the connections get, and nothing is sent once it has used the deadline up."""
+    deadline = _Deadline()
     host, port, ips = checked_addresses(url, allow_private, resolve)
     u = urllib.parse.urlsplit(url)
     target = (u.path or "/") + (f"?{u.query}" if u.query else "")
     ctx = context or ssl.create_default_context()
     last = "connect"
     for ip in ips:
-        conn = _Pinned(host, port, ip, ctx)
         try:
-            conn.request(
-                "POST",
-                target,
-                body=body,
-                headers={"Content-Type": "application/json", "User-Agent": "switchboard-webhook"},
-            )
-            resp = conn.getresponse()
-            resp.read(READ_MAX)
-            status = resp.status
-        except ssl.SSLError:
-            last = "tls"
-            continue
+            conn = _Pinned(host, port, ip, ctx, deadline)
         except TimeoutError:
-            last = "timeout"
-            continue
-        except (OSError, http.client.HTTPException):
-            last = "connect"
-            continue
+            raise SendError("timeout") from None
+        try:
+            try:
+                conn.connect()
+            except (OSError, http.client.HTTPException) as e:
+                last = _code_of(e)  # nothing of the request went out: the next address may, in the time left
+                continue
+            # From here the POST may reach the receiver, so this is the send's only POST (#927).
+            try:
+                conn.request(
+                    "POST",
+                    target,
+                    body=body,
+                    headers={"Content-Type": "application/json", "User-Agent": "switchboard-webhook"},
+                )
+                resp = conn.getresponse()
+                try:
+                    resp.read(READ_MAX)
+                    status = resp.status
+                finally:
+                    resp.close()
+            except (OSError, http.client.HTTPException) as e:
+                raise SendError(_code_of(e)) from None
         finally:
             conn.close()
         if 300 <= status < 400:
