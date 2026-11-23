@@ -9931,9 +9931,11 @@
   // A cover can also go with none of those nodes changing: a modal <dialog> (Rename room) closing changes only
   // the dialog's own open state. So the events that end something drawn over the page ask too, caught on the
   // document in the capture phase since close and toggle do not bubble: close and cancel (dialogs), toggle
-  // (popovers, details), and, as a backstop for any cover not named here, focusin, pointerup and keyup. Each
-  // only schedules the one coalesced check, which still fails closed.
-  const COVER_ENDS = ['close', 'cancel', 'toggle', 'focusin', 'pointerup', 'keyup'];
+  // (popovers, details), and transitionend, a cover that slides away (the phone's Rooms drawer, whose class
+  // changes 260 ms before it has gone, so the frame that class change asks for still finds the log covered, #941),
+  // and, as a backstop for any cover not named here, focusin, pointerup and keyup. Each only schedules the one
+  // coalesced check, which still fails closed.
+  const COVER_ENDS = ['close', 'cancel', 'toggle', 'transitionend', 'focusin', 'pointerup', 'keyup'];
   function watchLogCover() {
     document.addEventListener('visibilitychange', noteShown);
     for (const t of COVER_ENDS) document.addEventListener(t, function () { noteShown(); }, true);
