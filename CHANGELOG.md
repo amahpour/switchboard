@@ -2,6 +2,14 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.16.1 (2026-11-24)
+
+### Fixed
+
+- **An older copy of the whiteboard no longer takes back text you are still typing.** While you typed, a copy of the board the broker had made before your last keystrokes could reach the drawing pane after them and put the text back to what it was, losing what you typed in between. The pane now keeps what it has sent until a copy of the board shows it, so only a copy that already holds your text, or a whole board from the broker (which is how it answers something it refused), takes its place. A change from someone else still shows at once.
+- **The Zoom meeting bot filters its own early captions during playback.** This prevents a caption that appears before the bot's initials from cutting off its spoken line when Zoom's active tile identifies the bot.
+- **The bot no longer stops its own line when Zoom revises a caption nobody is saying.** While the bot speaks, a person's caption row counts as talking over it only if it says something new: more words than it showed when the line began, a row not shown before, or a different utterance. A revision of the same words (case, punctuation, a corrected word) does not. A person's microphone picking up the bot's voice adds words and can still stop a line, and a person who repeats exactly the last words of their previous caption is not heard until they say something new. The log says how many words were ignored as an edit, never which. **Operators: re-mount the new `captions.py`** (its sha256 is in the deploy guide) and restart the broker.
+
 ## 1.16.0 (2026-11-23)
 
 ### Added
