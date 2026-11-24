@@ -17,17 +17,17 @@ concurrency:
   cancel-in-progress: false   # a publish in progress finishes; the next push publishes after it
 
 jobs:
-  publish:
-    name: publish the site
+  # Two jobs, as GitHub's own Pages workflow has them: deploy-pages looks the run's artifact up by name,
+  # and in the same job as the upload it sometimes found none yet ("Found 0 artifact(s)": 5 of 100
+  # publishes to main failed that way, and the site stayed on the last good one). The publish job starts
+  # once the build job has ended, so the artifact is listed by then.
+  build:
+    name: build the site
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
-      pages: write      # upload and deploy the Pages artifact
-      id-token: write   # deploy-pages proves the run with an OIDC token
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      pages: read       # configure-pages reads the repository's Pages settings
     env:
       UV_PYTHON_PREFERENCE: only-managed
     steps:
@@ -44,5 +44,18 @@ jobs:
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
         with:
           path: site
+
+  publish:
+    name: publish the site
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write      # deploy the Pages artifact
+      id-token: write   # deploy-pages proves the run with an OIDC token
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1
