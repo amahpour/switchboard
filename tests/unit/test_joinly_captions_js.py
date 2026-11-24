@@ -53,20 +53,25 @@ const rows = JSON.parse(process.argv[1]).map((r) => {
   return el('div', {}, [icon, el('span', {class: 'live-transcription-subtitle__item'}, [], r.text)]);
 });
 const box = el('div', {class: 'live-transcription-subtitle__box'}, rows);
-globalThis.document = {querySelector: (sel) => (sel === '.live-transcription-subtitle__box' ? box : null)};
+const tile = el('div', {}, [el('span', {}, [], process.argv[4])]);
+globalThis.document = {
+  querySelector: (sel) => (sel === '.live-transcription-subtitle__box' ? box : null),
+  querySelectorAll: (sel) => sel === 'div.speaker-active-container__video-frame span'
+    ? tile.querySelectorAll('span') : [],
+};
 globalThis.getComputedStyle = () => ({backgroundColor: 'rgb(1, 2, 3)'});
 const read = eval(process.argv[2]);
-process.stdout.write(JSON.stringify(read()));
+process.stdout.write(JSON.stringify(read(process.argv[3])));
 """
 
 AVATAR_A = "https://example.com/avatars/a.png?size=64"
 AVATAR_B = "https://example.com/avatars/b.png?size=64"
 
 
-def read(rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+def read(rows: list[dict[str, str]], bot: str = "", active: str = "") -> list[dict[str, Any]]:
     assert NODE
     out = subprocess.run(
-        [NODE, "-e", HARNESS, json.dumps(rows), cap.READ_JS],
+        [NODE, "-e", HARNESS, json.dumps(rows), cap.READ_JS, bot, active],
         capture_output=True,
         text=True,
         timeout=30,
@@ -110,3 +115,12 @@ def test_an_initials_row_has_no_picture_id() -> None:
     (item,) = read([{"shape": "initials", "initials": "AB", "text": "hi"}])
     assert item["i"] == "AB"
     assert item["p"] == ""
+
+
+def test_anonymous_row_reads_the_bots_active_tile() -> None:
+    """The page must report the bot's own active tile even when the caption avatar is empty."""
+    rows = [{"shape": "initials", "initials": "", "text": "hello"}]
+    (own,) = read(rows, bot="switchboard (transcribing)", active="switchboard (transcribing)")
+    (other,) = read(rows, bot="switchboard (transcribing)", active="someone else")
+    assert own.get("own_active") is True
+    assert other.get("own_active") is False

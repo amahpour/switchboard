@@ -141,7 +141,7 @@ class Page:
     def is_closed(self) -> bool:
         return False
 
-    async def evaluate(self, js: str) -> Any:
+    async def evaluate(self, js: str, arg: Any = None) -> Any:
         if js is cap.ENABLE_JS:
             return self.enable
         return self.reads.pop(0) if len(self.reads) > 1 else (self.reads[0] if self.reads else None)
@@ -304,7 +304,7 @@ class Changing(Page):
         super().__init__([None])
         self.initials, self.n = initials, 0
 
-    async def evaluate(self, js: str) -> Any:
+    async def evaluate(self, js: str, arg: Any = None) -> Any:
         if js is cap.READ_JS:
             self.n += 1
             return [{"i": self.initials, "c": "rgb(2, 2, 2)", "t": "words " * self.n}]
@@ -331,6 +331,34 @@ async def test_the_bots_own_caption_never_clears_the_no_speech_signal_but_a_pers
     monkeypatch.setattr(cap, "POLL_S", 0.01)
     assert await _no_speech_after_reads("S(", 20) is True  # the bot's own row, growing
     assert await _no_speech_after_reads("AB", 20) is False  # a person's row, growing
+
+
+@pytest.mark.parametrize("initials", ["", "S("])
+async def test_self_caption_stays_quiet_as_initials_appear(initials: str) -> None:
+    """A bot caption must leave the barge-in signal quiet even on its first frame without initials."""
+    c = controller(Page([None]))
+    await c._take([{"i": "", "c": "rgb(2, 2, 2)", "t": "First", "own_active": True}], 1.0)
+    first_frame_quiet = not c._rule.changing(1.0, 0.6, c._is_own_key)
+    if initials:
+        await c._take([{"i": initials, "c": "rgb(2, 2, 2)", "t": "First words"}], 1.25)
+    assert first_frame_quiet
+    assert not c._rule.changing(1.25, 0.6, c._is_own_key)
+
+
+async def test_playback_interruption_logs_row_metadata_once(caplog: pytest.LogCaptureFixture) -> None:
+    """A human can still interrupt playback. The transition log gives row metadata without spoken words."""
+    c = controller(Page([None]))
+    c.attach(c._provider, c._bot, lambda: True)
+    with caplog.at_level("INFO"):
+        await c._take([{"i": "AB", "c": "rgb(1, 2, 3)", "t": "private phrase", "own_active": True}], 1.0)
+        await c._take([{"i": "AB", "c": "rgb(1, 2, 3)", "t": "private phrase again"}], 1.25)
+    assert not c.no_speech_event.is_set()
+    assert caplog.text.count("no-speech cleared during playback") == 1
+    assert (
+        "initials='AB' colour='rgb(1, 2, 3)' label_length=0 picture='' words=2 baseline_words=none"
+        in caplog.text
+    )
+    assert "private phrase" not in caplog.text
 
 
 def test_a_new_sentence_that_ends_like_the_last_one_sent_is_not_dropped() -> None:
@@ -438,7 +466,7 @@ async def test_a_picture_row_key_holds_its_label_and_a_row_with_initials_does_no
     separator removed. Fails if a label is trusted next to real initials, is not cut, or can split the key."""
     c = controller(Page([None]))
     seen: list[list[tuple[str, str]]] = []
-    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing_rows=lambda *a: iter(()))
     await c._take(
         [
             {"i": "", "c": "rgb(1, 1, 1)", "n": "al|ice " + "x" * 200, "t": "hi"},
@@ -598,7 +626,7 @@ async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id
     src = "https://example.com/avatar/secret-person-123.png"
     c = controller(Page([None]))
     seen: list[list[tuple[str, str]]] = []
-    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing=lambda *a: False)
+    c._rule = types.SimpleNamespace(feed=lambda e, n: seen.append(e) or [], changing_rows=lambda *a: iter(()))
     row = {
         "i": "",
         "c": "x",
@@ -615,3 +643,266 @@ async def test_the_picture_address_is_never_logged_and_the_key_holds_only_its_id
     c._clock, c._transcript, c._events = Clock(), Transcript(), Bus()
     c._emit([cap.Final(seen[0][0][0], "hi", 0.0, 1.0)])
     assert "secret-person" not in "\n".join(r.getMessage() for r in caplog.records)
+
+
+# ------------------------------- a person's row revised during the bot's line (#852, found live)
+
+PIC_ROW = {"i": "", "c": "rgba(0, 0, 0, 0)", "n": "", "p": "137b8afd3423"}
+
+
+class _Line:
+    """Whether the bot is playing a line, as the controller asks it."""
+
+    on = False
+
+    def __call__(self) -> bool:
+        return self.on
+
+
+def _with_line(c: Any) -> _Line:
+    line = _Line()
+    c.attach(c._provider, c._bot, line)
+    return line
+
+
+async def _show(c: Any, text: str, now: float, row: dict[str, Any] | None = None) -> None:
+    await c._take([{**(row or PIC_ROW), "t": text}], now)
+
+
+async def test_a_revision_of_the_same_words_during_a_line_is_not_speech_over_it(joinly_types: None) -> None:
+    """The live cut: the person's last caption was revised by Zoom (case, punctuation) while the bot spoke
+    and nobody talked. Same words as when the line began must leave the no-speech signal set. Fails if any
+    change to a row counts."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester, what's", 1.0)
+    line.on = True
+    await _show(c, "hey tester what's", 2.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_one_word_revised_with_the_same_count_is_an_edit(joinly_types: None) -> None:
+    """Zoom corrects a word in place: the count is the same and most words are as before. Fails if only an
+    identical text is treated as an edit."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's", 1.0)
+    line.on = True
+    await _show(c, "Hey Tester when's", 2.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_a_row_that_gains_a_word_during_a_line_cuts_it_at_once(joinly_types: None) -> None:
+    """Something new said over the bot stops it. Guard: the exemption must end at the first added word."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's", 1.0)
+    line.on = True
+    await _show(c, "Hey Tester what's up", 2.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_picture_person_never_heard_before_cuts_a_line_at_once(joinly_types: None) -> None:
+    """Guard: a person with a profile picture who has not spoken has no baseline, so any words are new. A fix
+    that waited for a name would leave them unable to interrupt (#810)."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    line.on = True
+    await _show(c, "Wait", 1.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_person_with_initials_cuts_a_line(joinly_types: None) -> None:
+    """Guard: a person with initials who says something new stops the line."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    row = {"i": "AB", "c": "rgb(1, 2, 3)"}
+    await _show(c, "Hello", 1.0, row)
+    line.on = True
+    await _show(c, "Hello there everyone", 2.0, row)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_row_replaced_by_a_shorter_different_utterance_cuts_a_line(joinly_types: None) -> None:
+    """Zoom replaces the row's text when a new utterance begins, and it can be shorter than the old one.
+    Fewer words is not an edit unless most of them were there. Guard against a rule that is only a count."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's up now", 1.0)
+    line.on = True
+    await _show(c, "Sure thing", 2.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_each_line_takes_a_fresh_baseline(joinly_types: None) -> None:
+    """Words added between two lines are not new to the second; words during it are. Fails if the baseline
+    is taken once, so the first line's picture of the row is used for the second."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "Hey Tester what's", 1.0)
+    line.on = True
+    await _show(c, "hey tester whats", 2.0)
+    assert c.no_speech_event.is_set()
+    line.on = False
+    await _show(c, "Hey Tester what's up", 3.0)  # said between the lines
+    line.on = True
+    await _show(c, "hey tester whats up", 4.0)  # an edit of it, in the second line
+    assert c.no_speech_event.is_set()
+    await _show(c, "hey tester whats up with the plan", 5.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_the_logs_hold_counts_and_none_of_the_captions_words(caplog: pytest.LogCaptureFixture) -> None:
+    """What someone said is never logged: the ignored edit gives the word counts before and after, and the
+    cut gives the baseline's count. Fails if a caption's text reaches a log line."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    with caplog.at_level("INFO"):
+        await _show(c, "Hey Tester what's", 1.0)
+        line.on = True
+        await _show(c, "hey tester whats", 2.0)
+        await _show(c, "hey tester whats", 3.0)
+        await _show(c, "hey tester whats up", 4.0)
+    assert "words_before=3 words=3" in caplog.text
+    assert caplog.text.count("an edit to words already shown") == 1
+    assert "words=4 baseline_words=3" in caplog.text
+    assert "tester" not in caplog.text.lower() and "what" not in caplog.text.lower()
+
+
+WINDOW = [f"w{i}" for i in range(30)]  # a full row: the words of one person's caption box
+
+
+@pytest.mark.parametrize("new_words", [1, 4])
+async def test_a_full_row_that_scrolls_at_the_same_count_cuts_a_line(
+    joinly_types: None, new_words: int
+) -> None:
+    """The box is a rolling window: once a person has talked a while, each new word pushes an old one out and
+    the count stays the same. That is speech over the bot, not an edit. Fails if a row with the same count
+    and mostly shown words is always an edit, so someone who has talked a lot cannot stop the bot."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, " ".join(WINDOW), 1.0)
+    line.on = True
+    await _show(c, " ".join(WINDOW[new_words:] + [f"new{i}" for i in range(new_words)]), 2.0)
+    assert not c.no_speech_event.is_set()
+
+
+def test_is_edit_keeps_in_place_revisions_and_refuses_scrolls() -> None:
+    """Guard: a revision keeps its words in their places and stays an edit (the live "Hey Tester, what's",
+    and one word of a long row); a scroll, even by one word, is not."""
+    assert cap.is_edit(cap.words_of("Hey Tester, what's"), cap.words_of("hey tester whats"))
+    revised = WINDOW[:10] + ["fixed"] + WINDOW[11:]
+    assert cap.is_edit(WINDOW, revised)
+    assert not cap.is_edit(WINDOW, WINDOW[1:] + ["new"])
+    assert not cap.is_edit(WINDOW, WINDOW[3:] + ["a", "b", "c"])
+
+
+async def test_a_one_word_revision_of_a_full_row_does_not_cut_a_line(joinly_types: None) -> None:
+    """Guard: the scroll check must not turn an in-place correction of a long row into speech."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, " ".join(WINDOW), 1.0)
+    line.on = True
+    await _show(c, " ".join(WINDOW[:10] + ["fixed"] + WINDOW[11:]), 2.0)
+    assert c.no_speech_event.is_set()
+
+
+# The live call on ec3b3668: a person who talked over the bot reused words of their previous caption.
+SAID = cap.words_of("I am now talking over you right now. Did I interrupt you correctly")
+
+
+async def _after_said(c: Any, text: str) -> None:
+    line = _with_line(c)
+    await _show(c, " ".join(SAID), 1.0)
+    line.on = True
+    await _show(c, text, 2.0)
+
+
+async def test_a_new_row_that_begins_with_a_word_the_last_one_had_cuts_at_the_first_word(
+    joinly_types: None,
+) -> None:
+    """Live: the person's previous row was 13 words; the new row began "I" and was logged as an edit because
+    "i" was among the old words, so the line was cut nine seconds late. Compared by position against the end
+    of the baseline, "I" is not "correctly". Fails if words are compared as a set."""
+    c = controller(Page([None]))
+    await _after_said(c, "I")
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_new_row_of_common_words_cuts_without_outgrowing_the_baseline(joinly_types: None) -> None:
+    """Live: "I am talking over you right now" reuses most of the old words and has fewer, and must still cut.
+    Fails if it takes more words than the baseline to be heard."""
+    c = controller(Page([None]))
+    await _after_said(c, "I am talking over you right now")
+    assert not c.no_speech_event.is_set()
+
+
+def test_is_edit_keeps_a_dropped_front_and_revisions_and_refuses_scrolls() -> None:
+    """Guard: the live 14-to-7 case (Zoom dropped the older sentence of a quiet person's row) is an edit, as
+    are an in-place revision and a dropped front with one revised word; a scroll is speech."""
+    long = cap.words_of("one two three four five six seven eight nine ten eleven twelve thirteen fourteen")
+    assert cap.is_edit(long, long[7:])
+    assert cap.is_edit(long, long[6:-1] + ["fixed"])
+    assert cap.is_edit(long, long[:5] + ["fixed"] + long[6:])
+    assert not cap.is_edit(long, long[1:] + ["new"])
+    assert not cap.is_edit(SAID, ["i"])
+
+
+# ---------------- revisions add up against the row as it last stood, not the list before the first (#852)
+
+
+async def test_successive_revisions_of_a_short_row_are_edits_while_the_line_plays(
+    joinly_types: None,
+) -> None:
+    """A multi-sentence @call is one speak_text a sentence and a 0.25 s poll can miss the gap, so the baseline
+    is from before the first sentence. "hey tester whats" -> "hey lester whats" -> "hey lester watts" must
+    not cut: the second differs from the original in two of three places. Fails if each revision is compared
+    with the baseline from before the first."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "hey tester whats", 1.0)
+    line.on = True  # and stays on across both revisions
+    await _show(c, "hey lester whats", 2.0)
+    assert c.no_speech_event.is_set()
+    await _show(c, "hey lester watts", 3.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_a_new_word_after_an_accepted_edit_still_cuts_at_once(joinly_types: None) -> None:
+    """Guard: taking the edited row as the baseline must not hide what is said next."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "hey tester whats", 1.0)
+    line.on = True
+    await _show(c, "hey lester whats", 2.0)
+    await _show(c, "hey lester whats up", 3.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_word_added_after_a_shrink_accepted_as_an_edit_cuts_at_once(joinly_types: None) -> None:
+    """Zoom shrinks a quiet 14-word row to its last 7 (the live case); one word more makes 8. Guard: it
+    passed on fa7688fe too (the 8 words did not line up with the 14's end), and must keep cutting now that the
+    7 are the baseline."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    long = [f"w{i}" for i in range(14)]
+    await _show(c, " ".join(long), 1.0)
+    line.on = True
+    await _show(c, " ".join(long[7:]), 2.0)
+    assert c.no_speech_event.is_set()
+    await _show(c, " ".join(long[7:] + ["fresh"]), 3.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_scroll_after_an_accepted_edit_still_cuts(joinly_types: None) -> None:
+    """Guard: a full row revised in place, then scrolled by new words, is speech."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    full = [f"w{i}" for i in range(30)]
+    await _show(c, " ".join(full), 1.0)
+    line.on = True
+    revised = full[:10] + ["fixed"] + full[11:]
+    await _show(c, " ".join(revised), 2.0)
+    assert c.no_speech_event.is_set()
+    await _show(c, " ".join(revised[2:] + ["a", "b"]), 3.0)
+    assert not c.no_speech_event.is_set()
