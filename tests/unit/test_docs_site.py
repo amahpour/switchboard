@@ -103,3 +103,32 @@ def test_the_site_build_is_part_of_the_required_ci_check() -> None:
     assert needs and "site" in [n.strip() for n in needs.group(1).split(",")]
     want = re.search(r"want = \((.*)\) if tests == \"true\" else \((.*)\)\n", aggregate)
     assert want and '"site"' in want.group(1) and '"site"' in want.group(2)
+
+
+def workflow_jobs(text: str) -> dict[str, str]:
+    """The jobs of a workflow file by id, each job's lines as text: the two-space keys under ``jobs:``."""
+    jobs: dict[str, str] = {}
+    name = ""
+    for line in text.split("\njobs:\n", 1)[1].splitlines():
+        key = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if key:
+            name = key.group(1)
+            jobs[name] = ""
+        elif name:
+            jobs[name] += line + "\n"
+    return jobs
+
+
+def test_the_site_is_published_by_a_job_after_the_one_that_uploads_it() -> None:
+    """docs.yml uploads the built site in one job and publishes it in a later one that `needs` it. With both
+    steps in one job, deploy-pages sometimes looked the artifact up moments after the upload and found none
+    ("Found 0 artifact(s)"): 5 of 100 publishes to main failed that way and the site went stale."""
+    jobs = workflow_jobs((ROOT / ".github/workflows/docs.yml").read_text(encoding="utf-8"))
+    upload = [job for job, body in jobs.items() if "actions/upload-pages-artifact@" in body]
+    deploy = [job for job, body in jobs.items() if "actions/deploy-pages@" in body]
+    assert len(upload) == 1 and len(deploy) == 1, f"one upload job and one publish job: {upload}, {deploy}"
+    assert upload != deploy, "the upload and the publish are in the same job"
+    assert re.search(rf"^    needs: \[?{upload[0]}\]?\s*$", jobs[deploy[0]], re.M), (
+        "the publish job needs the upload job"
+    )
+    assert "id-token: write" not in jobs[upload[0]], "only the publish job proves the run with an OIDC token"
