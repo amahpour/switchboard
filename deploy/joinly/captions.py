@@ -672,7 +672,7 @@ class CaptionsTranscriptionController:
         self._anonymous_own = anonymous_own
         playing = self._playback_active()
         if playing and not self._was_playing:  # a new line: what the rows showed just before it is the baseline
-            self._baseline = self._last_texts
+            self._baseline = dict(self._last_texts)
             self._edit_logged = False
         self._was_playing = playing
         self._last_texts = {key: words_of(caption) for key, caption in entries}
@@ -693,6 +693,9 @@ class CaptionsTranscriptionController:
             if playing:
                 before, words = self._baseline.get(key), words_of(caption)
                 if is_edit(before, words):
+                    # The row as it last stood is the next baseline: a 0.25 s poll can miss the gap between a
+                    # line's sentences, and revisions must not add up against a list from before the first.
+                    self._baseline[key] = words
                     if not self._edit_logged:
                         self._edit_logged = True
                         logger.info(

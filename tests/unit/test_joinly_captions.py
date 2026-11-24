@@ -846,3 +846,63 @@ def test_is_edit_keeps_a_dropped_front_and_revisions_and_refuses_scrolls() -> No
     assert cap.is_edit(long, long[:5] + ["fixed"] + long[6:])
     assert not cap.is_edit(long, long[1:] + ["new"])
     assert not cap.is_edit(SAID, ["i"])
+
+
+# ---------------- revisions add up against the row as it last stood, not the list before the first (#852)
+
+
+async def test_successive_revisions_of_a_short_row_are_edits_while_the_line_plays(
+    joinly_types: None,
+) -> None:
+    """A multi-sentence @call is one speak_text a sentence and a 0.25 s poll can miss the gap, so the baseline
+    is from before the first sentence. "hey tester whats" -> "hey lester whats" -> "hey lester watts" must
+    not cut: the second differs from the original in two of three places. Fails if each revision is compared
+    with the baseline from before the first."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "hey tester whats", 1.0)
+    line.on = True  # and stays on across both revisions
+    await _show(c, "hey lester whats", 2.0)
+    assert c.no_speech_event.is_set()
+    await _show(c, "hey lester watts", 3.0)
+    assert c.no_speech_event.is_set()
+
+
+async def test_a_new_word_after_an_accepted_edit_still_cuts_at_once(joinly_types: None) -> None:
+    """Guard: taking the edited row as the baseline must not hide what is said next."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    await _show(c, "hey tester whats", 1.0)
+    line.on = True
+    await _show(c, "hey lester whats", 2.0)
+    await _show(c, "hey lester whats up", 3.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_word_added_after_a_shrink_accepted_as_an_edit_cuts_at_once(joinly_types: None) -> None:
+    """Zoom shrinks a quiet 14-word row to its last 7 (the live case); one word more makes 8. Guard: it
+    passed on fa7688fe too (the 8 words did not line up with the 14's end), and must keep cutting now that the
+    7 are the baseline."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    long = [f"w{i}" for i in range(14)]
+    await _show(c, " ".join(long), 1.0)
+    line.on = True
+    await _show(c, " ".join(long[7:]), 2.0)
+    assert c.no_speech_event.is_set()
+    await _show(c, " ".join(long[7:] + ["fresh"]), 3.0)
+    assert not c.no_speech_event.is_set()
+
+
+async def test_a_scroll_after_an_accepted_edit_still_cuts(joinly_types: None) -> None:
+    """Guard: a full row revised in place, then scrolled by new words, is speech."""
+    c = controller(Page([None]))
+    line = _with_line(c)
+    full = [f"w{i}" for i in range(30)]
+    await _show(c, " ".join(full), 1.0)
+    line.on = True
+    revised = full[:10] + ["fixed"] + full[11:]
+    await _show(c, " ".join(revised), 2.0)
+    assert c.no_speech_event.is_set()
+    await _show(c, " ".join(revised[2:] + ["a", "b"]), 3.0)
+    assert not c.no_speech_event.is_set()
