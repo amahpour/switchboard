@@ -1,3 +1,0 @@
-### Fixed
-
-- **A review board's options are numbered from 1, wherever a person or an agent reads or types one.** The board text an agent reads now says `1. before tax | 2. after tax` (it began at `0.`), `recommend` on `raise` and `ask` and `concur`'s `recommend` take 1 to n, and the web page's option buttons send the option's number from 1. A person's answer in the room now reads "Q1 answered with option 1" (it said "option 0"). The board text comes from the server, so agents see the new numbers as soon as the server updates, whatever their plugin; a 0 is refused with a "1 to n" message. Nothing stored changes, so no migration.
