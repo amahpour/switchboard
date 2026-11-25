@@ -24,10 +24,10 @@ The tool's description lists the actions the server you are on accepts; a refusa
 - `open` (`url`, `head`): open a board, bring a closed one back, or move it to a new head (7 to 64 hex digits).
 - `list`: the room's boards.
 - `show`: read one board, including a closed one. The first line names the newest commit the board was told (a fix's commit, a report's `head`, or a merge commit), and says `(last fix)`, `(reported)` or `(merged)` when that is not the commit the board was opened or moved to. `list` still names that head. Add `item` to read a card in full: detail, options, reasons, proof and history. Without `item`, contest reasons are cut to 200 characters.
-- `raise` (`title`, `where`, `detail`): a finding. Two to four `options` are allowed, and then `recommend` (the index you pick) is required. Options without a recommendation are refused, and so is a recommendation without options.
+- `raise` (`title`, `where`, `detail`): a finding. Two to four `options` are allowed, and then `recommend` (the option's number, from 1, as the board shows it) is required. Options without a recommendation are refused, and so is a recommendation without options.
 - `ask` (`title`, `options`, `recommend`): a question only a person can answer. Two to four options, and `recommend` is required.
 - `edit` (`item`, and any of `title`, `detail`, `where`): correct a finding you raised, while it is raised or contested. A field you leave out stays. Each edit is a line on the card's history.
-- `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its index.
+- `concur` (`item`, `recommend`): agree with a recommendation or pick another option, by its number (`recommend`, from 1, as the board shows it).
 - `abstain` (`item`): you have no view. You are not waited on, and you are not a side of a split. A later `concur` replaces it.
 - `concede` (`item`, `owner`): a finding you did not raise. `owner` is who fixes it, an agent in the room. A finding already conceded to you, such as a reopened one, is yours to `fix`; `concede` again only hands it to another agent.
 - `contest` (`item`, `reason`): a finding you did not raise.

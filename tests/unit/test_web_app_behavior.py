@@ -788,7 +788,8 @@ def test_a_review_board_call_is_made_from_its_card_through_the_boards_own_moves(
     moves each allows; choosing an option sends the board's answer move for that item and option; Drop
     without a
     reason sends nothing and says why; a move the broker refuses shows its reason on the card. Fails if a move
-    goes to a different route than the room's board page uses, or a refusal is swallowed."""
+    goes to a different route than the room's board page uses, sends the stored index (0 for the first
+    option) instead of its number from 1, or a refusal is swallowed."""
     out = run("home_board_call")
     assert out["items"] == ["Q1 Keep v1?", "F2 Limit is too low", "F3 Old path"]
     assert out["options"] == ["Keep it", "Remove it (recommended)", "Concede to", "Drop", "Confirm the fix"]
@@ -799,7 +800,7 @@ def test_a_review_board_call_is_made_from_its_card_through_the_boards_own_moves(
             "url": "https://example.com/shop/pull/7",
             "item": "Q1",
             "action": "answer",
-            "option": 1,
+            "option": 2,  # "Remove it" is the second option: a person's numbers run from 1
         },
         {"room": "build", "url": "https://example.com/shop/pull/7", "item": "F3", "action": "confirm"},
     ]

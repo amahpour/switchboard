@@ -642,7 +642,7 @@ class UIWorld:
         call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
              detail="Finance's sheet says **before tax**. On the $96.00 order, with the 10% code:\n\n"
                     "| | Total |\n|---|---|\n| Before tax | $86.40 |\n| After tax | $88.00 |",
-             options=["Before tax", "After tax"], recommend=0)  # fmt: skip
+             options=["Before tax", "After tax"], recommend=1)  # fmt: skip
 
     def seed_second_review(self, room: str, pr: str = "https://github.com/example/shop/pull/8") -> None:
         """A second open board in a room ``seed_review`` filled, for another pull request (#445,
@@ -652,7 +652,7 @@ class UIWorld:
         call(room, "claude-1", "review", action="raise", url=pr, where="shop/cart.py:61",
              title="Cart total is stale after a code is removed")  # fmt: skip
         call(room, "claude-1", "review", action="ask", url=pr, title="Keep the old endpoint?",
-             options=["Keep it", "Remove it"], recommend=1)  # fmt: skip
+             options=["Keep it", "Remove it"], recommend=2)  # fmt: skip
 
     def agent_say(self, room: str, name: str, text: str, reply_to: int | None = None) -> int:
         """Post from an agent joined by ``add_agents``; returns the posted message id."""

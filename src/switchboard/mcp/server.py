@@ -321,7 +321,7 @@ def build_server(st: ToolBackend) -> FastMCP:
         proof: str = "",
         reason: str = "",
         options: list[str] = EMPTY_OPTIONS,
-        recommend: int = -1,
+        recommend: int = -1,  # an option number, 1 to n; -1 is "not given"
         state: str = "",
         threads: int = -1,
         ci: str = "",

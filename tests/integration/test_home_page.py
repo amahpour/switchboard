@@ -139,11 +139,11 @@ def test_a_board_call_is_a_card_and_answering_it_is_the_rooms_own_move(
     assert len(cards) == 1 and cards[0]["need"] == 1
     item = cards[0]["items"][0]
     assert (item["label"], item["moves"], item["options"]) == ("Q1", ["answer"], ["Keep", "Remove"])
-    r = alice.post("/api/rooms/build/review", {"action": "answer", "item": "Q1", "option": 1, "url": PR})
+    r = alice.post("/api/rooms/build/review", {"action": "answer", "item": "Q1", "option": 2, "url": PR})
     assert r.status_code == 200, r.text
     assert [c for c in home(alice)["waiting"] if c["kind"] == "board"] == []
     texts = [m["text"] for m in alice.get("/api/rooms/build/messages").json()["messages"]]
-    assert any("Q1 answered with option 1" in t for t in texts)
+    assert any("Q1 answered with option 2: Remove" in t for t in texts), texts  # 2 of 1 to n
 
 
 def test_done_lists_what_agents_said_since_you_looked_and_seen_moves_only_forward(

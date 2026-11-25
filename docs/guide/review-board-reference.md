@@ -182,7 +182,7 @@ An option's note tells you what the agents think:
 - "(picked by codex-1)" on two options means the agents are split. No option is recommended, and the card says so. That one is yours.
 - "abstained: codex-1." means that agent recorded no view. They are not in the waiting line, and they did not pick an option.
 
-Your answer is your own message in the room: "Review board: Q1 answered with option 0." It names the question and your choice by number, and never repeats the agents' words. You can also drop a question, with a reason.
+Your answer is your own message in the room: "Review board: Q1 answered with option 1: Before tax." It names the question and your choice by its number, from 1, with the start of its words (cut short, with any @ made harmless so no agent is mentioned). You can also drop a question, with a reason.
 
 ### Confirm a fix
 
@@ -194,7 +194,7 @@ When a room has two or more open boards, a row of tabs sits at the top of the bo
 
 ![Two boards as tabs, with the first on show](../media/ui/guide-review-tabs.png)
 
-A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 0." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count toward the eight, but a room keeps at most 24 boards open in all.
+A tab shows the forge's mark, the repository's name, the number, and how many cards on it need you. Click a tab to show that board. With the keyboard, use the arrow keys, Home and End. Each board has its own lanes, its own **Hand off** and its own **Close board**. What you do is about the board on show. Your message in the room says which, by its number: "Review board #7: Q1 answered with option 1: Before tax." With one open board there are no tabs. A room holds at most eight boards that still have work, or that have no cards yet. A settled board does not count toward the eight, but a room keeps at most 24 boards open in all.
 
 ### When the head commit changes
 
@@ -260,10 +260,10 @@ F2 [fixed] Expired codes still apply (shop/codes.py:12-19): fixed by claude-1 in
 
 ### Raising and asking
 
-- **`raise`** raises a finding. It takes `title` and `where`, the place in the code, as `shop/cart.py:40-58`, `shop/cart.py:42`, or just the path. It takes `detail`, written in Markdown, with a Mermaid diagram when a picture explains it better than words. A finding can also offer two to four fix options in `options`, with the one it recommends in `recommend`.
-- **`ask`** asks a person a question. It takes `title`, `options` (two to four, all different) and `recommend`, the position of the option it picks, counting from 0. `recommend` is required. It can also take `detail`.
+- **`raise`** raises a finding. It takes `title` and `where`, the place in the code, as `shop/cart.py:40-58`, `shop/cart.py:42`, or just the path. It takes `detail`, written in Markdown, with a Mermaid diagram when a picture explains it better than words. A finding can also offer two to four fix options in `options`, with the one it recommends in `recommend`, the option's number from 1, as the board lists it ("1. Before tax | 2. After tax").
+- **`ask`** asks a person a question. It takes `title`, `options` (two to four, all different) and `recommend`, the number of the option it picks, from 1 to the number of options. `recommend` is required, and a 0 is refused. It can also take `detail`.
 - **`edit`** corrects a finding's title, detail, file or lines. It takes `item` and any of `title`, `detail` and `where`. A field left out stays. Only the raiser can, and only while the finding is raised or contested. Each edit is a line on the card's history, naming the fields. The state does not change. A person can correct any card from the page, in any state.
-- **`concur`** agrees with the recommended option, or picks another. It takes `item` and `recommend`, the position of the option the agent picks. An agent may pick again. It works while the item is still being decided.
+- **`concur`** agrees with the recommended option, or picks another. It takes `item` and `recommend`, the number of the option the agent picks, from 1. An agent may pick again. It works while the item is still being decided.
 - **`abstain`** records that the agent has no view. It takes `item` and nothing else. That agent is no longer waited on, and is not counted in a split. The card says "abstained: …". A later `concur` replaces it. It works while the item is still being decided, on a question or on a finding's fix options.
 
 ```text
@@ -272,9 +272,9 @@ review(room="build", action="raise", title="Discount is taken after tax",
        detail="`total()` adds tax first, then takes the code's percentage off.")
 
 review(room="build", action="ask", title="Discount before or after tax?",
-       options=["Before tax", "After tax"], recommend=0)
+       options=["Before tax", "After tax"], recommend=1)  # the first option
 
-review(room="build", action="concur", item="Q1", recommend=0)
+review(room="build", action="concur", item="Q1", recommend=2)  # agree on the second
 
 review(room="build", action="abstain", item="Q1")
 ```
@@ -328,7 +328,7 @@ A board can keep a review in order. It cannot act on your behalf in the world ou
 
 - **switchboard fetches nothing.** It never reads the pull request, never judges a finding, never runs a model, and never holds a GitHub or GitLab token. It never posts, comments, approves or merges. The board only keeps what agents and people tell it.
 - **Only agents in the room can move cards.** An agent calls the tool with its own credential. A move is always a tool call, never something picked out of chat text. An agent cannot answer a question. Only you can.
-- **Your answers go out as your own messages, naming items by number.** "Review board: Q1 answered with option 0." never contains an agent's title or option. If it did, an agent's words would reach every other agent as if you had said them, including any @mention in them. The agents read their own text from the board, as other agents' text.
+- **Your answers go out as your own messages, naming items by number.** "Review board: Q1 answered with option 1: Before tax." never contains an agent's title, and holds only the start of the option you chose, with its @ made a full-width one. If it carried more, an agent's words would reach every other agent as if you had said them, including any @mention in them. The agents read their own text from the board, as other agents' text.
 - **The page treats what agents write as text.** Titles and reasons are shown as plain text. A card's detail goes through the same Markdown renderer as the chat, which runs no HTML and checks every link. The links to lines and commits are built only from the forge's own parts and checked values. A Mermaid diagram is drawn with the chat's safety settings. One that cannot be drawn keeps its code and says why.
 - **Obvious secrets are cut out.** What an agent or you write on a board goes through the same check as a chat message: a key or token with a well-known prefix, `Bearer` and a long token, a private-key block, or a `password=` style value becomes `[redacted: github token]` (or its kind) before it is stored, shown or posted in the room. A board link or a proof link that holds one (or a `user:password@` in front of the host) is refused, and so is a field that the marker would make too long. This is best effort, as it is for messages ([Secrets in messages](../USAGE.md#secrets-in-messages)): don't put secrets on a board.
 - **The proof rule.** A fix has to name its commit and a proof. The agent that raised the finding checks it and confirms, and a fix cannot be confirmed by its own owner. switchboard checks only the shape of the proof, a test name or an http or https link. It never runs the test and never opens the link. Whether the proof is good is for the agent that checks it, and for you. [The proof rule on a real review](../research/proof-rule.md) has the experiment behind it.

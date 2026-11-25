@@ -3326,7 +3326,12 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     detail = page.locator("#board .board-detail")
     expect(detail.locator("h3")).to_have_text("Q1 · Discount before or after tax?")
     expect(detail.locator('button[data-option="0"]')).to_have_text("Before tax (claude-1 recommends this)")
-    detail.locator('button[data-option="0"]').click()
+    with page.expect_request(
+        lambda r: r.url.endswith("/e2e-board-answer/review") and r.method == "POST"
+    ) as sent:
+        detail.locator('button[data-option="0"]').click()
+    # the first option is option 1 to a person and to the API (it is index 0 only in the page's data)
+    assert sent.value.post_data_json["option"] == 1
     expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()
     page.click('#board .board-card[data-item="F3"]')
     page.select_option("#board-owner", "codex-1")
@@ -3337,7 +3342,7 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     expect(page.locator("#board .lane-you .board-empty")).to_have_text("Nothing needs you")
     expect(page.locator("#board-status")).to_have_text("2 open")
     page.click("#board-toggle")
-    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 0")
+    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 1: Before tax")
     expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
 
 
@@ -3496,12 +3501,12 @@ def test_a_question_marks_an_option_recommended_only_once_the_agents_agree(ui: U
     expect(detail.locator(".board-consensus")).to_have_text("Waiting for codex-1 to agree or pick another.")
     expect(buttons.nth(0)).not_to_have_class(cls("btn-primary"))  # one agent's pick isn't the board's
 
-    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=0)
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
     expect(buttons).to_have_text(["Before tax (recommended by claude-1 and codex-1)", "After tax"])
     expect(buttons.nth(0)).to_have_class(cls("btn-primary"))
     expect(detail.locator(".board-consensus")).to_have_count(0)
 
-    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=2)
     expect(buttons).to_have_text(["Before tax (picked by claude-1)", "After tax (picked by codex-1)"])
     expect(detail.locator(".board-consensus")).to_have_text("The agents are split: no option is recommended.")
     expect(detail.locator("button.btn-primary[data-option]")).to_have_count(0)
@@ -3530,7 +3535,7 @@ def test_an_abstention_is_named_on_the_card_and_a_later_pick_replaces_it(ui: UI)
     expect(option_buttons(page).nth(0)).to_have_text("Before tax (recommended by claude-1)")
     expect(detail.locator(".board-consensus")).to_have_text("abstained: codex-1.")
 
-    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=2)
     expect(option_buttons(page)).to_have_text(
         ["Before tax (picked by claude-1)", "After tax (picked by codex-1)"]
     )
@@ -3545,7 +3550,7 @@ def test_the_option_the_agents_recommend_is_listed_first(ui: UI) -> None:
     page = review_room(ui, slug)
     ui.world.agent_call(
         room, "codex-1", "review", action="ask", title="Keep the retry loop?",
-        options=["Keep the retry loop", "Cap it at three tries", "Remove it"], recommend=1,
+        options=["Keep the retry loop", "Cap it at three tries", "Remove it"], recommend=2,
     )  # fmt: skip
     page.click("#board-toggle")
     page.click('#board .board-card[data-item="Q2"]')
@@ -3553,7 +3558,7 @@ def test_the_option_the_agents_recommend_is_listed_first(ui: UI) -> None:
     expect(buttons).to_have_text(
         ["Cap it at three tries (codex-1 recommends this)", "Keep the retry loop", "Remove it"]
     )
-    ui.world.agent_call(room, "claude-1", "review", action="concur", item="Q2", recommend=1)
+    ui.world.agent_call(room, "claude-1", "review", action="concur", item="Q2", recommend=2)
     expect(buttons).to_have_text(
         ["Cap it at three tries (recommended by codex-1 and claude-1)", "Keep the retry loop", "Remove it"]
     )
@@ -3597,7 +3602,7 @@ def test_a_finding_lists_its_fix_options_with_who_recommends_them(ui: UI) -> Non
     page = review_room(ui, slug)
     ui.world.agent_call(
         room, "codex-1", "review", action="raise", title="Retry loop never stops",
-        where="shop/retry.py:10-20", options=["Cap the retries", "Remove the loop"], recommend=0,
+        where="shop/retry.py:10-20", options=["Cap the retries", "Remove the loop"], recommend=1,
     )  # fmt: skip
     page.click("#board-toggle")
     page.click('#board .board-card[data-item="F5"]')
@@ -3608,7 +3613,7 @@ def test_a_finding_lists_its_fix_options_with_who_recommends_them(ui: UI) -> Non
         "Waiting for claude-1 to agree or pick another."
     )
     expect(page.locator("#board .board-detail button[data-option]")).to_have_count(0)
-    ui.world.agent_call(room, "claude-1", "review", action="concur", item="F5", recommend=0)
+    ui.world.agent_call(room, "claude-1", "review", action="concur", item="F5", recommend=1)
     expect(options.nth(0)).to_have_text("Cap the retries (recommended by codex-1 and claude-1)")
     expect(page.locator("#board .board-detail .board-consensus")).to_have_count(0)
 
@@ -3620,7 +3625,7 @@ def test_an_agent_joining_the_room_changes_what_the_board_says_with_no_move(ui: 
     slug = "e2e-board-newcomer"
     room = "#" + slug
     page = review_room(ui, slug)
-    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=0)
+    ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
     page.click("#board-toggle")
     page.click('#board .board-card[data-item="Q1"]')
     buttons = option_buttons(page)
@@ -3630,7 +3635,7 @@ def test_an_agent_joining_the_room_changes_what_the_board_says_with_no_move(ui: 
     expect(page.locator("#board .board-detail .board-consensus")).to_have_text(
         "Waiting for devin-1 to agree or pick another."
     )
-    ui.world.agent_call(room, "devin-1", "review", action="concur", item="Q1", recommend=0)
+    ui.world.agent_call(room, "devin-1", "review", action="concur", item="Q1", recommend=1)
     expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1, codex-1 and devin-1)")
 
 
@@ -4232,7 +4237,7 @@ def test_a_long_option_wraps_inside_the_question_s_detail(ui: UI, size: str) -> 
     other = "Disallow private rooms as invite sources and destinations"
     ui.world.agent_call(
         "#" + slug, "codex-1", "review", action="ask", title="Should invites support private rooms?",
-        options=[long, other], recommend=0,
+        options=[long, other], recommend=1,
     )  # fmt: skip
     page.click("#board-toggle")
     page.click('#board .board-card[data-item="Q2"]')
@@ -4640,7 +4645,7 @@ def test_closing_one_of_two_boards_keeps_it_and_an_agent_opening_it_brings_it_ba
         lambda r: r.url.endswith(f"/api/rooms/{slug}/review") and r.method == "POST"
     ) as sent:
         page.locator('#board .board-detail button[data-option="1"]').click()
-    assert sent.value.post_data_json == {"url": PR_TWO, "action": "answer", "item": "Q1", "option": 1}
+    assert sent.value.post_data_json == {"url": PR_TWO, "action": "answer", "item": "Q1", "option": 2}
     expect(page.locator('#board .lane-settled .board-card[data-item="Q1"]')).to_be_visible()
 
     page.click("#board-close")
@@ -4712,7 +4717,7 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
         assert result["ok"], result
 
     move(action="open", url=unknown)
-    move(action="ask", title="When should discounts apply?", options=["Before tax", "After tax"], recommend=0)
+    move(action="ask", title="When should discounts apply?", options=["Before tax", "After tax"], recommend=1)
     move(action="close", state="unknown", reason="Review paused")
     move(action="open", url=merged)
     move(action="raise", title="Check rounding")
