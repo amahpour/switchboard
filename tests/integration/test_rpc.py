@@ -189,7 +189,8 @@ def test_command_roles_over_uds_without_trust(tmp_home: Path) -> None:
         assert (
             "paused" in call_sync(b.paths.sock, "human.command", {"room": "#build", "text": "/pause"})["text"]
         )
-        for text in ["/resume", "/budget 61", "/release x"]:
+        web.post("/api/rooms/build/command", json={"text": "/budget 10"}, headers=b.write_headers())
+        for text in ["/resume", "/budget 61", "/budget 0", "/release x"]:
             with pytest.raises(RpcError) as e:
                 call_sync(b.paths.sock, "human.command", {"room": "#build", "text": text})
             assert e.value.code == "forbidden", text

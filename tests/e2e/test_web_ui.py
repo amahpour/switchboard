@@ -680,7 +680,7 @@ def test_the_room_buttons_sit_in_one_row_on_a_phone(ui: UI) -> None:
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_a_phones_header_shows_every_chip_without_scrolling(ui: UI, scheme: str) -> None:
     """#716: on a 390 px phone the header's chip row scrolled sideways. With hands-free on and every
-    chip showing (Hands-free, Running, Budget, the loop-guard warning, the approvals count) Hops sat
+    chip showing (Hands-free, Running, Budget, Hops, the approvals count) Hops sat
     past the edge. Whether a room is paused or out of budget is worth seeing without a swipe, so the
     row wraps and each chip is wholly inside it. Fails if any shown chip is cut by the row, or the
     row scrolls, at 390x844, including at the larger text size."""
@@ -688,14 +688,13 @@ def test_a_phones_header_shows_every_chip_without_scrolling(ui: UI, scheme: str)
     world = ui.world
     world.create_room("#" + room)
     world.command(room, "/room voice on")
-    world.command(room, "/hops 0")  # "loop guard off", the long form of the Hops chip
     world.add_agents("#" + room, ("ag-1",))
     world.set_approval_modes("#" + room, {"ag-1": "bypass"})
     page = ui.open(room=room, color_scheme=scheme, **PHONE)
     expect(page.locator("#st-handsfree")).to_have_text("Hands-free")
     expect(page.locator("#st-state")).to_have_text("Running")
     expect(page.locator("#st-budget")).to_contain_text("60/60")
-    expect(page.locator("#st-hops")).to_contain_text("loop guard off")
+    expect(page.locator("#st-hops")).to_contain_text("Hops")
     expect(page.locator("#st-approvals")).to_be_visible()
     assert page.locator("#st-approvals").evaluate("el => getComputedStyle(el, '::after').content") == '"1"'
     report = chip_row_report(page)
@@ -1931,12 +1930,14 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
 
 def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) -> None:
     """Settings' Rooms section seeds a new room's budget and hop limit; the room's own
-    header dialog then changes just that room, live, with a notice and a hop-limit-0 warning."""
+    header dialog then changes just that room, live, with a notice. A limit of 0 is no limit: it
+    has no warning, and its chip goes."""
     page = ui.open()
     open_settings(page, "rooms")
     page.locator("#settings-budget").fill("120")
     page.locator("#settings-hops").fill("20")
-    expect(page.locator("#settings-hops-warn")).to_be_hidden()
+    expect(page.locator("#settings-budget-hint")).to_contain_text("0 means no limit")
+    expect(page.locator("#settings-hops-hint")).to_contain_text("0 means no limit")
     page.click("#settings-rules-save")
     expect(page.locator("#settings-rules-status")).to_have_text("Saved")
     page.click("#settings-close")
@@ -1953,28 +1954,51 @@ def test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live(ui: UI) ->
     expect(dialog).to_be_visible()
     expect(page.locator("#app-dialog-budget")).to_have_value("120")
     expect(page.locator("#app-dialog-hops")).to_have_value("20")
-    expect(page.locator("#app-dialog-wake-warn")).to_be_hidden()
+    expect(page.locator("#app-dialog-budget-hint")).to_contain_text("0 means no limit")
+    expect(page.locator("#app-dialog-hops-hint")).to_contain_text("0 means no limit")
     page.locator("#app-dialog-hops").fill("0")
-    expect(page.locator("#app-dialog-wake-warn")).to_be_visible()
-    expect(page.locator("#app-dialog-wake-warn")).to_contain_text("loop guard off")
+    expect(page.locator("#app-dialog-wake-error")).to_have_text("")  # 0 is a normal value
     page.locator("#app-dialog-budget").fill("300")
     page.click("#app-dialog-action")
     expect(dialog).to_be_hidden()
     expect(page.locator("#log")).to_contain_text(TEST_HUMAN + " set the wake budget to 300/hour")
     expect(page.locator("#log")).to_contain_text(TEST_HUMAN + " turned the loop guard off")
     expect(page.locator("#st-budget")).to_contain_text("300")
-    expect(page.locator("#st-hops")).to_contain_text("loop guard off")
+    expect(page.locator("#st-hops")).to_be_hidden()  # no loop guard chip: its limit is off
 
     # a later default change never reaches back into the already-created room
     open_settings(page, "rooms")
     expect(page.locator("#settings-budget")).to_have_value("120")
     page.locator("#settings-budget").fill("")
     page.locator("#settings-hops").fill("")
-    expect(page.locator("#settings-budget-source")).to_contain_text("built-in default")
+    expect(page.locator("#settings-budget-source")).to_contain_text("config.toml")
     page.click("#settings-rules-save")
     expect(page.locator("#settings-rules-status")).to_have_text("Saved")
     page.click("#settings-close")
     ui.world.command("e2e-wake", "/close")
+
+
+def test_a_room_shows_a_wake_chip_only_while_its_limit_is_on(ui: UI) -> None:
+    """#965: a wake budget or hop limit of 0 is no limit, so its header chip is not there (and no
+    "loop guard off" warning stands in for it); a limit that is set shows its chip, and
+    ``/budget 20`` sets the rate, so the chip reads 20/20. Fails if either chip shows for a limit of
+    0, or ``/budget`` sets only what is left (leaving the chip above its rate)."""
+    world = ui.world
+    world.create_room("#no-limits")
+    world.command("no-limits", "/budget 0")
+    world.command("no-limits", "/hops 0")
+    page = ui.open(room="no-limits")
+    expect(page.locator("#st-state")).to_have_text("Running")
+    expect(page.locator("#st-budget")).to_be_hidden()
+    expect(page.locator("#st-hops")).to_be_hidden()
+    expect(page.locator("#status-chips")).not_to_contain_text("loop guard")
+    world.command("no-limits", "/budget 20")
+    world.command("no-limits", "/hops 5")
+    expect(page.locator("#st-budget")).to_have_text(re.compile(r"Budget\s*20/20"))
+    expect(page.locator("#st-hops")).to_have_text(re.compile(r"Hops\s*0/5"))
+    world.command("no-limits", "/budget 0")
+    expect(page.locator("#st-budget")).to_be_hidden()
+    world.command("no-limits", "/close")
 
 
 def test_settings_shows_seven_tabs_on_a_desktop_broker(ui: UI) -> None:

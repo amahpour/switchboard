@@ -144,7 +144,7 @@ def test_the_upgrade_cleans_the_stored_whiteboard_and_its_change_records(
     path = at_55(tmp_path, monkeypatch)
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 61
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 62
         raw = con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0]
         got = {e["id"]: e for e in json.loads(raw)}
         assert set(got) == {"clean1", "wrapped", "ten_equal", "ten_wrapped", "arrow1", "label", "holder"}

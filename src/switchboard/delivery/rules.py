@@ -406,11 +406,11 @@ def releasable(
         return done(prio, "priority", False) if prio else None
     if not is_idle(eff):
         return None
-    if prio and (any(d.prio == 2 for d in prio) or room.budget_remaining > 0):
+    if prio and (any(d.prio == 2 for d in prio) or not room.budget_spent):
         return done(prio + (chatter if ok or wake_now else []), "wake", True)
     if chatter and wake_now:
         return done(chatter, "wake", True)
-    if chatter and ok and room.budget_remaining > 0 and not voice_loop:
+    if chatter and ok and not room.budget_spent and not voice_loop:
         ordinary_due = chatter_due(
             room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=addressed_only
         )
@@ -448,7 +448,7 @@ def budget_blocked(
 
     Unaddressed chatter a quiet member is holding (#548) does not count: the budget
     is not what keeps it. A reply still would, once the quiet period let it go."""
-    if not is_idle(eff) or room.budget_remaining > 0:
+    if not is_idle(eff) or not room.budget_spent:
         return False
     eligible = [d for d in pending if d.notified_at is None]
     if any(d.prio == 2 for d in eligible):

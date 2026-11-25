@@ -1000,8 +1000,8 @@ class RoomService:
 
     def set_room_wake(self, room_name: str, *, budget_per_hour: int, hop_limit: int, actor: str) -> Room:
         """Budget per hour and hop limit from the room's own settings dialog (#131), live and
-        without a restart: the rate ``/budget <n>`` can't set (it only ever sets what's left
-        this hour) and the hop limit ``/hops <n>`` does, saved together in one dialog. Bounds
+        without a restart: the rate (``/budget <n>`` sets it too, #965) and the hop limit
+        (``/hops <n>``), saved together in one dialog. Bounds
         and unknown fields are checked by the caller (the web route). Only a signed-in web
         session reaches this route, the same role ``/budget`` and ``/hops`` need to raise
         activity (``commands.required_role``), so no further role check runs here; lowering
@@ -1018,7 +1018,9 @@ class RoomService:
                 data={"old": old_rate, "new": budget_per_hour, "per_hour": True},
             )
             self.post_notice(
-                room, f"{actor} set the wake budget to {budget_per_hour}/hour (was {old_rate}/hour)"
+                room,
+                f"{actor} set the wake budget to {cmds.budget_phrase(budget_per_hour)}"
+                f" (was {cmds.budget_phrase(old_rate)})",
             )
             changed = True
         if hop_limit != old_hops:
@@ -1789,8 +1791,9 @@ class RoomService:
         state = f"paused ({room.paused_reason})" if room.paused else "active"
         lines = [
             f"{room.name}: {state}",
-            f"  budget {room.budget_remaining}/{room.budget_per_hour} wakes this hour"
-            f" (refills {_hhmmss(room.budget_reset_at)}); {cmds.hops_state(room)}",
+            f"  {cmds.budget_state(room)}"
+            + (f" (refills {_hhmmss(room.budget_reset_at)})" if room.budget_on else "")
+            + f"; {cmds.hops_state(room)}",
         ]
         members = self.member_rows(room.id)
         if not members:

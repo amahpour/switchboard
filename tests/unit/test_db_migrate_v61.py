@@ -46,7 +46,7 @@ def test_a_schema_60_database_admits_grok_and_nothing_else_changes(tmp_path: Pat
     backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 61
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 62
         assert db.schema_version(backup) == 60
         assert "'grok'" not in backup.execute(PARTICIPANTS).fetchone()[0]
         # the same table, spaced as each was written: SQLite keeps a table's text as it was given

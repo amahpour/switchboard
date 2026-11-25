@@ -790,7 +790,7 @@ const SCENARIOS = {
                                                          budget_per_hour: 60 } };
     const first = {
       state: w.$('st-state').textContent, stateBad: w.$('st-state').classList.contains('bad'),
-      hops: w.$('st-hops').textContent, hopsBad: w.$('st-hops').classList.contains('bad'),
+      hops: w.$('st-hops').textContent, hopsHidden: w.$('st-hops').classList.contains('hidden'),
       budget: w.$('st-budget').textContent, budgetBad: w.$('st-budget').classList.contains('bad'),
       paused: w.$('banner-paused').textContent, pausedHidden: w.$('banner-paused').classList.contains('hidden'),
       pauseLabel: w.$('pause-toggle').attrs['aria-label'],
@@ -798,14 +798,20 @@ const SCENARIOS = {
     ws.deliver(on);
     await settle();
     const fill = findAll(w.$('st-budget'), function (n) { return n.classList.contains('meter-fill'); })[0];
-    return report(w, ws, {
-      first: first,
-      second: {
-        state: w.$('st-state').textContent, hops: w.$('st-hops').textContent, hopsBad: w.$('st-hops').classList.contains('bad'),
-        budget: w.$('st-budget').textContent, fill: fill ? fill.className : null,
-        pausedHidden: w.$('banner-paused').classList.contains('hidden'), pauseLabel: w.$('pause-toggle').attrs['aria-label'],
-      },
-    });
+    const second = {
+      state: w.$('st-state').textContent, hops: w.$('st-hops').textContent, hopsHidden: w.$('st-hops').classList.contains('hidden'),
+      budget: w.$('st-budget').textContent, fill: fill ? fill.className : null,
+      pausedHidden: w.$('banner-paused').classList.contains('hidden'), pauseLabel: w.$('pause-toggle').attrs['aria-label'],
+    };
+    // a rate of 0 and a hop limit of 0 are no limit (#965): neither chip is shown, with nothing left over from before
+    ws.deliver({ t: 'room', room: '#build', settings: { paused: false, hop_limit: 0, hop_count: 9, budget_remaining: 0, budget_per_hour: 0 } });
+    await settle();
+    const none = {
+      hopsHidden: w.$('st-hops').classList.contains('hidden'), hops: w.$('st-hops').textContent,
+      budgetHidden: w.$('st-budget').classList.contains('hidden'), budget: w.$('st-budget').textContent,
+      budgetBad: w.$('st-budget').classList.contains('bad'), budgetTitle: w.$('st-budget').title,
+    };
+    return report(w, ws, { first: first, second: second, none: none });
   },
 
   // An empty room shows the join hint; the first member hides it.

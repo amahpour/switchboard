@@ -28,7 +28,9 @@ W = 120.0  # the default watchdog_s
 def w(tmp_path: Path, clock: FakeClock) -> World:
     # An open wait() takes chatter as soon as the room has been quiet for ``quiet_s``, so the
     # quiet period is long here: only what is addressed to a member starts its turn before it.
-    cfg = Config(human_name="alice").with_delivery(quiet_s=60.0, max_hold_s=300.0, unaddressed_hold_s=5.0)
+    cfg = Config(human_name="alice").with_delivery(
+        budget_per_hour=60, quiet_s=60.0, max_hold_s=300.0, unaddressed_hold_s=5.0
+    )
     return World(tmp_path, clock, cfg)
 
 

@@ -19,7 +19,9 @@ KEY = b"k" * 32
 class World:
     def __init__(self, tmp_path: Path, clock: Any, cfg: Config | None = None):
         self.clock = clock
-        self.cfg = cfg or Config(human_name="alice")
+        # the wake budget is on here, 60 an hour: the built-in one is off (#965), and most engine tests are
+        # about what a budget holds back. A test of the default builds its own Config.
+        self.cfg = cfg or Config(human_name="alice").with_delivery(budget_per_hour=60)
         self.store = Store(db.open_db(tmp_path / "y.db"), clock)
         self.engine = Engine(
             self.store, clock, self.cfg, build_adapters(self.cfg), SinkRegistry(), key=KEY, test_mode=True

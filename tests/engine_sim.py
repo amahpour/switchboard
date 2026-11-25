@@ -85,11 +85,16 @@ class Sim:
     def __init__(self, tmp_path: Path, seed: int):
         self.seed = seed
         r = self.rng = random.Random(seed)
+        # a room with no wake budget (0 an hour, #965) is among the cases, 3 seeds in 10, drawn from a side
+        # stream after the main one picked its number, so no other seed's events move
+        budget = r.choice([4, 60])
+        if random.Random(seed * 6007 + 965).random() < 0.3:
+            budget = 0
         cfg = Config(human_name="alice").with_delivery(
             quiet_s=r.choice([0.0, 3.0]),
             max_hold_s=r.choice([0.0, 20.0, 60.0]),
             batch_max_msgs=r.choice([2, 5, 20]),
-            budget_per_hour=r.choice([4, 60]),
+            budget_per_hour=budget,
             hop_limit=r.choice([0, 3, 6]),
             watchdog_s=r.choice([30.0, 120.0]),
             watchdog_max=r.choice([0, 1, 2]),
@@ -554,7 +559,9 @@ class Sim:
             self.store.set_paused(room.id, False)
             self.run(self.engine.on_command(room.id, "resume"))
         elif what == "budget":
-            self.store.set_budget(room.id, r.choice([0, 1, 2, 5, 60]))
+            left = r.choice([0, 1, 2, 5, 60])  # drawn either way, so the stream is what it was
+            if self.store.room_by_id(room.id).budget_on:  # a room with no limit has no count to set
+                self.store.set_budget(room.id, left)
             self.run(self.engine.on_command(room.id, "budget"))
         elif what in ("hold", "release"):
             ms = self.store.room_memberships(room.id)
@@ -756,7 +763,8 @@ class Sim:
 
     def settle_round(self) -> bool:
         for room in self.rooms:  # "the budget is at least the number of pending items"
-            if self.store.room_by_id(room.id).budget_remaining < BIG_BUDGET // 2:
+            now = self.store.room_by_id(room.id)
+            if now.budget_on and now.budget_remaining < BIG_BUDGET // 2:
                 self.store.set_budget(room.id, BIG_BUDGET)
                 self.run(self.engine.on_command(room.id, "budget"))
         busy = False
@@ -851,6 +859,15 @@ class Sim:
         Unaddressed chatter still pending for a quiet member is not wake-eligible (§50):
         quiescence leaves quiet on, so that chatter may stay."""
         out = self.bad + self.check_watchdog()
+        for room in self.rooms:  # a room with no budget never spends, refills or says it is used up (#965)
+            now = self.store.room_by_id(room.id)
+            if not now.budget_on and now.budget_remaining != 0:
+                out.append(f"{now.name}: no wake budget, yet {now.budget_remaining} wakes counted")
+        out += [
+            f"{self.store.room_by_id(n.room_id).name}: used-up notice in a room with no budget"
+            for n in self.notices
+            if "wake budget" in n.text and not self.store.room_by_id(n.room_id).budget_on
+        ]
         for mem in self.active():
             for mid in mem.mids:
                 mship = self.store.get_membership(mid)

@@ -333,7 +333,7 @@ agent named in a call line answers it.
 Turning the switch off, or `/meeting listen claude-1 off`, stops it, in the web UI; the command also works from your own CLI. Ending the call also stops
 all its listeners. By default each agent has 40 listening wakes on that call; the last switches
 listening off with a notice. Switching off and back on does not reset it, and nor does the agent leaving and joining again. A new call gets a new
-allowance. The room's hourly wake budget also applies, and a pause or a hold still holds delivery.
+allowance. The room's hourly wake budget also applies when it has one, and a pause or a hold still holds delivery.
 
 The operator can set these in `config.toml`, independently of ordinary chatter timing:
 
@@ -471,7 +471,7 @@ Call lines are ordinary room messages, with the sender kind `meeting`. An agent 
 ```
 
 - **A line that names nobody** has `to_you=no` and `prio=chatter`. It never starts an agent's turn by itself. It waits, and shows up in the agent's next `read()` or with its next real wake. It does not count toward the loop guard that stops agents from talking to each other forever. The room's rate limit on `say()` does not apply to it either.
-- **A line that names an agent** has `to_you=yes` and `prio=mention`, for that agent only. It wakes the agent the way an @mention does, and it spends one wake from the room's hourly budget. The call lines from just before come along. [Delivery rules](../USAGE.md#delivery-rules) says how wakes work.
+- **A line that names an agent** has `to_you=yes` and `prio=mention`, for that agent only. It wakes the agent the way an @mention does, and it spends one wake from the room's hourly budget, when it has one. The call lines from just before come along. [Delivery rules](../USAGE.md#delivery-rules) says how wakes work.
 - **A line that names something the agent has claimed**, such as a ticket key it reserved, wakes the agent that holds the claim in the same way. Someone reading out `SYSINT-645` wakes whoever claimed it.
 - **Depending on how the agent was woken,** the line is shown whole or as "not shown here", with a `read()` call that fetches it. An agent has to read it first, as with any other agent's message.
 - **A call line can come after a picture.** A snapshot that a call line asked for is a `kind=meeting` message from `call`, with the card as its text: `artifact: screen-142507.jpg | 21000 | sha256:… | switchboard:file/…`. A download link for it comes with the batch, as for any room file. One you asked for with the button is a message from you, `kind=human`. The bot next to the server and a call hosted on your machine both do this.
@@ -525,7 +525,7 @@ The long version is in [DESIGN.md §52](../DESIGN.md#52-meetings-a-live-call-in-
 - **A line holds at most 1,000 characters.** A longer stretch of speech becomes more than one line. A change of speaker also starts a new line.
 - **The room shows at most one call line a second.** If more than 50 are waiting, the oldest are dropped, and the room says so once.
 - **A speaker's name is cut to 40 characters.**
-- **A call-out spends the room's wake budget,** like an @mention. A paused room, or an agent you have held, is not woken.
+- **A call-out spends the room's wake budget** (if it has one), like an @mention. A paused room, or an agent you have held, is not woken.
 - **A restart can't be followed.** If the broker was killed or crashed, it could not tell the bot to leave. See [Troubleshooting](#troubleshooting).
 
 ## Troubleshooting

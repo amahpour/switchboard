@@ -35,7 +35,7 @@ The build runs unattended, so nothing may block on a human. Anything that needs 
 **Tooling and records**
 - **Use one uv in CI.** CI and the test container use uv 0.7.13 with CPython 3.13.5 and `--frozen`. `pyproject.toml` sets `[tool.uv] required-version = ">=0.7.13"` (it was `==0.7.13` until 0.3.0), so contributors can use a newer uv; a lock-format change would fail CI's frozen install rather than land silently.
 - **Assumptions made in M1:**
-  - the budget is a fixed hourly window, refilled to `budget_per_hour`, and `/budget n` sets what remains (§8.3);
+  - the budget is a fixed hourly window, refilled to `budget_per_hour` (0: no budget, #965); `/budget n` first set what remains and, since #965, sets the rate (§8.3, §42.2);
   - `/mode` is dropped, because the spec doesn't list it;
   - switchboard's own tools are allowlisted only in Devin (the decision on F§14.3). Claude and Cursor allow rules exist only in test profiles (§14).
 - **Latency targets are soft; correctness tests are not.** If a live latency target misses, re-run once. If it misses again, record the numbers and continue. Guardrail and correctness tests are never waived.
@@ -163,7 +163,7 @@ batch_max_msgs = 20
 batch_max_chars = 6000
 pull_max_chars = 24000    # read()/say() answers, rendered (M2 review)
 rate_limit_s = 10.0
-budget_per_hour = 60
+budget_per_hour = 0            # wakes a room may spend an hour; 0: no limit (#965, §8.3, §42.2)
 hop_limit = 0                  # the loop guard: pause a room after this many agent messages in a row with none from a person; 0: off (#406, §8.5)
 watchdog_s = 120
 watchdog_max = 2
@@ -583,7 +583,7 @@ The server sends a ping every 20 s.
   - "Parked — needs a poke" with a reason;
   - on a switchboard with more than one person, an "Owner: alice" line under the name (§29.10).
 - A **bridge banner** when a room holds both bypass members and prompting members: "Work handed to a member with approvals off runs without approval prompts."
-- Header chips for Running/Paused, the budget, the hop count (or "loop guard off ⚠") and the number of agents whose approval mode is bypass or unknown, and a TEST MODE band. The warning names a single agent, counts several, and shows all names on hover or focus; clicking it opens Members at the first flagged agent.
+- Header chips for Running/Paused, the budget, the hop count (each chip only while its limit is on: a budget or a hop limit of 0 is no limit and has no chip, #965) and the number of agents whose approval mode is bypass or unknown, and a TEST MODE band. The warning names a single agent, counts several, and shows all names on hover or focus; clicking it opens Members at the first flagged agent.
 - Agents on a device (§49): a host chip after the name (`@laptop`), senders `codex-1@laptop`.
 - **While the WebSocket is down** (#129), nothing claims to be live: the footer says "Reconnecting…", the You row "Human · reconnecting…" with a hollow dot, the Running/Paused chip keeps its word but loses its colour, a band says "Disconnected: reconnecting… What you see may be out of date.", and Members is dimmed with "last known" after its count. After two minutes continuously disconnected the band reports the longer outage and the tab continues to reconnect. A send that fails keeps its text in the composer and says why. All of it clears when the socket reopens and the page resyncs (`loadRooms(true)`), with no reload. Before the first connect the You row says "connecting…" and there is no band.
 - Below 1,100 px the right pane is a drawer; at 760 px and below the rooms are a left drawer and Members a bottom sheet.
@@ -788,11 +788,11 @@ peer_ok  = m.peer_batch_boundary < p.boundary_seq          # at most one peer ba
 if eff == 'busy':                                          # mid-task: priority only, never chatter
     return Release(cap(human_first(prio)), kind='priority', counted=False) if prio else None
 # idle / starting
-if prio and (any(d.prio == 2 for d in prio) or room.budget_remaining > 0):
+if prio and (any(d.prio == 2 for d in prio) or not room.budget_spent):  # budget_spent: a budget (rate > 0) with no wakes left
     return Release(cap(human_first(prio + (chatter if peer_ok or wake_now else []))), kind='wake', counted=True)
 if chatter and wake_now:                                   # /wake (#137): a person's ask, like their message
     return Release(cap(human_first(chatter)), kind='wake', counted=True)
-if chatter and peer_ok and room.budget_remaining > 0:
+if chatter and peer_ok and not room.budget_spent:
     if chatter_due(room, chatter, now, quiet_s, max_hold_s, hold_s, addressed_only=m.quiet):
         return Release(cap(human_first(chatter)), kind='wake', counted=True)
 return None
@@ -820,11 +820,12 @@ def chatter_due(..., addressed_only=False):                # hold_s = unaddresse
 - **Integration tests use `cfg_fast`** (`quiet_s=0`, `max_hold_s=0`), so adapter tests don't depend on timing.
 
 ### 8.3 Budget (wakes and continuations)
-- `rules.refill(room, now)`: when `now >= budget_window_start + 3600`, set `remaining = budget_per_hour` (default 60) and move the window forward.
+- **A room with no budget (`budget_per_hour = 0`, the default since #965, §42.2) has no limit.** Nothing below applies to it: it never spends, refills or posts the notice, and `Room.budget_spent` (a budget with no wakes left) is false whatever its count says. Pause is the brake.
+- `rules.refill(room, now)`: when `now >= budget_window_start + 3600`, set `remaining = budget_per_hour` (built-in default 0, no limit; it was 60) and move the window forward. A room at 0 is not refilled.
 - Only batches with `kind='wake'` are counted (`idle_wake`, `stop_cont`, `wait_return`, plus the Devin re-arm continue; a watchdog reminder is one of these with `wake_reason='reminder'`, §20). The count is decremented in the same transaction as the batch insert, down to a floor of 0.
 - Mid-turn priority (`hook_ctx`, `hook_ups`) and explicit pulls are not counted.
 - At 0, only wakes that contain a human item go through (and are still counted). A `budget_exhausted` event and a warn notice go out once per window.
-- `/budget n` sets `remaining=n`. The interpretation (fixed window, n = what remains) is an assumption (§0).
+- `/budget n` sets the rate and `remaining` to `n` (#965, §42.2). It first set only `remaining`; the fixed window is an assumption (§0).
 - What a person can see of this over time is §61: wakes delivered and messages agents posted, per agent and per room. It reads these rows. It does not add one.
 
 ### 8.4 Rate limit and stale says (`agent.say`)
@@ -869,7 +870,7 @@ memory-only entry. The same call can then be retried because it has no stored re
 
   `hop_limit` is per room: `[delivery] hop_limit` at creation, then `/hops <n>` (§10, §22), and `0` turns the guard off. The engine reads the room row on every agent message, so a new limit applies to the next one; a limit lowered below the current count trips on the next agent message, not at once.
 
-  **The guard is off by default (#406).** The built-in `hop_limit` is 0 (it was 6), so a new room's guard is off unless the person creating it has a default of their own in Settings or config.toml sets one (§42). It got in the way: agents that review and fix a pull request between themselves hit the limit within minutes, and the person had to `/resume` again and again. The wake budget (§8.3, 60 an hour) still limits wakes: at 0 only a person's messages wake anyone. It doesn't end chatter on its own, though: mid-turn context, steers and pulls are free, so busy agents can keep trading messages, slowed only by the say rate limit (10 s, which `rate_limit_exempt` lifts for a reply to a person or to a message that mentions the sender). With the guard off, nothing else stops a conversation between agents that stay busy. The counter keeps running with the guard off (the room's header and `/hops` show it), so a limit set later counts the run so far. A room that exists keeps its limit: a room's limit is that room's setting, and no migration touches `rooms.hop_limit`.
+  **The guard is off by default (#406).** The built-in `hop_limit` is 0 (it was 6), so a new room's guard is off unless the person creating it has a default of their own in Settings or config.toml sets one (§42). It got in the way: agents that review and fix a pull request between themselves hit the limit within minutes, and the person had to `/resume` again and again. The wake budget (§8.3, 60 an hour then) still limited wakes: at 0 only a person's messages woke anyone. It is off by default too since #965 (§42.2), so with both off Pause is the brake. A budget doesn't end chatter on its own, though: mid-turn context, steers and pulls are free, so busy agents can keep trading messages, slowed only by the say rate limit (10 s, which `rate_limit_exempt` lifts for a reply to a person or to a message that mentions the sender). With the guard off, nothing else stops a conversation between agents that stay busy. The counter keeps running with the guard off (the room's header and `/hops` show it), so a limit set later counts the run so far. A room that exists keeps its limit: a room's limit is that room's setting, and no migration touches `rooms.hop_limit`.
 - **Requeue** (`rules.requeue(d, reason)`) puts a delivery back to `pending` for another wake. Two rules use it:
   - **Re-deliver once** (F§12, delivery ≠ handling). On Stop (→ idle), each `in_context` delivery with prio ≥ 1 that isn't handled and has `redelivered = 0` is requeued with `redelivered = 1`. It becomes the next idle wake, marked `again=yes`, with the same message id.
   - **Watchdog** (`rules.watchdog_verdict`, `engine.watchdog`, run every tick). A delivery with `mentioned=1` that stays `in_context` or notified for longer than `watchdog_s` (120) with no say or pass from that member is requeued as a `reminder` wake (counted) with the header "you were @mentioned and haven't answered", and `reminders += 1`. After `watchdog_max` (2) reminders, a `watchdog_escalate` notice goes to the human ("@claude-1 hasn't answered #123"). The item stays available to `read()` but gets no further wakes. As built (M6, §20): it reminds only while the member is effectively idle (a member that isn't idle gets the human a notice instead, once the @mention has waited `(watchdog_max + 1) * watchdog_s`), and paused rooms and held members are skipped.
@@ -1061,7 +1062,7 @@ class Adapter:
   3. Else, if all of these hold, return `continue` with "(switchboard, not your user) To keep listening in #build, call wait("#build", 100). If your user asked you to stop listening, don't." (counted):
      - `devin.rearm` is on;
      - the room isn't paused;
-     - `budget_remaining > 0`;
+     - the room's budget isn't used up (`not room.budget_spent`; a room with no budget never is, #965);
      - `rearms_in_gen < rearm_max_per_prompt` (2 by default);
      - fewer than `rearm_max_per_hour` re-arms in this session in the last hour (12 by default).
   4. Otherwise answer nothing; the member is **parked**. Later mentions stay queued until a person types in Devin to call `read()` or `wait()` again. Settings → Agents, the join guidance and the tier note explain this limit; the guidance and tier note use the broker's configured caps, including disabled reminders (#514).
@@ -1121,8 +1122,8 @@ See §23 for the rules of removal.
 | `/unpin <id>` | Removes a pin; a notice and an `unpin` event | human_cli | service + store |
 | `/kick <name>` | Sets `left_at`, `kicked=1`. Deliveries become `revoked`, sinks resolve `kicked`, a notice is posted. A re-join by the same participant is refused. | human_cli | service.join, rpc auth |
 | `/close` | Ends every membership (reason `closed`, not kicked), posts leave lines and a notice, renames the room `#name~closed-<id>`, hides it; sinks resolve `closed` (§28.3) | human_cli | service + engine |
-| `/budget` | Shows `remaining/per_hour` and the reset time | human_cli | – |
-| `/budget n` | Sets `budget_remaining=n` (n ≥ 0) | human_cli if n ≤ current, else human | rules |
+| `/budget` | Shows `remaining/per_hour` and the reset time, or "no wake limit" for a rate of 0 | human_cli | – |
+| `/budget n` | Sets the hourly rate `budget_per_hour=n` (0 ≤ n ≤ 1,000,000) and `budget_remaining=n` with it; 0 is no limit (#965, §42.2) | human_cli to tighten; human for a higher rate, for 0, or for any n above what is left now | rules |
 | `/hops` | Shows `hop_count/hop_limit` (or "loop guard off" at 0) and whether the room is paused by the loop guard | human_cli | – |
 | `/hops n` | Sets `rooms.hop_limit=n` (0 ≤ n ≤ 1000; 0 = loop guard off). Never un-pauses: a loop-guard pause still needs `/resume` (the reply says so). Posts a notice, writes a `hop_limit_set` event (`old`, `new`), pushes the room settings | human_cli if it doesn't raise activity (lower, same, or turning the guard back on from 0), else human (a higher limit, or 0) | engine reads the live row (§8.5) |
 | `/hold <name>` | Sets `memberships.held`; held messages stay queued | human_cli | engine.evaluate |
@@ -1144,7 +1145,7 @@ In M1, `/kick`, `/hold` and `/release` on an agent-less room return "no such mem
 
 `/hops` was added after M7 (§22), at the user's request: agents should be able to run up to about 30 messages without a pause, adjustable while the room is live. `/review` was added after M7, as milestone R1, and replaced by `/catchup` (§26).
 
-Neither command can change `budget_per_hour` itself, the rate the room's wake budget refills to each hour: `/budget n` only ever sets what's left *this* hour. The room's own settings dialog does both at once, through a REST route rather than a command (§42).
+`/budget n` sets the rate the room's wake budget refills to each hour, and what is left this hour with it (`Store.set_budget_rate`, #965; before, it set only what was left). The room's own settings dialog does the same for both limits at once, through a REST route (§42).
 
 ---
 
@@ -1596,7 +1597,7 @@ The real demo, with a human interjecting live and with Cursor, is repeated later
 - **Tests:** `hatchling` is a dev dependency so `test_wheel_contents` builds offline. The in-process broker fixture points `codex.control_socket`, `codex.bin` and `claude.sessions_dir` at the temp home. CLI test children run in a new session (no controlling terminal). Production-policy refusal tests run CLI or RPC children under a stand-in agent harness, so their verdict does not depend on who runs pytest or whether its launching shell exits (#437, #458).
 - **Review fixes (M1):**
   - The peer check walks the whole ancestry to pid 1 and fails closed (§5.3); `ps` is called by absolute path.
-  - `/budget n` decides raise vs lower after the hourly refill; `sys.status` shows the refilled budget.
+  - `/budget n` decides raise vs lower after the hourly refill (against the rate and what is left, since #965); `sys.status` shows the refilled budget.
   - The WebSocket replay-cap notice counts the skipped messages of that room (ids are global across rooms).
   - Text that is empty once `clean()`ed (only control or zero-width characters) is refused as an empty message.
   - Bad `/login` tokens write at most one `login bad_token` event per 60 s (with a count), so an unauthenticated endpoint can't grow the DB.
@@ -2649,18 +2650,29 @@ Anyone renames themselves in **Settings > Profile**: their first and last name (
 
 A new room's `budget_per_hour` and `hop_limit` used to come only from `[delivery]` in config.toml (§2), which on a hosted broker means editing a file on the broker's machine and restarting. After a room exists, `/budget <n>` (§10) only ever sets what's left *this* hour, never the rate it refills to, so a room kept going back to config.toml's rate every hour. This gives each person their own defaults in Settings, and the room's own rate a place to change live.
 
-**Precedence for a new room:** the creator's own `preferences.budget_per_hour` / `hop_limit` if they set one, else `[delivery]` in config.toml, else the built-in default (60, 0: the loop guard off since #406, §8.5; it was 6). `RoomService.wake_defaults(person_id)` computes this once, for both `create_room` and `GET /api/me`'s `wake_defaults` field, so Settings can say "your default", "config.toml" or "built-in default" next to a blank number; `create_room` never computes the precedence a second way. On a desktop broker, the one person's Settings simply take precedence over config.toml; nothing here writes config.toml.
+**Precedence for a new room:** the creator's own `preferences.budget_per_hour` / `hop_limit` if they set one, else `[delivery]` in config.toml, else the built-in default (0, 0: no wake budget since #965, §42.2, and the loop guard off since #406, §8.5; they were 60 and 6). `RoomService.wake_defaults(person_id)` computes this once, for both `create_room` and `GET /api/me`'s `wake_defaults` field, so Settings can say "your default", "config.toml" or "built-in default" next to a blank number; `create_room` never computes the precedence a second way. On a desktop broker, the one person's Settings simply take precedence over config.toml; nothing here writes config.toml.
 
 **Storage (schema version 14):** `preferences.budget_per_hour` and `.hop_limit`, both a nullable `INTEGER` bounded like `commands.MAX_BUDGET` and `commands.MAX_HOPS`. NULL means "not set": unlike `theme` or `room_rules`, there is no single value to default an unset row to in SQL, since 0 is itself meaningful for both (no wakes until raised; the loop guard off). The v13→v14 migration adds both columns after the usual checked backup; every existing person starts unset, so every existing room keeps the room-creation behaviour it had before this issue. `PUT /api/me/preferences` accepts either field as an integer in range or `null`, which clears a chosen default back to config.toml or the built-in one.
 
 **Copy on create**, the same model and code path as custom room rules (§35): a new room's `budget_per_hour` and `hop_limit` are copied from `wake_defaults` into `rooms` at creation (`Store.create_room`), not read live from `preferences` afterward. Editing a person's defaults later never changes a room already made, and editing a room's own numbers never changes that person's defaults.
 
-**A room's own rate**, from a new button in the room's header (an in-page dialog, §29.2, rising from the bottom on a phone): Budget per hour and Hop limit, both applied live. Since `/budget <n>` can't reach the rate itself, the dialog sets `budget_per_hour` and `budget_remaining` together in one save (`Store.set_budget_rate`), so a higher or lower rate takes effect at once rather than at the next hourly refill; there is no new `/budget rate` command.
+**A room's own rate**, from a new button in the room's header (an in-page dialog, §29.2, rising from the bottom on a phone): Budget per hour and Hop limit, both applied live. Since `/budget <n>` can't reach the rate itself, the dialog sets `budget_per_hour` and `budget_remaining` together in one save (`Store.set_budget_rate`), so a higher or lower rate takes effect at once rather than at the next hourly refill. Since #965 `/budget n` does the same (§42.2), so the dialog is no longer the only way to set the rate.
 
 `PUT /api/rooms/{slug}/wake` takes exactly `budget_per_hour` and `hop_limit` together, each an integer in the commands' own bounds; unknown fields, a missing field or an out-of-range or wrongly typed one are a 400. It needs the same signed-in web session, Origin and `X-Switchboard` checks `PUT /api/rooms/{slug}/rules` needs (§35) — never a room message, since a room message changing a setting is against §11. A changed value writes the same `budget_set` / `hop_limit_set` event and room notice `/budget <n>` and `/hops <n>` already write (`commands.hop_limit_notice` is the one function both the command and this route call, so the wording for turning the loop guard on or off is a single rule); changing only your own Settings defaults posts nothing in any room. Raising activity here needs nothing beyond the web session itself, the same role `/budget` and `/hops` need to raise (§10): every caller of this route already is one, and there is no CLI path to it at all. Setting the hop limit to 0 shows the same warning line the header's chip and Settings' own hop-limit field show ("agents may message each other without limit"), one shared string rather than three different ones.
 
 ### 42.1 Tests
 `tests/unit/test_db_migrate_v14.py` (the migration; existing preferences rows keep their theme, text size and room rules, and start unset for the two new columns); `tests/unit/test_room_wake_defaults.py` (precedence over config.toml and the built-in default, copy on create in both directions, `set_room_wake`'s notices, events, the shared `hop_limit_notice` wording, and the no-op save); `tests/integration/test_web_preferences.py` (bounds, unknown and wrongly typed values, `null` clearing a default, the theme and text size beside it untouched); `tests/integration/test_web_room_wake.py` (copy on create and each person's own independence, `PUT /api/rooms/{slug}/wake`'s checked bounds, unknown fields, session and Origin/`X-Switchboard` requirements, and the live websocket push and notice); `tests/e2e/test_web_ui.py::test_wake_defaults_copy_into_a_room_and_its_own_dialog_edits_live` (Settings seeding a new room, the room's own dialog changing only that room, the hop-limit-0 warning in both places, the header chips updating live).
+
+### 42.2 The wake budget is off by default, as the loop guard is (#965)
+The loop guard went off by default in #406 (§8.5). The wake budget, 60 an hour, was then the only cap left, and it got in the way the same way: on one server a room ran out four times in one evening while agents did ordinary work, and each time the answer was to raise it or turn it off. Neither limit had caught a real runaway. Since a header showing both chips all the time (and a "loop guard off ⚠" warning in every new room, and "Budget 99995/60" because `/budget <n>` set only what was left) told nobody anything, both stay as settings and are unlimited until someone sets a number. This loosens a default guard (CLAUDE.md, "Guards only tighten"), so the maintainer said yes on 2026-11-24.
+
+- **0 means no limit.** `budget_per_hour = 0` is no budget, as `hop_limit = 0` is no loop guard. `Room.budget_on` (rate above 0) and `Room.budget_spent` (a budget with no wakes left) are the two reads; `rules.releasable`, `rules.budget_blocked`, `Engine.wakes_at`, `_after_counted` and the Devin re-arm all ask `budget_spent`, never `budget_remaining <= 0`. A room with no budget never spends (`Store.spend_budget` and the counted insert in `Store.create_batch` skip it), never refills, and never posts the "used up" notice or records `budget_exhausted`. The call's listening wake cap and the board's own rate limit (§56.3) are other limits and are unchanged.
+- **The default.** `[delivery] budget_per_hour` is 0. The precedence of the section above is unchanged: a person's own default in Settings, then config.toml, then the built-in one. A new room starts with no budget and no hop limit.
+- **`/budget <n>` sets the rate,** with what is left this hour (`Store.set_budget_rate`, as the room dialog's save does), so the count is never above the rate. Who may: tightening works from the human CLI; a higher rate, 0 (no limit), or any number above what is left now needs the web session (`commands.budget_raise`, built on `hops_raise`; the last clause is because `/budget 60` hands a spent room its wakes back). `/budget`, `/status` and `switchboard status` say "no limit" for 0. The event is `budget_set` with `{old, new, per_hour: true}`, the rate the dialog already wrote (before, `old` and `new` were what was left).
+- **The header shows each chip only while its limit is on.** There is no Budget chip for a room with no budget, and no Hops chip, so no "loop guard off ⚠", for one with no hop limit. The room's settings dialog and Settings keep both fields with one line under each saying what it limits and that 0 means no limit; the hop-limit-0 warning is gone because 0 is the normal value. The usage page (§61) says "no wake limit" for such a room.
+- **Schema 62** moves rooms whose `budget_per_hour` is 60 to 0, `budget_remaining` with them, after the usual checked backup (§27.6); a room at any other number keeps it, rooms at the old hop default of 6 keep theirs, and every `preferences` row is left as the person set it. It adds and removes nothing.
+- **What stops agents now** is Pause, which a person presses, the say rate limit (§8.4) and the room's wake settings if someone sets them. SECURITY.md says so.
+- **Tests:** `test_db_migrate_v62.py` (a real 1.14.0 database with rooms at 60 and 10 and a person's default of 60), `test_rules_budget.py` (a room with no budget is never held back, spends or posts), `test_commands.py` (the rate, the roles, "no wake limit"), `tests/engine_sim.py` (3 seeds in 10 give the room no budget and check the count never moves), `test_web_app_behavior.py` and the e2e `test_a_room_shows_a_wake_chip_only_while_its_limit_is_on` (the chips).
 
 ## 44. Private rooms (#74)
 

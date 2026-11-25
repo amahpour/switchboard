@@ -20,7 +20,7 @@ def test_defaults_match_design() -> None:
     assert (d.quiet_s, d.max_hold_s, d.batch_max_msgs, d.batch_max_chars) == (3.0, 60.0, 20, 6000)
     assert (d.rate_limit_s, d.budget_per_hour, d.hop_limit, d.watchdog_s, d.watchdog_max) == (
         10.0,
-        60,
+        0,  # no wake budget unless a room has a number (#965)
         0,  # the loop guard is off unless a room has a limit (#406)
         120,
         2,

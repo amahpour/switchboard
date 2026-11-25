@@ -59,9 +59,12 @@ class DeliveryCfg:
     batch_max_chars: int = 6000
     pull_max_chars: int = 24000  # read()/say() unread answers (tool results), rendered
     rate_limit_s: float = 10.0
-    budget_per_hour: int = 60
+    # wakes a room may spend an hour. 0 = no limit, the default (#965), as for the loop guard
+    # below: Pause is the brake. A person's own default in Settings, /budget <n> or a room's wake
+    # dialog sets a number. Rooms that exist keep theirs (§8.5, §42)
+    budget_per_hour: int = 0
     # the loop guard: pause a room after this many agent messages in a row with none from a
-    # person. 0 = off, the default (#406): the wake budget still bounds runaway chatter, and a
+    # person. 0 = off, the default (#406): Pause is the brake, and a
     # person's own default in Settings, /hops <n> or a room's wake dialog turns the guard on.
     # Rooms that exist keep the limit they have: a room's limit is that room's setting (§8.5, §42)
     hop_limit: int = 0

@@ -69,7 +69,7 @@ Measured on 2026-11-09 with switchboard 0.56.1, Python 3.13.15 and an Intel Core
 Ultra 7 265: only the broker was pinned to one core (`taskset`); a separate
 process drove `FakeAgent` clients over loopback HTTP/MCP. Each row used a fresh
 test-mode broker and temporary database, with `rate_limit_s = 0` and
-`budget_per_hour = 1000000000`. Rooms held five agents. Each agent sent its next
+`budget_per_hour = 1000000000` (the default, 0, is no limit now, [#965](https://github.com/amahpour/switchboard/issues/965); this run predates it). Rooms held five agents. Each agent sent its next
 call as soon as the last returned. **One cloud vCPU may be slower.** These are
 achieved rates from one load-client process, not production capacity guarantees.
 

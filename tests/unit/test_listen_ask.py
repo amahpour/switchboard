@@ -134,7 +134,8 @@ def test_a_question_spends_the_listening_cap_and_the_room_budget(tmp_path: Path,
 
 def test_a_question_does_not_pass_the_room_budget(tmp_path: Path, clock: FakeClock) -> None:
     """With no wakes left in the hour, a question waits like any listening wake."""
-    w, call = call_world(tmp_path, clock, budget_per_hour=0)
+    w, call = call_world(tmp_path, clock)
+    w.store.set_budget(w.room.id, 0)  # this hour's wakes are all used
     _, m, sink = waiting(w)
     w.store.set_listen(m.id, True, call)
     line(w, call, "Is anyone there?")

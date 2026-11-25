@@ -124,7 +124,11 @@ def test_parked_escalation_waits_for_both_the_message_and_the_parking() -> None:
 # ------------------------------------------------------------------- engine
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0))
+    return World(
+        tmp_path,
+        clock,
+        Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0),
+    )
 
 
 def listen(w: World, p: Any, m: Any, wid: str) -> Any:
@@ -469,7 +473,11 @@ def test_a_paused_room_is_not_parked_and_not_escalated(w: World) -> None:
 
 
 def test_watchdog_off(tmp_path: Path, clock: FakeClock) -> None:
-    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, watchdog_s=0.0))
+    w = World(
+        tmp_path,
+        clock,
+        Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, watchdog_s=0.0),
+    )
     p, m = w.agent("bot")
     s = listen(w, p, m, "w0")
     w.human("@bot x", mentions=("bot",))
@@ -484,7 +492,11 @@ def test_watchdog_off(tmp_path: Path, clock: FakeClock) -> None:
 
 
 def test_watchdog_max_zero_tells_the_human_without_reminding(tmp_path: Path, clock: FakeClock) -> None:
-    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, watchdog_max=0))
+    w = World(
+        tmp_path,
+        clock,
+        Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, watchdog_max=0),
+    )
     p, m = w.agent("bot")
     s = listen(w, p, m, "w0")
     msg = w.human("@bot x", mentions=("bot",))
@@ -500,7 +512,11 @@ def test_watchdog_max_zero_tells_the_human_without_reminding(tmp_path: Path, clo
 def escalated(tmp_path: Path, clock: FakeClock, *, hooks: bool = False) -> tuple[World, Any, Any, Any]:
     """``bot`` took a peer's @mention, ignored the one reminder (``watchdog_max = 1``)
     and was escalated; it isn't listening any more."""
-    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, watchdog_max=1))
+    w = World(
+        tmp_path,
+        clock,
+        Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, watchdog_max=1),
+    )
     p, m = w.agent("bot", hooks=hooks)
     _pp, peer = w.agent("peer")
     s = listen(w, p, m, "w0")
