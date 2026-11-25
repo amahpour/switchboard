@@ -249,9 +249,9 @@ def test_a_review_board_call_is_made_from_its_card_and_the_room_shows_it(
     card.get_by_role("button", name="Remove").click()
     expect(page.locator("#home .home-card", has_text="review board in " + w.build)).to_have_count(0)
     texts = [m["text"] for m in w.messages(w.build)]
-    assert any("Q1 answered with option 1" in t for t in texts), texts
+    assert any("Q1 answered with option 2." in t for t in texts), texts
     page.locator("#tabs .room", has_text=w.build.lstrip("#")).first.click()
-    expect(page.locator("#log")).to_contain_text("Q1 answered with option 1")
+    expect(page.locator("#log")).to_contain_text("Q1 answered with option 2.")
 
 
 def test_leaving_home_moves_since_you_last_looked_forward(ui: UI, hosted: tuple[InProcBroker, str]) -> None:

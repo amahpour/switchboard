@@ -374,11 +374,11 @@ def test_a_concur_answers_the_question_for_that_agent_only(w: World, clock: Fake
     say), the one that hasn't still owes it."""
     r, _d, _g = review_room(w, clock)
     r.move(
-        "codex-review", action="ask", title="Before or after tax?", options=["before", "after"], recommend=0
+        "codex-review", action="ask", title="Before or after tax?", options=["before", "after"], recommend=1
     )
     [line] = r.lines()
     assert set(line.mentions) == {"dispatch", "grok-reviewer"}
-    r.move("grok-reviewer", action="concur", item="Q1", recommend=0)
+    r.move("grok-reviewer", action="concur", item="Q1", recommend=1)
     assert r.delivered("grok-reviewer", line)["state"] == "handled"  # type: ignore[index]
     assert r.delivered("dispatch", line)["state"] != "handled"  # type: ignore[index]
 
@@ -388,13 +388,13 @@ def test_a_pick_still_due_keeps_the_raise_line_after_the_author_concedes(w: Worl
     dropped (§37.12). The dispatcher conceding it does not answer the line for grok-reviewer, which
     has yet to pick, nor for the dispatcher itself: each answers it by picking (F3 on #889)."""
     r, _d, _g = review_room(w, clock)
-    r.move("codex-review", action="raise", title="rounding", options=["half up", "half even"], recommend=0)
+    r.move("codex-review", action="raise", title="rounding", options=["half up", "half even"], recommend=1)
     [line] = r.lines()
     assert set(line.mentions) == {"dispatch", "grok-reviewer"}
     r.move("dispatch", action="concede", item="F1")
     assert r.delivered("grok-reviewer", line)["state"] != "handled"  # type: ignore[index]
     assert r.delivered("dispatch", line)["state"] != "handled"  # type: ignore[index]
-    r.move("grok-reviewer", action="concur", item="F1", recommend=1)
+    r.move("grok-reviewer", action="concur", item="F1", recommend=2)
     assert r.delivered("grok-reviewer", line)["state"] == "handled"  # type: ignore[index]
     r.move("dispatch", action="abstain", item="F1")
     assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]

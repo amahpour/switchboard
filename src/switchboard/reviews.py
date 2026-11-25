@@ -116,7 +116,7 @@ class Item:
     commit: str
     reason: str
     options: tuple[str, ...]
-    recommend: int | None  # index into options
+    recommend: int | None  # 0-based index into options, as stored; people and agents say 1 to n (``pick``)
     answer: str
     answered_by: str
     created_at: float = 0.0
@@ -435,20 +435,28 @@ def options(value: Any) -> tuple[str, ...]:
     return out
 
 
+def pick(value: Any, count: int, what: str) -> int:
+    """The stored (0-based) index of the option a person or an agent numbered ``value``, from 1 to
+    ``count`` as the board shows it, or ReviewError saying ``what`` it was given for. Every edge
+    (an agent's ``recommend`` and ``concur``, a person's ``answer``) converts here, so the database
+    keeps indexes and nobody reads or types a 0. A bool is not a number."""
+    if type(value) is not int or not 1 <= value <= count:
+        raise ReviewError(f"{what} must be an option's number, 1 to {count}")
+    return value - 1
+
+
 def recommend(value: Any, opts: tuple[str, ...], *, required: bool = False) -> int | None:
-    """An option's index, or None when none is given and none is required. A question and a
-    finding's fix options both carry the asker's recommendation (#423): ``required`` refuses a
-    call without it, with what to give."""
+    """The stored index of the option numbered ``value`` (1 to n), or None when none is given and
+    none is required. A question and a finding's fix options both carry the asker's recommendation
+    (#423): ``required`` refuses a call without it, with what to give."""
     if value is None:
         if required:
             raise ReviewError(
-                f"recommend is required with options: the index of the one you pick, 0 to {len(opts) - 1}."
+                f"recommend is required with options: the number of the one you pick, 1 to {len(opts)}."
                 " The other agents agree or pick another with concur"
             )
         return None
-    if type(value) is not int or not 0 <= value < len(opts):
-        raise ReviewError(f"recommend must be an option's index, 0 to {len(opts) - 1}")
-    return value
+    return pick(value, len(opts), "recommend")
 
 
 def names(who: Sequence[str]) -> str:
@@ -528,9 +536,10 @@ def consensus(item: Item, present: Sequence[str]) -> Consensus:
 
 
 def concur(item: Item, actor: str, value: Any, here: Sequence[str]) -> int:
-    """The option index ``actor`` picks with ``concur``, or ReviewError. Only an agent in the room
+    """The stored index of the option ``actor`` picks with ``concur`` (they say its number, 1 to n),
+    or ReviewError. Only an agent in the room
     picks (the board's agents are the room's, §37.12); only an item with options that is still being
-    decided: an open question, or a finding not yet fixed or dropped; and only an index in range.
+    decided: an open question, or a finding not yet fixed or dropped; and only a number in range.
     An agent may pick again until then, which replaces their pick."""
     if actor not in here:
         raise ReviewError(f"only an agent in the room can concur: {actor!r} isn't")
@@ -538,18 +547,18 @@ def concur(item: Item, actor: str, value: Any, here: Sequence[str]) -> int:
         raise ReviewError(f"{item.label} has no options to pick")
     if item.state != "open" and item.state not in OPEN_FINDING:
         raise ReviewError(f"{item.label} is {item.state}: its options are settled")
-    if type(value) is not int or not 0 <= value < len(item.options):
+    if type(value) is not int or not 1 <= value <= len(item.options):
         raise ReviewError(
-            f"concur needs recommend, the index of the option you pick, 0 to {len(item.options) - 1}"
+            f"concur needs recommend, the number of the option you pick, 1 to {len(item.options)}"
         )
-    return value
+    return value - 1
 
 
 def abstain(item: Item, actor: str, here: Sequence[str]) -> None:
     """``actor`` records no view on ``item``'s options (#785), or ReviewError. The same gates as
     ``concur``, and no index: an agent in the room, an item with options that is still being
     decided. A later ``concur`` replaces it. ``recommend=-1`` is not this: that value is how a
-    caller leaves the field out, and ``concur`` still refuses it."""
+    caller leaves the field out, and ``concur`` still refuses it, as it does a 0."""
     if actor not in here:
         raise ReviewError(f"only an agent in the room can abstain: {actor!r} isn't")
     if not item.options:
@@ -1140,7 +1149,7 @@ def told(
         who = tuple(a for a in _pickers(item, here) if a != actor)
         if item.state != "open" or not who:
             return None
-        concur_s = f'review(action="concur", item="{item.label}", recommend=<index>{pass_url})'
+        concur_s = f'review(action="concur", item="{item.label}", recommend=<number>{pass_url})'
         abstain_s = f'review(action="abstain", item="{item.label}"{pass_url})'
         stop = "" if item.title.endswith((".", "?", "!")) else "."  # a question usually ends in one
         mention = " ".join("@" + a for a in who)
@@ -1350,12 +1359,14 @@ def contested_line(item: Item, active: set[str], offline: Collection[str]) -> st
 
 def options_text(item: Item, present: Sequence[str]) -> str:
     """An item's options as an agent reads them: the recommended one first, each with its number
-    (what ``concur`` takes) and who is behind it, then who abstained and who is still to agree.
-    Empty for none."""
+    from 1 (what ``recommend`` and ``concur`` take; the store's index plus one) and who is behind
+    it, then who abstained and who is still to agree. Empty for none."""
     if not item.options:
         return ""
     c = consensus(item, present)
-    text = " | ".join(f"{n}. {item.options[n]}" + (f" ({c.notes[n]})" if c.notes[n] else "") for n in c.order)
+    text = " | ".join(
+        f"{n + 1}. {item.options[n]}" + (f" ({c.notes[n]})" if c.notes[n] else "") for n in c.order
+    )
     if c.abstained:
         text += f"; abstained: {names(c.abstained)}"
     if c.state == "split":

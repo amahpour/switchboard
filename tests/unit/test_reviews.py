@@ -233,11 +233,15 @@ def test_input_from_an_agent_is_checked(fn, value, msg) -> None:
         fn(value)
 
 
-def test_recommend_must_point_at_an_option() -> None:
+def test_recommend_takes_an_options_number_from_one() -> None:
+    """An agent types the option's number, 1 to n, and the store keeps its 0-based index. Fails if
+    0 is still the first option (the maintainer's "Option 0? Should start with Option 1") or n + 1
+    is let through; a bool, a string and a negative number are not numbers."""
     assert reviews.recommend(None, ("a", "b")) is None
-    assert reviews.recommend(1, ("a", "b")) == 1
-    for bad in (2, -1, True, "0"):
-        with pytest.raises(ReviewError):
+    assert reviews.recommend(1, ("a", "b")) == 0
+    assert reviews.recommend(2, ("a", "b")) == 1
+    for bad in (0, 3, -1, True, "1"):
+        with pytest.raises(ReviewError, match="recommend must be an option's number, 1 to 2"):
             reviews.recommend(bad, ("a", "b"))
 
 
@@ -285,7 +289,7 @@ def test_the_board_text_puts_open_work_first_and_stays_short() -> None:
     assert lines[1].startswith("F2 [contested] rounding")
     assert "raised by codex-1, contested: codex-1 drops it or insists" in lines[1]  # its raiser's move (#424)
     assert lines[2].startswith("Q1 [open] before or after tax?")
-    assert "0. before tax (codex-1 recommends this) | 1. after tax" in lines[2]  # asked by codex-1
+    assert "1. before tax (codex-1 recommends this) | 2. after tax" in lines[2]  # asked by codex-1
     assert lines[3].startswith("F1 [fixed]") and len(lines) == 4
 
 
@@ -941,27 +945,28 @@ def test_names_are_joined_in_words() -> None:
 
 def test_concur_checks_who_what_and_which_option() -> None:
     """A pick is validated like any move: an agent in the room, an item with options that is still
-    being decided, and an index in range (a bool, a string and a negative number are not one)."""
+    being decided, and a number in range, 1 to n (0, n + 1, a bool, a string and a negative number
+    are not one). Fails if 0 still picks the first option."""
     q = asked()
-    assert reviews.concur(q, "claude-1", 1, AGENTS) == 1
-    assert reviews.concur(q, "codex-1", 1, AGENTS) == 1  # the asker may change their mind
+    assert reviews.concur(q, "claude-1", 2, AGENTS) == 1  # the number says 2, the store keeps index 1
+    assert reviews.concur(q, "codex-1", 1, AGENTS) == 0  # the asker may change their mind
     with pytest.raises(ReviewError, match="only an agent in the room can concur: 'devin-9' isn't"):
-        reviews.concur(q, "devin-9", 0, AGENTS)
-    for bad in (2, -1, True, "0", None, 1.0):
+        reviews.concur(q, "devin-9", 1, AGENTS)
+    for bad in (0, 3, -1, True, "1", None, 1.0):
         with pytest.raises(
-            ReviewError, match="concur needs recommend, the index of the option you pick, 0 to 1"
+            ReviewError, match="concur needs recommend, the number of the option you pick, 1 to 2"
         ):
             reviews.concur(q, "claude-1", bad, AGENTS)
     with pytest.raises(ReviewError, match="F1 has no options to pick"):
-        reviews.concur(finding(), "claude-1", 0, AGENTS)
+        reviews.concur(finding(), "claude-1", 1, AGENTS)
     for state in ("answered", "dropped"):
         with pytest.raises(ReviewError, match=f"Q1 is {state}: its options are settled"):
-            reviews.concur(replace(q, n=1, state=state), "claude-1", 0, AGENTS)
+            reviews.concur(replace(q, n=1, state=state), "claude-1", 1, AGENTS)
     fix = replace(finding(), options=("rewrite it", "patch it"), recommend=1)
-    assert reviews.concur(fix, "claude-1", 0, AGENTS) == 0  # a finding's fix options, while it's open
+    assert reviews.concur(fix, "claude-1", 1, AGENTS) == 0  # a finding's fix options, while it's open
     for state in ("fixed", "dropped"):
         with pytest.raises(ReviewError, match=f"F1 is {state}: its options are settled"):
-            reviews.concur(replace(fix, state=state), "claude-1", 0, AGENTS)
+            reviews.concur(replace(fix, state=state), "claude-1", 1, AGENTS)
 
 
 def test_an_abstention_is_neither_a_pick_nor_a_wait() -> None:
@@ -1062,14 +1067,15 @@ def test_the_board_text_names_who_abstained() -> None:
 
 
 def test_a_question_must_carry_a_recommendation() -> None:
-    """ask(options) without recommend is refused, saying what to give; with one it is the index."""
+    """ask(options) without recommend is refused, saying what to give; with one, the number of an
+    option (1 to n), it is that option's stored index."""
     with pytest.raises(
-        ReviewError, match=r"recommend is required with options: .* 0 to 1\. The other agents agree"
+        ReviewError, match=r"recommend is required with options: .* 1 to 2\. The other agents agree"
     ):
         reviews.recommend(None, ("a", "b"), required=True)
-    assert reviews.recommend(1, ("a", "b"), required=True) == 1
-    with pytest.raises(ReviewError, match="recommend must be an option's index, 0 to 1"):
-        reviews.recommend(2, ("a", "b"), required=True)
+    assert reviews.recommend(2, ("a", "b"), required=True) == 1
+    with pytest.raises(ReviewError, match="recommend must be an option's number, 1 to 2"):
+        reviews.recommend(3, ("a", "b"), required=True)
 
 
 def test_a_question_just_asked_is_the_other_agents_to_agree_with() -> None:
@@ -1079,7 +1085,7 @@ def test_a_question_just_asked_is_the_other_agents_to_agree_with() -> None:
     assert who == ("claude-1", "devin-1")
     assert text == (
         "Review board: Q1 asked: off by one. @claude-1 @devin-1: agree with codex-1's pick or pick"
-        ' another option, review(action="concur", item="Q1", recommend=<index>), or abstain if you'
+        ' another option, review(action="concur", item="Q1", recommend=<number>), or abstain if you'
         ' have no view, review(action="abstain", item="Q1"). review(action="show") shows the board.'
     )
 
@@ -1102,19 +1108,19 @@ def test_the_board_text_says_who_is_behind_each_option_and_who_is_awaited() -> N
     review = {"url": "https://example.com/pr/7", "head": ""}
     one = reviews.render(review, [asked(recommend=1)], None, AGENTS).splitlines()[1]
     assert one.endswith(
-        "for a person: 1. after tax (codex-1 recommends this) | 0. before tax;"
+        "for a person: 2. after tax (codex-1 recommends this) | 1. before tax;"
         " waiting on claude-1 to agree or pick another (concur)"
     )
     agreed = reviews.render(review, [asked(picks=(("claude-1", 0),))], None, AGENTS).splitlines()[1]
-    assert agreed.endswith("for a person: 0. before tax (recommended by codex-1 and claude-1) | 1. after tax")
+    assert agreed.endswith("for a person: 1. before tax (recommended by codex-1 and claude-1) | 2. after tax")
     split = reviews.render(review, [asked(picks=(("claude-1", 1),))], None, AGENTS).splitlines()[1]
     assert split.endswith(
-        "0. before tax (picked by codex-1) | 1. after tax (picked by claude-1);"
+        "1. before tax (picked by codex-1) | 2. after tax (picked by claude-1);"
         " the agents are split: no option is recommended"
     )
     fix = replace(finding(), options=("rewrite it", "patch it"), recommend=1)
     line = reviews.render(review, [fix], None, AGENTS).splitlines()[1]
-    assert "; fix options: 1. patch it (codex-1 recommends this) | 0. rewrite it; waiting on claude-1" in line
+    assert "; fix options: 2. patch it (codex-1 recommends this) | 1. rewrite it; waiting on claude-1" in line
     done = reviews.render(review, [replace(fix, state="fixed", confirmed_by="codex-1")], None, AGENTS)
     assert "fix options" not in done  # once it's fixed, the choice is made
 
@@ -1321,7 +1327,7 @@ def test_with_several_boards_open_a_wake_line_names_its_board_and_every_call_it_
     assert line.endswith(f'review(action="show", url="{url}") shows the board.')
     asked = replace(question(), state="open")
     _, line = reviews.handoff(asked, "codex-1", ["codex-1", "claude-1"], url)  # type: ignore[misc]
-    assert f'review(action="concur", item="Q1", recommend=<index>, url="{url}")' in line
+    assert f'review(action="concur", item="Q1", recommend=<number>, url="{url}")' in line
     contested = replace(finding("contested", raised_by="claude-1"), reason="no")
     _, line = reviews.handoff(contested, "codex-1", ["codex-1", "claude-1"], url)  # type: ignore[misc]
     assert f'review(action="insist", item="F1", reason=..., url="{url}")' in line
@@ -1394,8 +1400,8 @@ def test_one_card_text_keeps_all_evidence_options_and_history() -> None:
         item.proof,
         item.commit,
         item.owner,
-        "0. Lock",
-        "1. Queue",
+        "1. Lock",
+        "2. Queue",
         "codex-1 raised it",
         "claude-1 contested it",
     ):

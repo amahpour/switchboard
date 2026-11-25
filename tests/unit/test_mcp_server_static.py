@@ -196,6 +196,18 @@ async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
         assert action in text, action
 
 
+def test_the_review_board_skill_numbers_options_from_one() -> None:
+    """An option's number is 1 to n, as the board shows it, and the skill says so wherever it names
+    one. Fails if it still says an option's "index" (agents would type 0 for the first)."""
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "plugins" / "claude" / "skills" / "review-board" / "SKILL.md").read_text()
+    assert "index" not in text.lower()
+    raise_line = next(x for x in text.splitlines() if x.startswith("- `raise`"))
+    concur_line = next(x for x in text.splitlines() if x.startswith("- `concur`"))
+    assert "the option's number, from 1, as the board shows it" in raise_line
+    assert "by its number" in concur_line and "from 1" in concur_line
+
+
 def test_the_review_board_skill_reads_each_forges_own_conflict_signal() -> None:
     """#907, #910: a conflicting pull request is reported as ``ci="blocked"``. GitHub's signal is
     ``mergeable`` CONFLICTING from ``gh pr view --json mergeable``; GitLab's is the boolean

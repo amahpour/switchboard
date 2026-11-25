@@ -997,13 +997,13 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
             expect(buttons.nth(0)).to_have_text("Before tax (claude-1 recommends this)")
             if slug == "light":
                 shot(page, out, "review-options-one-pick-light.png")
-            world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=0)
+            world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
             expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1 and codex-1)")
             if slug == "phone-light":
                 page.locator("#board .board-detail").scroll_into_view_if_needed()
             shot(page, out, "review-options-agreed-" + slug + ".png")
             if slug == "light":
-                world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
+                world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=2)
                 expect(buttons.nth(1)).to_have_text("After tax (picked by codex-1)")
                 shot(page, out, "review-options-split-light.png")
         finally:
@@ -1484,7 +1484,7 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
             room, "claude-1", "review", action="contest", item="F1", reason="The old order matched the ledger"
         )
         call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
-             options=["Before tax", "After tax"], recommend=0)  # fmt: skip
+             options=["Before tax", "After tax"], recommend=1)  # fmt: skip
         ctx = browser.new_context(timezone_id="UTC", locale="en-US", **ctx_args)
         ctx.set_default_timeout(WAIT_MS)
         try:
@@ -1605,7 +1605,7 @@ def shoot_review_guide(browser: Any, out: Path, world: Any) -> None:
          where="shop/cart.py:40-58", detail="The receipt uses the discounted total.")  # fmt: skip
     call(room, "claude-1", "review", action="contest", item="F1", reason="The old order matched the ledger")
     call(room, "claude-1", "review", action="ask", title="Discount before or after tax?",
-         options=["Before tax", "After tax"], recommend=0)  # fmt: skip
+         options=["Before tax", "After tax"], recommend=1)  # fmt: skip
     ctx = browser.new_context(**base)
     ctx.set_default_timeout(WAIT_MS)
     try:

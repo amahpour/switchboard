@@ -7924,7 +7924,7 @@
       for (const n of boardOptionOrder(i)) {
         const b = btn(n === agreed ? 'btn-primary' : 'btn', i.options[n] + boardOptionNote(i, n));
         b.dataset.option = String(n);
-        b.addEventListener('click', function () { boardMove({ action: 'answer', item: i.label, option: n }); });
+        b.addEventListener('click', function () { boardMove({ action: 'answer', item: i.label, option: n + 1 }); });
         acts.append(b);
       }
       const line = boardConsensusLine(i);
@@ -8657,7 +8657,7 @@
     if (it.moves.indexOf('answer') >= 0) {
       it.options.forEach(function (o, i) {
         const b = btn('btn home-opt', o + (it.recommend === i ? ' (recommended)' : ''));
-        b.addEventListener('click', function () { run(b, { action: 'answer', option: i }); });
+        b.addEventListener('click', function () { run(b, { action: 'answer', option: i + 1 }); });
         bar.append(b);
       });
     }

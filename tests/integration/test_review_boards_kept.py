@@ -309,26 +309,26 @@ async def test_a_person_names_the_board_they_move_and_the_room_hears_which(broke
             await tool(reviewer, action="open", url=PR_A)
             await tool(reviewer, action="open", url=PR_B)
             await tool(reviewer, action="ask", url=PR_A, title="Before or after tax?",
-                       options=["before", "after"], recommend=0)  # fmt: skip
+                       options=["before", "after"], recommend=1)  # fmt: skip
             await tool(reviewer, action="raise", url=PR_B, title="stale cache", where="shop/cache.py:9")
 
             def chat() -> list[str]:
                 return [r["text"] for r in q(broker, "SELECT text FROM messages WHERE sender_kind='human'")]
 
             vague = web.post(
-                PATH, json={"action": "answer", "item": "Q1", "option": 0}, headers=broker.write_headers()
+                PATH, json={"action": "answer", "item": "Q1", "option": 1}, headers=broker.write_headers()
             )
             assert vague.status_code == 400 and "2 open boards: say which with url" in vague.json()["message"]
             assert chat() == []
             answered = web.post(
-                PATH, json={"action": "answer", "item": "Q1", "option": 1, "url": PR_A},
+                PATH, json={"action": "answer", "item": "Q1", "option": 2, "url": PR_A},
                 headers=broker.write_headers(),
             )  # fmt: skip
             assert answered.status_code == 200
             a, b = answered.json()["boards"]
             assert a["items"][0]["answer"] == "after" and b["items"][0]["state"] == "raised"
             assert chat() == [
-                'Review board #7: Q1 answered with option 1. review(action="list") shows the boards.'
+                'Review board #7: Q1 answered with option 2. review(action="list") shows the boards.'
             ]
             assert all("http" not in text for text in chat())
 

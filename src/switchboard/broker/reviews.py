@@ -1043,13 +1043,11 @@ class Boards:
             to = reviews.person_move(item, action)
         fields: dict[str, Any] = {}
         if action == "answer":
-            choice = params.get("option")
-            if type(choice) is not int or not 0 <= choice < len(item.options):
-                raise ReviewError(
-                    f"option must be one of {item.label}'s choices, 0 to {len(item.options) - 1}"
-                )
+            # the person says the option's number, 1 to n, as the board shows it; the store keeps
+            # the answer's words, and the notice names the number only
+            choice = reviews.pick(params.get("option"), len(item.options), "option")
             fields = {"answer": item.options[choice], "answered_by": name}
-            said = f"answered with option {choice}"
+            said = f"answered with option {choice + 1}"
         elif action == "concede":
             owner = reviews.text(params.get("owner"), "owner", 100, required=True)
             if owner not in self.store.active_names(room.id):
@@ -1093,8 +1091,8 @@ class Boards:
             by=name,
             person=True,
         )
-        # Only text switchboard or this person wrote: the label, the option's number, an owner
-        # checked against the room, their own reason. Never the agents' title or options, which
+        # Only text switchboard or this person wrote: the label, the option's number (from 1), an
+        # owner checked against the room, their own reason. Never the agents' title or options, which
         # would reach every agent as this person's words, @mentions and all (#177). With several
         # boards open it also names which one by its number, built from digits and nothing an agent
         # wrote, and sends the agents to ``list`` rather than to a board that may not be theirs.
