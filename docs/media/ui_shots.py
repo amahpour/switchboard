@@ -57,6 +57,8 @@ OpenCode images, #518), opencode-upload-settings-{light,dark,phone-light} (OpenC
 opencode-avatar-{light,dark} (an OpenCode session's own avatar in the log and the Inspector, #518),
 grok-{members,inspector}-{light,dark} and grok-members-phone-light (a Grok Build session in Members and the
 Inspector, #851; ``--only grok``),
+wakechips-{before,after}-{fresh,capped}-{light,dark,phone-light} (the header with and without the two wake
+limits, #965; ``--only wake_chips``, ``SB_WAKE_CHIPS=before`` on the commit before),
 opencode-avatar-{log,members}-phone-light, closed-light, inspector-light, inspector-claude-{light,dark,phone-light} (Claude Code's
 bubble with its name written under it, #62), inspector-device-light, inspector-dark-parked,
 room-rename-before-{light,dark,phone-light}, room-rename-after-{light,dark,phone-light} (#316),
@@ -1896,7 +1898,7 @@ def shoot_focus_mode(browser: Any, out: Path, world: Any) -> None:
 def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
     """Default wake budget and hop limit, and a room's own rate (#131): Settings' New rooms
     group (budget and hop limit beside the existing room rules default; light, dark), and a
-    room's own Wake settings dialog with the hop-limit-0 warning showing (light, dark, phone).
+    room's own Wake settings dialog with its one line under each limit (light, dark, phone).
     Neither Save is clicked, so nothing here changes the seeded world for a shot after it."""
     from playwright.sync_api import expect
 
@@ -1917,7 +1919,7 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             page.click("#settings-tab-rooms")  # Settings is tabbed (#232); New rooms isn't the default
             page.fill("#settings-budget", "120")
             page.fill("#settings-hops", "0")
-            page.locator("#settings-hops-warn").scroll_into_view_if_needed()
+            page.locator("#settings-hops-hint").scroll_into_view_if_needed()
             page.evaluate("document.activeElement && document.activeElement.blur()")
             shot(page, out, name)
         finally:
@@ -1942,7 +1944,7 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             expect(page.locator("#app-dialog")).to_be_visible()
             page.fill("#app-dialog-budget", "300")
             page.fill("#app-dialog-hops", "0")
-            expect(page.locator("#app-dialog-wake-warn")).to_be_visible()
+            expect(page.locator("#app-dialog-hops-hint")).to_contain_text("0 means no limit")
             page.evaluate("document.activeElement && document.activeElement.blur()")
             shot(page, out, name)
         finally:
@@ -4438,7 +4440,6 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
     world.add_agents(room, ("ag-1",))
     world.set_approval_modes(room, {"ag-1": "bypass"})
     world.command(room.lstrip("#"), "/room voice on")
-    world.command(room.lstrip("#"), "/hops 0")
     variants = {
         "light": {**DESKTOP, "color_scheme": "light"},
         "dark": {**DESKTOP, "color_scheme": "dark"},
@@ -4457,7 +4458,7 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
             tab.click()
             expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
             expect(page.locator("#st-handsfree")).to_be_visible()
-            expect(page.locator("#st-hops")).to_contain_text("loop guard off")
+            expect(page.locator("#st-hops")).to_contain_text("Hops")
             expect(page.locator("#st-approvals")).to_be_visible()
             page.evaluate("document.activeElement && document.activeElement.blur()")
             page.mouse.move(0, 0)
@@ -4468,6 +4469,57 @@ def shoot_phone_chips(browser: Any, out: Path, world: Any) -> None:
                     page,
                     out,
                     f"phonechips-strip-{name}.png",
+                    clip={**head, "height": head["height"] + 2},
+                )
+        finally:
+            ctx.close()
+
+
+def shoot_wake_chips(browser: Any, out: Path, world: Any) -> None:
+    """#965, the room header with and without the two wake limits: a room as new rooms are made
+    (``wakechips-{tag}-fresh-{light,dark,phone-light}``) and a room with a budget of 20 and a hop limit of
+    5 (``wakechips-{tag}-capped-…``). ``tag`` is ``SB_WAKE_CHIPS`` (``after`` by default, ``before`` on
+    the commit before the change). The seeded world gives new rooms a budget of 60 and a hop limit of 30 so
+    its scripts post in one go, so the fresh room is made as the built-in defaults make one: ``/hops 0``,
+    and after the change ``/budget 0``. Before, that room showed Budget 60/60 and "loop guard off";
+    ``/budget 20`` set only what was left, so the capped room read 20/60."""
+    from playwright.sync_api import expect
+
+    tag = os.environ.get("SB_WAKE_CHIPS", "after")
+    fresh, capped = "#fresh-room", "#capped-room"
+    for name in (fresh, capped):
+        world.create_room(name)
+    world.command(fresh.lstrip("#"), "/hops 0")
+    if tag == "after":
+        world.command(fresh.lstrip("#"), "/budget 0")
+    world.command(capped.lstrip("#"), "/budget 20")
+    world.command(capped.lstrip("#"), "/hops 5")
+    variants = {
+        "light": {**DESKTOP, "color_scheme": "light"},
+        "dark": {**DESKTOP, "color_scheme": "dark"},
+        "phone-light": {**PHONE, "color_scheme": "light"},
+    }
+    for variant, options in variants.items():
+        ctx = browser.new_context(timezone_id="UTC", locale="en-US", **options)
+        ctx.set_default_timeout(WAIT_MS)
+        page = ctx.new_page()
+        try:
+            sign_in(page, world.broker)
+            for key, room in (("fresh", fresh), ("capped", capped)):
+                tab = page.locator(f'#tabs .room[data-room="{room}"]')
+                if not tab.is_visible():
+                    page.click("#rooms-toggle")
+                tab.click()
+                expect(page.locator("#room-title")).to_have_text(room.lstrip("#"))
+                expect(page.locator("#st-state")).to_have_text("Running")
+                page.evaluate("document.activeElement && document.activeElement.blur()")
+                page.mouse.move(0, 0)
+                head = page.locator(".conv-head").bounding_box()
+                assert head is not None
+                shot(
+                    page,
+                    out,
+                    f"wakechips-{tag}-{key}-{variant}.png",
                     clip={**head, "height": head["height"] + 2},
                 )
         finally:
@@ -5122,6 +5174,7 @@ ONLY: dict[str, Any] = {
     "room_calls": shoot_room_calls,
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,
+    "wake_chips": shoot_wake_chips,
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,

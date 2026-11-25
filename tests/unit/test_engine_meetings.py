@@ -21,7 +21,9 @@ from switchboard.models import Message
 def world(tmp_path: Path, clock: FakeClock) -> World:
     # A short hold, so "past the hold" is a few seconds of the fake clock and not
     # the default four and a half minutes. An ordinary agent line would wake by then.
-    cfg = Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=1.0, unaddressed_hold_s=5.0)
+    cfg = Config(human_name="alice").with_delivery(
+        budget_per_hour=60, quiet_s=0.0, max_hold_s=1.0, unaddressed_hold_s=5.0
+    )
     return World(tmp_path, clock, cfg)
 
 

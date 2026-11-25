@@ -62,9 +62,10 @@
   const CONT_WINDOW_S = 300;       // a same-sender message within 5 minutes is a continuation row
   const REFETCH_MS = 800;          // Inspector refetch debounce
   const COPIED_MS = 1600;          // how long "Copied" / "Session id copied" shows
-  // the room's own wake dialog and Settings' Rooms section (#131) share this one warning,
-  // so a hop limit of 0 reads the same wherever it's set
-  const HOP_LIMIT_ZERO_WARNING = 'Hop limit 0 turns the loop guard off: agents may message each other without limit.';
+  // what each of the two wake limits stops, said once for the room's wake dialog and Settings (#131, #965):
+  // 0 is the normal value for both (no limit), so neither warns about it
+  const BUDGET_HINT = 'The most times agents in the room are woken in an hour. 0 means no limit.';
+  const HOPS_HINT = 'Pauses the room after this many agent messages in a row with none from a person. 0 means no limit.';
 
   // harness key -> [avatar monogram, display name, avatar glyph (an ICONS name) shown instead,
   //                  a word written under the glyph on the Inspector's large avatar]
@@ -279,8 +280,10 @@
           hopsInput.max = '1000';
           hopsInput.inputMode = 'numeric';
           hopsInput.value = String(init.hop_limit);
-          const wakeWarn = el('p', 'wake-warn hidden', HOP_LIMIT_ZERO_WARNING);
-          wakeWarn.id = 'app-dialog-wake-warn';
+          const budgetHint = el('p', 'fine', BUDGET_HINT);
+          budgetHint.id = 'app-dialog-budget-hint';
+          const hopsHint = el('p', 'fine', HOPS_HINT);
+          hopsHint.id = 'app-dialog-hops-hint';
           const wakeError = el('p', 'app-dialog-error');
           wakeError.id = 'app-dialog-wake-error';
           wakeError.setAttribute('role', 'status');
@@ -289,7 +292,6 @@
             const h = Number(hopsInput.value);
             const bOk = budgetInput.value !== '' && Number.isInteger(b) && b >= 0 && b <= 1000000;
             const hOk = hopsInput.value !== '' && Number.isInteger(h) && h >= 0 && h <= 1000;
-            wakeWarn.classList.toggle('hidden', !(hOk && h === 0));
             wakeError.textContent = !bOk
               ? 'Wake budget per hour must be a whole number from 0 to 1,000,000.'
               : !hOk ? 'Hop limit must be a whole number from 0 to 1,000.' : '';
@@ -297,7 +299,7 @@
           };
           budgetInput.addEventListener('input', validWake);
           hopsInput.addEventListener('input', validWake);
-          form.append(budgetLabel, budgetInput, hopsLabel, hopsInput, wakeWarn, wakeError);
+          form.append(budgetLabel, budgetInput, budgetHint, hopsLabel, hopsInput, hopsHint, wakeError);
         }
         let voiceBox = null, listenBox = null;
         if (options.kind === 'calls') {
@@ -2184,8 +2186,10 @@
 
     const budget = $('st-budget');
     budget.replaceChildren();
-    const hasBudget = !!r && s.budget_per_hour !== undefined;
+    // a chip only while its limit is on (#965): a rate of 0 is no limit, and there is nothing to show
+    const hasBudget = !!r && s.budget_per_hour !== undefined && Number(s.budget_per_hour) > 0;
     budget.classList.toggle('hidden', !hasBudget);
+    if (!hasBudget) { budget.classList.remove('bad', 'low'); budget.title = ''; }
     if (hasBudget) {
       const left = Number(s.budget_remaining) || 0;
       const per = Number(s.budget_per_hour) || 0;
@@ -2197,20 +2201,16 @@
 
     const hops = $('st-hops');
     hops.replaceChildren();
-    const guardOff = !!(r && s.hop_limit === 0);
-    hops.classList.toggle('hidden', !r || s.hop_limit === undefined);
-    if (!r || s.hop_limit === undefined) {
+    const hopsOn = !!r && Number(s.hop_limit) > 0;
+    hops.classList.toggle('hidden', !hopsOn);
+    if (!hopsOn) {
       hops.title = '';
-    } else if (guardOff) {
-      hops.textContent = 'loop guard off ⚠';
-      hops.title = 'hop limit 0: agents may message each other without limit (' + s.hop_count +
-        ' in a row now). /hops <n> turns the loop guard back on.';
     } else {
       hops.append(el('span', 'chip-label', 'Hops'), meter(s.hop_count, s.hop_limit),
         el('span', 'chip-num', s.hop_count + '/' + s.hop_limit));
       hops.title = 'Loop guard: agent messages in a row with none from you / the limit. /hops n changes it.';
     }
-    hops.classList.toggle('bad', guardOff);
+    hops.classList.remove('bad');
     // a marker while the room's calls are hands-free, so everyone in it can see that (§52.3)
     const hf = $('st-handsfree');
     const hands = (s.hands_free && typeof s.hands_free === 'object') ? s.hands_free : {};
@@ -3280,10 +3280,10 @@
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
     { group: 'Room', cmd: 'rename', args: '<new-name>', desc: 'Rename this room', pill: 'web only',
       usage: '/rename <new-name>', detail: 'Members stay in the room. Agents can use either name.' },
-    { group: 'Room', cmd: 'budget', args: '[n]', desc: 'Show or set wakes left this hour', pill: 'raise: web only',
-      usage: '/budget   /budget <n>', detail: 'Lowering works from anywhere; raising needs this browser.', live: 'budget' },
+    { group: 'Room', cmd: 'budget', args: '[n]', desc: 'Show or set the wakes an hour', pill: 'raise: web only',
+      usage: '/budget   /budget <n>   (0 means no limit)', detail: 'Lowering works from anywhere; raising it, or 0 for no limit, needs this browser.', live: 'budget' },
     { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
-      usage: '/hops   /hops <n>   (0–1000, 0 turns it off)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
+      usage: '/hops   /hops <n>   (0–1000, 0 means no limit)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
     { group: 'Room', cmd: 'meeting', args: '[<link> [mine]|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
       pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   voice <name> <voice>   snapshot   share <file>|stop',
       detail: 'Add mine to ask your own agent to host it, without a model seeing the link. The link is not kept. Voice lets agents speak with @call; a snapshot posts the shared screen; share shows a PNG or JPEG of this room in a Zoom call.' },
@@ -3317,7 +3317,7 @@
     { group: 'Info', cmd: 'who', args: '', desc: 'Members, their sessions and hosts', pill: '', usage: '/who',
       detail: 'Shows session: <id> @ <host> for each member that has one.' },
     { group: 'Info', cmd: 'status', args: '', desc: 'Room status: paused, budget, hops', pill: '', usage: '/status',
-      detail: 'Paused or running, the wake budget and the loop guard, as a reply.' },
+      detail: 'Paused or running, the wake budget and the loop guard (or that they have no limit), as a reply.' },
     { group: 'Info', cmd: 'help', args: '', desc: 'List every command', pill: '', usage: '/help',
       detail: 'Lists every command as a reply in the room.' },
   ];
@@ -3326,8 +3326,12 @@
     const r = activeRoom();
     const s = (r && r.settings) || {};
     let d = c.desc.replace('{room}', r ? r.name : 'the room');
-    if (c.live === 'budget' && s.budget_per_hour !== undefined) d += ' · ' + s.budget_remaining + '/' + s.budget_per_hour;
-    if (c.live === 'hops' && s.hop_limit !== undefined) d += ' · ' + s.hop_count + '/' + s.hop_limit;
+    if (c.live === 'budget' && s.budget_per_hour !== undefined) {
+      d += s.budget_per_hour > 0 ? ' · ' + s.budget_remaining + '/' + s.budget_per_hour : ' · no limit';
+    }
+    if (c.live === 'hops' && s.hop_limit !== undefined) {
+      d += s.hop_limit > 0 ? ' · ' + s.hop_count + '/' + s.hop_limit : ' · no limit';
+    }
     return d;
   }
 
@@ -5250,14 +5254,15 @@
     budgetSource.id = 'settings-budget-source';
     const [hopsLabel, hopsInput] = numberField('settings-hops', 'Hop limit', 1000);
     hopsInput.value = has(prefs0.hop_limit) ? String(prefs0.hop_limit) : '';
-    const hopsWarn = el('p', 'wake-warn hidden', HOP_LIMIT_ZERO_WARNING);
-    hopsWarn.id = 'settings-hops-warn';
+    const budgetHint = el('p', 'fine', BUDGET_HINT);
+    budgetHint.id = 'settings-budget-hint';
+    const hopsHint = el('p', 'fine', HOPS_HINT);
+    hopsHint.id = 'settings-hops-hint';
     const hopsSource = el('p', 'fine');
     hopsSource.id = 'settings-hops-source';
     const renderWakeSources = function () {
       budgetSource.textContent = wakeSourceText(budgetInput.value, wakeDefaults.budget_per_hour, '/hour');
       hopsSource.textContent = wakeSourceText(hopsInput.value, wakeDefaults.hop_limit, '');
-      hopsWarn.classList.toggle('hidden', hopsInput.value !== '0');
     };
     renderWakeSources();
     const clearStatus = function () { $('settings-rules-status').textContent = ''; };
@@ -5271,8 +5276,8 @@
     status.setAttribute('role', 'status');
     panel.append(
       rulesLabel, rulesInput, count,
-      budgetLabel, budgetInput, budgetSource,
-      hopsLabel, hopsInput, hopsWarn, hopsSource
+      budgetLabel, budgetInput, budgetHint, budgetSource,
+      hopsLabel, hopsInput, hopsHint, hopsSource
     );
     const bar = settingsSaveBar(panel, 'rules', [rulesInput, budgetInput, hopsInput], save, status,
       function () { countRules(); renderWakeSources(); });
@@ -5986,7 +5991,8 @@
       const rulesPart = rules ? firstLine(rules, 40) : 'No default rules';
       const budget = has(prefs.budget_per_hour) ? prefs.budget_per_hour : (wakeDefaults.budget_per_hour || {}).value;
       const hops = has(prefs.hop_limit) ? prefs.hop_limit : (wakeDefaults.hop_limit || {}).value;
-      return rulesPart + ' · ' + budget + ' wakes an hour · ' + hops + ' hops';
+      return rulesPart + ' · ' + (Number(budget) > 0 ? budget + ' wakes an hour' : 'no wake limit')
+        + ' · ' + (Number(hops) > 0 ? hops + ' hops' : 'no hop limit');
     }
     if (key === 'agents') {
       const list = state.agentTokens;
@@ -6254,7 +6260,6 @@
           wakeSourceText($('settings-budget').value, me.wake_defaults.budget_per_hour, '/hour');
         $('settings-hops-source').textContent =
           wakeSourceText($('settings-hops').value, me.wake_defaults.hop_limit, '');
-        $('settings-hops-warn').classList.toggle('hidden', $('settings-hops').value !== '0');
       }
       state.me = me;
       renderSettingsAccount();
@@ -8972,7 +8977,7 @@
     const s = r.settings || {};
     const answer = await openDialog({
       kind: 'wake', title: 'Wake settings for ' + r.name,
-      body: 'How often agents may wake each hour, and when the loop guard pauses this room.',
+      body: 'Two limits on how busy agents in this room may get. Both are off at 0.',
       initial: { budget_per_hour: s.budget_per_hour || 0, hop_limit: s.hop_limit || 0 },
       action: 'Save',
     });
@@ -10477,7 +10482,7 @@
     root.replaceChildren();
     const lead = el('p', 'usage-lead');
     lead.textContent = 'Wakes handed to each agent, and the messages they posted, today and over the last 7 days. '
-      + 'Today is included in the 7 days. The budget is the wakes the room has left this hour. '
+      + 'Today is included in the 7 days. The budget, when a room has one, is the wakes it has left this hour. '
       + 'This page does not measure tokens or dollars.';
     root.append(lead);
     const data = state.usageData;
@@ -10493,7 +10498,7 @@
       root.append(p);
     }
     root.append(el('h2', 'usage-h', 'Rooms'));
-    root.append(el('p', 'usage-note', 'Noisiest first. The budget is what is left this hour.'));
+    root.append(el('p', 'usage-note', 'Noisiest first. A room with a budget shows what is left this hour.'));
     const rooms = Array.isArray(data.rooms) ? data.rooms : [];
     if (!rooms.length) root.append(el('p', 'usage-none', 'No open rooms.'));
     else {
@@ -10505,8 +10510,9 @@
         const row = el('div', 'usage-row');
         const who = el('div', 'usage-name');
         who.append(usageJump(name));
-        const budget = el('span', 'usage-budget', whole(room.budget_remaining) + ' of '
-          + whole(room.budget_per_hour) + ' left this hour');
+        const budget = el('span', 'usage-budget', whole(room.budget_per_hour) > 0
+          ? whole(room.budget_remaining) + ' of ' + whole(room.budget_per_hour) + ' left this hour'
+          : 'no wake limit');
         row.append(who, budget, ...usageCounts(room));
         const ran = whole(room.exhausted_week);
         if (ran > 0) {

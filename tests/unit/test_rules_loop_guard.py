@@ -22,7 +22,9 @@ from switchboard.models import Notice
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, hop_limit=6))
+    return World(
+        tmp_path, clock, Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, hop_limit=6)
+    )
 
 
 def warn_notices(w: World) -> list[Notice]:
@@ -162,7 +164,7 @@ def test_a_wait_opened_after_the_loop_guard_tripped_names_it_at_its_timeout(w: W
 
 
 def test_a_hop_limit_of_zero_turns_the_guard_off(tmp_path: Path, clock: FakeClock) -> None:
-    w = World(tmp_path, clock, Config().with_delivery(hop_limit=0))
+    w = World(tmp_path, clock, Config().with_delivery(budget_per_hour=60, hop_limit=0))
     _pa, ma = w.agent("a")
     for i in range(20):
         w.agent_says(ma, f"hop {i}")
@@ -177,7 +179,7 @@ def test_a_new_room_with_no_default_of_anyones_has_the_guard_off_and_never_pause
     row with none from a person leave it running: no pause, no ``loop_guard`` event, no warning.
     Before, the same room paused at the sixth message. The count still runs, so ``/hops <n>``
     can turn the guard on later and count the run so far."""
-    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    w = World(tmp_path, clock, Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0))
     svc = RoomService(w.store, Hub(), w.cfg, BrokerInfo(port=7419, test_mode=True), clock)
     fresh = svc.create_room("#fresh")
     assert fresh.hop_limit == 0

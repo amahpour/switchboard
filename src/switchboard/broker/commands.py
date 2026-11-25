@@ -45,7 +45,8 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /resume             unfreeze the room and reset the loop guard (web only)
   /rename <new-name>  rename this room (web only)
   /budget             show the wake budget
-  /budget <n>         set the wakes left this hour (raising it is web only)
+  /budget <n>         set the room's wakes an hour, 0-1000000; 0 means no limit
+                      (raising it or turning it off is web only)
   /hops               show the loop guard: agent messages in a row / the limit
   /hops <n>           set the loop guard limit, 0-1000; 0 turns it off
                       (raising it or turning it off is web only)
@@ -484,6 +485,14 @@ def hops_raise(new: int, old: int) -> bool:
     return new > old
 
 
+def budget_raise(new: int, room: Room) -> bool:
+    """Does ``/budget new`` allow more wakes than the room has now (#965)? It sets the hourly
+    rate and, with it, what is left this hour. A higher rate is a raise, and so is 0 (no
+    limit), as for ``/hops``; so is any number above what is left this hour, since it hands
+    the room those wakes back at once. Turning a budget on (from no limit) only tightens."""
+    return hops_raise(new, room.budget_per_hour) or (room.budget_on and new > room.budget_remaining)
+
+
 def required_role(cmd: Command, room: Room) -> str:
     if cmd.name == "room" and not cmd.args:
         return "human_cli"  # reading the settings changes nothing
@@ -492,7 +501,7 @@ def required_role(cmd: Command, room: Room) -> str:
     if cmd.name == "budget":
         if not cmd.args:
             return "human_cli"
-        return "human_cli" if int(cmd.args[0]) <= room.budget_remaining else "human"
+        return "human" if budget_raise(int(cmd.args[0]), room) else "human_cli"
     if cmd.name == "hops":
         if not cmd.args:
             return "human_cli"
@@ -505,7 +514,7 @@ def check_role(cmd: Command, room: Room, actor: Actor) -> None:
     if ROLE_RANK.get(actor.role, 0) < ROLE_RANK[need]:
         # need == "human" for these two means a value was given and it raises activity
         if cmd.name == "budget" and need == "human":
-            what = "raising the budget"
+            what = "turning the wake budget off" if cmd.args[0] == "0" else "raising the wake budget"
         elif cmd.name == "hops" and need == "human":
             what = "turning the loop guard off" if cmd.args[0] == "0" else "raising the hop limit"
         else:
@@ -518,6 +527,27 @@ def check_role(cmd: Command, room: Room, actor: Actor) -> None:
 
 def _hhmmss(ts: float) -> str:
     return time.strftime("%H:%M:%S", time.localtime(ts))
+
+
+def budget_phrase(rate: int) -> str:
+    """``60/hour``, or ``no limit`` for 0 (#965)."""
+    return f"{rate}/hour" if rate else "no limit"
+
+
+def budget_state(room: Room) -> str:
+    """``budget 12/60 wakes this hour``, or ``no wake limit`` for a rate of 0."""
+    if not room.budget_on:
+        return "no wake limit"
+    return f"budget {room.budget_remaining}/{room.budget_per_hour} wakes this hour"
+
+
+def budget_show(room: Room) -> str:
+    if not room.budget_on:
+        return f"{room.name}: no wake limit (/budget <n> sets one; Pause is the brake)"
+    return (
+        f"{room.name}: {room.budget_remaining}/{room.budget_per_hour} wakes left this hour"
+        f" (refills at {_hhmmss(room.budget_reset_at)})"
+    )
 
 
 def hops_state(room: Room) -> str:
@@ -1201,22 +1231,18 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
         )
     if name == "budget":
         if not cmd.args:
-            return Result(
-                True,
-                f"{room.name}: {room.budget_remaining}/{room.budget_per_hour} wakes left this hour"
-                f" (refills at {_hhmmss(room.budget_reset_at)})",
-            )
+            return Result(True, budget_show(room))
         n = int(cmd.args[0])
-        old = room.budget_remaining
-        store.set_budget(room.id, n)
+        old = room.budget_per_hour
+        room = store.set_budget_rate(room.id, n)
         return Result(
             True,
-            f"{room.name}: budget set to {n} (was {old}); refills to {room.budget_per_hour}"
-            f" at {_hhmmss(room.budget_reset_at)}",
-            notice=f"set the wake budget to {n} (was {old})",
+            f"{room.name}: wake budget set to {budget_phrase(n)} (was {budget_phrase(old)})"
+            + (f"; refills at {_hhmmss(room.budget_reset_at)}" if n else ""),
+            notice=f"set the wake budget to {budget_phrase(n)} (was {budget_phrase(old)})",
             room_changed=True,
             event="budget_set",
-            event_data={"old": old, "new": n},
+            event_data={"old": old, "new": n, "per_hour": True},
         )
     if name == "hops":
         if not cmd.args:

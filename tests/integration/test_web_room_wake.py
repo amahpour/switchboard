@@ -57,7 +57,9 @@ def test_each_person_creates_rooms_from_their_own_defaults(hosted: InProcBroker)
         bob.c.put("/api/me/preferences", json={"hop_limit": 15}, headers=bob.headers(True))
         made_by_bob = bob.post("/api/rooms", {"name": "#bob-room"}).json()["room"]["settings"]
         made_by_admin = admin.post("/api/rooms", {"name": "#admin-room"}).json()["room"]["settings"]
-        assert made_by_bob["hop_limit"] == 15 and made_by_bob["budget_per_hour"] == 60  # built-in rate
+        assert (
+            made_by_bob["hop_limit"] == 15 and made_by_bob["budget_per_hour"] == 0
+        )  # built-in rate: no limit (#965)
         # admin set no hop limit of their own, so the built-in 0 (guard off, #406) applies, not bob's 15
         assert made_by_admin["budget_per_hour"] == 90 and made_by_admin["hop_limit"] == 0
     finally:
@@ -75,7 +77,7 @@ def test_a_default_can_be_cleared_back_to_the_broker_default(broker: InProcBroke
     web.put("/api/me/preferences", json={"budget_per_hour": None}, headers=headers)
     me = web.get("/api/me").json()
     assert me["preferences"]["budget_per_hour"] is None
-    assert me["wake_defaults"]["budget_per_hour"] == {"value": 60, "source": "built-in default"}
+    assert me["wake_defaults"]["budget_per_hour"] == {"value": 0, "source": "built-in default"}
 
 
 def test_wake_is_checked_bounded_and_needs_the_right_headers(broker: InProcBroker, web: httpx.Client) -> None:
@@ -103,7 +105,7 @@ def test_wake_is_checked_bounded_and_needs_the_right_headers(broker: InProcBroke
         {"budget_per_hour": 100, "hop_limit": True},
     ):
         assert web.put(path, json=bad, headers=headers).status_code == 400
-    assert broker.state.store.get_room("#wake-cap").budget_per_hour == 60  # untouched by any refusal
+    assert broker.state.store.get_room("#wake-cap").budget_per_hour == 0  # untouched by any refusal
     assert web.put(path, json=good, headers=headers).status_code == 200
     assert broker.state.store.get_room("#wake-cap").budget_per_hour == 100
 
@@ -152,6 +154,6 @@ def test_set_room_wake_updates_the_header_chips_live_and_posts_a_notice(
         assert hop == {"old": 0, "new": 12}
         # the rate, not what's left this hour (which /budget n's budget_set records)
         rate = [e.data for e in broker.state.store.recent_events() if e.kind == "budget_set"]
-        assert rate and rate[-1] == {"old": 60, "new": 300, "per_hour": True}, rate
+        assert rate and rate[-1] == {"old": 0, "new": 300, "per_hour": True}, rate
     finally:
         ws.close()

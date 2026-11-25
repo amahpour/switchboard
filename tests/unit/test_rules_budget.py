@@ -23,7 +23,7 @@ from switchboard.models import Notice
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    return World(tmp_path, clock, Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0))
 
 
 def left(w: World) -> int:
@@ -259,3 +259,60 @@ def test_a_listening_claude_at_zero_budget_waits_for_the_human(w: World, clock: 
     assert not woke(w, park) and w.engine.parked_reason(m.id) is None  # budget-held is not parked
     w.human("me")
     assert woke(w, park)
+
+
+# ------------------------------------------------------- no limit (#965)
+def test_a_room_with_no_budget_holds_nothing_back_and_blocks_nothing() -> None:
+    """A rate of 0 an hour is no limit: its count of 0 is not "used up". A mention wakes an idle member,
+    chatter is released with it, and nothing is "budget blocked" (which would post the used-up notice).
+    Fails if a rate of 0 is read as an empty budget."""
+    free = room(budget_per_hour=0, budget_remaining=0)
+    r = rules.releasable(
+        [item(1, 1), item(2, 0)],
+        room=free,
+        eff="idle",
+        peer_batch_boundary=-1,
+        boundary_seq=0,
+        now=NOW,
+        quiet_s=3,
+        max_hold_s=60,
+        batch_max_msgs=20,
+        max_chars=6000,
+    )
+    assert r is not None and [i.message_id for i in r.items] == [1, 2]
+    assert not rules.budget_blocked(
+        [item(1, 1)], room=free, eff="idle", peer_batch_boundary=-1, boundary_seq=0
+    )
+    assert not free.budget_on and not free.budget_spent
+    assert room(budget_per_hour=60, budget_remaining=0).budget_spent  # a set budget still runs out
+
+
+def test_a_room_with_no_budget_never_spends_refills_or_posts_the_notice(
+    tmp_path: Path, clock: FakeClock
+) -> None:
+    """Many chatter wakes and a Devin re-arm in a room with no budget: the count stays 0, no
+    ``budget_exhausted`` event or notice is written, the window never moves, and a re-arm is not refused for
+    having "no wakes left". Fails if a wake spends, an hour passing refills, or the notice is posted."""
+    w = World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    assert not w.room.budget_on
+    window = w.store.room_by_id(w.room.id).budget_window_start
+    p, m = w.agent("bot")
+    _p2, m2 = w.agent("peer")
+    for i in range(5):
+        sink, acts = w.engine.open_wait(w.p(p), w.m(m), f"w{i}", 50)
+        w.actions += acts
+        w.agent_says(m2, f"chatter {i}")
+        assert w.resolved(sink.id)[0]["status"] == "messages", i  # woken every time, none held back
+        clock.advance(30)
+    assert left(w) == 0
+    assert not [a for a in w.take() if isinstance(a, Notice)]
+    assert w.store.count_events("budget_exhausted") == 0
+    clock.advance(7200)
+    assert w.store.refill_budget(w.room.id).budget_window_start == window
+    assert w.store.spend_budget(w.room.id).budget_remaining == 0
+    pd, md = devin(w)
+    w.hook(pd, "UserPromptSubmit", gen="g1")
+    w.store.mark_handled(md.id)
+    out = w.hook(pd, "Stop", gen="g1")
+    assert out is not None and out.kind == "continue" and "wait(" in out.text  # re-armed
+    assert w.store.count_events("rearm") == 1

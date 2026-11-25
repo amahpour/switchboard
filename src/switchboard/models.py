@@ -187,6 +187,16 @@ class Room:
     def budget_reset_at(self) -> float:
         return self.budget_window_start + 3600.0
 
+    @property
+    def budget_on(self) -> bool:
+        """A wake budget is set (§8.5, #965). 0 an hour is no limit: nothing is spent or refilled."""
+        return self.budget_per_hour > 0
+
+    @property
+    def budget_spent(self) -> bool:
+        """The room has a budget and this hour's wakes are all used."""
+        return self.budget_on and self.budget_remaining <= 0
+
 
 @dataclass(frozen=True)
 class Message:

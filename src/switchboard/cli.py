@@ -240,10 +240,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             if limit is None
             else f"{r['hop_count']}/{limit}"
         )
-        print(
-            f"  {r['name']}: {state}, {r['members']} agent(s), budget "
-            f"{r['budget_remaining']}/{r['budget_per_hour']}, hops {hops}"
-        )
+        budget = f"{r['budget_remaining']}/{r['budget_per_hour']}" if r["budget_per_hour"] else "no limit"
+        print(f"  {r['name']}: {state}, {r['members']} agent(s), budget {budget}, hops {hops}")
     if closed:
         print(f"  closed  {closed} room(s) (switchboard rooms --closed)")
     return EXIT_OK

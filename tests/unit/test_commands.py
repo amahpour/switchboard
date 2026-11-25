@@ -43,13 +43,24 @@ class Rec(Subscriber):
         return True
 
 
-@pytest.fixture
-def svc(tmp_path: Path, clock: FakeClock) -> RoomService:
+def make_service(tmp_path: Path, clock: FakeClock, cfg: Config) -> RoomService:
     store = Store(db.open_db(tmp_path / "y.db"), clock)
-    hub = Hub()
-    s = RoomService(store, hub, Config(), BrokerInfo(port=7419, test_mode=True), clock)
+    s = RoomService(store, Hub(), cfg, BrokerInfo(port=7419, test_mode=True), clock)
     s.create_room("#build")
     return s
+
+
+@pytest.fixture
+def svc(tmp_path: Path, clock: FakeClock) -> RoomService:
+    """A room with a wake budget of 60 an hour: the built-in default is no limit (#965), and most of
+    these tests are about what a budget does."""
+    return make_service(tmp_path, clock, Config().with_delivery(budget_per_hour=60))
+
+
+@pytest.fixture
+def free(tmp_path: Path, clock: FakeClock) -> RoomService:
+    """A room as the built-in defaults make it: no wake budget, no hop limit."""
+    return make_service(tmp_path, clock, Config())
 
 
 @pytest.fixture
@@ -153,6 +164,7 @@ def test_required_roles(svc: RoomService) -> None:
             "/budget 10",
             "/budget 60",
             "/budget 61",
+            "/budget 0",
             "/hold a",
             "/quiet a",
             "/unquiet a",
@@ -180,6 +192,7 @@ def test_required_roles(svc: RoomService) -> None:
         "/budget 10": "human_cli",
         "/budget 60": "human_cli",
         "/budget 61": "human",
+        "/budget 0": "human",  # no limit is the loosest there is, as /hops 0 is
         "/hold a": "human_cli",
         "/quiet a": "human_cli",  # fewer wakes (#548)
         "/unquiet a": "human",  # more wakes again, like /release
@@ -230,33 +243,63 @@ def test_budget(svc: RoomService, clock: FakeClock) -> None:
     res = svc.command("#build", "/budget", CLI)
     assert "60/60 wakes left" in res["text"]
     assert svc.command("#build", "/budget 5", CLI)["ok"]
-    assert svc.room("#build").budget_remaining == 5
+    room = svc.room("#build")
+    assert (room.budget_per_hour, room.budget_remaining) == (5, 5)  # the rate, and what is left with it
     with pytest.raises(ServiceError) as e:
         svc.command("#build", "/budget 6", CLI)  # raising needs the web session
     assert e.value.code == "forbidden"
     assert svc.command("#build", "/budget 500", WEB)["ok"]
-    assert svc.room("#build").budget_remaining == 500
+    room = svc.room("#build")
+    assert (room.budget_per_hour, room.budget_remaining) == (500, 500)
     ev = svc.store.recent_events(kinds=["budget_set"])[0]
-    assert ev.data == {"via": "web", "old": 5, "new": 500}
+    assert ev.data == {"via": "web", "old": 5, "new": 500, "per_hour": True}
     clock.advance(3601)
-    assert "60/60" in svc.command("#build", "/budget", WEB)["text"]
+    assert "500/500" in svc.command("#build", "/budget", WEB)["text"]
 
 
-def test_budget_role_uses_the_refilled_window(svc: RoomService, clock: FakeClock) -> None:
-    """Raise vs lower is judged against what is really left after the hourly refill."""
-    assert svc.command("#build", "/budget 0", CLI)["ok"]
-    clock.advance(3700)  # the window rolled over: 60 left again
-    assert svc.command("#build", "/budget 30", CLI)["ok"]  # a lowering, so the CLI may
-    assert svc.room("#build").budget_remaining == 30
-    # web raised it above the hourly budget; after a rollover only 60 are left,
-    # so setting the old value again from the CLI is a raise
-    assert svc.command("#build", "/budget 500", WEB)["ok"]
-    clock.advance(3601)
+def test_budget_sets_the_rate_so_the_header_never_reads_above_it(svc: RoomService) -> None:
+    """#965: ``/budget 20`` sets the hourly rate with what is left, as the room dialog's save does.
+    Before, it set only what was left, so a room could read 99995/60. Fails if the rate stays 60."""
+    assert svc.command("#build", "/budget 20", CLI)["ok"]
+    s = svc.settings(svc.room("#build"))
+    assert (s["budget_remaining"], s["budget_per_hour"]) == (20, 20)
+    assert "20/20" in svc.command("#build", "/status", CLI)["text"]
+
+
+def test_budget_role_is_judged_on_the_rate_and_what_is_left_after_a_refill(
+    svc: RoomService, clock: FakeClock
+) -> None:
+    """No limit is a loosening, and so is any number above what is really left, after the hourly
+    refill: ``/budget 60`` hands a spent room its wakes back, so the CLI may not do it until the hour
+    has rolled over and they are back anyway. Fails if the role ignores 0, or the refill."""
     with pytest.raises(ServiceError) as e:
-        svc.command("#build", "/budget 500", CLI)
-    assert e.value.code == "forbidden"
-    st = {r["name"]: r for r in svc.status()["rooms"]}["#build"]
-    assert st["budget_remaining"] == 60
+        svc.command("#build", "/budget 0", CLI)
+    assert e.value.code == "forbidden" and "turning the wake budget off" in e.value.message
+    svc.store.set_budget(svc.room("#build").id, 0)  # this hour's wakes are all used
+    with pytest.raises(ServiceError):
+        svc.command("#build", "/budget 60", CLI)
+    clock.advance(3700)  # the window rolled over: 60 are left again
+    assert svc.command("#build", "/budget 60", CLI)["ok"]
+    assert svc.command("#build", "/budget 30", CLI)["ok"]  # a lowering, so the CLI may
+    assert svc.command("#build", "/budget 0", WEB)["ok"]
+    room = svc.room("#build")
+    assert (room.budget_per_hour, room.budget_remaining) == (0, 0)
+
+
+def test_a_room_with_no_budget_says_so_and_a_number_only_tightens_it(free: RoomService) -> None:
+    """#965: the built-in rate is 0, no limit. ``/budget`` and ``/status`` say "no limit" and never
+    "0/0", and setting a number is a tightening the CLI may do. Fails if a rate of 0 reads as an
+    empty budget or setting one needs the web."""
+    room = free.room("#build")
+    assert not room.budget_on and room.budget_per_hour == 0
+    assert "no wake limit" in free.command("#build", "/budget", CLI)["text"]
+    st = free.command("#build", "/status", CLI)["text"]
+    assert "no wake limit" in st and "0/0" not in st
+    assert free.command("#build", "/budget 20", CLI)["ok"]
+    assert free.room("#build").budget_on
+    assert "20/20" in free.command("#build", "/budget", CLI)["text"]
+    assert free.command("#build", "/budget 0", WEB)["ok"]
+    assert "no wake limit" in free.command("#build", "/budget", CLI)["text"]
 
 
 def test_member_commands_on_agent_less_room(svc: RoomService) -> None:

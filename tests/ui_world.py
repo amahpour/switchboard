@@ -137,12 +137,13 @@ def wait_js(page: Any, expression: str, arg: Any = None, timeout_ms: float = 15_
 
 
 def start_broker(home: Path) -> InProcBroker:
-    """A test-mode in-process broker in ``home``, with no say() rate limit and a roomier loop
-    guard, so the scripted conversation posts in one go."""
+    """A test-mode in-process broker in ``home``, with no say() rate limit and a loop guard
+    and a wake budget that are on (30 and 60: the built-in ones are off, #406, #965), so the
+    scripted conversation posts in one go and the header shows both chips."""
     from switchboard.config import Config
 
     cfg = Config(human_name=TEST_HUMAN).with_delivery(
-        quiet_s=0.0, max_hold_s=0.0, rate_limit_s=0.0, hop_limit=30
+        quiet_s=0.0, max_hold_s=0.0, rate_limit_s=0.0, hop_limit=30, budget_per_hour=60
     )
     return InProcBroker(home, cfg, test_mode=True).start()
 

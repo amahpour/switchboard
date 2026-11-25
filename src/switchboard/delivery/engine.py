@@ -202,7 +202,7 @@ class Engine:
             return None
         p = self.store.get_participant(m.participant_id)
         room = self.store.room_by_id(m.room_id)
-        if p is None or room is None or room.paused or room.budget_remaining <= 0:
+        if p is None or room is None or room.paused or room.budget_spent:
             return None
         if self._voice_loop(room):
             return None  # only a person's message wakes this member now (#713): nothing waits on a hold
@@ -550,7 +550,7 @@ class Engine:
 
     def _after_counted(self, room_id: int) -> list[Action]:
         room = self.store.room_by_id(room_id)
-        if room is not None and room.budget_remaining <= 0:
+        if room is not None and room.budget_spent:
             return self._budget_exhausted(room)
         return []
 
@@ -1794,7 +1794,7 @@ class Engine:
             return None, out
         for m in ms:
             room = self.store.refill_budget(m.room_id)
-            if room.paused or m.held or room.budget_remaining <= 0:
+            if room.paused or m.held or room.budget_spent:
                 continue
             self.store.spend_budget(room.id)
             recent.append(now)

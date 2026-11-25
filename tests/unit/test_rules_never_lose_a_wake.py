@@ -20,7 +20,11 @@ from switchboard.config import Config
 
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0))
+    return World(
+        tmp_path,
+        clock,
+        Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, unaddressed_hold_s=0.0),
+    )
 
 
 def ids(text: str) -> list[int]:

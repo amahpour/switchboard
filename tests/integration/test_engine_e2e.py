@@ -114,9 +114,11 @@ async def test_budget_holds_chatter_but_never_the_human(broker: InProcBroker) ->
         await a.join("#build", "alpha")
         await b.join("#build", "beta")
         r = broker.web.post(
-            "/api/rooms/build/command", json={"text": "/budget 0"}, headers=broker.write_headers()
+            "/api/rooms/build/command", json={"text": "/budget 5"}, headers=broker.write_headers()
         )
         assert r.json()["ok"]
+        # this hour's wakes are all used (a /budget of 0 is no limit now, #965)
+        broker.state.store.set_budget(broker.state.store.get_room("#build").id, 0)
         await b.say("#build", "chatter nobody asked for")
         assert (await a.wait("#build", 1))["status"] == "timeout"  # chatter: no wake at budget 0
         t = a.wait_task("#build", 10)

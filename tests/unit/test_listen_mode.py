@@ -18,6 +18,7 @@ from switchboard.models import Message
 
 
 def call_world(tmp_path: Path, clock: FakeClock, **delivery) -> tuple[World, int]:
+    delivery.setdefault("budget_per_hour", 60)  # the built-in budget is off (#965); these tests spend it
     w = World(tmp_path, clock, Config().with_delivery(**delivery))
     call = w.store.insert_meeting(w.room.id, started_by="alice", platform="zoom")
     w.store.set_meeting_live(call.id)
@@ -178,7 +179,8 @@ def test_listening_command_requires_a_call_and_a_member(svc: RoomService) -> Non
 
 def test_listening_still_needs_the_room_budget(tmp_path: Path, clock: FakeClock) -> None:
     """A private cap supplements the shared budget; exhaustion holds call chatter but not the person."""
-    w, call = call_world(tmp_path, clock, budget_per_hour=0)
+    w, call = call_world(tmp_path, clock)
+    w.store.set_budget(w.room.id, 0)  # this hour's wakes are all used
     _, m, sink = waiting(w)
     w.store.set_listen(m.id, True, call)
     line(w, call)

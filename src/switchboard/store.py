@@ -548,10 +548,13 @@ class Store:
         return self._room_or_raise(room_id)
 
     def spend_budget(self, room_id: int) -> Room:
-        """One wake that has no batch of its own (a Devin Stop re-arm): remaining - 1, floor 0."""
+        """One wake that has no batch of its own (a Devin Stop re-arm): remaining - 1, floor 0.
+        A room with no budget (0 an hour, #965) spends nothing."""
         with db.tx(self.con):
             self.con.execute(
-                "UPDATE rooms SET budget_remaining=MAX(budget_remaining-1, 0) WHERE id=?", (room_id,)
+                "UPDATE rooms SET budget_remaining=MAX(budget_remaining-1, 0)"
+                " WHERE id=? AND budget_per_hour > 0",
+                (room_id,),
             )
         return self._room_or_raise(room_id)
 
@@ -560,7 +563,7 @@ class Store:
         now = self.clock.now() if now is None else now
         with db.tx(self.con):
             room = self._room_or_raise(room_id)
-            if now >= room.budget_window_start + 3600.0:
+            if room.budget_on and now >= room.budget_window_start + 3600.0:
                 elapsed = int((now - room.budget_window_start) // 3600.0)
                 self.con.execute(
                     "UPDATE rooms SET budget_remaining=budget_per_hour,"
@@ -3157,7 +3160,8 @@ class Store:
                     raise StoreError(f"delivery {membership_id}/{message_id} is not pending")
             if counted:
                 self.con.execute(
-                    "UPDATE rooms SET budget_remaining=MAX(budget_remaining-1, 0) WHERE id=?",
+                    "UPDATE rooms SET budget_remaining=MAX(budget_remaining-1, 0)"
+                    " WHERE id=? AND budget_per_hour > 0",
                     (m.room_id,),
                 )
             if peer_boundary is not None:

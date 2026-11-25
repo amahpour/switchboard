@@ -60,7 +60,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 61
+SCHEMA_VERSION = 62
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -1270,6 +1270,15 @@ V60_TO_V61 = (
     "UPDATE meta SET value='61' WHERE key='schema_version'",
 )
 
+# v61 -> v62 (#965, DESIGN.md §42.2): a room set to the old built-in wake budget, 60 an hour, moves to 0, no
+# limit, as #406 did for the loop guard. What is left this hour goes with it, so the count is never above
+# the rate. A room at any other number keeps it, and so does every ``preferences`` row: a person's own
+# default stays as they set it. No table, column or row is added or removed.
+V61_TO_V62 = (
+    "UPDATE rooms SET budget_per_hour=0, budget_remaining=0 WHERE budget_per_hour=60",
+    "UPDATE meta SET value='62' WHERE key='schema_version'",
+)
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1702,6 +1711,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         58: MigrationStep(59, V58_TO_V59, ()),
         59: MigrationStep(60, V59_TO_V60, ("webhooks", "webhook_sent")),
         60: MigrationStep(61, V60_TO_V61, (), (("participants", "'opencode','grok','test'"),)),
+        61: MigrationStep(62, V61_TO_V62, ()),
     }
     out = []
     v = frm

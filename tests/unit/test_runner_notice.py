@@ -47,7 +47,9 @@ class Rec(Subscriber):
 @pytest.fixture
 def w(tmp_path: Path, clock: FakeClock) -> World:
     # hop_limit=6: the loop guard ships off (#406), and two tests here trip it to see its notice
-    return World(tmp_path, clock, Config().with_delivery(quiet_s=0.0, max_hold_s=0.0, hop_limit=6))
+    return World(
+        tmp_path, clock, Config().with_delivery(budget_per_hour=60, quiet_s=0.0, max_hold_s=0.0, hop_limit=6)
+    )
 
 
 @pytest.fixture
@@ -150,9 +152,9 @@ def test_the_web_ui_styles_the_room_line_as_a_warning() -> None:
     assert ".line.k-notice.warn {" in css
     # transient notices (room-less, e.g. "new web login") still render as local lines
     assert "f.t === 'notice'" in js
-    # the Hops chip: n/limit, or a warning when the guard is off (the chip row scrolls when narrow)
-    assert "s.hop_count + '/' + s.hop_limit" in js and "'loop guard off ⚠'" in js
-    assert "#st-hops.bad {" in css
+    # the Hops chip: n/limit, shown only while the guard is on; no "loop guard off" chip (#965)
+    assert "s.hop_count + '/' + s.hop_limit" in js and "loop guard off ⚠" not in js
+    assert "#st-hops.bad {" not in css
 
 
 def test_a_notice_for_a_closed_or_deleted_room_is_dropped(

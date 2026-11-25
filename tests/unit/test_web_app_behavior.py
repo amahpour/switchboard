@@ -336,18 +336,24 @@ def test_unknown_approval_mode_says_the_agent_may_act_without_asking() -> None:
     assert "It may run commands and edit files without asking" in out["inspector"]
 
 
-def test_the_status_chips_show_paused_and_the_loop_guard_off() -> None:
+def test_the_status_chips_show_paused_and_each_limit_only_while_it_is_on() -> None:
+    """#965: a hop limit or a wake budget of 0 is no limit, so its chip is hidden (no "loop guard off"
+    warning, no Budget 0/0); a limit that is set shows its chip, and a chip comes back when the limit does.
+    Fails if a limit of 0 still draws a chip or keeps the danger fill of the budget it replaced."""
     out = run("status_chips")
     f = out["first"]
     assert f["state"] == "Paused" and f["stateBad"]
-    assert f["hops"] == "loop guard off ⚠" and f["hopsBad"]
+    assert f["hopsHidden"] and "loop guard" not in f["hops"]  # hop limit 0: no chip
     assert f["budget"] == "Budget0/60" and f["budgetBad"]
     assert not f["pausedHidden"] and "#build is paused (loop guard)" in f["paused"]
     assert f["pauseLabel"] == "Resume room"
     s = out["second"]
-    assert s["state"] == "Running" and s["hops"] == "Hops3/30" and not s["hopsBad"]
+    assert s["state"] == "Running" and s["hops"] == "Hops3/30" and not s["hopsHidden"]
     assert s["budget"] == "Budget47/60" and s["fill"] == "meter-fill w8"
     assert s["pausedHidden"] and s["pauseLabel"] == "Pause room"
+    none = out["none"]
+    assert none["hopsHidden"] and none["hops"] == "" and none["budgetHidden"] and none["budget"] == ""
+    assert not none["budgetBad"] and none["budgetTitle"] == ""
 
 
 def test_an_empty_room_shows_how_to_join() -> None:

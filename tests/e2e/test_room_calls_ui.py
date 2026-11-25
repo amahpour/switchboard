@@ -105,6 +105,9 @@ def test_the_headers_chips_are_all_in_view_with_both_side_panels_open(
     room = f"chips-{scheme}"
     assert _post(calls, "/api/rooms", {"name": "#" + room}).status_code == 200
     assert _post(calls, f"/api/rooms/{room}/command", {"text": "/room voice on"}).status_code == 200
+    # the Budget and Hops chips show only while their limits are on (#965): turn both on
+    for text in ("/budget 60", "/hops 6"):
+        assert _post(calls, f"/api/rooms/{room}/command", {"text": text}).status_code == 200
     page = _open(ui, calls, room=room, color_scheme=scheme, viewport={"width": 1280, "height": 800})
     expect(page.locator("#st-handsfree")).to_be_visible()
     expect(page.locator("#pane-toggle")).to_have_attribute("aria-pressed", "true")  # Members is open
