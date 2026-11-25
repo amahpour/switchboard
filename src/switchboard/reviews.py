@@ -445,17 +445,6 @@ def pick(value: Any, count: int, what: str) -> int:
     return value - 1
 
 
-def answer_note(number: int, option: str, limit: int = 80) -> str:
-    """What a person's notice says of the option they chose: its number from 1 and its words, cut
-    to ``limit`` characters. The words are an agent's (already redacted when stored), and the notice
-    is the person's own message (kind=human), so an ``@`` in them is made a full-width one: no agent
-    is mentioned, or woken, by what another agent wrote (#177)."""
-    words = " ".join(option.split()).replace("@", "\uff20").replace("yk:", "yk_:")
-    if len(words) > limit:
-        words = words[: limit - 1].rstrip() + "\u2026"
-    return f"option {number}: {words}".rstrip(".")
-
-
 def recommend(value: Any, opts: tuple[str, ...], *, required: bool = False) -> int | None:
     """The stored index of the option numbered ``value`` (1 to n), or None when none is given and
     none is required. A question and a finding's fix options both carry the asker's recommendation

@@ -3342,7 +3342,7 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     expect(page.locator("#board .lane-you .board-empty")).to_have_text("Nothing needs you")
     expect(page.locator("#board-status")).to_have_text("2 open")
     page.click("#board-toggle")
-    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 1: Before tax")
+    expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 1.")
     expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
 
 

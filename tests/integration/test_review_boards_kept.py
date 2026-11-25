@@ -328,7 +328,7 @@ async def test_a_person_names_the_board_they_move_and_the_room_hears_which(broke
             a, b = answered.json()["boards"]
             assert a["items"][0]["answer"] == "after" and b["items"][0]["state"] == "raised"
             assert chat() == [
-                'Review board #7: Q1 answered with option 2: after. review(action="list") shows the boards.'
+                'Review board #7: Q1 answered with option 2. review(action="list") shows the boards.'
             ]
             assert all("http" not in text for text in chat())
 

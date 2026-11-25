@@ -143,7 +143,7 @@ def test_a_board_call_is_a_card_and_answering_it_is_the_rooms_own_move(
     assert r.status_code == 200, r.text
     assert [c for c in home(alice)["waiting"] if c["kind"] == "board"] == []
     texts = [m["text"] for m in alice.get("/api/rooms/build/messages").json()["messages"]]
-    assert any("Q1 answered with option 2: Remove" in t for t in texts), texts  # 2 of 1 to n
+    assert any("Q1 answered with option 2." in t for t in texts), texts  # 2 of 1 to n
 
 
 def test_done_lists_what_agents_said_since_you_looked_and_seen_moves_only_forward(

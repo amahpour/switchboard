@@ -12,7 +12,6 @@ from conftest import FakeClock
 
 from switchboard import db, reviews
 from switchboard.broker.reviews import Boards
-from switchboard.delivery.rules import parse_mentions
 from switchboard.reviews import Item, ReviewError
 from switchboard.store import Store
 
@@ -244,22 +243,6 @@ def test_recommend_takes_an_options_number_from_one() -> None:
     for bad in (0, 3, -1, True, "1"):
         with pytest.raises(ReviewError, match="recommend must be an option's number, 1 to 2"):
             reviews.recommend(bad, ("a", "b"))
-
-
-def test_the_answer_note_names_the_option_by_number_and_a_cut_of_its_words() -> None:
-    """A person's notice says "option 1: <its words>": the number from 1, the words cut to a
-    length, and nothing in them that would mention or wake an agent (#177). Fails if the notice
-    still says the stored index, repeats a whole long option, or keeps a live @mention."""
-    assert (
-        reviews.answer_note(1, "Attach the verification evidence")
-        == "option 1: Attach the verification evidence"
-    )
-    assert reviews.answer_note(2, "Remove it.") == "option 2: Remove it"
-    assert reviews.answer_note(1, "two\n  lines") == "option 1: two lines"
-    long = reviews.answer_note(1, "word " * 60)
-    assert len(long) <= len("option 1: ") + 80 and long.endswith("\u2026")
-    note = reviews.answer_note(1, "@devin-1 and @everyone, do yk:it")
-    assert parse_mentions(note, ["devin-1"]) == [] and "yk:" not in note and "@" not in note
 
 
 def test_where_keeps_the_existing_file_and_line_checks() -> None:
