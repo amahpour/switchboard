@@ -690,12 +690,12 @@ def test_a_board_near_the_limits_opens_with_its_text_from_the_built_bundle(
     ui: UI,  # noqa: F811
     world: UIWorld,  # noqa: F811
 ) -> None:
-    """A load keeps ``text`` and ``originalText`` exactly as stored, because an earlier broker and browser sized
-    them independently and a board near the limits would otherwise open empty (DESIGN §56). The frame asks the
-    rules for that with ``batch(elements, true)``; the bundle once shipped without the ``true`` (a hand-edited
-    build that no longer matched ``scripts/board/frame.jsx``, #958). Fails if the committed ``board.js`` cuts a
-    stored text to the write limit on load: here a 1500-character text beside a shorter ``originalText``, which
-    the page must show whole."""
+    """A load keeps ``text`` and ``originalText`` exactly as stored, because an earlier broker and browser
+    sized them independently and a board near the limits would otherwise open empty (DESIGN §56). The frame
+    asks the rules for that with ``batch(elements, true)``; the bundle once shipped without the ``true`` (a
+    hand-edited build that no longer matched ``scripts/board/frame.jsx``, #958). Fails if the committed
+    ``board.js`` cuts a stored text to the write limit on load: here a 1500-character text beside a shorter
+    ``originalText``, which the page must show whole."""
     room = "board-near-limits"
     world.create_room(room)
     b = world.broker

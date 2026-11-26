@@ -20,8 +20,8 @@ CHUNKS = Path(board.__file__).parent / "web/static/vendor/board/chunks"
 
 
 def colour_table() -> str:
-    """The chunk that holds Excalidraw's Open Color table, found by what is in it: a rebuild renames the chunks
-    and the minifier's variable names (#958), so neither is part of the test."""
+    """The chunk that holds Excalidraw's Open Color table, found by what is in it: a rebuild renames the
+    chunks and the minifier's variable names (#958), so neither is part of the test."""
     found = [
         m.group(0)
         for f in sorted(CHUNKS.glob("chunk-*.js"))
