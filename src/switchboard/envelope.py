@@ -620,6 +620,7 @@ def render_join(
     earlier_before: int | None = None,
     pins: Sequence[Any] = (),
     board: int = 0,
+    quiet: bool = False,
 ) -> str:
     """The join() result: rules, pins, catch-up, how delivery works, and the join nonce.
 
@@ -660,10 +661,18 @@ def render_join(
             ),
             pins=pins,
             board=board,
+            quiet=quiet,
         )
         if not pins or len(text) <= JOIN_BUDGET or not kept:
             return text
         kept = kept[1:]
+
+
+# The join text of a quiet member (§50.1): said once, so an agent knows why the room is calm.
+QUIET_JOIN_NOTE = (
+    "You are quiet here: only messages addressed to you (your user, an @mention or a reply) wake you."
+    " The rest is still there when you read()."
+)
 
 
 def _render_join(
@@ -683,6 +692,7 @@ def _render_join(
     earlier_before: int | None,
     pins: Sequence[Any],
     board: int,
+    quiet: bool = False,
 ) -> str:
     r = _word(room)
     me = _word(screen_name)
@@ -722,6 +732,8 @@ def _render_join(
             f'{what}: read("{r}", before={earlier_before}) shows {"it" if earlier == 1 else "them"}.'
         )
     lines.append("How messages reach you: " + guidance)
+    if quiet:
+        lines.append(QUIET_JOIN_NOTE)
     lines.append(PASS_ADVICE)
     lines.append(
         f'Reply: say("{r}", text, reply_to=<id>) or pass("{r}").'

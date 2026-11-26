@@ -150,7 +150,7 @@ def test_the_upgrade_cleans_what_a_board_stored_and_nothing_else(
     old.close()
     con = db.open_db(path)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 62
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
         assert db.row_counts(con, db.tables_of(54)) == counts
         assert db.integrity_ok(con) is None
         dump = json.dumps(

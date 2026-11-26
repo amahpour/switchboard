@@ -1365,7 +1365,7 @@ class Engine:
     def on_command(self, room_id: int, name: str, membership_id: int | None = None) -> list[Action]:
         if name == "pause":
             return self._pause_actions(room_id)
-        if name in ("resume", "budget", "rename"):
+        if name in ("resume", "budget", "rename", "room"):
             return self.evaluate_room(room_id) + [Snapshot(room_id)]
         if name == "release" and membership_id is not None:
             return self.evaluate(membership_id) + [Snapshot(room_id)]

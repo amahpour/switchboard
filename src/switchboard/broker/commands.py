@@ -92,6 +92,7 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /room voice on|off  every call here starts with Voice on (web only)
   /room listen on|off every agent here listens on calls (web only)
   /room review on|off ask for a review when an agent posts a new PR or MR link (web only)
+  /room quiet on|off  agents here hear only what is addressed to them (web only)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -313,18 +314,19 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     return Command(name="meeting", args=(args[0],), raw=raw)
 
 
-ROOM_USAGE = "usage: /room [voice|listen|review on|off]"
+ROOM_USAGE = "usage: /room [voice|listen|review|quiet on|off]"
 
 
 def _parse_room(args: tuple[str, ...], raw: str) -> Command:
     """``/room`` (show), ``/room voice on|off`` and ``/room listen on|off`` (a room's hands-free call
     settings, §52.3), and ``/room review on|off`` (a review asked for when an agent posts a pull request
-    link, §37.16). Anything else is refused, never guessed at."""
+    link, §37.16), and ``/room quiet on|off`` (agents here join quiet, §50.1). Anything else is refused, never
+    guessed at."""
     if not args:
         return Command(name="room", args=(), raw=raw)
     if (
         len(args) == 2
-        and args[0].lower() in ("voice", "listen", "review")
+        and args[0].lower() in ("voice", "listen", "review", "quiet")
         and args[1].lower() in ("on", "off")
     ):
         return Command(name="room", args=(args[0].lower(), args[1].lower()), raw=raw)
@@ -932,16 +934,19 @@ def _room_calls(cmd: Command, room: Room, svc: "RoomService") -> Result:
     to a call that is open now, so a person on a phone does not have to wait for the next call; turning
     one off leaves the open call as it is (``/meeting voice off`` and the call bar change that)."""
     if not cmd.args:
-        voice, listen, review = (
-            "on" if x else "off" for x in (room.call_voice, room.call_listen, room.review_on_link)
+        voice, listen, review, quiet = (
+            "on" if x else "off" for x in (room.call_voice, room.call_listen, room.review_on_link, room.quiet)
         )
         return Result(
             True,
             f"{room.name}: hands-free voice is {voice}; hands-free listening is {listen} (calls here);"
-            f" a review is asked for when an agent posts a new pull request link: {review}",
+            f" a review is asked for when an agent posts a new pull request link: {review};"
+            f" agents here join quiet: {quiet}",
         )
     setting, word = cmd.args
     on = word == "on"
+    if setting == "quiet":
+        return _room_quiet(on, room, svc)
     if setting == "review":
         if not svc.store.set_room_review_on_link(room.id, on):
             return Result(True, f"{room.name}: asking for a review on a posted link is already {word}")
@@ -978,6 +983,30 @@ def _room_calls(cmd: Command, room: Room, svc: "RoomService") -> Result:
         members_changed=setting == "listen",
         event="room_calls",
         event_data={"setting": setting, "on": on},
+    )
+
+
+def _room_quiet(on: bool, room: Room, svc: "RoomService") -> Result:
+    """``/room quiet on|off`` (§50.1, #975): agents that join the room join quiet. Turning it on also quiets
+    the agents already here, which only narrows what wakes them; turning it off leaves each agent as it is,
+    so a person's ``/unquiet`` is the way to wake one for everything again."""
+    word = "on" if on else "off"
+    if not svc.store.set_room_quiet(room.id, on):
+        return Result(True, f"{room.name}: a quiet room is already {word}")
+    quieted = svc.store.quiet_room_members(room.id) if on else []
+    if on:
+        meaning = "agents here wake only for messages addressed to them, and an agent that joins is quiet"
+        if quieted:
+            meaning += f" ({len(quieted)} already here quieted now)"
+    else:
+        meaning = "agents that join are no longer quiet; each agent here stays as it is"
+    return Result(
+        True,
+        f"{room.name}: a quiet room is {word}",
+        notice=f"turned {word} a quiet room: {meaning}",
+        room_changed=True,
+        event="room_quiet",
+        event_data={"on": on, "quieted": len(quieted)},
     )
 
 

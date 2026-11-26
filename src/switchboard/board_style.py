@@ -23,8 +23,8 @@ class StyleError(Exception):
 
 
 # Excalidraw's own colour palette, so an agent's colours match the picker a person uses. Taken from
-# the pinned build (``web/static/vendor/board/chunks/chunk-42LTX363.js``, its Open Color table
-# ``Jt``): the background picker's shade is index 2 of a hue, the stroke picker's index 8.
+# the pinned build (``web/static/vendor/board/chunks/``, the chunk that holds its Open Color table
+# ``Jt`` in that build): the background picker's shade is index 2 of a hue, the stroke picker's index 8.
 # ``black`` is the default stroke the picker shows (``#1e1e1e``), not the table's ``#000000``.
 # ``indigo`` and ``lime`` are in the build but not in the picker's main list, so they are not names.
 # name -> (fill, stroke)

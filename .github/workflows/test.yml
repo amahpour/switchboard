@@ -105,6 +105,9 @@ jobs:
           key: lint-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/lint.py') }}
       - run: uv sync --frozen
       - run: uv run --frozen python scripts/lint.py --base HEAD^1
+      # the committed whiteboard bundle is what scripts/board builds from the locked dependencies (#958, DESIGN §56.8):
+      # it is a built file, so only a rebuild can say so, and Node 22 is already here
+      - run: scripts/board/check.sh
       # what PyPI would get (#233): the same check release.yml runs before an upload
       - run: uv build --out-dir dist && python3 .github/scripts/check_dist.py dist
 

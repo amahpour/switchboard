@@ -183,6 +183,8 @@ def test_the_backup_is_written_before_the_first_statement(tmp_path: Path) -> Non
     per_step += [1]  # 58: mcp_sessions (#823)
     per_step += [0]  # 59: an index (#914)
     per_step += [2]  # 60: webhooks and webhook_sent (#923)
+    per_step += [0, 0]  # 61 and 62: a CHECK edit and a data move, no ALTER
+    per_step += [1]  # 63: a room's quiet setting (#975)
     assert len(alters) == sum(per_step) and all(alters)
     assert dump(bak) == original
     c = sqlite3.connect(bak)
