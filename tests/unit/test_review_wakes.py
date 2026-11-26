@@ -21,6 +21,7 @@ from engine_world import World
 
 from switchboard import reviews
 from switchboard.broker.reviews import Boards
+from switchboard.claims import Claim
 from switchboard.config import Config
 from switchboard.delivery import rules
 from switchboard.models import Membership, Participant
@@ -439,3 +440,36 @@ def test_closing_the_board_answers_every_line_on_it(w: World, clock: FakeClock) 
     r.move("dispatch", action="close", state="unknown", reason="superseded by #867")
     assert r.delivered("dispatch", line)["state"] == "handled"  # type: ignore[index]
     assert rules.redeliver_ids(w.store.in_context_items(r.agents["dispatch"][1].id)) == []
+
+
+# ------------------------------------------- the claimant is the fallback side (#969)
+def _claim(key: str, holder: str = "claude-author") -> Claim:
+    return Claim(key, 1, holder, 9e9)
+
+
+def test_a_live_claim_on_the_boards_url_is_the_side_only_when_the_board_records_none() -> None:
+    """With no side recorded, the agent claiming the board's URL is the side, matched as claims are
+    (spaces and case folded); a branch or ticket claim, an offline or absent claimant, or a board that
+    already has a side ignores it. Fails if the claim is not read, or read looser or over a record."""
+    room = ("claude-author", "codex-review", "grok-reviewer")
+    mine = [_claim(f"  {PR.upper()}  ")]
+    assert reviews.author_side("alice", [finding()], [], room, (), PR, mine) == ("claude-author",)
+    for other in ("fix/discount", "SHOP-7", PR + "/files", PR[:-1]):
+        assert reviews.author_side("alice", [finding()], [], room, (), PR, [_claim(other)]) == ()
+    assert reviews.author_side("alice", [finding()], [], room, ["claude-author"], PR, mine) == ()
+    assert reviews.author_side("alice", [finding()], [], ("codex-review",), (), PR, mine) == ()
+    assert reviews.author_side("alice", [finding()], [], room, (), "", mine) == ()
+    recorded = [{"item": "F1", "to": "contested", "by": "grok-reviewer"}]
+    assert reviews.author_side("alice", [finding()], recorded, room, (), PR, mine) == ("grok-reviewer",)
+
+
+def test_a_raise_names_the_claimant_alone_unless_the_claimant_raised_it() -> None:
+    """The claimant's side makes a raise name it alone; when it is the raiser, the raise names every
+    other agent, as with no claim. Fix options still ask every agent to pick (§37.12)."""
+    room = ("claude-author", "codex-review", "grok-reviewer")
+    side = reviews.author_side("alice", [], [], room, (), PR, [_claim(PR)])
+    assert reviews.acts_next(finding(), room, side) == ("claude-author",)
+    own = finding(raised_by="claude-author")
+    assert reviews.acts_next(own, room, side) == ("codex-review", "grok-reviewer")
+    with_options = replace(finding(), options=("a", "b"))
+    assert reviews.acts_next(with_options, room, side) == ("claude-author", "grok-reviewer")

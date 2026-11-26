@@ -691,7 +691,8 @@ class Boards:
         """The board after ``actor``'s move on ``item``, and how the room hears of it: the line
         for whoever acts next, posted as the mover's message (``poster``) to them alone, so it wakes
         them, or the notice when that's nobody (§37.4). A raised finding's next move is the author's
-        side's (``reviews.author_side``, #884). A move that asks nothing of anyone, such as a pick
+        side's (``reviews.author_side``, #884; the PR's claimant when the
+        board records none, #969). A move that asks nothing of anyone, such as a pick
         among options (``wake`` False), is a notice whatever state the item is in. With several boards
         open, the line and the notice say which one, and whoever is told of a move on a board has it as
         the board their next call is about (§37.14). Every move then settles the board's earlier lines:
@@ -729,7 +730,8 @@ class Boards:
     ) -> tuple[str, ...]:
         """The board's author side as it records it (``reviews.author_side``)."""
         events = [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
-        return reviews.author_side(reviews.holder(rv), items, events, agents, offline)
+        live = self.store.claims_for_room(room.id)
+        return reviews.author_side(reviews.holder(rv), items, events, agents, offline, rv["url"], live)
 
     def _say(self, room: Room, rv: dict[str, Any], poster: Poster, line: reviews.Told) -> None:
         """Post ``line`` at once as its mover's message, delivered only to the agents it names (§37.4),

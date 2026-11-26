@@ -126,3 +126,37 @@ async def test_eleven_quick_raises_reach_the_author_as_one_wake(tmp_home: Path) 
             assert all(delivery(b, "grok-1", x["id"]) is None for x in lines)
     finally:
         b.stop()
+
+
+async def test_a_raise_on_a_board_with_no_side_goes_to_the_agent_claiming_its_pull_request(
+    tmp_home: Path,
+) -> None:
+    """A reviewer opens the board and raises, so the board records no author. claude-1 holds a live
+    claim on the pull request: the raise names it alone and grok-1 gets no delivery (#969). With no
+    claim, or once the claim is released, it names every other agent. Fails on main, where the
+    raise named grok-1 as well."""
+    b = start(tmp_home, Config(human_name="alice").with_delivery(quiet_s=0.0, max_hold_s=0.0))
+    try:
+        async with (
+            FakeAgent(b.home, "author") as author,
+            FakeAgent(b.home, "reviewer") as reviewer,
+            FakeAgent(b.home, "bystander") as bystander,
+        ):
+            await author.join("#build", "claude-1")
+            await reviewer.join("#build", "codex-1")
+            await bystander.join("#build", "grok-1")
+            await reviewer.call("review", room="#build", action="open", url=PR)
+            await reviewer.call("review", room="#build", action="raise", title="no claim", where="a.py:1")
+            [bare] = board_lines(b)
+            assert bare["mentions"] == '["claude-1", "grok-1"]'
+            await author.call("claim", room="#build", key=PR, ttl=300)
+            await reviewer.call("review", room="#build", action="raise", title="claimed", where="a.py:2")
+            claimed = board_lines(b)[-1]
+            assert claimed["text"].startswith("Review board: F2 raised: claimed. @claude-1: concede")
+            assert claimed["mentions"] == '["claude-1"]'
+            assert delivery(b, "grok-1", claimed["id"]) is None
+            await author.call("claim", room="#build", key=PR, ttl=0)
+            await reviewer.call("review", room="#build", action="raise", title="released", where="a.py:3")
+            assert board_lines(b)[-1]["mentions"] == '["claude-1", "grok-1"]'
+    finally:
+        b.stop()
