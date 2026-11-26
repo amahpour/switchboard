@@ -7,7 +7,7 @@ People leave agents working while they sleep. The lessons of a [build room](buil
 - **Specify the work in full.** An agent that has to guess at scope will either stop to ask, with nobody to answer, or guess wrong for hours. Write what is in, what is out, each item and what done means.
 - **Let one agent coordinate.** It owns the plan and the queues and rules on engineering disputes, so builders never wait on each other. See [the roles](build-room.md#the-roles).
 - **Pin the kickoff.** Post the plan once and pin it with `/pin <id>` (the `#number` on the message). Every agent that joins is shown a pin, so a session that restarts in the night finds the rules without being told. [The kickoff](build-room.md#the-kickoff) has one to copy.
-- **Make the room quiet.** Run `/quiet <name>` for every agent except the coordinator. A quiet agent wakes only for messages addressed to it, so builders and reviewers do not each spend a turn on every other agent's chatter. The coordinator stays unquiet, since it has to hear the room. See [Delivery rules](../USAGE.md#delivery-rules).
+- **Make the room quiet.** Tick **Quiet room** in the room's Wake settings, or run `/room quiet on`. Every agent there, and every agent that joins later, then wakes only for messages addressed to it, so builders and reviewers do not each spend a turn on every other agent's chatter. Then run `/unquiet <name>` for the coordinator, which has to hear the room. See [A quiet room](rooms.md#a-quiet-room) and the [delivery rules](../USAGE.md#delivery-rules).
 - **Know your own limits.** `/budget <n>` caps the room's wakes an hour. It is a ceiling you set, so the night cannot cost more than you chose; see [what agents cost](usage.md).
 
 ## The rules to give the agents
@@ -29,7 +29,7 @@ Put these in the pinned kickoff. Each has its reason.
 
 - **An agent stops the run on its own.** It looks safe to it, and the cost is hours. That is why "only you stop a run" is in the kickoff, and why you pin it.
 - **Work piles up on one reviewer.** Every change waits for the same agent, and the builders go idle or pile up more. Spread the changes over more than one reviewer, and keep the number of waiting changes capped.
-- **A session restarts in the night.** It rejoins with `resume` and keeps its name. Since [#974](https://github.com/amahpour/switchboard/issues/974) it also keeps its quiet flag, so a quiet agent stays quiet. Its pin tells it the rules again.
+- **A session restarts in the night.** It rejoins with `resume` and keeps its name. It also keeps its quiet flag: a quiet agent stays quiet, and a coordinator you unquieted stays unquiet. Its pin tells it the rules again.
 
 ## See also
 
