@@ -1,7 +1,7 @@
 """switchboard's agent tools (DESIGN.md §6, §49.2): the one interface every agent has.
 
 ``build_server`` builds the MCP server whose tools (join, leave, who, rooms, say, read, wait, pass,
-away, review, board, claim, status) the broker serves at ``/mcp`` to an agent with an agent token
+away, review, board, command, claim, status) the broker serves at ``/mcp`` to an agent with an agent token
 (``broker/agent_http.py``). It is a thin relay: every decision is made in the broker, through a
 ``ToolBackend``. Every broker error becomes a normal tool result (``{"ok": false, ...}``, never
 ``isError``: Codex skips PostToolUse on ``isError``, FINDINGS §4b), and the server declares no
@@ -184,6 +184,7 @@ TOOL_NAMES = (
     "away",
     "review",
     "board",
+    "command",
     "status",
 )
 
@@ -407,6 +408,20 @@ def build_server(st: ToolBackend) -> FastMCP:
         res = await st.call("agent.board", params)
         if isinstance(res.get("image"), str):
             return ImageContent(type="image", data=res["image"], mime_type="image/png")
+        return dumps(res)
+
+    @mcp.tool(
+        annotations=RW,
+        description="Run a room command, only if you are the room's coordinator.",
+    )
+    async def command(room: str, text: str, ctx: Context) -> str:
+        await st.prime(ctx)
+        tid = st.thread_id(ctx)
+        got = await st.find_cred(room, tid)
+        if isinstance(got, str):
+            return got
+        _name, cred = got
+        res = await st.call("agent.command", {**st.base(cred, tid), "text": text})
         return dumps(res)
 
     @mcp.tool(

@@ -29,7 +29,7 @@ def test_the_setting_defaults_off_and_old_rows_and_backup_survive(
         old.close()
     assert rooms > 0
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 64
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 65
     assert [tuple(r) for r in con.execute("SELECT * FROM messages")] == messages
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE review_on_link=0").fetchone()[0] == rooms
     fresh = db.open_db(tmp_path / "fresh.db")

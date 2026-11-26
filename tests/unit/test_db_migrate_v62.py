@@ -41,12 +41,12 @@ def test_rooms_at_the_old_default_move_to_no_limit_and_the_rest_keep_theirs(tmp_
     old_database(path)
     with sqlite3.connect(path) as before:
         assert db.schema_version(before) == 60
-        counts = db.row_counts(before, db.TABLES)
+        counts = db.row_counts(before, db.tables_of(64))
         prefs = [tuple(r) for r in before.execute("SELECT * FROM preferences ORDER BY person_id")]
     con = db.open_db(path)
     backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 65
         assert [tuple(r) for r in con.execute(ROOMS)] == [
             ("#build", 0, 0, 1790000000.0, 15),
             ("#small", 10, 3, 1790000000.0, 6),
@@ -54,7 +54,7 @@ def test_rooms_at_the_old_default_move_to_no_limit_and_the_rest_keep_theirs(tmp_
             ("#spent", 0, 0, 1790000000.0, 6),
         ]
         assert [tuple(r) for r in con.execute("SELECT * FROM preferences ORDER BY person_id")] == prefs
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.TABLES) == {**counts, "room_coordinators": 0}  # 65's table (#976), empty
         assert [r[0] for r in backup.execute("SELECT budget_per_hour FROM rooms ORDER BY id")] == [
             60,
             10,

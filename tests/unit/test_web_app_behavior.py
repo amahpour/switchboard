@@ -418,7 +418,7 @@ def test_a_typed_kick_asks_first_and_declining_gives_the_text_back() -> None:
 
 def test_the_palette_and_mentions_complete_without_sending() -> None:
     out = run("palette_and_mentions")
-    assert not out["all"]["hidden"] and len(out["all"]["items"]) == 20
+    assert not out["all"]["hidden"] and len(out["all"]["items"]) == 21
     assert "/rename" in out["all"]["items"]
     assert "/meeting" in out["all"]["items"]  # transcribe a call in this room (#573)
     assert "/wake" in out["all"]["items"]  # wake an agent past the hold on chatter (#137)

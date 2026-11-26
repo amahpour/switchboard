@@ -339,6 +339,30 @@
             'Every agent here wakes on call talk without being named, up to the cap for the call. You can turn one off on the call bar.',
             init.listen);
         }
+        // the room's coordinator (§50.2, #976): the five room actions a person may tick for one agent, all unticked
+        // for a new one; Save types "/coordinator <name> <actions>", Remove "/coordinator off"
+        const coordBoxes = {};
+        let removeBtn = null;
+        if (options.kind === 'coordinator') {
+          const init = options.initial || {};
+          for (const a of options.actions) {
+            const row = el('label', 'check-row');
+            const box = el('input');
+            box.type = 'checkbox';
+            box.id = 'app-dialog-coord-' + a.key;
+            box.checked = (init.actions || []).indexOf(a.key) >= 0;
+            box.setAttribute('aria-describedby', box.id + '-hint');
+            row.append(box, el('span', null, a.label));
+            const note = el('p', 'calls-hint', a.hint);
+            note.id = box.id + '-hint';
+            form.append(row, note);
+            coordBoxes[a.key] = box;
+          }
+          if (init.current) {
+            removeBtn = btn('btn-danger', 'Remove coordinator');
+            removeBtn.id = 'app-dialog-coord-remove';
+          }
+        }
         let personPick = null;
         if (options.kind === 'person') {
           const label = el('label', null, 'Person');
@@ -385,6 +409,7 @@
         action.type = 'submit';
         if (options.kind === 'notice') cancel.classList.add('hidden');
         if (!settings) {
+          if (removeBtn) buttons.append(removeBtn, el('span', 'dialog-spacer'));
           buttons.append(cancel, action);
           form.append(buttons);
         }
@@ -404,6 +429,13 @@
         };
         if (!settings) {
           cancel.addEventListener('click', function () { dlg.close('cancel'); });
+          if (removeBtn) {
+            removeBtn.type = 'button';
+            removeBtn.addEventListener('click', function () {
+              answer = { remove: true };
+              dlg.close('action');
+            });
+          }
           action.addEventListener('click', function (ev) {
             ev.preventDefault();
             form.requestSubmit();
@@ -418,7 +450,10 @@
             else if (options.kind === 'person') answer = personPick.value;
             else if (options.kind === 'handoff') answer = handoffPick.value;
             else if (options.kind === 'calls') answer = { voice: voiceBox.checked, listen: listenBox.checked };
-            else if (options.kind === 'wake') {
+            else if (options.kind === 'coordinator') {
+              answer = { actions: options.actions.filter(function (a) { return coordBoxes[a.key].checked; })
+                .map(function (a) { return a.key; }) };
+            } else if (options.kind === 'wake') {
               answer = {
                 budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value), quiet: quietBox.checked,
               };
@@ -433,7 +468,7 @@
         if (validWake) validWake();
         dlg.showModal();
         (settings ? (settingsFocus || $('settings-close'))
-          : (name || rulesInput || budgetInput || voiceBox || personPick || handoffPick || (options.danger ? cancel : action))).focus();
+          : (name || rulesInput || budgetInput || voiceBox || coordBoxes[Object.keys(coordBoxes)[0]] || personPick || handoffPick || (options.danger ? cancel : action))).focus();
       });
     });
     dialogQueue = next.then(function () {}, function () {});
@@ -1803,6 +1838,7 @@
     if (m.inflight) st += ' · ' + m.inflight + ' in flight';
     if (m.held) st += ' · held';
     if (m.quiet) st += ' · quiet';
+    if (Array.isArray(m.coordinator)) st += ' · coordinator';
     if (m.listen === true) st += ' · listening';
     // the Kokoro voice its @call lines are spoken in, while the room has a call (#713): shown only as text
     if (typeof m.voice === 'string' && callOf(activeRoom())) st += ' · voice ' + m.voice + (m.voice_pinned === true ? ' (set)' : '');
@@ -2782,6 +2818,11 @@
       q.title = 'Wakes only for messages addressed to it';
       chips.append(q);
     }
+    if (Array.isArray(m.coordinator)) {
+      const c = el('span', 'chip-quiet', 'coordinator');
+      c.title = m.coordinator.length ? 'May run for you: ' + m.coordinator.join(', ') : 'Named the coordinator, with no actions ticked';
+      chips.append(c);
+    }
     if (m.listen === true) {
       const l = el('span', 'chip-listening', 'Listening');
       l.title = 'Wakes on call talk nobody addressed to it';
@@ -2980,6 +3021,13 @@
     quietBtn.addEventListener('click', function () {
       submitText((m.quiet ? '/unquiet ' : '/quiet ') + m.name);
     });
+    // Coordinator (§50.2): the room actions this agent may run for you, ticked in a dialog
+    const coord = btn('btn');
+    coord.id = 'insp-coordinator';
+    coord.dataset.focus = 'coordinator';
+    coord.append(Array.isArray(m.coordinator) ? 'Coordinator ✓…' : 'Coordinator…');
+    coord.title = 'Coordinator: choose which room actions ' + m.name + ' may run for you';
+    coord.addEventListener('click', function () { openCoordinator(m); });
     // Wake now (#137): only while agents' chatter waits on the hold for this member
     let wake = null;
     if (m.wakes_at) {
@@ -3000,7 +3048,7 @@
     cu.append(icon('history'), 'Catch up on…', icon('chev-down'));
     cu.addEventListener('click', function () { setMenu(!ui.menu); });
     if (wake) row.append(wake);
-    row.append(hold, quietBtn, cu);
+    row.append(hold, quietBtn, coord, cu);
     refs.hold = hold;
     refs.quiet = quietBtn;
     refs.catchup = cu;
@@ -3318,6 +3366,9 @@
       detail: 'Another agent’s chatter no longer starts a turn. Your messages, an @mention and a reply still do, and that chatter comes along.' },
     { group: 'Agents', cmd: 'unquiet', args: '<name>', desc: 'Wake that agent for every message again', pill: 'web only',
       usage: '/unquiet <name>', detail: 'Raises what wakes it, so it needs this signed-in browser.' },
+    { group: 'Agents', cmd: 'coordinator', args: '[<name> <actions>|off]', desc: 'Name the agent that may run room actions for you',
+      pill: 'web only', usage: '/coordinator   /coordinator <name> quiet,boards,pins,calls,budget|none   /coordinator off',
+      detail: 'One a room. It gets a command tool for only the actions you tick, each use shows in the room as “<it> for you”, and it never touches approvals, permissions, tokens, admin settings or another room.' },
     { group: 'Agents', cmd: 'wake', args: '<name>', desc: 'Wake an agent now for its waiting messages', pill: 'web only',
       usage: '/wake <name>',
       detail: 'Agents’ messages that don’t address it wait a few minutes to arrive together; this sends them now.' },
@@ -9005,6 +9056,34 @@
     } catch (e) {
       await openDialog({ kind: 'notice', title: 'Wake settings not saved', body: String(e.message || e), action: 'Close' });
     }
+  }
+
+  // The five room actions a person may tick for the room's coordinator (§50.2, #976), in the broker's order
+  // (``commands.COORDINATOR_ACTIONS``). Every box starts unticked; what each allows is said under it.
+  const COORDINATOR_ACTIONS = [
+    { key: 'quiet', label: 'Quiet', hint: 'Turn the room quiet or not, and quiet or unquiet one agent: /room quiet, /quiet, /unquiet.' },
+    { key: 'boards', label: 'Boards', hint: 'Close any review board in this room, not only the ones it opened.' },
+    { key: 'pins', label: 'Pins', hint: 'Pin and unpin messages that every agent that joins is shown: /pin, /unpin.' },
+    { key: 'calls', label: 'Calls', hint: 'Start or leave this room’s call, and let agents speak in it: /meeting <link>, leave, voice on|off.' },
+    { key: 'budget', label: 'Budget', hint: 'Set the wake budget and the loop guard, or turn them off: /budget, /hops.' },
+  ];
+
+  // Name an agent the room's coordinator, change what it may do, or remove it. Typed as the command a person
+  // would type, so the broker checks the role: only this signed-in browser can (§50.2).
+  async function openCoordinator(m) {
+    const r = activeRoom();
+    if (!r) return;
+    const answer = await openDialog({
+      kind: 'coordinator', title: 'Coordinator: ' + m.name,
+      body: 'Let ' + m.name + ' run the room actions you tick, with its own command tool. Each use shows in the room as “' +
+        m.name + ' for you”. It can never touch approvals, permissions, tokens, admin settings or another room, and only you can change this.',
+      actions: COORDINATOR_ACTIONS,
+      initial: { actions: Array.isArray(m.coordinator) ? m.coordinator : [], current: Array.isArray(m.coordinator) },
+      action: 'Save',
+    });
+    if (!answer) return;
+    if (answer.remove) await submitText('/coordinator off');
+    else await submitText('/coordinator ' + m.name + ' ' + (answer.actions.length ? answer.actions.join(',') : 'none'));
   }
 
   // The room's hands-free call settings (§52.3). Only what changed is sent, as the commands a person would type.

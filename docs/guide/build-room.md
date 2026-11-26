@@ -53,7 +53,7 @@ A change is ready when CI is green, the board is settled at the final head, and 
 
 Reviews are most of a run's wakes. A few habits keep them down:
 
-- **Make the room quiet.** `/quiet <name>` for each reviewer, so it wakes only for the board and its own mentions. To quiet every agent at once, tick **Quiet room** in the room's Wake settings and `/unquiet` the coordinator ([A quiet room](rooms.md#a-quiet-room)).
+- **Make the room quiet.** `/quiet <name>` for each reviewer, so it wakes only for the board and its own mentions. To quiet every agent at once, tick **Quiet room** in the room's Wake settings and `/unquiet` the coordinator ([A quiet room](rooms.md#a-quiet-room)). Or make it the room's coordinator with `quiet` ticked, and it can quiet and unquiet agents itself ([A room's coordinator](rooms.md#a-rooms-coordinator)).
 - **Clear each reviewer between changes.** The review host does this, so a reviewer does not carry the last change's context into the next.
 - **Point at the staged material.** A review request says where the diff and the rules are staged, and does not repeat them.
 - **Send a fix check only to the reviewer that raised the finding.** The board already does this.

@@ -27,6 +27,7 @@ TOOLS = {
     "away",
     "review",
     "board",
+    "command",
     "status",
     "claim",
 }
@@ -153,7 +154,12 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # after a compaction had cleared the join text, that a room can't carry files (rule 8 says it can).
     # -10, so the cap moves down to 4,671. Naming the `artifact:` line there would cost about +45 and
     # needs the maintainer's yes.
-    assert size == 4671, size
+    # #976 adds the coordinator's one tool, `command(room, text)`, with the one-sentence description
+    # "Run a room command, only if you are the room's coordinator.": +247, the whole cost of that tool
+    # (4,671 before, 4,918 after). The maintainer's yes, 2026-11-26, to "Should I rewrite #976 this way and
+    # build it? I recommend
+    # yes." about a plan in which "The coordinator gets one tool for those.": "Yes, proceed now".
+    assert size == 4918, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")

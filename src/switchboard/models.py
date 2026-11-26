@@ -344,6 +344,9 @@ class Member:
     listen: bool = False  # call chatter may start a turn (§52.1)
     call_voice: str | None = None  # the voice a person pinned for it on calls; None: its default (§52.6)
     quiet: bool = False  # wake only for what is addressed (#548, §50); off until a person sets it
+    # the room's coordinator (#976, §50.2): the room actions a person ticked for it, a tuple of the fixed keys
+    # (possibly empty); None for every other member
+    coordinator: tuple[str, ...] | None = None
     queued: int = 0
     inflight: int = 0
     parked: bool = False
@@ -738,6 +741,20 @@ class Membership:
     @property
     def active(self) -> bool:
         return self.left_at is None
+
+
+@dataclass(frozen=True)
+class Coordinator:
+    """A room's coordinator (#976, §50.2): the one membership a person named to run the room actions they
+    ticked. ``actions`` are keys of ``commands.COORDINATOR_ACTIONS``; ``named_by`` is the person's name."""
+
+    room_id: int
+    membership_id: int
+    name: str  # its screen name now
+    actions: tuple[str, ...]
+    named_by: str
+    named_by_person: int | None
+    named_at: float
 
 
 @dataclass(frozen=True)

@@ -43,10 +43,10 @@ def test_a_schema_63_database_gains_an_empty_held_fixes_and_keeps_every_board(
     backup = db.connect(db.backup_path_for(path, 63), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 65
         assert db.schema_version(backup) == 63
         assert "held_fixes" not in backup.execute(REVIEWS).fetchone()[0]
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.row_counts(con, db.tables_of(64)) == counts  # 65 only adds a table (room_coordinators)
         assert [tuple(r) for r in con.execute("SELECT id, url, opened_by, opened_at FROM reviews")] == before
         assert [r[0] for r in con.execute("SELECT held_fixes FROM reviews")] == [""] * len(before)
         assert con.execute(REVIEWS).fetchone()[0] == fresh.execute(REVIEWS).fetchone()[0]

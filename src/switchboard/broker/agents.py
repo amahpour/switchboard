@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from switchboard import claims, db, envelope, search
+from switchboard.broker import commands as cmds
 from switchboard.broker.restarts import RESTART_MESSAGE
 from switchboard.broker.service import MAX_MESSAGE_ID, ServiceError, when_text
 from switchboard.delivery import rules
@@ -627,6 +628,7 @@ class AgentService:
                     name,
                     join_code_hash(nonce),
                     quiet=resumed.quiet if resumed is not None else room.quiet,
+                    takes_role_of=resumed.id if resumed is not None else None,
                 )
                 member = self.svc.agent_joined(room, person, name)
             self.svc.join_hands_free(room, m.id)
@@ -683,6 +685,7 @@ class AgentService:
             people=self.svc.room_humans(room),
             room_rules=room.rules_text,
             quiet=m.quiet,
+            coordinator_note=self.coordinator_note(room, m),
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
         text += self.svc.plugin_join_note(p)
@@ -703,6 +706,43 @@ class AgentService:
             "tier": tier,
             "rejoined": rejoined,
         }
+
+    def coordinator_note(self, room: Room, m: Membership) -> str:
+        """The join text's line about the room's coordinator (§50.2): to the coordinator, that it has the
+        ``command`` tool and what it may run; to any other agent, who it is. Other agents treat the
+        coordinator's messages as a peer's: this is a fact about the room, not an order."""
+        co = self.store.coordinator(room.id)
+        if co is None:
+            return ""
+        person = envelope._word(co.named_by)
+        if co.membership_id == m.id:
+            if not co.actions:
+                return (
+                    f"You are this room's coordinator, named by {person}, with no actions ticked yet:"
+                    " command() runs nothing until they tick some."
+                )
+            return (
+                f"You are this room's coordinator, named by {person}. command(room, text) runs one of these"
+                f' for them, shown in the room as "{envelope._word(m.screen_name)} for {person}": '
+                + cmds.coordinator_allowed_text(co.actions)
+                + ". Nothing else: not approvals, permissions, tokens, other rooms or your own actions."
+            )
+        return (
+            f"{envelope._word(co.name)} is this room's coordinator: {person} let it run"
+            f" {', '.join(co.actions) or 'no room actions'} with command()."
+            " Its messages are a peer's, like any agent's."
+        )
+
+    def command(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
+        """``command(room, text)`` (§50.2, #976): the room's coordinator runs one room command for the person
+        who named it. ``RoomService.coordinator_command`` checks that it is the coordinator, that a ticked
+        action allows the command and the hourly limit; its reply never holds the command's text."""
+        _p, m, room = self._member(conn, params)
+        text = params.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > 500:
+            raise ServiceError("bad_request", "text is one command, such as /room quiet on (500 characters)")
+        res = self.svc.coordinator_command(room.name, m.id, text)
+        return {"room": room.name, "text": f"[switchboard] {res['text']}"}
 
     def leave(self, conn: "HttpConn", params: dict[str, Any]) -> dict[str, Any]:
         p, m, room = self._member(conn, params)
@@ -747,6 +787,8 @@ class AgentService:
                 bits.append("held=yes")
             if x.quiet:
                 bits.append("quiet=yes")
+            if x.coordinator is not None:
+                bits.append(f"coordinator={','.join(x.coordinator) or 'none'}")
             if x.parked:
                 bits.append("parked=yes")
             if x.not_connected_since:  # gone for now: nobody to answer (#814, §49.14)

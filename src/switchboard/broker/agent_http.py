@@ -231,6 +231,7 @@ METHODS = {
     "agent.say": "say",
     "agent.review": "review",
     "agent.board": "board",
+    "agent.command": "command",
     "agent.claim": "claim",
     "agent.read": "read",
     "agent.wait": "wait",

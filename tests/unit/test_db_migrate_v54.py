@@ -14,6 +14,7 @@ from switchboard import db
 from switchboard.store import Store
 
 NEW_AT_60 = {"webhooks": 0, "webhook_sent": 0}  # 60's tables (#923), empty with no webhook rows to move
+NEW_AT_65 = {"room_coordinators": 0}  # 65's table (#976), empty: no room has a coordinator
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 
@@ -72,12 +73,13 @@ def test_the_step_adds_only_the_column(tmp_path: Path, monkeypatch: pytest.Monke
     fresh = db.open_db(tmp_path / "fresh.db")
     backup = db.connect(path.with_name("old.db.v53.bak"), readonly=True)
     try:
-        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 64
+        assert db.schema_version(upgraded) == db.SCHEMA_VERSION == 65
         assert db.schema_version(backup) == 53
         assert db.row_counts(upgraded, db.TABLES) == {
             **counts,
             "mcp_sessions": 0,
             **NEW_AT_60,
+            **NEW_AT_65,
         }  # 58's table, empty
         assert columns(upgraded) == columns(fresh)
         assert ("joined_with", "TEXT", 0, None, 0) in columns(upgraded)

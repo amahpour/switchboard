@@ -173,7 +173,14 @@ async def test_an_agent_cannot_pin(broker: InProcBroker) -> None:
     assert f"/pin {mid}" in texts
     async with FakeAgent(broker.home, "k2") as a:
         names = {t.name for t in await a.list_tools()}
-        assert not {"pin", "unpin", "command"} & names  # no tool for it
+        assert not {"pin", "unpin"} & names  # no tool for it
+        # ``command`` is the room's coordinator's one tool (#976, §50.2, the maintainer's yes of
+        # 2026-11-26): the pin is still a person's unless a person ticked ``pins`` for the
+        # coordinator, so an agent that was never named one is refused
+        assert "command" in names
+        assert (await a.join("#build", "worker-2"))["ok"]
+        refused = await a.call("command", room="#build", text=f"/pin {mid}")
+        assert not refused["ok"] and refused["code"] == "forbidden", refused
     with Stream(broker.paths.sock, timeout=5) as s:  # and no method on the socket, which is the CLI's
         for method in ("agent.pin", "agent.unpin", "agent.command"):
             with pytest.raises(RpcError) as e:

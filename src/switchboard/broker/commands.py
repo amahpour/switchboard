@@ -93,6 +93,11 @@ commands (type them in the web UI; the CLI runs them with `switchboard cmd '#roo
   /room listen on|off every agent here listens on calls (web only)
   /room review on|off ask for a review when an agent posts a new PR or MR link (web only)
   /room quiet on|off  agents here hear only what is addressed to them (web only)
+  /coordinator        say who this room's coordinator is and what it may run
+  /coordinator <name> <actions>  name an agent the room's coordinator; <actions> are quiet, boards,
+                      pins, calls, budget (comma-separated, or none): the room actions it may run with its
+                      own `command` tool, shown in the room as "<it> for <you>" (web only)
+  /coordinator off    remove it (web only)
   /who                list members
   /status             room and delivery status
   /help               this list
@@ -120,7 +125,7 @@ KNOWN = (
     | _ONE_NAME
     | set(_ONE_NUMBER)
     | _ONE_MESSAGE
-    | {"catchup", "review", "rename", "meeting", "room"}
+    | {"catchup", "review", "rename", "meeting", "room", "coordinator"}
 )
 
 _STATIC_ROLES = {
@@ -145,6 +150,9 @@ _STATIC_ROLES = {
     "unpin": "human_cli",
     "room": "human",  # hands-free calls: what every call here starts with (§52.3); /room alone is read-only
     "meeting": "human",  # joining a call lets anyone on it address an agent (§52)
+    # naming or removing a coordinator hands an agent room actions (§50.2): a person's web session; the
+    # bare ``/coordinator`` only reads (``required_role``)
+    "coordinator": "human",
 }
 
 REVIEW_USAGE = "/review <url> [note]"
@@ -167,7 +175,7 @@ class Command:
 @dataclass(frozen=True)
 class Actor:
     role: str  # 'human' or 'human_cli'
-    via: str  # 'web' or 'cli'
+    via: str  # 'web', 'cli' or 'coordinator'
     chain: str | None = None  # short process chain for CLI callers
     # who, on a hosted broker with people (§32): their name and id (None: the owner, and
     # every CLI caller, whose name is ``human_name``)
@@ -175,6 +183,11 @@ class Actor:
     person_id: int | None = None
     # an admin (the owner, or a person whose row says so, §51): who may end a call that is not theirs (§54)
     admin: bool = False
+    # a room's coordinator running a command for ``name`` (#976, §50.2): its screen name, and the actions the
+    # person ticked for it. ``role`` is 'human' so a ticked command runs as that person's would, never as an
+    # admin; ``apply`` lets this actor run only what the actions allow (``coordinator_refusal``)
+    coordinator: str | None = None
+    allowed: tuple[str, ...] = ()
 
     def who(self, human_name: str) -> str:
         return self.name or human_name
@@ -219,6 +232,8 @@ def parse_command(text: str) -> Command:
         return _parse_catchup(raw[1:].split(None, 1)[1] if args else "", raw)
     if name == "review":
         return _parse_review(raw)
+    if name == "coordinator":
+        return _parse_coordinator(args, raw)
     if name == "rename" and len(args) != 1:
         raise CommandError("bad_request", "usage: /rename <new-name>")
     if name in _NO_ARGS and args:
@@ -312,6 +327,98 @@ def _parse_meeting(args: tuple[str, ...], raw: str) -> Command:
     if len(args) != 1:
         raise CommandError("bad_request", MEETING_USAGE)
     return Command(name="meeting", args=(args[0],), raw=raw)
+
+
+# ---------------------------------------------------------------------------- the room's coordinator (§50.2)
+# The room actions a person may tick for the coordinator, each with the commands it runs and what it lets the
+# agent do. This one table is the whole list: a key not here is refused where it is set, and a command not in
+# ``coordinator_action`` is refused where it would run, so the set only grows by an edit here and a yes
+# (#976).
+COORDINATOR_ACTIONS: dict[str, tuple[str, str]] = {
+    "quiet": (
+        "/room quiet on|off, /quiet <name>, /unquiet <name>",
+        "make agents here wake only for what is addressed",
+    ),
+    "boards": ('review(action="close") on any board in the room', "close a review board it did not open"),
+    "pins": ("/pin <id>, /unpin <id>", "pin messages that every agent that joins is shown"),
+    "calls": (
+        "/meeting <link>, /meeting leave, /meeting voice on|off",
+        "start or leave the room's call, and let agents speak in it",
+    ),
+    "budget": ("/budget <n|off>, /hops <n|off>", "set the wake budget and the loop guard, or turn them off"),
+}
+COORDINATOR_LIMIT = 30  # commands in a rolling hour (a coordinator that loops or is tricked stops here)
+COORDINATOR_WINDOW_S = 3600.0
+COORDINATOR_USAGE = "usage: /coordinator [<name> <quiet,boards,pins,calls,budget|none>|off]"
+# the /meeting words that are not a link: a call's link is a /meeting command's one other argument
+_MEETING_WORDS = frozenset({"leave", "snapshot", "unmute", "share", "talker", "listen", "voice"})
+
+
+def _parse_coordinator(args: tuple[str, ...], raw: str) -> Command:
+    """``/coordinator`` (say who), ``/coordinator off``, ``/coordinator <name> <actions>``. Actions are
+    comma- or space-separated keys of ``COORDINATOR_ACTIONS``, or ``none``; an unknown key is refused, never
+    ignored, and a repeated one is kept once."""
+    if not args:
+        return Command(name="coordinator", args=(), raw=raw)
+    if len(args) == 1 and args[0].lower() == "off":
+        return Command(name="coordinator", args=("off",), raw=raw)
+    if len(args) < 2:
+        raise CommandError("bad_request", COORDINATOR_USAGE)
+    target = _screen_name("coordinator", args[0])
+    keys = [k for word in args[1:] for k in word.lower().split(",") if k]
+    if keys == ["none"]:
+        keys = []
+        args = (args[0], "none")
+    bad = [k for k in keys if k not in COORDINATOR_ACTIONS]
+    if bad or not (keys or args[1:] == ("none",)):
+        what = f"unknown action {bad[0][:30]!r}" if bad else "no actions given"
+        raise CommandError(
+            "bad_request", f"/coordinator: {what}; the actions are {', '.join(COORDINATOR_ACTIONS)}, or none"
+        )
+    ordered = tuple(k for k in COORDINATOR_ACTIONS if k in keys)
+    return Command(name="coordinator", args=(target, *ordered), raw=raw)
+
+
+def coordinator_action(cmd: Command) -> str | None:
+    """The action a coordinator needs ticked to run ``cmd``, or None when no action allows it: the pure table
+    of what the role can ever do. Anything not named here (``/coordinator`` itself, ``/kick``, ``/close``,
+    ``/wake``, ``/catchup``, ``/review``, ``/meeting <link> mine`` and every other ``/meeting`` word) is None,
+    so an unknown command fails closed."""
+    name, args = cmd.name, cmd.args
+    if name == "room":
+        return "quiet" if len(args) == 2 and args[0] == "quiet" else None
+    if name in ("quiet", "unquiet"):
+        return "quiet"
+    if name in ("pin", "unpin"):
+        return "pins"
+    if name in ("budget", "hops"):
+        return "budget" if args else None  # setting one; showing it is read-only and not an action
+    if name == "meeting":
+        if args == ("leave",) or (len(args) == 2 and args[0] == "voice" and args[1] in ("on", "off")):
+            return "calls"
+        if len(args) == 1 and args[0] not in _MEETING_WORDS:
+            return "calls"  # the link, which parse_link checks and which is never echoed
+    return None
+
+
+def coordinator_allowed_text(actions: tuple[str, ...]) -> str:
+    """What these actions let the coordinator run, as one sentence."""
+    if not actions:
+        return "nothing yet (no action is ticked)"
+    return "; ".join(f"{k}: {COORDINATOR_ACTIONS[k][0]}" for k in actions if k in COORDINATOR_ACTIONS)
+
+
+def coordinator_refusal(cmd: Command, actor: Actor) -> str | None:
+    """Why ``actor``, a coordinator, may not run ``cmd``, or None. Says what is allowed, never the command's
+    text (a call's link must not come back, §50.2)."""
+    need = coordinator_action(cmd)
+    if need is not None and need in actor.allowed:
+        return None
+    if need is None:
+        why = f"/{cmd.name} is not one a coordinator may run"
+    else:
+        why = f"{need} is not ticked for you"
+    return f"{why}. You may run: {coordinator_allowed_text(actor.allowed)}."
 
 
 ROOM_USAGE = "usage: /room [voice|listen|review|quiet on|off]"
@@ -498,6 +605,8 @@ def budget_raise(new: int, room: Room) -> bool:
 def required_role(cmd: Command, room: Room) -> str:
     if cmd.name == "room" and not cmd.args:
         return "human_cli"  # reading the settings changes nothing
+    if cmd.name == "coordinator" and not cmd.args:
+        return "human_cli"  # saying who it is changes nothing
     if cmd.name == "meeting" and cmd.args[:1] == ("listen",) and len(cmd.args) == 3:
         return "human_cli"
     if cmd.name == "budget":
@@ -1212,6 +1321,59 @@ def _meeting_share(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -
     )
 
 
+def _coordinator(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
+    """``/coordinator`` (§50.2, #976): who the room's coordinator is and what it may run; with a name and
+    actions, name it (one a room: another replaces the first, and naming the same agent again changes its
+    actions); ``off`` removes it. Only a person's web session names, changes or removes it: a coordinator's
+    own ``/coordinator`` is refused before this (``coordinator_action``) and here again."""
+    store = svc.store
+    current = store.coordinator(room.id)
+    if not cmd.args:
+        if current is None:
+            return Result(True, f"{room.name} has no coordinator. /coordinator <name> <actions> names one.")
+        return Result(
+            True,
+            f"{room.name}: {current.name} is the coordinator, named by {current.named_by}."
+            f" It may run: {coordinator_allowed_text(current.actions)}.",
+        )
+    if actor.coordinator is not None:  # pragma: no cover  (refused by coordinator_refusal before this)
+        raise CommandError("forbidden", "a coordinator cannot name a coordinator or change its own actions")
+    who = actor.who(svc.cfg.human_name)
+    if cmd.args == ("off",):
+        if current is None:
+            return Result(True, f"{room.name} has no coordinator")
+        store.clear_coordinator(room.id)
+        return Result(
+            True,
+            f"{current.name} is no longer the coordinator of {room.name}",
+            notice=f"removed {current.name} as the room's coordinator",
+            members_changed=True,
+            event="coordinator_off",
+            event_data={"membership_id": current.membership_id},
+        )
+    target, actions = cmd.args[0], tuple(cmd.args[1:])
+    member = store.find_member(room.id, target)
+    if member is None:
+        raise CommandError("not_found", f"no such member in {room.name}: {target}")
+    if current is not None and current.membership_id == member.membership_id and current.actions == actions:
+        return Result(True, f"{member.name} is already the coordinator with those actions")
+    store.set_coordinator(room.id, member.membership_id, actions, who, actor.person_id)
+    word = ", ".join(actions) if actions else "none yet"
+    replaced = (
+        f" (it replaces {current.name})"
+        if current is not None and current.membership_id != member.membership_id
+        else ""
+    )
+    return Result(
+        True,
+        f"{member.name} is now the coordinator of {room.name}{replaced}; it may run: {word}",
+        notice=f"named {member.name} the room's coordinator{replaced}; it may run: {word}",
+        members_changed=True,
+        event="coordinator_set",
+        event_data={"membership_id": member.membership_id, "actions": list(actions)},
+    )
+
+
 def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     """Run a parsed command. Role checks happen here too (defence in depth)."""
     store = svc.store
@@ -1219,7 +1381,13 @@ def apply(cmd: Command, room: Room, actor: Actor, svc: "RoomService") -> Result:
     # budget that is really left now, not a window that has already rolled over.
     room = store.refill_budget(room.id)
     check_role(cmd, room, actor)
+    if actor.coordinator is not None:  # defence in depth: the service checked it too (§50.2)
+        why = coordinator_refusal(cmd, actor)
+        if why is not None:
+            raise CommandError("forbidden", why)
     name = cmd.name
+    if name == "coordinator":
+        return _coordinator(cmd, room, actor, svc)
     if name == "meeting":
         return _meeting(cmd, room, actor, svc)
     if name == "room":

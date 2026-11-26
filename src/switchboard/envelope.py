@@ -621,6 +621,7 @@ def render_join(
     pins: Sequence[Any] = (),
     board: int = 0,
     quiet: bool = False,
+    coordinator_note: str = "",
 ) -> str:
     """The join() result: rules, pins, catch-up, how delivery works, and the join nonce.
 
@@ -662,6 +663,7 @@ def render_join(
             pins=pins,
             board=board,
             quiet=quiet,
+            coordinator_note=coordinator_note,
         )
         if not pins or len(text) <= JOIN_BUDGET or not kept:
             return text
@@ -693,6 +695,7 @@ def _render_join(
     pins: Sequence[Any],
     board: int,
     quiet: bool = False,
+    coordinator_note: str = "",
 ) -> str:
     r = _word(room)
     me = _word(screen_name)
@@ -734,6 +737,8 @@ def _render_join(
     lines.append("How messages reach you: " + guidance)
     if quiet:
         lines.append(QUIET_JOIN_NOTE)
+    if coordinator_note:  # who the room's coordinator is, and for it, what it may run (§50.2)
+        lines.append(coordinator_note)
     lines.append(PASS_ADVICE)
     lines.append(
         f'Reply: say("{r}", text, reply_to=<id>) or pass("{r}").'

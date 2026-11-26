@@ -41,6 +41,7 @@ from switchboard.models import (
     PRIO_LABEL,
     PULL_PATHS,
     SCREEN_NAME_RE,
+    Coordinator,
     InvalidName,
     Meeting,
     Member,
@@ -208,6 +209,8 @@ def member_dict(m: Member) -> dict[str, Any]:
         "voice": voices.effective(m.call_voice, m.name),
         "voice_pinned": m.call_voice is not None,
         "quiet": m.quiet,  # wake only for what is addressed (#548, §50)
+        # the room's coordinator (§50.2): the actions ticked for it (empty: none yet); None for the rest
+        "coordinator": None if m.coordinator is None else list(m.coordinator),
         "queued": m.queued,
         # when the hold on unaddressed chatter (#137) lets the queued messages wake it, or None
         "wakes_at": m.wakes_at,
@@ -1686,6 +1689,71 @@ class RoomService:
                 self.hub.members_changed(er.name)
         return m.name
 
+    # ------------------------------------------------------------ the coordinator (§50.2, #976)
+    def coordinator_for_boards(self, room: Room, name: str) -> Coordinator | None:
+        """The room's coordinator when it is ``name`` and a person ticked ``boards`` for it, else None."""
+        co = self.store.coordinator(room.id)
+        if co is not None and co.name == name and "boards" in co.actions:
+            return co
+        return None
+
+    def coordinator_take(self, co: Coordinator, what: str) -> float | None:
+        """Count one use of the coordinator's role against its hourly limit (``cmds.COORDINATOR_LIMIT``): None
+        and an event written when it may go ahead, else the seconds until it may try again, with nothing
+        written. The event holds the kind of action only: never a command's text, which may carry a link."""
+        now = self.clock.now()
+        uses = self.store.coordinator_uses(co.membership_id, now - cmds.COORDINATOR_WINDOW_S)
+        if len(uses) >= cmds.COORDINATOR_LIMIT:
+            return max(1.0, uses[len(uses) - cmds.COORDINATOR_LIMIT] + cmds.COORDINATOR_WINDOW_S - now)
+        self.store.add_event(
+            "coordinator_command",
+            room_id=co.room_id,
+            membership_id=co.membership_id,
+            data={"what": what, "for": co.named_by},
+        )
+        return None
+
+    @staticmethod
+    def coordinator_limit_text(wait: float) -> str:
+        return (
+            f"a coordinator may run {cmds.COORDINATOR_LIMIT} commands an hour, and that many have run:"
+            f" try again in about {max(1, round(wait / 60))} min, or ask your person"
+        )
+
+    def coordinator_command(self, room_name: str, membership_id: int, text: str) -> dict[str, Any]:
+        """``command(room, text)`` from an agent (§50.2): runs one room command for the person who named the
+        room's coordinator, if this member is that coordinator and a ticked action allows it, through
+        ``command`` as an actor that is that person (never an admin) with the coordinator's name beside it.
+        Refused, saying what is allowed and never repeating the text: not the coordinator (of this room), an
+        action not ticked, any command outside the table, a ``/coordinator``, or past the hourly limit."""
+        room = self.room(room_name)
+        co = self.store.coordinator(room.id)
+        if co is None or co.membership_id != membership_id:
+            raise ServiceError(
+                "forbidden",
+                f"you are not the coordinator of {room.name}: only the agent a person named in this room"
+                " may use command",
+            )
+        try:
+            cmd = cmds.parse_command(text if isinstance(text, str) else "")
+        except CommandError as e:
+            raise ServiceError(e.code, e.message) from None
+        actor = Actor(
+            role="human",
+            via="coordinator",
+            name=co.named_by,
+            person_id=co.named_by_person,
+            coordinator=co.name,
+            allowed=co.actions,
+        )
+        why = cmds.coordinator_refusal(cmd, actor)
+        if why is not None:
+            raise ServiceError("forbidden", why)
+        wait = self.coordinator_take(co, cmd.name)
+        if wait is not None:
+            raise ServiceError("rate_limited", self.coordinator_limit_text(wait))
+        return self.command(room.name, text, actor)
+
     def command(self, name: str, text: str, actor: Actor) -> dict[str, Any]:
         room = self.room(name)
         try:
@@ -1716,7 +1784,7 @@ class RoomService:
                 data["message_id"] = posted.id
             self.store.add_event(result.event, room_id=room.id, data=data)
         if result.notice:
-            self.post_notice(room, f"{actor.who(self.cfg.human_name)} {result.notice}{audit}")
+            self.post_notice(room, f"{self._acting(actor)} {result.notice}{audit}")
         elif actor.via == "cli":
             # Every command issued over the CLI leaves an audit line (§10).
             self.post_notice(room, f"/{cmd.name} by {self.cfg.human_name}{audit}")
@@ -1734,10 +1802,17 @@ class RoomService:
             fn(room, cmd.name)
         return {"ok": result.ok, "text": result.text}
 
+    def _acting(self, actor: Actor) -> str:
+        """Who a notice names: the person, or "<coordinator> for <person>" (§50.2)."""
+        who = actor.who(self.cfg.human_name)
+        return f"{actor.coordinator} for {who}" if actor.coordinator else who
+
     @staticmethod
     def _audit_suffix(actor: Actor) -> str:
         if actor.via == "cli":
             return f" (via cli: {actor.chain or 'unknown'})"
+        if actor.coordinator:  # the notice already says who ran it
+            return ""
         return f" (via {actor.via})"
 
     # ------------------------------------------------------------- reporting
@@ -1768,6 +1843,8 @@ class RoomService:
                 flags.append("⏸ held")
             if m.quiet:
                 flags.append("quiet")
+            if m.coordinator is not None:
+                flags.append(f"coordinator: {', '.join(m.coordinator) or 'no actions'}")
             if m.queued:
                 flags.append(f"{m.queued} queued")
             if m.inflight:

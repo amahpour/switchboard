@@ -50,6 +50,7 @@ MEMBER_KEYS = {
     "held",
     "listen",  # opt-in to call chatter (#697), a boolean, never transcript text
     "quiet",  # wake only for what is addressed (#548); false until a person sets it
+    "coordinator",  # the room's coordinator's ticked actions (#976, §50.2); null for every other member
     "queued",
     "inflight",
     "parked",

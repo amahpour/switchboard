@@ -576,7 +576,8 @@ class Boards:
     def _close(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
         """Close a settled board at any time; open work needs the mover's reason in the room. The
         board is kept, with every item and move, and ``open`` brings it back (§37.14). Only the
-        board's holder closes it: anyone else's close asks a person, in the room, and changes nothing."""
+        board's holder closes it: anyone else's close asks a person, in the room, and changes nothing, unless
+        it is the room's coordinator with ``boards`` ticked (§50.2)."""
         if rv["closed_at"] is not None:
             raise ReviewError(f"the board for {rv['url']} is closed already")
         outcome, merge_commit, given = reviews.close_outcome(params)
@@ -588,11 +589,25 @@ class Boards:
         items = self.store.review_items(rv["id"])
         open_items = reviews.open_items(items)
         holder = reviews.holder(rv)
+        # the room's coordinator, with ``boards`` ticked, closes any board in the room as a person may; it
+        # always gives a reason, and the line names it and the person it acts for (§50.2, #976)
+        coordinator = self.state.service.coordinator_for_boards(room, actor) if actor != holder else None
         mine = actor == holder
         reason = reviews.text(
-            params.get("reason"), "reason", reviews.MAX_REASON, required=bool(open_items) or not mine
+            params.get("reason"),
+            "reason",
+            reviews.MAX_REASON,
+            required=bool(open_items) or not mine,
         )
         ref = self._ref(rv)
+        if coordinator is not None:
+            wait = self.state.service.coordinator_take(coordinator, "board_close")
+            if wait is not None:
+                raise ReviewError(self.state.service.coordinator_limit_text(wait))
+            mine = True
+            closer = f"{actor} for {coordinator.named_by}"
+        else:
+            closer = actor
         if not mine:
             if (rv["id"], actor) not in self._asked:
                 self._asked.add((rv["id"], actor))
@@ -606,7 +621,7 @@ class Boards:
                 " A person has been asked in the room."
             )
         labels = [item.label for item in open_items]
-        line = f"Review board for {ref} closed by {actor}"
+        line = f"Review board for {ref} closed by {closer}"
         if outcome != "unknown":  # the pull request's outcome, a claim in the closer's name (#886)
             line += f", the pull request {outcome}" + (f" as {merge_commit}" if merge_commit else "")
         line += f": {reason}" if reason else "."
