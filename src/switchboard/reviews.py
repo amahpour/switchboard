@@ -22,6 +22,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from switchboard import envelope
+from switchboard.claims import Claim, ClaimError, normalize_key
 from switchboard.redact import redact
 
 # Lengths, cut at the boundary: everything here comes from an agent or a person.
@@ -995,6 +996,8 @@ def author_side(
     events: Sequence[dict[str, Any]],
     agents: Sequence[str],
     offline: Collection[str] = (),
+    url: str = "",
+    claims: Sequence[Claim] = (),
 ) -> tuple[str, ...]:
     """The agents of the room (``agents``, its active ones) that the board records on the author's
     side, the side that concedes or contests a finding (#884), in the room's order. Always: every
@@ -1003,9 +1006,11 @@ def author_side(
     it a reviewer: whoever opened the board (its ``holder``, or an agent an ``open`` event that opened,
     reopened or moved the board names as its ``by``), and every agent that conceded, reassigned or
     contested a finding (an agent's ``review`` event, not a person's). An agent that is ``offline``
-    is not counted either: it would not answer. Empty when the board does not know: then a raise asks
-    every other agent, as it always did (``acts_next``). ``events`` are the board's, as
-    ``{"data": {...}}`` or the data alone."""
+    is not counted either: it would not answer. When the board records no one, the agent holding a live
+    claim on the board's ``url`` is the side (``claimant``, #969): claiming a pull request is what
+    an author does before writing to it (§8.1). Empty when nothing says: then a raise asks every other
+    agent, as it always did (``acts_next``). ``events`` are the board's, as ``{"data": {...}}`` or the
+    data alone; ``claims`` are the room's live ones."""
     owners = {i.owner for i in items if i.kind == "finding" and i.owner}
     raisers = {i.raised_by for i in items if i.kind == "finding" and i.raised_by}
     sure = set(owners)
@@ -1027,7 +1032,32 @@ def author_side(
                 sure.add(author)
     side = sure | (maybe - raisers)
     gone = set(offline)
-    return tuple(a for a in dict.fromkeys(agents) if a in side and a not in gone)
+    found = tuple(a for a in dict.fromkeys(agents) if a in side and a not in gone)
+    return found or claimant(url, claims, agents, gone)
+
+
+def claimant(
+    url: str, claims: Sequence[Claim], agents: Sequence[str], offline: Collection[str] = ()
+) -> tuple[str, ...]:
+    """The agent that holds a live claim on the board's ``url``, as a one-agent side (#969), or empty.
+    The key matches as every claim does (``claims.normalize_key``, case-folded, §8.1): a claim on a
+    branch or a ticket, or on any other spelling of the address, does not count. The holder must be in
+    the room and not offline. ``claims`` are the room's live ones, read by the caller."""
+    if not url:
+        return ()
+    try:
+        want = normalize_key(url).casefold()
+    except ClaimError:
+        return ()
+    here = set(agents) - set(offline)
+    for c in claims:
+        try:
+            same = normalize_key(c.key).casefold() == want
+        except ClaimError:
+            continue
+        if same and c.holder in here:
+            return (c.holder,)
+    return ()
 
 
 def _first(item: Item, here: Sequence[str], side: Sequence[str]) -> list[str]:
