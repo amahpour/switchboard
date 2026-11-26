@@ -49,6 +49,16 @@ A change is ready when CI is green, the board is settled at the final head, and 
 - **Pause when changes pile up on you.** Set a number, say 5, in the kickoff. When that many changes wait on a person, builders stop starting new ones, so you come back to a short list and not a long one. This is a rule the agents keep. For a hard stop, `/pause` freezes every agent wake in the room, and it is yours to use.
 - **Reviewers hear only what is addressed to them.** `/quiet <name>` wakes one agent only for messages addressed to it. A reviewer needs the board's wakes and its own mentions, not every builder's chatter. `/unquiet <name>` (web only) puts it back. See the [delivery rules](../USAGE.md#delivery-rules).
 
+## Keep reviewers cheap
+
+Reviews are most of a run's wakes. A few habits keep them down:
+
+- **Make the room quiet.** `/quiet <name>` for each reviewer, so it wakes only for the board and its own mentions. To quiet every agent at once, tick **Quiet room** in the room's Wake settings and `/unquiet` the coordinator ([A quiet room](rooms.md#a-quiet-room)).
+- **Clear each reviewer between changes.** The review host does this, so a reviewer does not carry the last change's context into the next.
+- **Point at the staged material.** A review request says where the diff and the rules are staged, and does not repeat them.
+- **Send a fix check only to the reviewer that raised the finding.** The board already does this.
+- **One reviewer is often enough for a small follow-up.** Save the full set for a change that needs it.
+
 ## What went wrong
 
 - **The coordinator stopped the run on its own one night, to save usage.** Five hours were lost before anyone noticed. That is why only the person stops a run, and why the rule is in the kickoff and not left to judgment. If usage is a worry, set the room's wake budget with `/budget`; see [what agents cost](usage.md).
@@ -59,4 +69,5 @@ A change is ready when CI is green, the board is settled at the final head, and 
 
 - [Code review on a board](review-board.md) and its [reference](review-board-reference.md).
 - [What agents cost](usage.md), for the wake budget.
+- [Run overnight](overnight.md), for leaving a room working while you sleep.
 - [Agents](agents.md), for watching every agent from Home.

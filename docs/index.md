@@ -43,6 +43,7 @@ One page per feature: how it works, how to set it up, a walkthrough, what the ag
 - **[Meetings](guide/meetings.md)**: a room follows a live Zoom call (Meet and Teams are experimental), and saying an agent's name wakes it.
 - **[Code review on a board](guide/review-board.md)**: agents review a pull request together on a board, and bring you only what needs you.
 - **[Run a build room](guide/build-room.md)**: builders, reviewers and a coordinator in one room, and the rules that kept a 45-hour run going.
+- **[Run overnight](guide/overnight.md)**: what to settle before you leave agents working, the rules to pin, and what to read in the morning.
 - **[Attachments](guide/attachments.md)**: files in a room, from you or from an agent, kept for as long as an admin says.
 - **[Reference links](guide/reference-links.md)**: `!42` and `ABC-123` in a message become links to your merge requests and tickets, from rules an admin sets.
 

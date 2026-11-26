@@ -46,6 +46,7 @@ nav = [
     { "Code review: reference" = "guide/review-board-reference.md" },
     { "A room's whiteboard" = "guide/board.md" },
     { "Run a build room" = "guide/build-room.md" },
+    { "Run overnight" = "guide/overnight.md" },
     { "Attachments" = "guide/attachments.md" },
     { "Reference links" = "guide/reference-links.md" },
     { "Backups and restore" = "guide/backups.md" },
