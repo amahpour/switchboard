@@ -149,7 +149,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # edit uses title, detail and where.
     # #823 adds only the optional say key (+37). The maintainer approved the measured increase
     # on 2026-11-17: "Yes to all three".
-    assert size == 4681, size
+    # #964 drops "or images" from say's description ("Markdown renders; no raw HTML."): it told agents,
+    # after a compaction had cleared the join text, that a room can't carry files (rule 8 says it can).
+    # -10, so the cap moves down to 4,671. Naming the `artifact:` line there would cost about +45 and
+    # needs the maintainer's yes.
+    assert size == 4671, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")
@@ -165,6 +169,18 @@ async def test_tool_list_fits_the_review_budget() -> None:
         )
     )
     assert review_size <= 953, review_size  # was 1,185 before the how-to left the description (#629)
+
+
+async def test_say_description_does_not_say_files_or_images_cannot_be_shared() -> None:
+    """#964: the tool list is all an agent has left after its context is compacted, and rule 8 (join
+    text) says a file can be shared. say's description must not say "images" are out, which an agent
+    read as "this room can't carry a file". The Markdown/HTML limit stays."""
+    _st, server = make()
+    async with Client(server, mode="legacy") as c:
+        say = next(t for t in await c.list_tools() if t.name == "say")
+    desc = say.description or ""
+    assert "image" not in desc.lower()
+    assert "no raw HTML" in desc
 
 
 async def test_the_review_skill_holds_the_how_to_the_tool_only_names() -> None:
