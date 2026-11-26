@@ -14,6 +14,7 @@ and ``options`` call it too), which cuts obvious secrets out with ``say``'s patt
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
@@ -1144,6 +1145,7 @@ class Told:
     on: str
     show: str
     state: str = ""
+    labels: tuple[str, ...] = ()  # every card the line names, when it is one line for several (#984)
 
     @property
     def line(self) -> str:
@@ -1222,6 +1224,121 @@ def told(
         return None
     body = f"{item.label} {verb}. {' '.join('@' + a for a in who)}: {then}."
     return Told(who, item.label, item.kind, item.title, body, on, show, item.state)
+
+
+# ---------------------------------------------------------------- held fix lines (#984, §37.20)
+# An author marks several findings fixed one after another, and each line would mention the reviewer and
+# wake it. The lines for the same reviewers on one board wait until no fix has come for FIX_QUIET_S, and
+# never more than FIX_MAX_S from the first, then go out as one. Pure: the groups are data (the board's
+# ``held_fixes`` column holds them as JSON), the times are given, and the broker only carries it out.
+FIX_QUIET_S = 30.0
+FIX_MAX_S = 120.0
+HELD_MAX_FIXES = 40  # a group this long is due at once: the column holds 30000 characters
+HELD_MAX_CHARS = 30000
+
+
+def hold_fix(
+    groups: list[dict[str, Any]],
+    who: Sequence[str],
+    label: str,
+    poster: dict[str, Any],
+    now: float,
+) -> list[dict[str, Any]]:
+    """``groups`` with one more fix for ``who`` (the agents its line would mention): into the group of
+    the same agents when there is one, which restarts its quiet wait and keeps its first time, else a
+    group of its own. A card already in the group (a fix revised) is not listed twice. The poster is
+    the first fix's mover's."""
+    who_l = list(who)
+    out = [dict(g) for g in groups]
+    for g in out:
+        if g["who"] == who_l:
+            if label not in g["fixes"]:
+                g["fixes"] = [*g["fixes"], label]
+            g["last"] = now
+            return out
+    out.append({"who": who_l, "fixes": [label], "first": now, "last": now, "poster": poster})
+    return out
+
+
+def fixes_due(group: dict[str, Any], now: float) -> bool:
+    """Whether a held group goes out: no fix for ``FIX_QUIET_S``, or ``FIX_MAX_S`` since its first, or it
+    is as long as it may be."""
+    return (
+        now - group["last"] >= FIX_QUIET_S
+        or now - group["first"] >= FIX_MAX_S
+        or len(group["fixes"]) >= HELD_MAX_FIXES
+    )
+
+
+def dump_held(groups: list[dict[str, Any]]) -> str:
+    return json.dumps(groups, separators=(",", ":"), sort_keys=True) if groups else ""
+
+
+def parse_held(text: str) -> list[dict[str, Any]]:
+    """The groups a board's ``held_fixes`` holds. What does not parse, or is not shaped like a group, is
+    left out: a held line is never worth stopping the board for."""
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    out = []
+    for g in data if isinstance(data, list) else []:
+        if (
+            isinstance(g, dict)
+            and isinstance(g.get("who"), list)
+            and g["who"]
+            and all(isinstance(a, str) for a in g["who"])
+            and isinstance(g.get("fixes"), list)
+            and g["fixes"]
+            and all(isinstance(x, str) for x in g["fixes"])
+            and all(type(g.get(k)) in (int, float) for k in ("first", "last"))
+            and isinstance(g.get("poster"), dict)
+        ):
+            out.append(g)
+    return out
+
+
+def _and(words: Sequence[str]) -> str:
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+def fixes_told(
+    group: dict[str, Any], items: Sequence[Item], agents: Sequence[str], board_url: str = ""
+) -> Told | None:
+    """The one line for a held group (§37.20), or None when it is nobody's to say any more. A card
+    still counts when it is fixed and not yet confirmed, read now: one the reviewer has dropped, reopened
+    or confirmed since is left out, and the commit is the one on the card. The mentioned agents are the
+    group's that are still here. One card reads as ``told`` words it; several name each, then say where:
+    "F3, F5 and F6 fixed in <sha>. @codex-1: check the fixes." (with two commits: "F3 and F5 fixed in
+    <sha>, F6 in <sha>")."""
+    by_label = {i.label: i for i in items}
+    cards = [
+        by_label[x]
+        for x in group["fixes"]
+        if x in by_label and by_label[x].state == "fixed" and not by_label[x].confirmed_by
+    ]
+    who = tuple(a for a in group["who"] if a in agents)
+    if not cards or not who:
+        return None
+    on = f"Review board {board_url}:" if board_url else "Review board:"
+    pass_url = f', url="{board_url}"' if board_url else ""
+    show = f'review(action="show"{pass_url}) shows the board.'
+    by_commit: dict[str, list[str]] = {}
+    for c in cards:
+        by_commit.setdefault(c.commit[:12], []).append(c.label)
+    parts = [
+        f"{_and(labels)} fixed in {sha}" if i == 0 else f"{_and(labels)} in {sha}"
+        for i, (sha, labels) in enumerate(by_commit.items())
+    ]
+    said = ", ".join(parts)
+    then = "check the fix" if len(cards) == 1 else "check the fixes"
+    body = f"{said}. {' '.join('@' + a for a in who)}: {then}."
+    first = cards[0]
+    return Told(
+        who, first.label, first.kind, first.title, body, on, show, "fixed", tuple(c.label for c in cards)
+    )
 
 
 def handoff(

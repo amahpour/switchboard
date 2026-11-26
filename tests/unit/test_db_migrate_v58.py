@@ -46,7 +46,7 @@ def test_a_schema_56_database_takes_57s_check_edit_and_gains_mcp_sessions_at_58(
     backup = db.connect(db.backup_path_for(path, 56), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 62
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
         assert db.schema_version(backup) == 56
         assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60}
         same_table_as_fresh(con, tmp_path)
@@ -95,7 +95,8 @@ def test_a_schema_57_database_only_gains_mcp_sessions(
         assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60}
         same_table_as_fresh(con, tmp_path)
         assert con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0] == stored
-        assert con.execute(q).fetchone()[0] == reviews_sql
+        held = ", held_fixes TEXT NOT NULL DEFAULT '' CHECK(length(held_fixes) <= 30000)"  # 63 (#984)
+        assert con.execute(q).fetchone()[0].replace(held, "") == reviews_sql
         assert db.integrity_ok(con) is None
     finally:
         backup.close()

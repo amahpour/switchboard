@@ -709,9 +709,59 @@ class Boards:
             self._notice(room, f"{ref}: {notice}" if several else notice)
         out = self._shown(room, rv, touched=item.label)
         if line is not None and poster is not None:
-            self._say(room, rv, poster, line)
+            if action == "fix" and line.state == "fixed":
+                self._hold_fix(rv, line, poster)  # the cards moved; the room hears once it is quiet (#984)
+            else:
+                self._say(room, rv, poster, line)
         self._settle(room, rv)
         return out
+
+    # ---------------------------------------------- one line for a burst of fixes (#984, §37.20)
+    def _hold_fix(self, rv: dict[str, Any], line: reviews.Told, poster: Poster) -> None:
+        """Keep a fix's line, with the board, instead of posting it: ``flush_held`` posts the fixes
+        marked close together as one line. The groups are in the database, so a restart keeps them."""
+        groups = reviews.hold_fix(
+            reviews.parse_held(self.store.held_fixes(rv["id"])),
+            line.who,
+            line.label,
+            dict(poster),
+            self.state.clock.now(),
+        )
+        self.store.set_held_fixes(rv["id"], reviews.dump_held(groups))
+
+    def flush_held(self) -> int:
+        """Post the held fix lines that are due (``reviews.fixes_due``), each as one message to the
+        reviewers it names, and keep the rest. Called on every tick of the runner, and so also on the
+        first one after a start: what a stopped broker held is posted then. A group whose cards moved on
+        meanwhile, or whose board was closed, posts nothing. Returns the lines posted."""
+        now = self.state.clock.now()
+        posted = 0
+        for rv in self.store.reviews_holding():
+            groups = reviews.parse_held(rv["held_fixes"])
+            due = [g for g in groups if reviews.fixes_due(g, now)]
+            if groups and not due:
+                continue
+            room = self.store.room_by_id(rv["room_id"])
+            try:
+                if room is not None and not room.closed and rv["closed_at"] is None:
+                    for g in due:
+                        posted += self._post_held(room, rv, g)
+            except Exception:  # never let one board's line stop the others, or loop on every tick
+                log.exception("a held fix line for review %s could not be posted", rv["id"])
+            keep = [g for g in groups if g not in due]
+            # posted first, then cleared: a crash between the two says a line twice, never none
+            self.store.set_held_fixes(rv["id"], reviews.dump_held(keep))
+        return posted
+
+    def _post_held(self, room: Room, rv: dict[str, Any], group: dict[str, Any]) -> int:
+        agents, _ = self._here(room)
+        line = reviews.fixes_told(
+            group, self.store.review_items(rv["id"]), agents, rv["url"] if self._several(room) else ""
+        )
+        if line is None:
+            return 0
+        self._say(room, rv, group["poster"], line)
+        return 1
 
     # ---------------------------------------------------- lines for whoever acts next (#884)
     def _here(self, room: Room) -> tuple[list[str], list[str]]:
@@ -754,8 +804,8 @@ class Boards:
             data={
                 "board": rv["id"],
                 "msg": msg.id,
-                "items": [line.label],
-                "states": [line.state],
+                "items": list(line.labels or (line.label,)),
+                "states": [line.state] * len(line.labels or (line.label,)),
                 "to": who,
             },
         )
