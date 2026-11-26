@@ -16,7 +16,19 @@ import pytest
 from switchboard import board, board_style
 
 NAMES = ("red", "pink", "grape", "violet", "blue", "cyan", "teal", "green", "yellow", "orange", "gray")
-BUNDLE = Path(board.__file__).parent / "web/static/vendor/board/chunks/chunk-42LTX363.js"
+CHUNKS = Path(board.__file__).parent / "web/static/vendor/board/chunks"
+
+
+def colour_table() -> str:
+    """The chunk that holds Excalidraw's Open Color table, found by what is in it: a rebuild renames the chunks
+    and the minifier's variable names (#958), so neither is part of the test."""
+    found = [
+        m.group(0)
+        for f in sorted(CHUNKS.glob("chunk-*.js"))
+        if (m := re.search(r'\w+=\{white:"#ffffff",black:.*?\};', f.read_text()))
+    ]
+    assert len(found) == 1, found
+    return found[0]
 
 
 def shape(**kw: Any) -> dict[str, Any]:
@@ -27,7 +39,7 @@ def shape(**kw: Any) -> dict[str, Any]:
 def test_every_palette_name_is_the_pinned_excalidraw_colour() -> None:
     """The values come from the vendored build's colour table (fill: shade 2, stroke: shade 8), not
     from memory: a drifted hex would make an agent's colour differ from the picker's."""
-    table = re.search(r"Jt=\{white:.*?\};", BUNDLE.read_text()).group(0)
+    table = colour_table()
     assert set(board_style.PALETTE) == set(NAMES)
     for name in NAMES:
         shades = re.search(name + r":\[(.*?)\]", table).group(1).replace('"', "").split(",")

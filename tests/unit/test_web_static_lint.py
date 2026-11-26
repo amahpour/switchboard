@@ -431,104 +431,104 @@ BOARD_ASSETS = {
     "vendor/board/Assistant-SemiBold-CZ5MX6FK.woff2": (
         "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d"
     ),
-    "vendor/board/NOTICE": ("0460c147c752fd04d1233bdb414c2cbed16efc959abe9981bf701a7f90ad3b78"),
+    "vendor/board/NOTICE": ("e7c1ae94334f9c21b41c1eedd271efb5a133b65514e4bd344bbf825b9d7a8a7d"),
     "vendor/board/board.css": ("03c329f17085043b2602f5f121484d8f7944fd3c4d87d77d0c428043583a733b"),
-    "vendor/board/board.js": ("adaa1b2b4a4c4312461c921e87912e93764857b2b85ba612cfcfd62304fc4735"),
-    "vendor/board/chunks/chunk-42LTX363.js": (
-        "62d8b1dbac04c64e15749832711243bc938467274c2eec9ca6b10ff11c274198"
+    "vendor/board/board.js": ("6d2b3fc631e5c455175a39a66ec5bfc08366e06b2cb8ec89e997ffb4fa540870"),
+    "vendor/board/chunks/chunk-75JZFLYL.js": (
+        "c5863582ed60da3f54e232abf8544aee02efab2fa8c87525e95d0120d902750a"
     ),
-    "vendor/board/chunks/chunk-42LTX363.js.LEGAL.txt": (
+    "vendor/board/chunks/chunk-75JZFLYL.js.LEGAL.txt": (
         "62544d6446f960ae3f37318b41d8e85566921a7777ae492da7ab72d45ca1af31"
     ),
-    "vendor/board/chunks/chunk-4RIBWQVO.js": (
-        "c37e81a8d2e6fe0a68f555566221e9beba41dc8147f63c83e006fb2c0447c59a"
-    ),
-    "vendor/board/chunks/chunk-4RIBWQVO.js.LEGAL.txt": (
-        "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"
-    ),
-    "vendor/board/chunks/chunk-4Z55H5PS.js": (
-        "44e90e32371b5a5887ae9eecdb46c22a0229b463229e934a0096f6346e5ea8ef"
-    ),
-    "vendor/board/chunks/chunk-HND5NSDJ.js": (
+    "vendor/board/chunks/chunk-IUWJPB4O.js": (
         "fe5e24252868ff71bd3c229af9f795f4b5110f9db260c57cda816a28074e9046"
     ),
-    "vendor/board/chunks/chunk-MHJOTOFG.js": (
-        "98493c79e7b44af7574873770b563b282a90a30b858c1d2cf4a65a0f7d91a7cc"
+    "vendor/board/chunks/chunk-MZNWZ7EF.js": (
+        "877135e8c1db4a50db3a4d65e7f7de238b47864c9dfba6c2cf2f887ee57bf834"
     ),
-    "vendor/board/chunks/chunk-PBMPNUCO.js": (
-        "812e63e7c40364b8a4f69cb9fdd9540051e7668676ce30b8b420e20d914aa350"
-    ),
-    "vendor/board/chunks/chunk-PBMPNUCO.js.LEGAL.txt": (
-        "9d6729d5b5efcd1497bc4ea02c55ae358dd16e192613e741a47418db53e0c61e"
+    "vendor/board/chunks/chunk-OVS7G4IT.js": (
+        "44e90e32371b5a5887ae9eecdb46c22a0229b463229e934a0096f6346e5ea8ef"
     ),
     "vendor/board/chunks/chunk-SLE4MROL.js": (
         "d46dc7ae7c2467b9d71968c5f62e2465fac5aeda8c1f538d5ea91665fbeba1b6"
     ),
-    "vendor/board/chunks/chunk-UVDIT6BP.js": (
-        "877135e8c1db4a50db3a4d65e7f7de238b47864c9dfba6c2cf2f887ee57bf834"
+    "vendor/board/chunks/chunk-TZMMNJ7R.js": (
+        "9892c9ab5a080ddaecb754b9a5925cdaf80895f574210c9fe3df48711f80a5c0"
     ),
-    "vendor/board/chunks/directory-open-01563666-BCF2OQHL.js": (
+    "vendor/board/chunks/chunk-TZMMNJ7R.js.LEGAL.txt": (
+        "7b826dafefdf12e44d1d201e45d1b30de5f5ca8889629bfe6622da9441711e7e"
+    ),
+    "vendor/board/chunks/chunk-UNHW6WMX.js": (
+        "112f1fe3236902862e48f08c8eebce53be950dbc9e3a5936916e4e7e55ccb672"
+    ),
+    "vendor/board/chunks/chunk-UNHW6WMX.js.LEGAL.txt": (
+        "9d6729d5b5efcd1497bc4ea02c55ae358dd16e192613e741a47418db53e0c61e"
+    ),
+    "vendor/board/chunks/chunk-XGT3HXM7.js": (
+        "98493c79e7b44af7574873770b563b282a90a30b858c1d2cf4a65a0f7d91a7cc"
+    ),
+    "vendor/board/chunks/directory-open-01563666-FQJWSHTW.js": (
         "a1dcd4ed8ae5083cbc201d276c66461b5956139ea0ec697a2c6ce4da396ef22f"
     ),
-    "vendor/board/chunks/directory-open-4ed118d0-EJZEENFI.js": (
+    "vendor/board/chunks/directory-open-4ed118d0-DGZJFOA3.js": (
         "258599e3d97effbc55179ebf49d1bf046112fde932416c802ed7db4a2f665a7a"
     ),
     "vendor/board/chunks/disabled-3XZAYBYY.js": (
         "0824040e6f767389978a43f7e9d6a8e4238e025fa5c8c04880336d8f9e1fe0b5"
     ),
-    "vendor/board/chunks/en-B4ZKOASM-DZ44YZKH.js": (
-        "507d7d5e2f8b658f217b12d234b9e47140963c31c64b68acde54c7cf37990f8e"
+    "vendor/board/chunks/en-B4ZKOASM-MLL37ZVR.js": (
+        "16b56342812cf86cb6a1560a7e5969047c0041509f8a21404ea6c76d11731dd1"
     ),
     "vendor/board/chunks/english-only-BX72CWX6.js": (
         "c6e17959fa41e4e36b5caed6c161afa71c2d252d2d63129235335368d44f91b1"
     ),
-    "vendor/board/chunks/file-open-002ab408-X2X74O5N.js": (
+    "vendor/board/chunks/file-open-002ab408-J7AU7MQJ.js": (
         "357cc568d08486c25b676d63ce6800a304cbd504757e181131f412bdc0d6f539"
     ),
-    "vendor/board/chunks/file-open-7c801643-2KTMUCZB.js": (
+    "vendor/board/chunks/file-open-7c801643-LGNYAXV7.js": (
         "f2ccbabc8d46f7a1af925c4df4bafbf30ade5a0221b680c8365c9c54c18e9925"
     ),
-    "vendor/board/chunks/file-save-3189631c-57IVACNE.js": (
+    "vendor/board/chunks/file-save-3189631c-5QZV3JA6.js": (
         "d957af1d5c34e85e5dbc5990153c010aca1ac9f3878bd784ad99f46d849bc218"
     ),
-    "vendor/board/chunks/file-save-745eba88-7UR3GB4E.js": (
+    "vendor/board/chunks/file-save-745eba88-KZP6H6UF.js": (
         "974f609a4b4a89fb18bd0985bf165a6fabae8835bac81dae33d12291f67ea69b"
     ),
-    "vendor/board/chunks/image-GAAHSSAO-MYOD2TFX.js": (
-        "bbdace880cb9addd75a996d6a0739a7f341eb6d4ad5cfd7dfce1cd992f88e75c"
+    "vendor/board/chunks/image-GAAHSSAO-367S3MIT.js": (
+        "ad6b90616d6a364c7b44a8fb3ac27ac4d2e5dca8b8e97c5f36096394b03258b5"
     ),
-    "vendor/board/chunks/image-blob-reduce.esm-OS2VLHZ6.js": (
-        "2ef12a35eb45b63bab38cb6b82ae40d2430c22a29cbf7d4a2befac13715ee5e2"
+    "vendor/board/chunks/image-blob-reduce.esm-3IKAQ76O.js": (
+        "8af4fc5084769c9e6c8fe1a248f3ad851e098df9951cf35282bd2d800bda8d3c"
     ),
-    "vendor/board/chunks/image-blob-reduce.esm-OS2VLHZ6.js.LEGAL.txt": (
+    "vendor/board/chunks/image-blob-reduce.esm-3IKAQ76O.js.LEGAL.txt": (
         "784af932cf9057a7b45ac984633342b2b59b0028cb6506d0e114355fb3a4c8d4"
     ),
-    "vendor/board/chunks/kaa-6HZHGXH3-VRNFV3GN.js": (
-        "ff11d774178c3a135cdc5004414d690e24e28d585b0ddcce81d5bca5e48715cb"
+    "vendor/board/chunks/kaa-6HZHGXH3-YLUURHJD.js": (
+        "5c2a57a0d178b5f6d6530902cd9ff76830100e0fd51150ddbcdd4eb7dc413f5a"
     ),
-    "vendor/board/chunks/kab-KAB-ZGHBKWFO-Q33DF4M3.js": (
-        "b225d106b118758ff58592eab973752d2ca82987b88b27e5e1f8a6fdc162a5b6"
+    "vendor/board/chunks/kab-KAB-ZGHBKWFO-LH36JKGK.js": (
+        "e000e9e5c1006cc70b9757efb60f9850f9406a79ae519a3355e8926c0ef3bcc2"
     ),
-    "vendor/board/chunks/mermaid-QKS2V2ZS.js": (
-        "5d3dac8d3a1eeeefb76960ef35ec905239361221564752f2c9e73c492fcc1835"
+    "vendor/board/chunks/mermaid-HRO3OT2O.js": (
+        "9315dd8b2df2566d6f713314a18d5cfcf2d3f78590e02c231f7473d34e9dd5d7"
     ),
-    "vendor/board/chunks/percentages-BXMCSKIN-YJSF5M2O.js": (
-        "e10ec8a63d1747d594103ee30abc81da342ff2849b5350e902f492c6392c089b"
+    "vendor/board/chunks/percentages-BXMCSKIN-7UK4C4N2.js": (
+        "2db425a73c90a943302f9656bbd6b7124705e252751267af4f22d5969083be40"
     ),
-    "vendor/board/chunks/pica-IG5SJWFR.js": (
-        "bee459e2db1755a8e81b0813de1fab071244554eff17858d036e007467bad23d"
+    "vendor/board/chunks/pica-UWMOMIRA.js": (
+        "196412bb24ed54790c30301b251135990d6f2db4b433e97b618b1af34e99e86f"
     ),
-    "vendor/board/chunks/pica-IG5SJWFR.js.LEGAL.txt": (
+    "vendor/board/chunks/pica-UWMOMIRA.js.LEGAL.txt": (
         "65f20b75bfa40cf26749e8adb218d4f3e5befd4be7d3d8af5b4ff8f1fe683fbd"
     ),
-    "vendor/board/chunks/roundRect-BHUCBQ67.js": (
+    "vendor/board/chunks/roundRect-Y4GD6IDO.js": (
         "9be43f9137fc3bf967dd9450c578d270d94d31a8b3454e0faf9a99cb07f4711a"
     ),
-    "vendor/board/chunks/subset-shared.chunk-5R72Z2CK.js": (
-        "fcddca5b7f2c475bed4b8965d9f2da3d0e9f93dda28e248239bb94c782a6ae88"
+    "vendor/board/chunks/subset-shared.chunk-54RKO5SQ.js": (
+        "70597089eb5adb3ec942c144f71b51aab5d2803f4b744b08db47e56e478d9454"
     ),
-    "vendor/board/chunks/subset-worker.chunk-QIVNYH6E.js": (
-        "6bcc6dfe75fc43dd5c399e5cec5f26872ae3eb6145f2b67cf04d6b9a82ced4df"
+    "vendor/board/chunks/subset-worker.chunk-IOD4ZCXI.js": (
+        "3d4b2a2322dd38e891f9566f8961586a7c604c59580865474d041d89a046b91d"
     ),
     "vendor/board/fonts/Assistant/Assistant-Bold.woff2": (
         "e0cdd332ce039770e93ec44336b6db65f931940f42b0342aad35a06e7f991d29"
@@ -612,9 +612,11 @@ def test_the_board_frame_keeps_what_it_sent_until_a_copy_shows_it() -> None:
     assert "typeof m.full !== 'boolean'" in source
     assert "if (m.full) sent.clear();" in source
     bundle = (STATIC / "vendor/board/board.js").read_text()
-    assert "sn.set(e.id,e.version)" in bundle
-    assert 'typeof r.full!="boolean"' in bundle
-    assert "if(r.full)sn.clear();" in bundle
+    # the minifier's names change with every build, so the bundle is read with a pattern, not a name
+    recorded = re.search(r"\b(\w+)\.set\((\w+)\.id,\2\.version\)\}\),", bundle)
+    assert recorded is not None, "the frame records the version of each element it sends"
+    assert re.search(r'typeof \w+\.full!="boolean"', bundle)
+    assert re.search(r"if\(\w+\.full\)" + re.escape(recorded.group(1)) + r"\.clear\(\);", bundle)
     app = (STATIC / "whiteboard.js").read_text()
     assert "post('elements', { elements: merged, full: full === true })" in app
 
