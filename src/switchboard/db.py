@@ -60,9 +60,14 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 63
+SCHEMA_VERSION = 64
 
-SCHEMA = r"""
+# ``reviews.held_fixes`` (#984, DESIGN.md §37.20): the column's text, which the fresh schema and the step from
+# 63 both use, since an ALTER leaves the table's text as ``..., <column>`` and a fresh one must read the same.
+HELD_FIXES_COLUMN = "held_fixes TEXT NOT NULL DEFAULT '' CHECK(length(held_fixes) <= 30000)"
+
+SCHEMA = (
+    r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 CREATE TABLE rooms(
@@ -216,7 +221,9 @@ CREATE TABLE reviews(
   pr_ci TEXT NOT NULL DEFAULT '' CHECK(pr_ci IN ('', 'passing', 'failing', 'running', 'none', 'blocked')),
   reported_by TEXT NOT NULL DEFAULT '' CHECK(length(reported_by) <= 100), reported_at REAL,
   closed_by TEXT NOT NULL DEFAULT '' CHECK(length(closed_by) <= 100),
-  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL);
+  reopened_by TEXT NOT NULL DEFAULT '' CHECK(length(reopened_by) <= 100), reopened_at REAL, """
+    + HELD_FIXES_COLUMN
+    + r""");
 CREATE INDEX reviews_room ON reviews(room_id, id);
 CREATE TABLE review_items(
   id INTEGER PRIMARY KEY, review_id INTEGER NOT NULL REFERENCES reviews(id),
@@ -364,6 +371,7 @@ CREATE TABLE room_board_changes(
   n INTEGER NOT NULL CHECK(n >= 1));
 CREATE INDEX room_board_changes_room ON room_board_changes(room_id, seq);
 """
+)
 
 # The tables of each schema version that a migration must keep the rows of. The older versions'
 # lists name the two tables 29 dropped (``remotes`` and ``link_machines``: #385), because a backup
@@ -1286,6 +1294,15 @@ V62_TO_V63 = (
     "UPDATE meta SET value='63' WHERE key='schema_version'",
 )
 
+# v63 -> v64 (#984, DESIGN.md §37.20): the fix lines a board is holding back for a quiet moment, so one
+# reviewer is mentioned once for a burst of fixes. ``held_fixes`` is a JSON list a group of fixes for the
+# same reviewers (``reviews.hold_fix``), empty when nothing is held; a restart keeps what it holds. The
+# cap is ``reviews.HELD_MAX_CHARS``. Rows are untouched.
+V63_TO_V64 = (
+    "ALTER TABLE reviews ADD COLUMN held_fixes TEXT NOT NULL DEFAULT '' CHECK(length(held_fixes) <= 30000)",
+    "UPDATE meta SET value='64' WHERE key='schema_version'",
+)
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1720,6 +1737,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         60: MigrationStep(61, V60_TO_V61, (), (("participants", "'opencode','grok','test'"),)),
         61: MigrationStep(62, V61_TO_V62, ()),
         62: MigrationStep(63, V62_TO_V63, ()),
+        63: MigrationStep(64, V63_TO_V64, ()),
     }
     out = []
     v = frm

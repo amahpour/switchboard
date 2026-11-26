@@ -90,7 +90,7 @@ def test_pr_ci_admits_blocked_and_keeps_every_board(tmp_path: Path, monkeypatch:
         assert_seeded(before)
         counts = db.row_counts(before, db.kept_tables(56))
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 63
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 64
     assert db.row_counts(con, db.kept_tables(56)) == counts
     assert_seeded(con)
     assert list(con.execute("PRAGMA foreign_key_check")) == []

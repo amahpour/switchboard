@@ -37,7 +37,7 @@ def test_the_index_is_built_from_the_old_messages_and_matches_a_fresh_schema(
         total = before.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     assert chat, "the fixture has chat lines to index"
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 63
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 64
     assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == total
     indexed = {r[0] for r in con.execute("SELECT rowid FROM messages_fts WHERE messages_fts MATCH '\"a\"*'")}
     assert indexed, "the backfill found words"

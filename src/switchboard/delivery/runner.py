@@ -99,6 +99,10 @@ class Runner:
                 self.execute(self.engine.tick())
             except Exception:
                 log.exception("engine tick failed")
+            try:
+                self.state.boards.flush_held()  # the review boards' held fix lines (#984, §37.20)
+            except Exception:
+                log.exception("review board tick failed")
 
     async def stop(self) -> None:
         for fut in self.futures.values():

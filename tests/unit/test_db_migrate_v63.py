@@ -30,7 +30,7 @@ def test_every_room_gets_quiet_off_and_no_row_is_lost(tmp_path: Path) -> None:
     con = db.open_db(path)
     backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
         assert db.row_counts(con, db.TABLES) == counts
         assert [r[0] for r in con.execute("SELECT quiet FROM rooms")] == [0] * len(rooms)
         assert [

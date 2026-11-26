@@ -3418,6 +3418,20 @@ class Store:
         with db.tx(self.con):
             self.con.execute(f"UPDATE reviews SET {cols} WHERE id=?", (*fields.values(), review_id))
 
+    def held_fixes(self, review_id: int) -> str:
+        """The fix lines a board is holding (``reviews.hold_fix``, #984), as JSON text: empty when none."""
+        r = self.con.execute("SELECT held_fixes FROM reviews WHERE id=?", (review_id,)).fetchone()
+        return str(r[0]) if r else ""
+
+    def set_held_fixes(self, review_id: int, text: str) -> None:
+        with db.tx(self.con):
+            self.con.execute("UPDATE reviews SET held_fixes=? WHERE id=?", (text, review_id))
+
+    def reviews_holding(self) -> list[dict[str, Any]]:
+        """Every board that holds a fix line, in any room, open or closed (#984): what the tick looks at."""
+        rows = self.con.execute("SELECT * FROM reviews WHERE held_fixes!='' ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
     def move_review_head(self, review_id: int, head: str, finding_ids: list[int]) -> None:
         """Set the head and mark old unresolved findings in one transaction (#291)."""
         with db.tx(self.con):

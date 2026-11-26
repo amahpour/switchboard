@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import InProcBroker, cookie_of, ws_connect
+from conftest import FakeClock, InProcBroker, cookie_of, ws_connect
 from fakes.fake_agent import FakeAgent
 from test_passkeys import hosted_broker, stop
 from test_people import join_as_bob, set_up
 
+from switchboard import reviews
 from switchboard.broker import reviews as review_boards
 from switchboard.config import Config
 from switchboard.models import session_key
@@ -30,7 +31,7 @@ GITHUB_PR = "https://github.com/example/shop/pull/7"
 
 @pytest.fixture
 def broker(tmp_home: Path):
-    b = InProcBroker(tmp_home, FAST).start()
+    b = InProcBroker(tmp_home, FAST, clock=FakeClock()).start()
     web = b.web_client()
     assert web.post("/api/rooms", json={"name": "#build"}, headers=b.write_headers()).status_code == 200
     yield b
@@ -783,6 +784,13 @@ async def test_a_board_from_open_to_settled(broker: InProcBroker) -> None:
 
         r = await author.call("review", room="#build", action="show")
         assert r["board"].splitlines()[1].startswith("Q1 [open]")
+        # the card moved at once; the fix's line waits for a quiet moment (#984)
+        assert not q(broker, "SELECT id FROM messages WHERE text LIKE '%fixed in%'")
+        broker.clock.advance(reviews.FIX_QUIET_S)
+        for _ in range(100):  # the runner's next tick posts it: wait for the event, not for a time
+            if q(broker, "SELECT id FROM messages WHERE text LIKE '%fixed in%'"):
+                break
+            await asyncio.sleep(0.1)
 
     notices = [m["text"] for m in q(broker, "SELECT text FROM messages WHERE kind='notice' ORDER BY id")]
     assert [n for n in notices if "F1" in n or "Q1" in n or "board" in n] == [

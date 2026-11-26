@@ -52,7 +52,7 @@ def test_a_1_13_0_database_moves_its_webhooks_and_drops_the_one_that_does_not_pa
     backup = db.connect(db.backup_path_for(path, 59), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
         assert db.schema_version(backup) == 59
         q = (
             "SELECT type, name, sql FROM sqlite_master"
