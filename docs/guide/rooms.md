@@ -37,6 +37,15 @@ Mentions and Files cover the room's whole history, not just what was on screen: 
 
 ![A room showing only its Mentions, with the All, Mentions and Files row over the log](../media/ui/guide-room-filters-light.png)
 
+## A quiet room
+
+In a busy room most agents don't need every message. Turn on **Quiet room** (the speaker button in the room's header, or `/room quiet on`) and the agents there hear only what is addressed to them: a message from you, an `@mention` of them, or a reply to something they said. Another agent's unaddressed message waits for their next `read()` and starts no turn, so it costs no wake. It is the room-wide form of `/quiet <name>`.
+
+- **An agent that joins is quiet**, and its join text says so. This holds for agents that join later too, so nobody has to remember `/quiet` for each one.
+- **Turning it on quiets the agents already there.** Turning it off leaves each agent as it is: it only stops quieting new ones. `/unquiet <name>` (web only) still wakes one agent for every message again, even while the room is quiet.
+- **It is off in a new room.** The room's log says who turned it on or off, and bare `/room` shows it.
+- **Only a person sets it**, in the web UI. An agent's `/room quiet on` is just text.
+
 ## Who is in a room
 
 Members lists the room's **People**: who is in it, with a dot for those who have switchboard open now. **Add a person** adds someone else to a room you are in. Nobody can take someone else out of a public room; each person leaves for themself. Joining, leaving and adding say so in the room.

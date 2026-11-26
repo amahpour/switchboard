@@ -129,3 +129,37 @@ def test_the_headers_chips_are_all_in_view_with_both_side_panels_open(
     # the phone wraps this row (#716), so Hands-free stays in view. Every chip is checked in
     # test_web_ui.test_a_phones_header_shows_every_chip_without_scrolling
     expect(phone.locator("#st-handsfree")).to_be_in_viewport()
+
+
+def test_the_quiet_room_switch_sets_the_room_for_everyone_and_says_so(
+    ui: UI,
+    calls: InProcBroker,  # noqa: F811
+) -> None:
+    """Quiet room (#975, §50.1) is a header button with a name and a pressed state, reachable by Tab. A click
+    types the person's own ``/room quiet on``: the button reads pressed, the log names who did it, and a
+    second page sees it pressed with no action of its own; a second click turns it off. A phone shows it
+    inside the screen. Fails if the button stays unpressed, only the page that clicked changes, or it
+    falls off a phone."""
+    assert _post(calls, "/api/rooms", {"name": "#hush"}).status_code == 200
+    page = _open(ui, calls, room="hush")
+    other = _open(ui, calls, room="hush")
+    button = page.get_by_role("button", name="Quiet room")
+    expect(button).to_have_attribute("aria-pressed", "false")
+
+    page.locator("#room-calls").focus()
+    page.keyboard.press("Tab")
+    expect(button).to_be_focused()
+    page.keyboard.press("Enter")
+    expect(button).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#log")).to_contain_text("alice turned on a quiet room")
+    expect(other.get_by_role("button", name="Quiet room")).to_have_attribute("aria-pressed", "true")
+
+    button.click()
+    expect(button).to_have_attribute("aria-pressed", "false")
+    expect(page.locator("#log")).to_contain_text("alice turned off a quiet room")
+    expect(other.get_by_role("button", name="Quiet room")).to_have_attribute("aria-pressed", "false")
+
+    phone = _open(ui, calls, room="hush", **PHONE)
+    box = phone.get_by_role("button", name="Quiet room").bounding_box()
+    assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= PHONE["viewport"]["width"]
+    assert phone.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")

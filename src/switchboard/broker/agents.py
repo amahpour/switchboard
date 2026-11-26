@@ -618,7 +618,7 @@ class AgentService:
             # the membership and its person's (§63) in one transaction: committed apart, a failure between
             # them leaves the agent in the room and its person out, and the session's retry is a rejoin
             with db.tx(self.store.con):
-                m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce))
+                m = self.store.create_membership(room.id, p.id, name, join_code_hash(nonce), quiet=room.quiet)
                 member = self.svc.agent_joined(room, person, name)
             self.svc.join_hands_free(room, m.id)
             self.store.add_event(
@@ -673,6 +673,7 @@ class AgentService:
             rejoined=rejoined,
             people=self.svc.room_humans(room),
             room_rules=room.rules_text,
+            quiet=m.quiet,
         )
         self.store.mark_rules_seen(m.id, room.rules_version)
         text += self.svc.plugin_join_note(p)

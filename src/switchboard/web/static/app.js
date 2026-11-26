@@ -2156,6 +2156,11 @@
     $('room-rules').classList.toggle('hidden', !r);
     $('room-wake').classList.toggle('hidden', !r);
     $('room-calls').classList.toggle('hidden', !r);
+    // the room's Quiet switch (§50.1): agents that join hear only what is addressed to them. Anything but
+    // true is off, so a frame without the field shows it off
+    const quietBtn = $('room-quiet');
+    quietBtn.classList.toggle('hidden', !r);
+    quietBtn.setAttribute('aria-pressed', String(s.quiet === true));
 
     const st = $('st-state');
     const paused = $('banner-paused');
@@ -9251,6 +9256,13 @@
     $('preview-join').addEventListener('click', joinRoom);
     $('room-wake').addEventListener('click', openRoomWake);
     $('room-calls').addEventListener('click', openRoomCalls);
+    // one click types the person's own /room quiet on|off, so the broker checks the role as for the command
+    $('room-quiet').addEventListener('click', function () {
+      const r = activeRoom();
+      if (!r) return;
+      const on = !(r.settings && r.settings.quiet === true);
+      submitText('/room quiet ' + (on ? 'on' : 'off'));
+    });
     if (roomTitleButton) roomTitleButton.addEventListener('click', openRoomRename);
     $('past-boards-toggle').addEventListener('click', function () {
       const room = activeRoom();

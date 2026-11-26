@@ -60,7 +60,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 62
+SCHEMA_VERSION = 63
 
 SCHEMA = r"""
 CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -79,7 +79,8 @@ CREATE TABLE rooms(
   renamed_from TEXT NOT NULL DEFAULT '[]',
   call_voice INTEGER NOT NULL DEFAULT 0 CHECK(call_voice IN (0, 1)),
   call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)),
-  review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1)));
+  review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1)),
+  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -1279,6 +1280,12 @@ V61_TO_V62 = (
     "UPDATE meta SET value='62' WHERE key='schema_version'",
 )
 
+# v62 -> v63 (#975, DESIGN.md §50.1): a room's setting, agents here join quiet. Every room starts at 0.
+V62_TO_V63 = (
+    "ALTER TABLE rooms ADD COLUMN quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1))",
+    "UPDATE meta SET value='63' WHERE key='schema_version'",
+)
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1712,6 +1719,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         59: MigrationStep(60, V59_TO_V60, ("webhooks", "webhook_sent")),
         60: MigrationStep(61, V60_TO_V61, (), (("participants", "'opencode','grok','test'"),)),
         61: MigrationStep(62, V61_TO_V62, ()),
+        62: MigrationStep(63, V62_TO_V63, ()),
     }
     out = []
     v = frm

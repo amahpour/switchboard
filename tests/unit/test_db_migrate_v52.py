@@ -42,7 +42,7 @@ def test_the_usage_indexes_are_added_and_match_a_fresh_schema(
         total = before.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         rooms_off = before.execute("SELECT COUNT(*) FROM rooms WHERE review_on_link=0").fetchone()[0]
     con = db.open_db(path)
-    assert db.schema_version(con) == db.SCHEMA_VERSION == 62
+    assert db.schema_version(con) == db.SCHEMA_VERSION == 63
     assert con.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == total
     assert con.execute("SELECT COUNT(*) FROM rooms WHERE review_on_link=0").fetchone()[0] == rooms_off
     fresh = db.open_db(tmp_path / "fresh.db")

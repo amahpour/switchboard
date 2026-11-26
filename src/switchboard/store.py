@@ -509,6 +509,28 @@ class Store:
             )
             return cur.rowcount == 1
 
+    def set_room_quiet(self, room_id: int, on: bool) -> bool:
+        """Set whether agents that join the room join quiet (§50.1, #975). True when that changed it. Turning
+        it on also quiets every agent already here; turning it off leaves each as it is."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE rooms SET quiet=? WHERE id=? AND quiet!=?", (int(on), room_id, int(on))
+            )
+            return cur.rowcount == 1
+
+    def quiet_room_members(self, room_id: int) -> list[int]:
+        """The open memberships of a room that are not quiet yet, and are then quieted (§50.1). Their ids,
+        for the engine to re-evaluate."""
+        with db.tx(self.con):
+            ids = [
+                r[0]
+                for r in self.con.execute(
+                    "SELECT id FROM memberships WHERE room_id=? AND left_at IS NULL AND quiet=0", (room_id,)
+                )
+            ]
+            self.con.executemany("UPDATE memberships SET quiet=1 WHERE id=?", [(i,) for i in ids])
+        return ids
+
     def set_room_review_on_link(self, room_id: int, on: bool) -> bool:
         """Set whether an agent's new pull or merge request link asks for a review (§37.16, #816). True
         when that changed it."""
@@ -2706,14 +2728,15 @@ class Store:
         participant_id: int,
         screen_name: str,
         join_code_hash: str | None = None,
+        quiet: bool = False,
     ) -> Membership:
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)
             cur = self.con.execute(
                 "INSERT INTO memberships(room_id, participant_id, screen_name,"
-                " joined_at, join_msg_id, join_code_hash) VALUES(?,?,?,?,?,?)",
-                (room_id, participant_id, screen_name, now, last, join_code_hash),
+                " joined_at, join_msg_id, join_code_hash, quiet) VALUES(?,?,?,?,?,?,?)",
+                (room_id, participant_id, screen_name, now, last, join_code_hash, int(quiet)),
             )
             if cur.lastrowid is None:
                 raise StoreError("membership insert returned no id")

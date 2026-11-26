@@ -735,7 +735,8 @@ button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
 .head-tools { display: contents; }
 .head-btn { width: 30px; height: 30px; border-radius: 7px; color: var(--ink-2); }
 #pane-toggle[aria-pressed="true"],
-#focus-toggle[aria-pressed="true"] { background: var(--btn-on); }
+#focus-toggle[aria-pressed="true"],
+#room-quiet[aria-pressed="true"] { background: var(--btn-on); }
 
 .rooms-toggle {
   display: inline-flex;
