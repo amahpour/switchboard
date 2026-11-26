@@ -442,18 +442,129 @@ def test_the_skill_scan_sees_a_tool_behind_a_harnesss_prefix() -> None:
     assert "rooms" not in OLD_SERVER["tools"]  # so such a skill would be refused by the check below
 
 
+SKILL_TOOL = {"review-board": "review", "board": "board", "claim": "claim", "talk-on-a-call": "say"}
+# Skills whose bare ``name=value`` spans are parameters of the tool (the board skill's are style keys).
+LOOSE_PARAMS = {"review-board", "claim"}
+# What a skill may name that the oldest server lacks, only with a fallback the skill itself gives: each
+# entry is (tool, kind, name) -> text a skill naming it must contain, which says to use what the server
+# has. The check fails when the text is gone from a skill, so an entry cannot outlive its fallback.
+FALLBACKS = {
+    ("review", "action", name): "if an action here is not in that list, the server is older"
+    for name in ("edit", "abstain", "take", "reopen")
+}
+
+
+def skill_uses(skill: str, text: str) -> set[tuple[str, str, str]]:
+    """What a skill names of the tool surface, as (tool, kind, name) with kind ``tool``, ``action`` or
+    ``param``: a call written ``name(...)`` (its ``action="x"`` and its arguments), a bullet of the
+    ``## Actions`` list with the parameters in its parentheses, and, for skills that use them, a backticked
+    ``param=value``. Conservative: only these shapes, so prose is never read as a call."""
+    uses: set[tuple[str, str, str]] = set()
+    own = SKILL_TOOL.get(skill)
+    for span in re.findall(r"`([^`\n]*)`", text):
+        call = re.fullmatch(r"(?:mcp__[a-z_]+__|switchboard_)?([a-z_]+)\((.*)\)", span)
+        if call and (call.group(1) in TOOL_NAMES or call.group(1) == own):
+            tool = call.group(1)
+            uses.add((tool, "tool", tool))
+            for arg in (a.strip() for a in call.group(2).split(",")):
+                name, _, value = arg.partition("=")
+                if not re.fullmatch(r"[a-z_]+", name):
+                    continue  # "...", "<sha>"
+                if name == "action":
+                    if value.strip('"'):
+                        uses.add((tool, "action", value.strip('"')))
+                else:
+                    uses.add((tool, "param", name))
+        elif own and skill in LOOSE_PARAMS:
+            for name in re.findall(r"(?<![\w-])([a-z_]+)=", span):
+                uses.add((own, "param", name))
+    section = re.search(r"^## Actions\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    if own in ("review", "board") and section:
+        for bullet in re.finditer(r"^- `([a-z_]+)`(?: \(([^)]*)\))?", section.group(1), re.M):
+            uses.add((own, "action", bullet.group(1)))
+            for item in (bullet.group(2) or "").split(";"):
+                # "`shape` is `rectangle`, ...": the words after "is" are values, not parameters
+                for name in re.findall(r"`([a-z_]+)`", item.split(" is ")[0]):
+                    uses.add((own, "param", name))
+    return uses
+
+
+def beyond_the_oldest_server(skill: str, text: str) -> dict[tuple[str, str, str], str]:
+    """Each use in ``text`` that the oldest release lacks and no fallback in the text covers, with why."""
+    lacking: dict[tuple[str, str, str], str] = {}
+    tools = OLD_SERVER["tools"]
+    for use in sorted(skill_uses(skill, text)):
+        tool, kind, name = use
+        if kind == "tool":
+            have = name in tools
+        elif tool not in tools:
+            have = False
+        elif kind == "param":
+            have = name in tools[tool]["properties"]
+        else:
+            have = name in OLD_SERVER.get(f"{tool}_actions", [])
+        if have:
+            continue
+        fallback = FALLBACKS.get(use)
+        if fallback and fallback in text:
+            continue
+        lacking[use] = f"release {OLD_SERVER['release']} lacks the {kind} {name!r} of {tool!r}"
+    return lacking
+
+
+def plugin_skills() -> list[tuple[str, str, str]]:
+    return [
+        (f"{p.parents[2].name}/{p.parent.name}", p.parent.name, p.read_text())
+        for p in sorted((ROOT / "plugins").glob("*/skills/*/SKILL.md"))
+    ]
+
+
 def test_the_newest_plugins_skills_name_only_tools_the_oldest_server_has() -> None:
     """Every switchboard tool a skill of this checkout's plugins names exists on the oldest release of the
     major. A skill that names a tool added since would steer an agent on an older server to a tool it lacks:
     it fails until the skill is generic about it (#850, "Feature guidance lives on the server")."""
     named: dict[str, set[str]] = {}
-    for plugin in ("claude", "codex", "cursor"):
-        for skill in (ROOT / "plugins" / plugin / "skills").glob("*/SKILL.md"):
-            for tool in tools_named_by(skill.read_text()):
-                named.setdefault(tool, set()).add(f"{plugin}/{skill.parent.name}")
+    for where, _, text in plugin_skills():
+        for tool in tools_named_by(text):
+            named.setdefault(tool, set()).add(where)
     assert named  # the skills do name tools
     missing = {t: sorted(w) for t, w in named.items() if t not in OLD_SERVER["tools"]}
     assert not missing, missing
+
+
+def test_the_newest_plugins_skills_name_only_actions_and_parameters_the_oldest_server_has() -> None:
+    """Every ``action`` and parameter a skill of this checkout's plugins names exists on the oldest release
+    of the major, unless the skill gives a fallback (``FALLBACKS``). A skill that tells an agent on an older
+    server of the same major to call an action it never had, or to pass a parameter it refuses (a
+    ``state`` to ``close``, before ``close`` took one), fails here until the skill says what to do on the
+    older server (#850, #954)."""
+    missing: dict[str, list[str]] = {}
+    for where, skill, text in plugin_skills():
+        for why in beyond_the_oldest_server(skill, text).values():
+            missing.setdefault(where, []).append(why)
+    assert not missing, missing
+    assert any(skill_uses(skill, text) for _, skill, text in plugin_skills())  # the scan sees something
+
+
+def test_the_skill_scan_finds_an_action_and_a_parameter_the_oldest_server_lacks() -> None:
+    """The scan above is not blind: a planted line naming a tool, an action and a parameter that the oldest
+    release lacks is found, a fallback in the text excuses only the action it was written for, and a plain
+    call of what the release has is clean."""
+    ok = 'Call `review(action="close", state="merged")` and `claim(room, key, ttl, note)`.'
+    assert beyond_the_oldest_server("review-board", ok) == {}
+    bad = 'Call `review(action="shelve", state="merged", sparkle="x")` and `rooms()`.'
+    assert set(beyond_the_oldest_server("review-board", bad)) == {
+        ("review", "action", "shelve"),
+        ("review", "param", "sparkle"),
+        ("rooms", "tool", "rooms"),
+    }
+    actions = "## Actions\n\n- `take` (`item`, `sparkle`): x\n\n## Next\n"
+    assert set(beyond_the_oldest_server("review-board", actions)) == {
+        ("review", "action", "take"),
+        ("review", "param", "sparkle"),
+    }
+    covered = actions + "\nif an action here is not in that list, the server is older"
+    assert set(beyond_the_oldest_server("review-board", covered)) == {("review", "param", "sparkle")}
 
 
 def test_the_plugins_hook_templates_send_only_fields_the_oldest_server_takes() -> None:
