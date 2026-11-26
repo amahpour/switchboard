@@ -227,12 +227,12 @@ def test_a_release_with_an_unpinned_marketplace_does_not_open(tmp_path: Path) ->
 
 
 def test_a_release_pr_may_change_the_marketplaces() -> None:
-    """CI skips the suite for a release PR that changes only release files (ci_scope.py); the two
-    marketplaces are release files now, or a release would run everything."""
+    """The two marketplaces are release files (`is_release_file`), so a release's own
+    changes to them are expected."""
     assert rel.is_release_file(".claude-plugin/marketplace.json")
     assert rel.is_release_file(".agents/plugins/marketplace.json")
     assert not rel.is_release_file("plugins/claude/hooks/hooks.json")  # a plugin's other files are not
-    # the manifests are (#705): a release raises their version with the pin, and must still skip the suite
+    # the manifests are (#705): a release raises their version with the pin, and that is expected
     assert rel.is_release_file("plugins/claude/.claude-plugin/plugin.json")
     assert rel.is_release_file("plugins/codex/.codex-plugin/plugin.json")
     assert rel.is_release_file("plugins/cursor/.cursor-plugin/plugin.json")
@@ -697,11 +697,11 @@ def test_a_release_gathers_the_notes_files_and_deletes_them(tmp_path: Path) -> N
 def test_a_release_sets_every_plugin_to_the_releases_version_changed_or_not(tmp_path: Path) -> None:
     """The plugin of switchboard X.Y.Z is X.Y.Z (#841; the maintainer, 2026-11-17: "They should trail with
     each other."). Claude Code and Codex keep an installed plugin by its manifest `version` alone, so every
-    release sets Claude Code's, Codex's, Cursor's, Devin's and OpenCode's to the release's own, whether or
-    not a file of that
-    plugin changed, and nothing but the number moves. A release PR skips the suite, so only the script can
-    keep this. Fails if a manifest keeps its old version (a plugin with no change in it included), or the
-    stamp touches anything else."""
+    release sets Claude Code's, Codex's, Cursor's, Devin's and OpenCode's to the release's own, whether
+    or not a file of that plugin changed, and nothing but the number moves. Only the script keeps this.
+    Fails if a manifest keeps its old version (a plugin with no change in it included), or the stamp
+    touches anything else.
+    """
     repo = make_repo(tmp_path)
     git(repo, "commit", "-q", "--allow-empty", "-m", "fix(cli): a fix (#30)")  # no plugin file changed
     assert rel.release(repo, tmp_path / "notes.md", "2026-09-30") == "0.4.1"

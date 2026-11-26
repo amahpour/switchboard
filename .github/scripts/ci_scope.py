@@ -3,19 +3,19 @@
     git diff --name-only HEAD^1 HEAD | python3 .github/scripts/ci_scope.py --title "$TITLE"
 
 Reads the PR's changed files on stdin, one per line, and prints (and appends to $GITHUB_OUTPUT)
-`tests=true` or `tests=false`. The suite is skipped for:
-- a docs-only PR: every changed file is Markdown outside src/ and tests/, or an image or a video
-  under docs/;
-- a release PR (`release.py --open-pr`): titled `release: vX.Y.Z`, changing only the files a
-  release writes, and the notes files in changes/ it gathers (release.py's is_release_file).
-Anything else runs it, and so does an empty list. test.yml's `tree scan` job still runs for the
-two skipped kinds.
+`tests=true` or `tests=false`. The suite is skipped for a docs-only PR: every changed file is
+Markdown outside src/ and tests/, or an image or a video under docs/. Anything else runs it, and so
+does an empty list. test.yml's `tree scan` job still runs for a docs-only PR.
 
-It fails a release PR whose plugin manifests (release.py's PLUGIN_MANIFESTS) don't all carry the
-title's version: the suite that would catch it is skipped (#901). It also fails a PR that edits
-CHANGELOG.md: only a release writes it. A PR's notes go in
-changes/<name>.md (changes/README.md), which never conflict. A title scoped `(changelog)` may
-fix the notes of a release that's out. Standard library only.
+A release PR (`release.py --open-pr`, titled `release: vX.Y.Z`) runs the suite like any code PR: it
+runs on the PR's merge commit, which is main as the release will ship it, and nothing else tests
+that tree (#970: #966 and #967 each passed alone and v1.17.0 shipped both untested together).
+
+It fails a release PR whose plugin manifests (release.py's PLUGIN_MANIFESTS) don't all carry the title's
+version (#901). It also fails a PR that edits CHANGELOG.md: only a release writes it. A PR's notes go in
+changes/<name>.md (changes/README.md), which never conflict. A title scoped `(changelog)` may fix the
+notes of a release that's out.
+Standard library only.
 """
 
 from __future__ import annotations
@@ -39,14 +39,12 @@ def is_docs(path: str) -> bool:
     return p.suffix == ".md" or (p.parts[:1] == ("docs",) and p.suffix.lower() in MEDIA)
 
 
-def scope(files: list[str], title: str) -> tuple[bool, str]:
+def scope(files: list[str]) -> tuple[bool, str]:
     """(whether the tests run, why)."""
     if not files:
         return True, "no changed files listed"
     if all(is_docs(f) for f in files):
         return False, "docs only"
-    if release.RELEASE_TITLE_RE.match(title) and all(release.is_release_file(f) for f in files):
-        return False, "a release PR"
     code = [f for f in files if not is_docs(f)]
     return True, f"{len(code)} changed file(s) beyond the docs, such as {code[0]}"
 
@@ -76,9 +74,9 @@ def _top_level_version(path: Path) -> str | None:
 
 
 def release_problem(title: str, root: Path) -> str | None:
-    """Why a release PR's plugin manifests don't carry its version, or None (#901). A release PR skips
-    the suite, so this is the check that still runs: v1.11.0 was cut by an older release.py, which
-    left Devin's and OpenCode's manifests at 1.10.0, and nothing caught it until the next PR's tests."""
+    """Why a release PR's plugin manifests don't carry its version, or None (#901). v1.11.0 was cut by
+    an older release.py, which left Devin's and OpenCode's manifests at 1.10.0. This fails the PR at
+    once, before the suite runs."""
     m = release.RELEASE_TITLE_RE.match(title)
     if not m:
         return None
@@ -107,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     if problem := release_problem(args.title, Path(args.root)):
         print(f"::error::{problem}")
         return 1
-    tests, why = scope(files, args.title)
+    tests, why = scope(files)
     print(f"{why}: {'running' if tests else 'skipping'} the tests")
     release.output(tests="true" if tests else "false")
     return 0

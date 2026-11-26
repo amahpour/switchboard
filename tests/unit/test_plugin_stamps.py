@@ -1,9 +1,9 @@
 """Every plugin under ``plugins/`` carries the package's version, and the release stamps it (#887, §49.13).
 
-The server compares a session's plugin with its own release (``plugin_versions.PINNED``), so a plugin whose
-version no release moves reports a number that is wrong the day after the next release. A release PR skips
-the suite, so what keeps this true is that ``release.py`` stamps each plugin's manifest and this test finds
-a plugin folder it doesn't know.
+The server compares a session's plugin with its own release (``plugin_versions.PINNED``), so a plugin
+whose version no release moves reports a number that is wrong the day after the next release. What keeps
+this true is that ``release.py`` stamps each plugin's manifest and this test finds a plugin folder it
+doesn't know.
 """
 
 from __future__ import annotations
