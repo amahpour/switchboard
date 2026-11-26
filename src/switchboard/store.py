@@ -2706,14 +2706,17 @@ class Store:
         participant_id: int,
         screen_name: str,
         join_code_hash: str | None = None,
+        quiet: bool = False,
     ) -> Membership:
+        """``quiet`` is set only by a resumed join, which carries it over from the membership it
+        replaces in the same insert (#974, §50); every other membership starts unquiet."""
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)
             cur = self.con.execute(
                 "INSERT INTO memberships(room_id, participant_id, screen_name,"
-                " joined_at, join_msg_id, join_code_hash) VALUES(?,?,?,?,?,?)",
-                (room_id, participant_id, screen_name, now, last, join_code_hash),
+                " joined_at, join_msg_id, join_code_hash, quiet) VALUES(?,?,?,?,?,?,?)",
+                (room_id, participant_id, screen_name, now, last, join_code_hash, int(quiet)),
             )
             if cur.lastrowid is None:
                 raise StoreError("membership insert returned no id")
