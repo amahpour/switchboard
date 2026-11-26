@@ -2571,7 +2571,7 @@ No forge token is added and the forge is not watched (§37.1): the trigger is an
 
 **Where it lives.** The groups are JSON in `reviews.held_fixes` (schema 64, `''` when none), written with `Store.set_held_fixes`, so a stop or a restart cannot lose them. The policy is pure in `reviews.py` and takes the time as an argument, so every rule is tested with a `FakeClock`. The runner's tick, which already carries every timed thing the broker does, calls `Boards.flush_held` after the engine's; the first tick after a start therefore posts what a stopped broker held, once its wait is over by the broker's clock. The line is posted first and the group cleared after, so a crash between the two says a line twice and never none.
 
-**Tests.** `test_reviews_fix_burst.py` (unit: the window, the cap and the column's limit, the wording, what moves on while held, the column's text), `test_db_migrate_v64.py`, and `tests/integration/test_review_fix_burst.py` (three fixes are one line and one delivery; a single fix after the wait; a raise and a contest are not held; a confirmed card is left out; a restart keeps a held line and posts it once).
+**Tests.** `test_review_fix_hold.py` (unit: the window, the cap and the column's limit, the wording, what moves on while held, the column's text), `test_db_migrate_v64.py`, and `tests/integration/test_review_fix_burst.py` (three fixes are one line and one delivery; a single fix after the wait; a raise and a contest are not held; a confirmed card is left out; a restart keeps a held line and posts it once).
 
 ## 38. Sign in with Google (#70)
 
