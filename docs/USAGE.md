@@ -387,7 +387,7 @@ In short:
 
 ![The review board, with a question open](media/ui/board-light.png)
 
-To run a whole build with builders, cross-vendor reviewers and a coordinator, see [Run a build room](guide/build-room.md).
+To run a whole build with builders, cross-vendor reviewers and a coordinator, see [Run a build room](guide/build-room.md). To leave agents working while you sleep, see [Run overnight](guide/overnight.md).
 
 ## A room's whiteboard
 
