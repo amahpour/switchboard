@@ -85,6 +85,20 @@ def test_fixes_for_other_reviewers_are_other_groups_and_a_revised_fix_is_listed_
     assert [(g["who"], g["fixes"]) for g in groups] == [(["codex-1"], ["F1"]), (["bob"], ["F2"])]
 
 
+def test_a_fix_that_would_overflow_the_column_is_not_held() -> None:
+    """A board's ``held_fixes`` holds at most ``HELD_MAX_CHARS``: a fix whose groups would not fit is not
+    held (the broker posts its line at once), so the write never fails the move that marked it. Fails if
+    the cap is not checked and the column's CHECK refuses the write after the card has moved."""
+    groups: list[dict] = []
+    n = 0
+    while len(reviews.dump_held(groups)) < reviews.HELD_MAX_CHARS - 300:
+        n += 1
+        held = reviews.hold_fix(groups, [f"reviewer-{n}-" + "x" * 80], "F1", POSTER, 1.0)
+        assert held is not None
+        groups = held
+    assert reviews.hold_fix(groups, ["one-more-" + "y" * 400], "F2", POSTER, 2.0) is None
+
+
 def test_the_line_for_one_fix_reads_as_it_always_did() -> None:
     """One fix is worded as ``told`` words it. Fails if the single line changes."""
     one = reviews.fixes_told(group("F3"), [card(3)], ["claude-1", "codex-1"])

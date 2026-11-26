@@ -710,16 +710,18 @@ class Boards:
         out = self._shown(room, rv, touched=item.label)
         if line is not None and poster is not None:
             if action == "fix" and line.state == "fixed":
-                self._hold_fix(rv, line, poster)  # the cards moved; the room hears once it is quiet (#984)
+                self._hold_fix(room, rv, line, poster)  # the room hears once it is quiet (#984)
             else:
                 self._say(room, rv, poster, line)
         self._settle(room, rv)
         return out
 
     # ---------------------------------------------- one line for a burst of fixes (#984, §37.20)
-    def _hold_fix(self, rv: dict[str, Any], line: reviews.Told, poster: Poster) -> None:
+    def _hold_fix(self, room: Room, rv: dict[str, Any], line: reviews.Told, poster: Poster) -> None:
         """Keep a fix's line, with the board, instead of posting it: ``flush_held`` posts the fixes
-        marked close together as one line. The groups are in the database, so a restart keeps them."""
+        marked close together as one line. The groups are in the database, so a restart keeps them. A
+        line the board's column has no room for is posted at once, so the move that marked it never fails
+        on the write."""
         groups = reviews.hold_fix(
             reviews.parse_held(self.store.held_fixes(rv["id"])),
             line.who,
@@ -727,6 +729,9 @@ class Boards:
             dict(poster),
             self.state.clock.now(),
         )
+        if groups is None:
+            self._say(room, rv, poster, line)
+            return
         self.store.set_held_fixes(rv["id"], reviews.dump_held(groups))
 
     def flush_held(self) -> int:

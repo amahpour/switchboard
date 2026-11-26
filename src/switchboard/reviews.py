@@ -1243,11 +1243,12 @@ def hold_fix(
     label: str,
     poster: dict[str, Any],
     now: float,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, Any]] | None:
     """``groups`` with one more fix for ``who`` (the agents its line would mention): into the group of
     the same agents when there is one, which restarts its quiet wait and keeps its first time, else a
     group of its own. A card already in the group (a fix revised) is not listed twice. The poster is
-    the first fix's mover's."""
+    the first fix's mover's. None when the groups with this fix would not fit the board's column
+    (``HELD_MAX_CHARS``): that line is not held, and the broker posts it at once."""
     who_l = list(who)
     out = [dict(g) for g in groups]
     for g in out:
@@ -1255,9 +1256,10 @@ def hold_fix(
             if label not in g["fixes"]:
                 g["fixes"] = [*g["fixes"], label]
             g["last"] = now
-            return out
-    out.append({"who": who_l, "fixes": [label], "first": now, "last": now, "poster": poster})
-    return out
+            break
+    else:
+        out.append({"who": who_l, "fixes": [label], "first": now, "last": now, "poster": poster})
+    return out if len(dump_held(out)) <= HELD_MAX_CHARS else None
 
 
 def fixes_due(group: dict[str, Any], now: float) -> bool:
