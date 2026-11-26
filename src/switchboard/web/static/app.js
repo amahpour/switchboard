@@ -66,6 +66,8 @@
   // 0 is the normal value for both (no limit), so neither warns about it
   const BUDGET_HINT = 'The most times agents in the room are woken in an hour. 0 means no limit.';
   const HOPS_HINT = 'Pauses the room after this many agent messages in a row with none from a person. 0 means no limit.';
+  const QUIET_HINT = 'Agents here wake only for messages addressed to them: from you, an @mention or a reply. ' +
+    'Agents that join later are quiet too.';
 
   // harness key -> [avatar monogram, display name, avatar glyph (an ICONS name) shown instead,
   //                  a word written under the glyph on the Inspector's large avatar]
@@ -259,7 +261,7 @@
           updateCount();
           form.append(label, rulesInput, count);
         }
-        let budgetInput = null, hopsInput = null, validWake = null;
+        let budgetInput = null, hopsInput = null, quietBox = null, validWake = null;
         if (options.kind === 'wake') {
           const init = options.initial || {};
           const budgetLabel = el('label', null, 'Wake budget per hour');
@@ -299,7 +301,18 @@
           };
           budgetInput.addEventListener('input', validWake);
           hopsInput.addEventListener('input', validWake);
-          form.append(budgetLabel, budgetInput, budgetHint, hopsLabel, hopsInput, hopsHint, wakeError);
+          // a quiet room (§50.1, #975): a plain checkbox, which Save types as the person's own /room quiet on|off
+          const quietRow = el('label', 'check-row');
+          quietBox = el('input');
+          quietBox.type = 'checkbox';
+          quietBox.id = 'app-dialog-quiet';
+          quietBox.checked = init.quiet === true;
+          quietBox.setAttribute('aria-describedby', 'app-dialog-quiet-hint');
+          quietRow.append(quietBox, el('span', null, 'Quiet room'));
+          const quietHint = el('p', 'fine', QUIET_HINT);
+          quietHint.id = 'app-dialog-quiet-hint';
+          form.append(budgetLabel, budgetInput, budgetHint, hopsLabel, hopsInput, hopsHint, quietRow, quietHint,
+            wakeError);
         }
         let voiceBox = null, listenBox = null;
         if (options.kind === 'calls') {
@@ -406,7 +419,9 @@
             else if (options.kind === 'handoff') answer = handoffPick.value;
             else if (options.kind === 'calls') answer = { voice: voiceBox.checked, listen: listenBox.checked };
             else if (options.kind === 'wake') {
-              answer = { budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value) };
+              answer = {
+                budget_per_hour: Number(budgetInput.value), hop_limit: Number(hopsInput.value), quiet: quietBox.checked,
+              };
             } else answer = true;
             dlg.close('action');
           });
@@ -8977,13 +8992,16 @@
     const s = r.settings || {};
     const answer = await openDialog({
       kind: 'wake', title: 'Wake settings for ' + r.name,
-      body: 'Two limits on how busy agents in this room may get. Both are off at 0.',
-      initial: { budget_per_hour: s.budget_per_hour || 0, hop_limit: s.hop_limit || 0 },
+      body: 'What wakes the agents in this room. Both limits are off at 0.',
+      initial: { budget_per_hour: s.budget_per_hour || 0, hop_limit: s.hop_limit || 0, quiet: s.quiet === true },
       action: 'Save',
     });
     if (!answer) return;
     try {
-      await api('PUT', '/api/rooms/' + encodeURIComponent(r.slug) + '/wake', answer);
+      await api('PUT', '/api/rooms/' + encodeURIComponent(r.slug) + '/wake',
+        { budget_per_hour: answer.budget_per_hour, hop_limit: answer.hop_limit });
+      // only a change is sent, as the command a person would type, so the broker checks the role (§50.1)
+      if (answer.quiet !== (s.quiet === true)) await submitText('/room quiet ' + (answer.quiet ? 'on' : 'off'));
     } catch (e) {
       await openDialog({ kind: 'notice', title: 'Wake settings not saved', body: String(e.message || e), action: 'Close' });
     }

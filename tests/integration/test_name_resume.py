@@ -352,3 +352,18 @@ def test_a_fresh_join_and_a_resume_of_an_unquiet_agent_start_unquiet(broker: InP
     assert fresh.call("join", RESTARTED, room="#build", screen_name="builder")["ok"]
     assert fresh.call("join", RESTARTED, room="#docs", screen_name="planner", resume=codes["#docs"])["ok"]
     assert [r[0] for r in q(broker, "SELECT quiet FROM memberships WHERE left_at IS NULL")] == [0, 0]
+
+
+def test_a_resume_in_a_quiet_room_keeps_a_persons_unquiet(broker: InProcBroker) -> None:
+    """#974 with #975: in a quiet room a person may ``/unquiet`` one agent, such as a coordinator that should
+    hear everything. A restart that takes its name back keeps that choice rather than taking the room's
+    setting again, which would leave it deaf to the room without anyone noticing. Fails if the room's quiet
+    overrides the resumed membership's own flag."""
+    code = killed_session_in_build(broker)
+    room_id = q(broker, "SELECT id FROM rooms WHERE name='#build'")[0][0]
+    old_id = q(broker, "SELECT id FROM memberships WHERE screen_name='planner'")[0][0]
+    broker.on_loop(broker.state.store.set_room_quiet, room_id, True)
+    broker.on_loop(broker.state.store.set_quiet, old_id, False)
+    r = codex_session(broker).call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"], r
+    assert quiet_of(broker) == [0]

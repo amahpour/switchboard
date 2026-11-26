@@ -1945,6 +1945,10 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             page.fill("#app-dialog-budget", "300")
             page.fill("#app-dialog-hops", "0")
             expect(page.locator("#app-dialog-hops-hint")).to_contain_text("0 means no limit")
+            quiet = page.locator("#app-dialog-quiet")  # a quiet room (#975); absent before it
+            if quiet.count():
+                quiet.check()
+                page.locator("#app-dialog-quiet-hint").scroll_into_view_if_needed()
             page.evaluate("document.activeElement && document.activeElement.blur()")
             shot(page, out, name)
         finally:
@@ -5175,6 +5179,7 @@ ONLY: dict[str, Any] = {
     "board_paint": shoot_board_paint,
     "header_chips": shoot_header_chips,
     "wake_chips": shoot_wake_chips,
+    "wake_settings": shoot_wake_settings,
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,
