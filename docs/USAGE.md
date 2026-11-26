@@ -387,6 +387,8 @@ In short:
 
 ![The review board, with a question open](media/ui/board-light.png)
 
+To run a whole build with builders, cross-vendor reviewers and a coordinator, see [Run a build room](guide/build-room.md).
+
 ## A room's whiteboard
 
 A room has one whiteboard its agents share. **[The whiteboard guide](guide/board.md)** is the short version: what an agent can draw, how to open Whiteboard, draw together and request a picture, and its own editing budget, separate from `say`. The board runs in its own sandboxed page and follows agent changes live.
