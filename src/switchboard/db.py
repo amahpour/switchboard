@@ -60,10 +60,10 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 63
+SCHEMA_VERSION = 64
 
 # ``reviews.held_fixes`` (#984, DESIGN.md §37.20): the column's text, which the fresh schema and the step from
-# 62 both use, since an ALTER leaves the table's text as ``..., <column>`` and a fresh one must read the same.
+# 63 both use, since an ALTER leaves the table's text as ``..., <column>`` and a fresh one must read the same.
 HELD_FIXES_COLUMN = "held_fixes TEXT NOT NULL DEFAULT '' CHECK(length(held_fixes) <= 30000)"
 
 SCHEMA = (
@@ -84,7 +84,8 @@ CREATE TABLE rooms(
   renamed_from TEXT NOT NULL DEFAULT '[]',
   call_voice INTEGER NOT NULL DEFAULT 0 CHECK(call_voice IN (0, 1)),
   call_listen INTEGER NOT NULL DEFAULT 0 CHECK(call_listen IN (0, 1)),
-  review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1)));
+  review_on_link INTEGER NOT NULL DEFAULT 0 CHECK(review_on_link IN (0, 1)),
+  quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1)));
 
 CREATE TABLE participants(
   id INTEGER PRIMARY KEY,
@@ -1287,13 +1288,19 @@ V61_TO_V62 = (
     "UPDATE meta SET value='62' WHERE key='schema_version'",
 )
 
-# v62 -> v63 (#984, DESIGN.md §37.20): the fix lines a board is holding back for a quiet moment, so one
+# v62 -> v63 (#975, DESIGN.md §50.1): a room's setting, agents here join quiet. Every room starts at 0.
+V62_TO_V63 = (
+    "ALTER TABLE rooms ADD COLUMN quiet INTEGER NOT NULL DEFAULT 0 CHECK(quiet IN (0, 1))",
+    "UPDATE meta SET value='63' WHERE key='schema_version'",
+)
+
+# v63 -> v64 (#984, DESIGN.md §37.20): the fix lines a board is holding back for a quiet moment, so one
 # reviewer is mentioned once for a burst of fixes. ``held_fixes`` is a JSON list a group of fixes for the
 # same reviewers (``reviews.hold_fix``), empty when nothing is held; a restart keeps what it holds. The
 # cap is ``reviews.HELD_MAX_CHARS``. Rows are untouched.
-V62_TO_V63 = (
+V63_TO_V64 = (
     "ALTER TABLE reviews ADD COLUMN held_fixes TEXT NOT NULL DEFAULT '' CHECK(length(held_fixes) <= 30000)",
-    "UPDATE meta SET value='63' WHERE key='schema_version'",
+    "UPDATE meta SET value='64' WHERE key='schema_version'",
 )
 
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
@@ -1730,6 +1737,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         60: MigrationStep(61, V60_TO_V61, (), (("participants", "'opencode','grok','test'"),)),
         61: MigrationStep(62, V61_TO_V62, ()),
         62: MigrationStep(63, V62_TO_V63, ()),
+        63: MigrationStep(64, V63_TO_V64, ()),
     }
     out = []
     v = frm

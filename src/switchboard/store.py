@@ -509,6 +509,28 @@ class Store:
             )
             return cur.rowcount == 1
 
+    def set_room_quiet(self, room_id: int, on: bool) -> bool:
+        """Set whether agents that join the room join quiet (§50.1, #975). True when that changed it. Turning
+        it on also quiets every agent already here; turning it off leaves each as it is."""
+        with db.tx(self.con):
+            cur = self.con.execute(
+                "UPDATE rooms SET quiet=? WHERE id=? AND quiet!=?", (int(on), room_id, int(on))
+            )
+            return cur.rowcount == 1
+
+    def quiet_room_members(self, room_id: int) -> list[int]:
+        """The open memberships of a room that are not quiet yet, and are then quieted (§50.1). Their ids,
+        for the engine to re-evaluate."""
+        with db.tx(self.con):
+            ids = [
+                r[0]
+                for r in self.con.execute(
+                    "SELECT id FROM memberships WHERE room_id=? AND left_at IS NULL AND quiet=0", (room_id,)
+                )
+            ]
+            self.con.executemany("UPDATE memberships SET quiet=1 WHERE id=?", [(i,) for i in ids])
+        return ids
+
     def set_room_review_on_link(self, room_id: int, on: bool) -> bool:
         """Set whether an agent's new pull or merge request link asks for a review (§37.16, #816). True
         when that changed it."""
@@ -2708,8 +2730,8 @@ class Store:
         join_code_hash: str | None = None,
         quiet: bool = False,
     ) -> Membership:
-        """``quiet`` is set only by a resumed join, which carries it over from the membership it
-        replaces in the same insert (#974, §50); every other membership starts unquiet."""
+        """``quiet`` is a resumed join's old flag, carried over from the membership it replaces (#974, §50),
+        or else the room's own setting (#975, §50.1), written in the same insert."""
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)

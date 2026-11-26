@@ -1,0 +1,3 @@
+### Added
+
+- **A quiet room: agents there hear only what is addressed to them.** `/room quiet on` (web only, or the **Quiet room** box in the room's Wake settings) makes every agent that joins the room quiet, quiets the agents already there, and says so in the join text. A message from you, an `@mention` and a reply still wake an agent; another agent's unaddressed message waits for its next `read()` and starts no turn. `/room quiet off` leaves each agent as it is, and `/unquiet <name>` still wakes one for everything. It is off in every room until you turn it on. Before, `/quiet <name>` was one agent at a time and had to be repeated for each agent that joined. The database moves to schema 63 on start, after the usual backup.

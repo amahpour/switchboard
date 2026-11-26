@@ -1,5 +1,6 @@
-"""Schema 63 (#984, DESIGN.md §37.20): a board can hold the fix lines it has not posted yet. The step from 62
-only adds ``reviews.held_fixes``, empty on every board already there, and the table reads as a fresh one's."""
+"""Schema 63 adds ``rooms.quiet`` (#975, DESIGN.md §50.1): a room's setting, agents here join quiet. The step
+from 62 adds the column at 0 for every room and touches nothing else. It runs on ``v1_14_0.sql``, a real
+database 1.14.0 wrote (``tests/fixtures/db/README.md``), brought to schema 63 through every step."""
 
 from __future__ import annotations
 
@@ -11,49 +12,34 @@ import pytest
 from switchboard import db
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v1_14_0.sql"
-REVIEWS = "SELECT sql FROM sqlite_master WHERE name='reviews'"
 
 
-def test_a_schema_62_database_gains_an_empty_held_fixes_and_keeps_every_board(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A board stored at 62 comes through with its row as it was and ``held_fixes`` empty; the table's text
-    is the fresh schema's; the column refuses a value over its cap. The backup is schema 62 and has no such
-    column. Fails if the step is missing, rewrites a row, leaves a board holding something, or words the
-    column unlike a fresh database."""
+def test_every_room_gets_quiet_off_and_no_row_is_lost(tmp_path: Path) -> None:
+    """A real old database gains the column at 0 on every room, 0 and 1 are the only values it takes, the
+    row counts and the rooms' names and rules are unchanged, and the backup is the 1.14.0 file without it.
+    Fails if a room starts quiet, the CHECK is missing, or a row is lost."""
     path = tmp_path / "old.db"
     with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
-    with monkeypatch.context() as mp:
-        mp.setattr(db, "SCHEMA_VERSION", 62)
-        at62 = db.open_db(path)
-        with db.tx(at62):
-            at62.execute(
-                "INSERT INTO rooms(name, created_at, created_by, budget_per_hour, budget_remaining,"
-                " budget_window_start, hop_limit) VALUES('#r', 1.0, 'alice', 0, 0, 1.0, 6)"
-            )
-            at62.execute(
-                "INSERT INTO reviews(room_id, url, opened_by, opened_at)"
-                " SELECT id, 'https://example.com/a/pull/1', 'bob', 2.0 FROM rooms WHERE name='#r'"
-            )
-        counts = db.row_counts(at62, db.tables_of(62))
-        before = [tuple(r) for r in at62.execute("SELECT id, url, opened_by, opened_at FROM reviews")]
-        at62.close()
+    with sqlite3.connect(path) as before:
+        counts = db.row_counts(before, db.TABLES)
+        rooms = [
+            tuple(r) for r in before.execute("SELECT id, name, created_by, rules_text FROM rooms ORDER BY id")
+        ]
+    assert rooms
     con = db.open_db(path)
-    backup = db.connect(db.backup_path_for(path, 62), readonly=True)
-    fresh = db.open_db(tmp_path / "fresh.db")
+    backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
-        assert db.schema_version(backup) == 62
-        assert "held_fixes" not in backup.execute(REVIEWS).fetchone()[0]
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
         assert db.row_counts(con, db.TABLES) == counts
-        assert [tuple(r) for r in con.execute("SELECT id, url, opened_by, opened_at FROM reviews")] == before
-        assert [r[0] for r in con.execute("SELECT held_fixes FROM reviews")] == [""] * len(before)
-        assert con.execute(REVIEWS).fetchone()[0] == fresh.execute(REVIEWS).fetchone()[0]
+        assert [r[0] for r in con.execute("SELECT quiet FROM rooms")] == [0] * len(rooms)
+        assert [
+            tuple(r) for r in con.execute("SELECT id, name, created_by, rules_text FROM rooms ORDER BY id")
+        ] == rooms
         with pytest.raises(sqlite3.IntegrityError):
-            con.execute("UPDATE reviews SET held_fixes=?", ("x" * 30001,))
+            con.execute("UPDATE rooms SET quiet=2")
+        assert "quiet" not in {r[1] for r in backup.execute("PRAGMA table_info(rooms)")}
         assert db.integrity_ok(con) is None
     finally:
-        fresh.close()
         backup.close()
         con.close()

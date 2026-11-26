@@ -46,7 +46,7 @@ def test_rooms_at_the_old_default_move_to_no_limit_and_the_rest_keep_theirs(tmp_
     con = db.open_db(path)
     backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
         assert [tuple(r) for r in con.execute(ROOMS)] == [
             ("#build", 0, 0, 1790000000.0, 15),
             ("#small", 10, 3, 1790000000.0, 6),

@@ -14,9 +14,11 @@ from switchboard import db
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v1_14_0.sql"
 PARTICIPANTS = "SELECT sql FROM sqlite_master WHERE type='table' AND name='participants'"
-# 63 adds a column to ``reviews`` (#984): its own test, test_db_migrate_v63, checks that table
+# ``rooms`` and ``reviews`` are left out: schema 63 adds a column to ``rooms``
+# (tests/unit/test_db_migrate_v63.py) and 64 one to ``reviews`` (tests/unit/test_db_migrate_v64.py), and
+# this test is about what step 61 leaves alone
 OTHERS = (
-    "SELECT type, name, sql FROM sqlite_master WHERE name NOT IN ('participants', 'reviews')"
+    "SELECT type, name, sql FROM sqlite_master WHERE name NOT IN ('participants', 'rooms', 'reviews')"
     " ORDER BY type, name"
 )
 INSERT = "INSERT INTO participants(harness,session_key,created_at) VALUES(?,?,1.0)"
@@ -50,7 +52,7 @@ def test_a_schema_60_database_admits_grok_and_nothing_else_changes(tmp_path: Pat
     backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 63
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
         assert db.schema_version(backup) == 60
         assert "'grok'" not in backup.execute(PARTICIPANTS).fetchone()[0]
         # the same table, spaced as each was written: SQLite keeps a table's text as it was given

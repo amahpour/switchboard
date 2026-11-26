@@ -144,6 +144,7 @@ class Room:
     private: bool = False  # seen only by its people (§44, #74)
     call_voice: bool = False  # every call here starts with Voice on (§52.3)
     call_listen: bool = False  # every agent here listens on calls (§52.3)
+    quiet: bool = False  # agents that join here join quiet (§50.1, #975)
     review_on_link: bool = False  # an agent's new PR or MR link asks for a review (§37.16, #816)
 
     @classmethod
@@ -167,6 +168,7 @@ class Room:
             private=bool(r["private"]) if "private" in r.keys() else False,
             call_voice=bool(r["call_voice"]) if "call_voice" in r.keys() else False,
             call_listen=bool(r["call_listen"]) if "call_listen" in r.keys() else False,
+            quiet=bool(r["quiet"]) if "quiet" in r.keys() else False,
             review_on_link=bool(r["review_on_link"]) if "review_on_link" in r.keys() else False,
         )
 
