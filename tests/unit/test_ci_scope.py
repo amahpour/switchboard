@@ -17,7 +17,7 @@ spec.loader.exec_module(scope_mod)
 
 
 def runs_tests(files: list[str], title: str = "docs: x") -> bool:
-    return scope_mod.scope(files, title)[0]
+    return scope_mod.scope(files)[0]
 
 
 def stamped_tree(root: Path, version: str) -> Path:
@@ -50,7 +50,10 @@ def test_anything_else_runs_them(files: list[str]) -> None:
     assert runs_tests(files)
 
 
-def test_a_release_pr_skips_the_tests() -> None:
+def test_a_release_pr_runs_the_tests() -> None:
+    """#970: #966 and #967 each passed alone, merged one after the other, and v1.17.0 shipped both untested
+    together, because a release PR that changed only release files skipped the suite. It runs on the merge
+    commit, which is main as the release ships. Fails if a release's file list skips the tests."""
     release_files = [
         "pyproject.toml",
         "src/switchboard/__init__.py",
@@ -65,12 +68,9 @@ def test_a_release_pr_skips_the_tests() -> None:
         ".agents/plugins/marketplace.json",
         "deploy/helm/switchboard/Chart.yaml",  # the chart's appVersion moves too (#608)
     ]
-    assert not runs_tests(release_files, "release: v0.7.0")
-    assert runs_tests(release_files, "chore: bump the version")  # the title makes it a release PR
-    assert runs_tests([*release_files, "src/switchboard/cli.py"], "release: v0.7.0")  # and nothing else in it
-    assert runs_tests(release_files, "release: v0.7.0 and a fix")
-    # the notes files it gathers (and deletes) belong to a release PR too
-    assert not runs_tests([*release_files, "changes/sidebar-names.md", "changes/ci.md"], "release: v0.7.0")
+    assert runs_tests(release_files, "release: v0.7.0")
+    # with the notes files it gathers (and deletes)
+    assert runs_tests([*release_files, "changes/sidebar-names.md", "changes/ci.md"], "release: v0.7.0")
     assert not runs_tests(["changes/sidebar-names.md"], "fix(web): x")  # a note alone is docs
 
 
@@ -117,9 +117,9 @@ def test_the_cli_writes_the_decision_for_the_workflow(
 def test_a_release_pr_fails_unless_every_plugin_manifest_carries_its_version(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A release PR skips the suite, so its stamps are checked here (#901): v1.11.0 was cut by an
-    older release.py that left Devin's and OpenCode's manifests at 1.10.0, and only the next PR's
-    tests noticed. Fails if a manifest left at an old version, or missing, passes a release PR."""
+    """A release PR's stamps are checked here, before the suite (#901): v1.11.0 was cut by an
+    older release.py that left Devin's and OpenCode's manifests at 1.10.0.
+    Fails if a manifest left at an old version, or missing, passes a release PR."""
     root = stamped_tree(tmp_path, "0.7.0")
     assert scope_mod.release_problem("release: v0.7.0", root) is None
     assert scope_mod.release_problem("fix(web): x", root) is None  # only a release PR is checked

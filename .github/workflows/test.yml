@@ -4,8 +4,8 @@
 # CLIs, no perf timings) on Linux and macOS, split into three shards per OS, with line coverage
 # combined across all of them (the README badge, which release.yml publishes after the merge),
 # the web UI in a real browser (Playwright, the `frontend` job), and the container image behind
-# a TLS proxy (the `image` job). A docs-only PR and a release PR skip all that and run the tree
-# scan alone. Every PR builds the documentation site (`docs site`). `CI`, the last job, sums it up for the ruleset. `gh workflow run test.yml` runs
+# a TLS proxy (the `image` job). A docs-only PR skips all that and runs the tree
+# scan alone. A release PR runs it all, on its merge commit: main as the release will ship it (#970). Every PR builds the documentation site (`docs site`). `CI`, the last job, sums it up for the ruleset. `gh workflow run test.yml` runs
 # everything on a branch.
 name: test
 
@@ -23,8 +23,7 @@ concurrency:
 
 jobs:
   # What the PR changes (.github/scripts/ci_scope.py): the test jobs below run unless every
-  # file is docs, or the PR is a release PR (`release: vX.Y.Z`, changing only what a release
-  # writes). A manual run always tests. It fails a PR that edits CHANGELOG.md: only a release
+  # file is docs. A release PR (`release: vX.Y.Z`) runs them like any code PR (#970). A manual run always tests. It fails a PR that edits CHANGELOG.md: only a release
   # writes it, and a PR's notes go in changes/<name>.md.
   changes:
     name: what changed
@@ -46,7 +45,7 @@ jobs:
           fi
           git diff --name-only HEAD^1 HEAD | python3 .github/scripts/ci_scope.py --title "$TITLE"
 
-  # For the PRs that skip the tests: the tree scan alone (tests/unit/test_tree_scan.py), which
+  # For the docs-only PRs that skip the tests: the tree scan alone (tests/unit/test_tree_scan.py), which
   # keeps local machine details (home paths, scratch dirs) out of the public repo.
   docs:
     name: tree scan
@@ -64,7 +63,7 @@ jobs:
       - run: uv sync --frozen
       - run: uv run --frozen pytest -q -p no:cacheprovider tests/unit/test_tree_scan.py
 
-  # Every PR, docs-only and release PRs included: the documentation site (#586) builds from docs/ with
+  # Every PR, docs-only included: the documentation site (#586) builds from docs/ with
   # --strict, so a broken link or anchor fails here, and the rules that keep docs/ and the site one thing
   # (every page in the nav, no link out of docs/) hold. docs.yml publishes the same build after the merge.
   site:
@@ -352,7 +351,7 @@ jobs:
   # The check the ruleset on main requires (CONTRIBUTING.md, "CI"). A job skipped by its `if`
   # reports success, but a check that never starts leaves a PR waiting forever, so this job
   # always runs and judges the rest: `what changed` and `docs site` passed, and then either lint and every
-  # test job passed or (docs only, a release PR) the tree scan did.
+  # test job passed or (docs only) the tree scan did.
   ci:
     name: CI
     needs: [changes, docs, lint, test, frontend, image, coverage, site]
@@ -374,5 +373,5 @@ jobs:
           want = ("lint", "test", "frontend", "image", "coverage", "site") if tests == "true" else ("docs", "site")
           if failed := [job for job in want if needs[job]["result"] != "success"]:
               sys.exit(f"not passed: {', '.join(failed)}")
-          print("tests ran and passed" if tests == "true" else "tests skipped (docs only or a release PR); tree scan and docs site passed")
+          print("tests ran and passed" if tests == "true" else "tests skipped (docs only); tree scan and docs site passed")
           EOF
