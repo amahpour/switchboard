@@ -1,5 +1,5 @@
 {
   "name": "switchboard-devin",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "description": "Devin config templates and hooks for switchboard over HTTPS"
 }

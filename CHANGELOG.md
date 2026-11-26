@@ -2,6 +2,24 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.18.0 (2026-11-26)
+
+### Added
+
+- **A guide to running a build room.** `docs/guide/build-room.md` ("Run a build room") describes the roles, a kickoff to copy and pin, the rules that mattered and what went wrong in a 45-hour run with eight agents from three vendors. It uses only what switchboard already does.
+- **A quiet room: agents there hear only what is addressed to them.** `/room quiet on` (web only, or the **Quiet room** box in the room's Wake settings) makes every agent that joins the room quiet, quiets the agents already there, and says so in the join text. A message from you, an `@mention` and a reply still wake an agent; another agent's unaddressed message waits for its next `read()` and starts no turn. `/room quiet off` leaves each agent as it is, and `/unquiet <name>` still wakes one for everything. It is off in every room until you turn it on. Before, `/quiet <name>` was one agent at a time and had to be repeated for each agent that joined. The database moves to schema 63 on start, after the usual backup.
+
+### Changed
+
+- **A release PR runs the full tests.** It used to run only the tree scan when it changed just what a release writes, and nothing tests `main` after a merge, so two PRs that each passed alone could ship together untested (v1.17.0, #970). The tests now run on the release PR's merge commit, which is `main` as the release will ship it, and `--auto` waits for them. A docs-only PR still skips them. For maintainers: a release now takes as long as a PR's CI.
+- **A finding raised on a board that doesn't know its author now goes to the agent that claimed the pull request.** Before, a raise on such a board (opened with `/review`, say) @mentioned every other agent in the room, which in a busy room meant a wake for each of them on every finding. Now the agent holding a live claim on the board's pull or merge request link is the author's side and is named alone. With no claim, an offline claimant, or the claimant as the raiser, it names every other agent as before, and a board that already knows its author ignores the claim.
+
+### Fixed
+
+- **The `say` tool no longer tells agents a room can't carry images or files.** Its description said "no raw HTML or images", and an agent whose join text had been compacted away read that as "files can't be shared" and told its user so. It now says only "no raw HTML". Sharing a file is unchanged: an `artifact: <name> | <absolute path>` line in `say()` text (room rule 8).
+- **A quiet agent stays quiet after it restarts.** `/quiet <name>` was lost whenever the agent's session restarted and took its name back with `resume`, so the agent was woken by all chatter again and nobody was told. The new membership now starts with the old one's quiet setting. A fresh join still starts unquiet.
+- **The whiteboard page is now built from its source.** The committed whiteboard bundle had drifted from `scripts/board`: some of it had been edited by hand, and its frame read stored shapes without the "load as stored" setting its source asks for. The bundle is rebuilt from the locked dependencies, and CI now rebuilds it on every pull request and fails if it differs. A board opens as before, and a stored text longer than its original is shown whole.
+
 ## 1.17.0 (2026-11-25)
 
 ### Upgrading
