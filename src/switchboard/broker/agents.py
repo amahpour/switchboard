@@ -619,7 +619,8 @@ class AgentService:
             # them leaves the agent in the room and its person out, and the session's retry is a rejoin
             with db.tx(self.store.con):
                 # quiet (§50): a restart that takes the name back keeps its flag either way (#974), so a
-                # person's /unquiet of one agent in a quiet room survives it; a fresh join takes the room's (§50.1)
+                # person's /unquiet of one agent in a quiet room survives it; a fresh join takes the room's
+                # setting (§50.1)
                 m = self.store.create_membership(
                     room.id,
                     p.id,
