@@ -684,3 +684,39 @@ def test_one_old_stored_shape_does_not_keep_the_whole_board_from_opening(
     agent = world._extra_named[("#" + room, "drawer")]
     got = world._scripted(agent.raw("board", {"room": "#" + room, "action": "read", "text": "image"}))
     assert not got.is_error and got.content[0].type == "image"
+
+
+def test_a_board_near_the_limits_opens_with_its_text_from_the_built_bundle(
+    ui: UI,  # noqa: F811
+    world: UIWorld,  # noqa: F811
+) -> None:
+    """A load keeps ``text`` and ``originalText`` exactly as stored, because an earlier broker and browser
+    sized them independently and a board near the limits would otherwise open empty (DESIGN §56). The frame
+    asks the rules for that with ``batch(elements, true)``; the bundle once shipped without the ``true`` (a
+    hand-edited build that no longer matched ``scripts/board/frame.jsx``, #958). Fails if the committed
+    ``board.js`` cuts a stored text to the write limit on load: here a 1500-character text beside a shorter
+    ``originalText``, which the page must show whole."""
+    room = "board-near-limits"
+    world.create_room(room)
+    b = world.broker
+    base = {"x": 20, "width": 400, "height": 40, "version": 1, "versionNonce": 3, "isDeleted": False}
+    long_text = {
+        **base,
+        "id": "long1",
+        "type": "text",
+        "y": 20,
+        "text": "a" * 1500,
+        "originalText": "a" * 1400,
+    }
+    long_text.update(fontSize=16, fontFamily=1, textAlign="left", verticalAlign="top", containerId=None)
+    long_text.update(lineHeight=1.25)
+    row = b.on_loop(lambda: b.state.store.get_room("#" + room))
+    b.on_loop(lambda: b.state.store.board_write(row.id, 1, [long_text], "alice", ["long1"]))
+    page = ui.open(room)
+    open_board(page)
+    board_frame = next(f for f in page.frames if f.url.endswith("/board"))
+    wait_js(board_frame, "() => window.sbBoard.api.getSceneElements().length === 1")
+    shown = board_frame.evaluate(
+        "() => window.sbBoard.api.getSceneElements().map(e => [e.text.length, e.originalText.length])"
+    )
+    assert shown == [[1500, 1400]], shown
