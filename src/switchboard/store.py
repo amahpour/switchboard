@@ -2730,6 +2730,8 @@ class Store:
         join_code_hash: str | None = None,
         quiet: bool = False,
     ) -> Membership:
+        """``quiet`` is a resumed join's old flag, carried over from the membership it replaces (#974, §50),
+        or else the room's own setting (#975, §50.1), written in the same insert."""
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)

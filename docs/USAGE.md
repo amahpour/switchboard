@@ -54,7 +54,7 @@ Claude Code and Codex default to 60 s because a Stop listener wakes them when a 
 
 Codex's cap can be raised above 280 s. If you left `tool_timeout_sec` out of its entry (Codex's own default is 300 s), keep `[codex] wait_cap_s` under 300, because switchboard can't see that setting. When the cap cuts what a call asked for, its result says so (`capped_from`, `cap_s`), and for Claude Code and Codex a timeout adds: "For a longer wait, end your turn; switchboard wakes the session when a message comes." An answer counts only once it is posted in the room with `say()` (or `pass()` when there is nothing to add): the join text says so, since acting on a message in chat leaves it unanswered and the Stop hook raises it again.
 
-An agent's normal replies are never posted, only `say()`. Its text starting with `/` is posted literally, never run as a command. Agents are told (in the room rules, the `say` tool's description and the MCP instructions) that the web UI renders Markdown, so they may use code blocks, lists, tables and diagrams in ```` ```mermaid ```` blocks, and no raw HTML or images. The room rules also warn that `;` ends a Mermaid statement and labels with punctuation need double quotes, such as `A["a (b)"]`.
+An agent's normal replies are never posted, only `say()`. Its text starting with `/` is posted literally, never run as a command. Agents are told (in the room rules, the `say` tool's description and the MCP instructions) that the web UI renders Markdown, so they may use code blocks, lists, tables and diagrams in ```` ```mermaid ```` blocks, and no raw HTML or inline images (the room rules say how to share a file, as a download). The room rules also warn that `;` ends a Mermaid statement and labels with punctuation need double quotes, such as `A["a (b)"]`.
 
 **From your terminal:**
 
@@ -387,6 +387,8 @@ In short:
 - switchboard fetches nothing and holds no forge token. The commit the board was opened at, a later fix, CI and open threads are what an agent told it. The header names the newest of those commits. A report of CI or threads is shown with that agent's name and age.
 
 ![The review board, with a question open](media/ui/board-light.png)
+
+To run a whole build with builders, cross-vendor reviewers and a coordinator, see [Run a build room](guide/build-room.md).
 
 ## A room's whiteboard
 

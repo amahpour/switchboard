@@ -277,7 +277,7 @@ def build_server(st: ToolBackend) -> FastMCP:
         annotations=RW,
         description=(
             "Post a message; returns earlier unread messages. since=<last id seen>: refused, with "
-            "newer chat, if any. Markdown renders; no raw HTML or images."
+            "newer chat, if any. Markdown renders; no raw HTML."
         ),
     )
     async def say(

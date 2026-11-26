@@ -304,3 +304,66 @@ def test_a_session_that_never_went_offline_keeps_its_name(broker: InProcBroker) 
         "join", RESTARTED, room="#build", screen_name="planner", resume=join_code(r)
     )
     assert r2["code"] == "name_taken" and "still connected" in r2["error"], r2
+
+
+def quiet_of(b: InProcBroker, room: str = "#build") -> list[int]:
+    return [
+        r[0]
+        for r in q(
+            b,
+            "SELECT quiet FROM memberships WHERE screen_name='planner' AND left_at IS NULL"
+            " AND room_id=(SELECT id FROM rooms WHERE name=?)",
+            room,
+        )
+    ]
+
+
+def test_a_quiet_agent_that_resumes_its_name_is_still_quiet(broker: InProcBroker) -> None:
+    """#974: ``/quiet`` is kept on the membership, and a resumed join made a new one with the flag
+    off, so every restart woke the agent for all chatter again. Fails without the carry-over."""
+    old = codex_session(broker)
+    r = old.call("join", THREAD_A, room="#build", screen_name="planner")
+    code = join_code(r)
+    old_id = q(broker, "SELECT id FROM memberships WHERE screen_name='planner'")[0][0]
+    broker.on_loop(broker.state.store.set_quiet, old_id, True)
+    assert old.call("leave", THREAD_A, room="#build")["ok"]
+    assert wait_for(lambda: q(broker, "SELECT 1 FROM memberships WHERE left_reason='leave'"))
+    new = codex_session(broker)
+    assert new.call("join", RESTARTED, room="#build", screen_name="planner", resume=code)["ok"]
+    assert quiet_of(broker) == [1]
+
+
+def test_a_quiet_agent_killed_without_its_hooks_is_still_quiet_after_resuming(broker: InProcBroker) -> None:
+    """#974: the other resume path, a membership still in the room whose session is offline, ends
+    with ``resumed``; the new one is quiet too."""
+    code = killed_session_in_build(broker)
+    old_id = q(broker, "SELECT id FROM memberships WHERE screen_name='planner'")[0][0]
+    broker.on_loop(broker.state.store.set_quiet, old_id, True)
+    r = codex_session(broker).call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"], r
+    assert quiet_of(broker) == [1]
+
+
+def test_a_fresh_join_and_a_resume_of_an_unquiet_agent_start_unquiet(broker: InProcBroker) -> None:
+    """#974: quiet is carried, never invented: a join without ``resume`` and a resume of a member
+    that was not quiet both start unquiet."""
+    codes = first_session_ends(broker)
+    fresh = codex_session(broker)
+    assert fresh.call("join", RESTARTED, room="#build", screen_name="builder")["ok"]
+    assert fresh.call("join", RESTARTED, room="#docs", screen_name="planner", resume=codes["#docs"])["ok"]
+    assert [r[0] for r in q(broker, "SELECT quiet FROM memberships WHERE left_at IS NULL")] == [0, 0]
+
+
+def test_a_resume_in_a_quiet_room_keeps_a_persons_unquiet(broker: InProcBroker) -> None:
+    """#974 with #975: in a quiet room a person may ``/unquiet`` one agent, such as a coordinator that should
+    hear everything. A restart that takes its name back keeps that choice rather than taking the room's
+    setting again, which would leave it deaf to the room without anyone noticing. Fails if the room's quiet
+    overrides the resumed membership's own flag."""
+    code = killed_session_in_build(broker)
+    room_id = q(broker, "SELECT id FROM rooms WHERE name='#build'")[0][0]
+    old_id = q(broker, "SELECT id FROM memberships WHERE screen_name='planner'")[0][0]
+    broker.on_loop(broker.state.store.set_room_quiet, room_id, True)
+    broker.on_loop(broker.state.store.set_quiet, old_id, False)
+    r = codex_session(broker).call("join", RESTARTED, room="#build", screen_name="planner", resume=code)
+    assert r["ok"], r
+    assert quiet_of(broker) == [0]
