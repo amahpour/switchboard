@@ -131,35 +131,42 @@ def test_the_headers_chips_are_all_in_view_with_both_side_panels_open(
     expect(phone.locator("#st-handsfree")).to_be_in_viewport()
 
 
-def test_the_quiet_room_switch_sets_the_room_for_everyone_and_says_so(
+def test_the_quiet_room_box_in_wake_settings_sets_the_room_for_everyone_and_says_so(
     ui: UI,
     calls: InProcBroker,  # noqa: F811
 ) -> None:
-    """Quiet room (#975, §50.1) is a header button with a name and a pressed state, reachable by Tab. A click
-    types the person's own ``/room quiet on``: the button reads pressed, the log names who did it, and a
-    second page sees it pressed with no action of its own; a second click turns it off. A phone shows it
-    inside the screen. Fails if the button stays unpressed, only the page that clicked changes, or it
-    falls off a phone."""
+    """Quiet room (#975, §50.1) is a checkbox in Wake settings, with a name and a hint, and no new button in
+    the room's crowded header. Save types the person's own ``/room quiet on``: the log names who did it, and a
+    second page's Wake settings shows it checked with no action of its own; unchecking turns it off. A phone
+    shows the box inside the screen. Fails if Save doesn't set the room, only the page that saved knows, the
+    box doesn't follow the room, or the dialog cuts off."""
     assert _post(calls, "/api/rooms", {"name": "#hush"}).status_code == 200
     page = _open(ui, calls, room="hush")
     other = _open(ui, calls, room="hush")
-    button = page.get_by_role("button", name="Quiet room")
-    expect(button).to_have_attribute("aria-pressed", "false")
+    expect(page.locator("#room-quiet")).to_have_count(0)
+    dialog = page.locator("#app-dialog")
 
-    page.locator("#room-calls").focus()
-    page.keyboard.press("Tab")
-    expect(button).to_be_focused()
-    page.keyboard.press("Enter")
-    expect(button).to_have_attribute("aria-pressed", "true")
+    page.get_by_role("button", name="Wake settings").click()
+    box = dialog.get_by_label("Quiet room")
+    expect(box).not_to_be_checked()
+    expect(box).to_have_attribute("aria-describedby", "app-dialog-quiet-hint")
+    box.check()
+    dialog.get_by_role("button", name="Save").click()
     expect(page.locator("#log")).to_contain_text("alice turned on a quiet room")
-    expect(other.get_by_role("button", name="Quiet room")).to_have_attribute("aria-pressed", "true")
 
-    button.click()
-    expect(button).to_have_attribute("aria-pressed", "false")
+    other.get_by_role("button", name="Wake settings").click()
+    expect(other.locator("#app-dialog").get_by_label("Quiet room")).to_be_checked()
+    other.keyboard.press("Escape")
+
+    page.get_by_role("button", name="Wake settings").click()
+    expect(box).to_be_checked()
+    box.uncheck()
+    dialog.get_by_role("button", name="Save").click()
     expect(page.locator("#log")).to_contain_text("alice turned off a quiet room")
-    expect(other.get_by_role("button", name="Quiet room")).to_have_attribute("aria-pressed", "false")
 
+    # a phone: the box is inside the screen
     phone = _open(ui, calls, room="hush", **PHONE)
-    box = phone.get_by_role("button", name="Quiet room").bounding_box()
-    assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= PHONE["viewport"]["width"]
+    phone.get_by_role("button", name="Wake settings").click()
+    quiet = phone.locator("#app-dialog").get_by_label("Quiet room").bounding_box()
+    assert quiet is not None and quiet["x"] >= 0 and quiet["x"] + quiet["width"] <= PHONE["viewport"]["width"]
     assert phone.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")

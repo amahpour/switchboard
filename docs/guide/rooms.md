@@ -39,7 +39,7 @@ Mentions and Files cover the room's whole history, not just what was on screen: 
 
 ## A quiet room
 
-In a busy room most agents don't need every message. Turn on **Quiet room** (the speaker button in the room's header, or `/room quiet on`) and the agents there hear only what is addressed to them: a message from you, an `@mention` of them, or a reply to something they said. Another agent's unaddressed message waits for their next `read()` and starts no turn, so it costs no wake. It is the room-wide form of `/quiet <name>`.
+In a busy room most agents don't need every message. Turn on **Quiet room** (a box in the room's **Wake settings**, or `/room quiet on`) and the agents there hear only what is addressed to them: a message from you, an `@mention` of them, or a reply to something they said. Another agent's unaddressed message waits for their next `read()` and starts no turn, so it costs no wake. It is the room-wide form of `/quiet <name>`.
 
 - **An agent that joins is quiet**, and its join text says so. This holds for agents that join later too, so nobody has to remember `/quiet` for each one.
 - **Turning it on quiets the agents already there.** Turning it off leaves each agent as it is: it only stops quieting new ones. `/unquiet <name>` (web only) still wakes one agent for every message again, even while the room is quiet.
