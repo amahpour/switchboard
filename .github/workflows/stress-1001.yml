@@ -1,0 +1,51 @@
+# Temporary, never merged: runs the screenshot step (docs/media/ui_shots.py) 12 times on ubuntu-latest,
+# after the e2e suite as the frontend job does, with --traces on, to catch #1001's hang and keep its trace.
+name: stress 1001 (do not merge)
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  shots:
+    name: screenshots x3 (${{ matrix.n }})
+    strategy:
+      fail-fast: false
+      matrix:
+        n: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+      SWITCHBOARD_REQUIRE_NODE: "1"
+      SWITCHBOARD_E2E_ARTIFACTS: ${{ github.workspace }}/stress-artifacts/e2e
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-uv-python
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "22"
+      - run: uv sync --frozen
+      - run: uv run --frozen playwright install --with-deps chromium
+      # the frontend job runs the e2e suite first, on the same runner: do the same, pass or fail
+      - run: uv run --frozen pytest -q -p no:cacheprovider -m e2e tests/e2e --ignore=tests/e2e/test_layout_sweep.py || true
+      - name: Screenshots, three times
+        run: |
+          fails=0
+          for i in 1 2 3; do
+            start=$(date +%s)
+            if uv run --frozen python docs/media/ui_shots.py --out "stress-artifacts/shots-$i" --traces "stress-artifacts/traces-$i"; then
+              echo "run $i: ok in $(( $(date +%s) - start )) s"
+            else
+              echo "run $i: FAILED after $(( $(date +%s) - start )) s"; fails=$((fails + 1))
+            fi
+          done
+          echo "failed runs: $fails"
+          test "$fails" -eq 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: always()
+        with:
+          name: stress-traces-${{ matrix.n }}
+          path: stress-artifacts/traces-*
+          if-no-files-found: ignore
+          retention-days: 7
