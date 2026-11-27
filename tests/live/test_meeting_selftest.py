@@ -89,10 +89,10 @@ OUT_ENV = "SWITCHBOARD_SELFTEST_OUT"
 # flags speech late, and the hotwords turn a clipped first word into "Claude". That file is pinned too.
 # SWITCHBOARD_SELFTEST_STOCK_JOINLY=1 runs stock joinly instead, without either fix.
 ZOOM_FIX_URL = (
-    "https://raw.githubusercontent.com/amahpour/joinly/9fbd07ceccbbfc358d697378c3cb1d7b911b17a5"
+    "https://raw.githubusercontent.com/amahpour/joinly/58d5c89848c164f5fb5b20b45876371e0a3b67d6"
     "/joinly/providers/browser/platforms/zoom.py"
 )
-ZOOM_FIX_SHA256 = "9bf581c20a9a7911afb9f2ac1447a5d0800cdca24485dd215099d5d82afad6ff"
+ZOOM_FIX_SHA256 = "084358208c6bc318f8ee03929be7a6cd6f9f84dd57bdb4b470b83ded6a4d8d39"
 ZOOM_PY = "/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py"
 PREROLL_FIX_COMMIT = "1fe384d9deba32f38fabd5bfc77fc5975adef6a7"
 PREROLL_FIX_URL = (
