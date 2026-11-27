@@ -450,7 +450,7 @@ LOOSE_PARAMS = {"review-board", "claim"}
 # has. The check fails when the text is gone from a skill, so an entry cannot outlive its fallback.
 FALLBACKS = {
     ("review", "action", name): "if an action here is not in that list, the server is older"
-    for name in ("edit", "abstain", "take", "reopen")
+    for name in ("edit", "abstain", "take", "reopen", "verdict")
 }
 
 

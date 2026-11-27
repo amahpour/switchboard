@@ -7565,7 +7565,22 @@
       state.boardSel = null;
       boardDetailCache = null;
     }
-    box.replaceChildren(head, body);
+    // the line under the header (#985): ready at the newest commit, or what is missing. The broker sends
+    // it only for a room with a coordinator, and only for an open board. Information only; text, never HTML.
+    const under = [];
+    if (b.ready && !past) {
+      const line = el('div', 'board-ready' + (b.ready_ok ? ' ok' : ''), b.ready);
+      line.id = 'board-ready';
+      under.push(line);
+    }
+    if (Array.isArray(b.verdicts) && b.verdicts.length) {
+      const said = b.verdicts.map(function (v) { return v.by + ' at ' + String(v.head).slice(0, 7); });
+      const vd = el('div', 'board-verdicts', 'Verdicts: ' + said.join(', '));
+      vd.id = 'board-verdicts';
+      vd.title = 'Each reviewer\u2019s latest verdict: it reviewed that commit and has nothing more to raise';
+      under.push(vd);
+    }
+    box.replaceChildren(head, ...under, body);
     syncBoardDivider();
     if (handoffFocus) {
       // a button that is now disabled or gone can't take it: the line beside it does

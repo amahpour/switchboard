@@ -2000,6 +2000,71 @@ def shoot_coordinator(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_ready_line(browser: Any, out: Path, world: Any) -> None:
+    """A review board's ready line (#985). The same review in three rooms: codex-1 raised a finding and
+    claude-1 fixed it. #ready-none has no coordinator, so there is no line (the before, light). In #ready-not
+    a person names claude-2 the coordinator, and the line names what is missing (light, dark). In #ready-yes
+    the fix is confirmed, codex-1 gives its verdict and the coordinator reports CI passing at the fix's
+    commit: "Ready at <sha>" (light, dark, phone)."""
+    from playwright.sync_api import expect
+
+    fix = "9a1b2c3d4e5f"
+    call = world.agent_call
+    for room in ("#ready-none", "#ready-not", "#ready-yes"):
+        world.create_room(room)
+        world.add_agents(room, ("claude-1", "codex-1", "claude-2"))
+        call(room, "codex-1", "review", action="open", url="https://github.com/example/shop/pull/7",
+             head="4f2c9e1a7b30")  # fmt: skip
+        call(room, "codex-1", "review", action="raise", title="Discount is taken after tax",
+             where="shop/cart.py:40", detail="Found while reading the diff.")  # fmt: skip
+        call(room, "claude-1", "review", action="concede", item="F1")
+        call(room, "claude-1", "review", action="fix", item="F1", commit=fix, proof="test_cart")
+    call("#ready-yes", "codex-1", "review", action="confirm", item="F1")
+    call("#ready-yes", "codex-1", "review", action="verdict", head=fix)
+    call("#ready-yes", "claude-2", "review", action="report", ci="passing", head=fix)
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    named: set[str] = set()
+    for name, room, ctx_args in (
+        ("ready-none-light.png", "#ready-none", {**DESKTOP, "color_scheme": "light"}),
+        ("ready-not-light.png", "#ready-not", {**DESKTOP, "color_scheme": "light"}),
+        ("ready-not-dark.png", "#ready-not", {**DESKTOP, "color_scheme": "dark"}),
+        ("ready-yes-light.png", "#ready-yes", {**DESKTOP, "color_scheme": "light"}),
+        ("ready-yes-dark.png", "#ready-yes", {**DESKTOP, "color_scheme": "dark"}),
+        ("ready-yes-phone-light.png", "#ready-yes", {**PHONE, "color_scheme": "light"}),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator(f'#tabs .room[data-room="{room}"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text(room[1:], timeout=WAIT_MS)
+            if room != "#ready-none" and room not in named:  # a person names it, in the composer
+                page.fill("#input", "/coordinator claude-2 none")
+                page.press("#input", "Enter")
+                expect(page.locator("#log")).to_contain_text("named claude-2 the room's coordinator")
+                named.add(room)
+            if room != "#ready-none":  # the member list marks it before the picture is taken
+                lead = page.locator('#buddy-list .member[data-name="claude-2"]')
+                expect(lead).to_contain_text("coordinator")
+            page.click("#board-toggle")
+            expect(page.locator("#board .board-card")).not_to_have_count(0)
+            if room == "#ready-none":
+                expect(page.locator("#board-ready")).to_have_count(0)
+            elif room == "#ready-not":
+                expect(page.locator("#board-ready")).to_contain_text("Not ready")
+            else:
+                expect(page.locator("#board-ready")).to_have_text(f"Ready at {fix}")
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 def shoot_room_rename(browser: Any, out: Path, world: Any) -> None:
     """The small title dialog and its result (#316), before and after in light, dark and phone."""
     from playwright.sync_api import expect
@@ -5226,6 +5291,7 @@ ONLY: dict[str, Any] = {
     "wake_chips": shoot_wake_chips,
     "wake_settings": shoot_wake_settings,
     "coordinator": shoot_coordinator,
+    "ready_line": shoot_ready_line,
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,

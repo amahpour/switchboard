@@ -107,7 +107,7 @@ class Hub:
         self._settings_fn: Callable[[str], dict[str, Any] | None] | None = None
         # a room's review board follows who is in the room (DESIGN.md §37.12): see _flush_members
         self._board_fn: Callable[[str], list[dict[str, Any]] | None] | None = None
-        self._member_names: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        self._member_names: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = {}
 
     # registration ----------------------------------------------------------
     def add(self, sub: Subscriber) -> None:
@@ -204,13 +204,16 @@ class Hub:
         """When who is in ``room``, or who is offline in it, changed, publish its review board again.
         Whether an option is "recommended" is every agent in the room agreeing (§37.12), and a
         contested finding is a person's once its raiser has left or gone offline (§37.13), so a join,
-        a leave or a drop to offline changes what the board says without any move. Any other status
+        a leave or a drop to offline changes what the board says without any move, and so does naming or
+        removing the room's coordinator (the ready line is its alone, §37.21). Any other status
         change (busy, idle) doesn't: the same agents are there, as reachable as before."""
         names = tuple(sorted(str(m.get("name")) for m in members))
         gone = tuple(sorted(str(m.get("name")) for m in members if m.get("status") == "offline"))
-        if self._member_names.get(room) == (names, gone):
+        # who the coordinator is: a board's ready line exists only with one (#985, §37.21)
+        lead = tuple(sorted(str(m.get("name")) for m in members if m.get("coordinator") is not None))
+        if self._member_names.get(room) == (names, gone, lead):
             return
-        self._member_names[room] = (names, gone)
+        self._member_names[room] = (names, gone, lead)
         boards = self._board_fn(room) if self._board_fn is not None else None
         if boards:
             self.publish("review", room, {"boards": boards})

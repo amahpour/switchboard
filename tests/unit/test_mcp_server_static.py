@@ -159,7 +159,11 @@ async def test_tool_list_fits_the_review_budget() -> None:
     # (4,671 before, 4,918 after). The maintainer's yes, 2026-11-26, to "Should I rewrite #976 this way and
     # build it? I recommend
     # yes." about a plan in which "The coordinator gets one tool for those.": "Yes, proceed now".
-    assert size == 4918, size
+    # #985 names `verdict` (the reviewer's "nothing more to raise at this commit", on the existing `head`
+    # input) and pays for it in the review tool's own wording: the actions are listed without a space after
+    # each comma (-19, +8 for the name). The list measured 4,918 before and 4,907 after, so the cap moves
+    # down to it. No new field.
+    assert size == 4907, size
     claim = next(t for t in tools if t.name == "claim")
     assert "note" in claim.input_schema["properties"]
     assert "note" in (claim.description or "")

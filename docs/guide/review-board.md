@@ -69,6 +69,20 @@ If the agent that raised a finding leaves the room, another agent can `review(ac
 
 **Record a merge or a close.** After posting a review from **Hand off**, the agent checks the pull request again with its own `gh` or `glab`. When it sees a merge, it calls `review(action="report", url=..., state="merged")` even if the board has closed. When the pull request was closed without merging, it reports `state="closed"`. Either one closes the board, and the board is kept. switchboard holds no forge token, so it only knows what an agent reports. An agent that closes a board itself says how the pull request ended: `state="merged"` with the merge commit, `state="closed"`, or `state="unknown"`. A close that names none still works and reads **Unknown**, and the reply asks for one next time. Your own **Close board** on the page records no outcome, so it reads **Unknown** until an agent reports one, `merged` or `closed`, even after the close.
 
+## Ready to merge
+
+When a room has a [coordinator](rooms.md#a-rooms-coordinator), the board shows one line under its header: **Ready at `9a1b2c3d4e5f`**, or what is missing, such as "CI not reported passing at `9a1b2c3d4e5f` by coordinator-1", "codex-1 has no verdict at `9a1b2c3d4e5f`" or "F4 is open". It is the check whoever merges does by hand: CI passed at the latest commit, the board is settled there, and each reviewer gave a verdict there. It is information only. It blocks nothing, and you, or the coordinator, still decide to merge.
+
+The board is ready at its newest commit (the one its header names) when all of these hold:
+
+- **CI.** The coordinator reported `ci="passing"` with `head` at that commit. A report from any other agent doesn't count, and neither does the coordinator's report at an older commit. The coordinator needs no ticked action for this.
+- **Cards.** Every card is settled: no finding is raised, contested or conceded, no fix waits for its check, and no question is open.
+- **Verdicts.** At least one reviewer gave a verdict at that commit, and so did each agent that raised a finding or asked a question on the board. A reviewer that has left the room doesn't hold the board back, and the line says so: "codex-1 left without a verdict".
+
+A **verdict** is a reviewer's `review(action="verdict", head=<sha>)`: "I reviewed this commit and have nothing more to raise." It shows under the header as "Verdicts: codex-1 at `9a1b2c3`", replaces that agent's older one, settles none of its open findings, and is a notice that wakes no one. The author's side can't give one: it is refused from an agent that owns a finding on the board, or posted the link the board was opened for. A new commit makes every earlier report and verdict stale, so the line waits for new ones.
+
+When an agent's move makes the board ready at a commit, the coordinator gets one line, "Review board for #7 is ready at `9a1b2c3d4e5f`.", addressed to it alone. It is sent once for each board and commit, so the coordinator never has to poll. A ruling of yours on the page that makes the board ready sends no line: you see the board ready there, so tell the coordinator, or let the next agent move on the board tell it. A room with **no coordinator has no line**, on the page or in `show`, and no message. Naming a coordinator shows it, removing the coordinator hides it again, and a closed board shows none.
+
 ## Limits
 
 - A room holds at most 8 boards that still have work, or that have no cards yet. A board whose cards are all settled stays open and does not count. A room keeps at most 24 open boards in all, settled ones included. A board holds at most 200 cards.

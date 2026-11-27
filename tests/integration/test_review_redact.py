@@ -30,7 +30,7 @@ PATH = "/api/rooms/build/review"
 
 # The broker's ``review`` actions that take no text an agent writes: a concede's owner must be an agent in
 # the room, a report's values come from fixed lists, and the others take a label or an index.
-NO_TEXT = frozenset({"list", "show", "concur", "abstain", "concede", "confirm", "take", "report"})
+NO_TEXT = frozenset({"list", "show", "concur", "abstain", "concede", "confirm", "verdict", "take", "report"})
 
 
 class World:
