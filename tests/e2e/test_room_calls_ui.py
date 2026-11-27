@@ -10,6 +10,7 @@ from playwright.sync_api import Page
 from test_meetings_ui import PHONE, UI, InProcBroker, _open, _post, expect, pytest
 from test_meetings_ui import calls as calls  # noqa: F401  (a fixture)
 from test_meetings_ui import ui as ui  # noqa: F401  (a fixture)
+from test_web_ui import tap_more
 
 pytestmark = pytest.mark.e2e
 
@@ -70,7 +71,7 @@ def test_the_call_settings_dialog_sets_hands_free_and_the_header_says_so(
 
     # a phone: the marker and the dialog are inside the screen
     phone = _open(ui, calls, room="handsfree", **PHONE)
-    phone.get_by_role("button", name="Call settings").click()
+    tap_more(phone, "Call settings")
     box = phone.locator("#app-dialog").bounding_box()
     assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= PHONE["viewport"]["width"]
     assert phone.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
@@ -126,9 +127,11 @@ def test_the_headers_chips_are_all_in_view_with_both_side_panels_open(
     head, chips = page.locator(".conv-head").bounding_box(), page.locator("#status-chips").bounding_box()
     assert head and chips and head["height"] < 60 and chips["y"] < head["y"] + 52
     phone = _open(ui, calls, room=room, color_scheme=scheme, **PHONE)
-    # the phone wraps this row (#716), so Hands-free stays in view. Every chip is checked in
-    # test_web_ui.test_a_phones_header_shows_every_chip_without_scrolling
-    expect(phone.locator("#st-handsfree")).to_be_in_viewport()
+    # the phone has no chip row (#995, finding 7): Hands-free is Call settings' second line in More
+    phone.click("#room-more")
+    expect(phone.locator('#more-sheet .more-item[data-more="room-calls"] .more-hint')).to_contain_text(
+        "Hands-free"
+    )
 
 
 def test_the_quiet_room_box_in_wake_settings_sets_the_room_for_everyone_and_says_so(
@@ -166,7 +169,7 @@ def test_the_quiet_room_box_in_wake_settings_sets_the_room_for_everyone_and_says
 
     # a phone: the box is inside the screen
     phone = _open(ui, calls, room="hush", **PHONE)
-    phone.get_by_role("button", name="Wake settings").click()
+    tap_more(phone, "Wake settings")
     quiet = phone.locator("#app-dialog").get_by_label("Quiet room").bounding_box()
     assert quiet is not None and quiet["x"] >= 0 and quiet["x"] + quiet["width"] <= PHONE["viewport"]["width"]
     assert phone.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")

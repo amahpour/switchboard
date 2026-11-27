@@ -26,27 +26,16 @@ from typing import Any
 
 import pytest
 from playwright.sync_api import Page, expect
-from test_web_ui import PHONE, UI, open_room, open_settings, review_room, ui, world  # noqa: F401
+from test_web_ui import PHONE, UI, open_room, open_settings, review_room, tap_more, ui, world  # noqa: F401
 from ui_world import wait_js
 
 pytestmark = pytest.mark.e2e
 
 # (surface, element) pairs, written per surface: a button under 44x44 px on the phone. #995's sweep found
-# 113 of them; 8 are left, all in the room header, which gets its own redesign (#995, finding 7), and each
-# is resized there, so its line goes with it. Everything else is 44 px under a coarse pointer (UI.md,
-# "Touch"); a target that is small again fails the sweep. Fixing one means deleting its line.
-_SMALL_ON_A_PHONE: dict[str, list[str]] = {
-    "room": [
-        "button#buddy-toggle",
-        "button#focus-toggle",
-        "button#past-boards-toggle",
-        "button#room-calls",
-        "button#room-rules",
-        "button#room-title-button",
-        "button#room-wake",
-        "button#st-approvals",
-    ],
-}
+# 113 of them; the last 8, in the room header, went with its redesign (finding 7: one row, a More sheet), so
+# this is empty. Everything is 44 px under a coarse pointer (UI.md, "Touch"); a target that is small again
+# fails the sweep. A new entry needs a reason and an issue (web/REVIEW.md).
+_SMALL_ON_A_PHONE: dict[str, list[str]] = {}
 KNOWN_SMALL_TARGETS: set[tuple[str, str]] = {
     (surface, element) for surface, elements in _SMALL_ON_A_PHONE.items() for element in elements
 }
@@ -168,8 +157,20 @@ def s_room(env: UI, page: Page, phone: bool, slug: str) -> str:
     return "#app"
 
 
+def s_room_more(env: UI, page: Page, phone: bool, slug: str) -> str:
+    """The phone's More sheet, open. A desktop has no More button: it is the room, as it is."""
+    if not phone:
+        return "#app"
+    page.click("#room-more")
+    expect(page.locator("#more-sheet")).to_be_visible()
+    return "#app"
+
+
 def s_board(env: UI, page: Page, phone: bool, slug: str) -> str:
-    page.click("#board-toggle")
+    if phone:  # the header's icon is a row of the More sheet there
+        tap_more(page, "Review board")
+    else:
+        page.click("#board-toggle")
     expect(page.locator("#board .board-card").first).to_be_visible()
     return "#board"
 
@@ -182,14 +183,23 @@ def s_board_card(env: UI, page: Page, phone: bool, slug: str) -> str:
 
 
 def s_whiteboard(env: UI, page: Page, phone: bool, slug: str) -> str:
-    page.get_by_role("button", name="Whiteboard", exact=True).click()
+    if phone:  # the header's icon is a row of the More sheet there
+        tap_more(page, "Whiteboard")
+    else:
+        page.get_by_role("button", name="Whiteboard", exact=True).click()
     expect(page.locator("#whiteboard-status")).to_contain_text("Live")
     return "#whiteboard-host"
 
 
-def dialog_from(selector: str, title: str) -> Opener:
+def dialog_from(selector: str, title: str, more: str | None = None) -> Opener:
+    """Opens a dialog with ``selector``'s button; on a phone, where the header's icon buttons are rows of the
+    More sheet, with the row called ``more``."""
+
     def opener(env: UI, page: Page, phone: bool, slug: str) -> str:
-        page.click(selector)
+        if phone and more:
+            tap_more(page, more)
+        else:
+            page.click(selector)
         expect(page.locator("#app-dialog")).to_be_visible()
         expect(page.locator("#app-dialog h2").first).to_contain_text(title)
         return "#app-dialog"
@@ -297,12 +307,13 @@ def settings_tab(group: str) -> Opener:
 SURFACES: dict[str, tuple[Opener, bool]] = {
     # name: (opener, needs a seeded review board)
     "room": (s_room, False),
+    "room-more": (s_room_more, False),
     "board": (s_board, True),
     "board-card": (s_board_card, True),
     "whiteboard": (s_whiteboard, False),
-    "room-rules": (dialog_from("#room-rules", "Rules for"), False),
-    "wake-settings": (dialog_from("#room-wake", "Wake"), False),
-    "calls": (dialog_from("#room-calls", "Calls in"), False),
+    "room-rules": (dialog_from("#room-rules", "Rules for", "Room rules"), False),
+    "wake-settings": (dialog_from("#room-wake", "Wake", "Wake settings"), False),
+    "calls": (dialog_from("#room-calls", "Calls in", "Call settings"), False),
     "rename": (dialog_from("#room-title-button", "Rename"), False),
     "new-room": (s_new_room, False),
     "coordinator": (s_coordinator, False),

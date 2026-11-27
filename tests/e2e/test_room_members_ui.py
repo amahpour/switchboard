@@ -216,9 +216,15 @@ def test_a_room_you_are_not_in_is_a_preview_and_join_makes_it_yours(
     expect(join).to_have_text(f"Join {look}")
     expect(join).to_be_focused()
     expect(page.locator("#room-menu-wrap")).to_be_hidden()
+    leave_row = page.locator('#more-list [data-more="leave"]')
     if is_phone(options):
         assert join.bounding_box()["height"] >= 44
         no_sideways_scroll(page)
+        page.click("#room-more")  # the phone's room menu is the More sheet's Leave row (#995): none yet
+        expect(page.locator("#more-list .more-item").first).to_be_focused()
+        expect(leave_row).to_have_count(0)
+        page.keyboard.press("Escape")
+        join.focus()
     else:
         expect(page.locator("#room-preview")).to_be_visible()
     page.keyboard.press("Enter")
@@ -226,7 +232,12 @@ def test_a_room_you_are_not_in_is_a_preview_and_join_makes_it_yours(
     expect(bar).to_be_hidden()
     expect(page.locator("#room-preview")).to_be_hidden()
     expect(page.locator("#input")).to_be_focused()
-    expect(page.locator("#room-menu-wrap")).to_be_visible()
+    if is_phone(options):
+        page.click("#room-more")
+        expect(leave_row).to_have_text(f"Leave {look}")
+        page.keyboard.press("Escape")
+    else:
+        expect(page.locator("#room-menu-wrap")).to_be_visible()
     expect(page.locator("#log")).to_contain_text(f"alice joined {look}")
     sidebar(page)
     expect(mine(page, look)).to_be_visible()
@@ -238,20 +249,23 @@ def test_leave_says_what_changes_and_keeps_the_room_readable(
 ) -> None:
     """The room's menu opens by click, closes on Escape with the keyboard back on its button, and its Leave
     asks first, saying what stops and that her agents stay; Cancel changes nothing. Leaving makes the room a
-    preview she can still read, under Other rooms, with the keyboard on Join. Fails if Leave acts without
-    asking, if the confirm says something else, or if leaving hides the room."""
+    preview she can still read, under Other rooms, with the keyboard on Join. On a phone the menu is the More
+    sheet's Leave row (the header is one row, #995). Fails if Leave acts without asking, if the confirm says
+    something else, if leaving hides the room, or if a phone has no way to leave."""
     bye = team.room("alice", "bye")
     page = alices_page(ui, team, **options)
     sidebar(page)
     mine(page, bye).click()
-    menu_btn = page.locator("#room-menu-btn")
+    phone = is_phone(options)
+    menu_btn = page.locator("#room-more" if phone else "#room-menu-btn")
     expect(menu_btn).to_be_visible()
     menu_btn.click()
-    item = page.locator("#room-menu-leave")
+    item = page.locator('#more-list [data-more="leave"]' if phone else "#room-menu-leave")
     expect(item).to_have_text(f"Leave {bye}")
-    expect(item).to_be_focused()
+    if not phone:
+        expect(item).to_be_focused()  # the menu's one item; the More sheet starts on its first row
     page.keyboard.press("Escape")
-    expect(page.locator("#room-menu")).to_be_hidden()
+    expect(page.locator("#more-sheet" if phone else "#room-menu")).to_be_hidden()
     expect(menu_btn).to_be_focused()
     menu_btn.click()
     item.click()

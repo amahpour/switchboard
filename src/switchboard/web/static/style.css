@@ -2321,7 +2321,7 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* ==== 13. First run (spec 1.8) ======================================================= */
 /* With no open room there is nobody to list and nowhere to send: Welcome.dc shows only the steps,
    under a "Get started" title. app.js sets .no-rooms on #app. */
-.app.no-rooms #pane, .app.no-rooms #composer, .app.no-rooms #pane-toggle, .app.no-rooms #buddy-toggle,
+.app.no-rooms #pane, .app.no-rooms #composer, .app.no-rooms #pane-toggle, .app.no-rooms #buddy-toggle, .app.no-rooms #room-more,
 .app.no-rooms .head-divider, .app.no-rooms .head-hash, .app.no-rooms #scrim { display: none; }
 .welcome {
   position: absolute;
@@ -2669,8 +2669,8 @@ body.login {
        rest (#333). Three equal columns gave it a third of the phone, about 125 px, and cut a
        15-letter room name that would have fit. The title is centred between the two buttons,
        so it sits a few pixels off the screen's centre when they differ in width. */
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas: "nav title members" "chips chips chips" "tools tools tools";
+    grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+    grid-template-areas: "nav title approvals members more";
     align-items: center;
     height: auto;
     gap: 0;
@@ -2695,24 +2695,49 @@ body.login {
   }
   .head-hash { width: 13px; height: 13px; flex: 0 0 auto; }
   .head-title h1 { flex: 1 1 0; min-width: 0; max-width: 100%; font-size: calc(16px * var(--text-scale)); }
-  .room-sub { display: block; flex-basis: 100%; margin: 0; font-size: calc(11.5px * var(--text-scale)); color: var(--muted-2); text-align: center; }
-  .members-pill { grid-area: members; justify-self: end; }
-  .conv-head .head-spacer, .head-divider, #pane-toggle, #pause-toggle { display: none; }
-  /* The chips wrap (#716). This row used to stay one line and scroll sideways, so with hands-free on
-     and every chip showing (Hands-free, Running, Budget, Hops, the approvals count) the row was about
-     470 px inside a 390 px screen and Hops sat past the edge. Each chip stays whole, and one line is
-     still 38 px: 6 px of padding around a 26 px chip. A count for the ones that don't fit is unnecessary;
-     the widest chip, "loop guard off", is far narrower than the row. */
-  .chips {
-    grid-area: chips;
-    height: auto;
-    min-height: 38px;
-    margin: 0 -8px;
-    padding: 6px 12px;
-    overflow: visible;
+  /* One row (#995, finding 7): the name, and under it the room's state and its member count. The line is
+     never cut: the count drops the person's name here ("4 agents", not "alice and 4 agents"). */
+  .head-sub {
+    display: flex;
+    flex-basis: 100%;
     flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0 var(--sp-1);
+    min-width: 0;
+    max-height: 1lh;   /* one line: what does not fit wraps below and is clipped, the word "agents" first */
+    overflow: hidden;
+    font-size: var(--fs-xs);
   }
-  .head-tools { grid-area: tools; display: flex; align-items: center; gap: 4px; padding: 0 4px 6px; }
+  .room-sub { display: contents; margin: 0; color: var(--muted-2); }
+  .room-sub > * { color: var(--muted-2); white-space: pre; }
+  .room-state:not(.hidden) + .room-sub .sub-n::before { content: "· "; }
+  .room-state { display: inline-flex; align-items: center; gap: var(--sp-1); color: var(--muted-2); white-space: nowrap; }
+  .room-state.bad .dot { background: var(--amber-ink); }
+  .room-state.bad { color: var(--amber-fg); }
+  .room-state.stale .dot { background: var(--muted); }
+  /* the name is a 44 px tap, its box reaching over the padding and the line below it, not pushing them */
+  #room-title-button { padding-block: calc((var(--target) - 1lh) / 2); margin-block: calc((var(--target) - 1lh) / -2); }
+  .members-pill { grid-area: members; justify-self: end; height: auto; min-width: var(--target); min-height: var(--target); justify-content: center; }
+  #room-more { grid-area: more; justify-self: end; width: auto; min-width: var(--target); min-height: var(--target); }
+  .rooms-toggle { min-height: var(--target); padding: 0 var(--sp-1); font-size: var(--fs-md); }   /* the title gets the width */
+  .conv-head .head-spacer, .head-divider, #pane-toggle, #pause-toggle { display: none; }
+  /* The chips and the icon buttons are not a row of their own any more. The warning stays in the header's
+     row; the state is under the name, the budget and hops are on Wake settings' line and Hands-free is on Call
+     settings' line, and the icon buttons are in the More sheet (#995, finding 7; they were two more rows, about
+     110 px of an 844 px screen, and six icons with no words). */
+  .chips { display: contents; }
+  #st-handsfree, #st-state, #st-budget, #st-hops, .head-tools { display: none; }
+  /* a 44 px tap around a chip of the usual size: the rest of the box is a clear border */
+  #st-approvals {
+    grid-area: approvals;
+    height: auto;
+    min-width: var(--target);
+    min-height: var(--target);
+    justify-content: center;
+    border: calc((var(--target) - var(--ctl-h)) / 2) solid transparent;
+    background-clip: padding-box;
+  }
   .chip .meter { display: none; }
   #st-approvals::after { content: attr(data-count); }
 
@@ -3496,7 +3521,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 /* The first screen: what waits on you, what got done, what is live, your rooms. One column, a
    page of its own in place of the log, the composer and the members pane. */
 .app.home-open #log, .app.home-open #room-empty, .app.home-open #board, .app.home-open #composer,
-.app.home-open #pane, .app.home-open #pane-toggle, .app.home-open #buddy-toggle, .app.home-open .head-divider,
+.app.home-open #pane, .app.home-open #pane-toggle, .app.home-open #buddy-toggle, .app.home-open #room-more, .app.home-open .room-state, .app.home-open .head-divider,
 .app.home-open #pins, .app.home-open #claim-board, .app.home-open #room-filters, .app.home-open .head-tools, .app.home-open #usage,
 .app.home-open .band:not(#banner-offline):not(#banner-test):not(#banner-backup) { display: none; }
 .app.no-rooms #home, .app.no-rooms #usage-nav { display: none; }
@@ -3716,7 +3741,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .side-search input:focus ~ .search-kbd, .side-search input:not(:placeholder-shown) ~ .search-kbd { display: none; }
 
 .app.search-open #log, .app.search-open #room-empty, .app.search-open #board, .app.search-open #composer,
-.app.search-open #pane, .app.search-open #pane-toggle, .app.search-open #buddy-toggle, .app.search-open .head-divider,
+.app.search-open #pane, .app.search-open #pane-toggle, .app.search-open #buddy-toggle, .app.search-open #room-more, .app.search-open .room-state, .app.search-open .head-divider,
 .app.search-open #pins, .app.search-open #claim-board, .app.search-open #room-filters, .app.search-open .head-tools, .app.search-open #home,
 .app.search-open #usage, .app.search-open #status-chips, .app.search-open #approvals-tip,
 .app.search-open #whiteboard-panel, .app.search-open #banner-around,
@@ -3873,7 +3898,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 /* ==== 19. Usage (#818, DESIGN.md §61) ================================================ */
 /* Wakes and messages, per room and per agent, in place of the log. Search can still cover it. */
 .app.usage-open #log, .app.usage-open #room-empty, .app.usage-open #board, .app.usage-open #composer,
-.app.usage-open #pane, .app.usage-open #pane-toggle, .app.usage-open #buddy-toggle, .app.usage-open .head-divider,
+.app.usage-open #pane, .app.usage-open #pane-toggle, .app.usage-open #buddy-toggle, .app.usage-open #room-more, .app.usage-open .room-state, .app.usage-open .head-divider,
 .app.usage-open #pins, .app.usage-open #claim-board, .app.usage-open #room-filters, .app.usage-open .head-tools, .app.usage-open #home,
 .app.usage-open #whiteboard-panel, .app.usage-open #empty,
 .app.usage-open .band:not(#banner-offline):not(#banner-test):not(#banner-backup) { display: none; }
@@ -4211,16 +4236,93 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 }
 .filter-more { display: flex; justify-content: center; padding: 8px 0; }
 .filter-empty { padding: 24px 0; text-align: center; color: var(--muted-2); }
+.room-filter-group { display: contents; }
 @media (max-width: 760px) {
-  .room-filters { padding: 8px 16px; gap: 8px; }
-  .room-filter { height: 44px; padding: 0 16px; border-radius: 22px; }
+  /* A segmented control (#995, finding 7): one rounded track, the chosen part raised. The track is 40 px tall;
+     each part is a 44 px tap whose box reaches 2 px past the track, and the raised part is drawn by ::before. */
+  .room-filters { padding: var(--sp-2) var(--sp-4); gap: var(--sp-2); }
+  .room-filter-group {
+    display: flex;
+    flex: 1 1 100%;
+    align-items: center;
+    border-radius: var(--r-pill);
+    background: var(--chip-bg);
+  }
+  #room-filters .room-filter {
+    position: relative;
+    z-index: 0;
+    flex: 1 1 0;
+    height: auto;
+    min-width: var(--target);
+    min-height: var(--target);
+    margin-block: calc(var(--sp-1) / -2);
+    padding: 0 var(--sp-3);
+    border: 0;
+    border-radius: var(--r-pill);
+    background: none;
+    font-size: var(--fs-sm);
+  }
+  #room-filters .room-filter::before {
+    content: "";
+    position: absolute;
+    inset: var(--sp-1) calc(var(--sp-1) / 2);
+    z-index: -1;
+    border-radius: var(--r-pill);
+  }
+  #room-filters .room-filter[aria-pressed="true"]::before { background: var(--bg); box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
+  #room-filters .room-filter[aria-pressed="true"] { background: none; font-weight: 600; }
   .room-filter-note { flex-basis: 100%; }
+  .room-filter-note:empty { display: none; }   /* no empty line (and its gap) under the track */
 }
+
+/* The phone's More sheet (#995, finding 7): the room's header buttons in words, from the bottom, as Members is. */
+.more-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  padding: 0 var(--sp-4) max(var(--sp-3), env(safe-area-inset-bottom));
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: var(--pane-bg);
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .14);
+}
+.more-title { flex-shrink: 0; margin: 0; padding: var(--sp-2) 0; font-size: var(--fs-sm); font-weight: 600; color: var(--muted); overflow-wrap: anywhere; }
+.more-list { display: flex; flex-direction: column; min-height: 0; overflow-y: auto; }
+.more-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: var(--target);
+  padding: var(--sp-2) var(--sp-1);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-lg);
+  text-align: left;
+  cursor: pointer;
+}
+.more-item:hover, .more-item:focus-visible { background: var(--accent-tint); }
+.more-item.more-danger { color: var(--danger); }   /* Leave, as the room menu's own item is */
+.more-item.more-danger > .ic { color: inherit; }
+.more-item.more-danger:hover, .more-item.more-danger:focus-visible { background: var(--danger-bg); }
+.more-item > .ic, .more-item > .more-glyph { flex: 0 0 auto; width: var(--sp-5); text-align: center; color: var(--ink-2); }
+.more-item > .ic { height: var(--sp-5); }
+.more-words { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }
+.more-hint { font-size: var(--fs-sm); color: var(--muted-2); overflow-wrap: anywhere; }
+.more-item[aria-checked="true"] .switch-track { background: var(--accent); }
+.more-item[aria-checked="true"] .switch-knob { transform: translateX(10px); }  /* the knob's own travel, as the call bar's */
 
 /* Touch targets (#995, finding 6, UI.md "Touch"). Under a coarse pointer every control is --target (44 px) in
    both directions: a button grows around its icon, a row of a list a person taps is that tall, a text box too.
-   A fine pointer matches nothing here, so a desktop is as it was. The room header (.conv-head) is left for its
-   own redesign (#995, finding 7). */
+   A fine pointer matches nothing here, so a desktop is as it was. The room header (.conv-head) sets its own
+   (the narrow layout, section 15; #995, finding 7). */
 @media (pointer: coarse) {
   :is(
     button, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .menu-item, a.btn, summary

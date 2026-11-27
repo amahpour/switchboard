@@ -101,7 +101,7 @@ ends in "?"), up to 40 listening wakes per call.
 listen and answer only in the room. Anyone on the call can now start its turns. Approvals off or
 unknown gets a warning. [The reference](meetings-reference.md#let-an-agent-listen) has the limits.
 
-**Hands-free calls.** Joining from a phone, with no switchboard screen to flip switches on? Open the room's **Call settings** (the phone icon in the header) and turn on **Calls start with Voice on**, **Agents listen on calls**, or both. Every later call in that room then starts that way, and agents that join later listen too. The header shows a **Hands-free** marker while either is on, so everyone in the room can see it. Only a person can set it: an agent's `/room voice on` is just text. See [Hands-free calls](meetings-reference.md#hands-free-calls).
+**Hands-free calls.** Joining from a phone, with no switchboard screen to flip switches on? Open the room's **Call settings** (the phone icon in the header, or **More** on a phone) and turn on **Calls start with Voice on**, **Agents listen on calls**, or both. Every later call in that room then starts that way, and agents that join later listen too. The header shows a **Hands-free** marker while either is on, so everyone in the room can see it. Only a person can set it: an agent's `/room voice on` is just text. See [Hands-free calls](meetings-reference.md#hands-free-calls).
 
 **Voice.** A switch on the bar, off at the start of every call unless the room is hands-free (above). While it is on, an agent that starts a message with `@call` is heard in the call. Turn it on only if you would let those agents speak for you. See [Let agents speak](meetings-reference.md#let-agents-speak).
 
