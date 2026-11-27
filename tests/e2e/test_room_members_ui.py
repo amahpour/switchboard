@@ -144,6 +144,17 @@ def other(page: Page, room: str) -> Any:
     return page.locator(f'#other-rooms-list .room[data-room="{room}"]')
 
 
+def unfold_other_rooms(page: Page) -> None:
+    """Open the sidebar's Other rooms, wherever it starts. It starts open when alice is in no room (§63), and
+    whether she is depends on what earlier tests left on this module's shared broker: a plain click folded it
+    again in a test that ran before any of hers, and the room under it never showed."""
+    toggle = page.locator("#other-rooms")
+    expect(toggle).to_be_visible()
+    if toggle.get_attribute("aria-expanded") != "true":
+        toggle.click()
+    expect(toggle).to_have_attribute("aria-expanded", "true")
+
+
 @pytest.mark.parametrize("options", THEMES)
 def test_your_rooms_are_listed_and_the_others_fold_under_other_rooms(
     ui: UI, team: Team, options: dict[str, Any]
@@ -191,7 +202,7 @@ def test_a_room_you_are_not_in_is_a_preview_and_join_makes_it_yours(
     team.api("bob", "POST", f"/api/rooms/{look[1:]}/say", {"text": "@humans deploy at noon?"})
     page = alices_page(ui, team, **options)
     sidebar(page)
-    page.click("#other-rooms")
+    unfold_other_rooms(page)
     row = other(page, look)
     expect(row.locator(".badge")).to_have_count(0)
     row.click()
@@ -339,7 +350,7 @@ def test_at_humans_badges_only_your_rooms_and_home_waits_only_on_them(ui: UI, te
     for room in (loud, quiet):
         team.api("bob", "POST", f"/api/rooms/{room[1:]}/say", {"text": "@humans can someone look?"})
     expect(mine(page, loud).locator(".badge")).to_have_text("1")
-    page.click("#other-rooms")
+    unfold_other_rooms(page)
     expect(other(page, quiet)).to_be_visible()
     expect(other(page, quiet).locator(".badge")).to_have_count(0)
     page.click("#home-nav")
