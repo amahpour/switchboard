@@ -1,3 +1,0 @@
-### Fixed
-
-- **A line said while someone shares a screen on Zoom keeps the speaker's name (#760).** With Whisper (a call hosted on your own machine, or the server's bot with Whisper turned on), every line said during a share arrived as `call`: the bot reads who is talking from Zoom's video tile, and during a share Zoom moves that tile into its small floating window. The pinned Zoom fix (`zoom.py`) now reads the floating window too. The server's bot with captions, the default, reads the name from the captions and was never affected. The meeting self-test has a new step that shares a picture, speaks, and checks the line's name.
