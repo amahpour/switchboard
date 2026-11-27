@@ -4,9 +4,10 @@
     uv run python docs/media/ui_shots.py --out /tmp/shots
     uv run python docs/media/ui_shots.py --out /tmp/shots --only quiet   # one set of pictures
     uv run python docs/media/ui_shots.py --out /tmp/shots --only claim_board
+    uv run python docs/media/ui_shots.py --out /tmp/shots --traces /tmp/traces  # a trace of a shot that fails
 
-Run by hand (and by CI's ``frontend`` job, into a temp dir it uploads), never by pytest: it is
-not under tests/ and nothing imports it. It needs Playwright's Chromium, once per machine::
+Run by hand (and by CI's ``frontend`` job, into a temp dir it uploads, with ``--traces`` beside it, #1001),
+never by pytest: it is not under tests/ and nothing imports it. It needs Playwright's Chromium, once per machine::
 
     uv run playwright install chromium          # add --with-deps on a bare Linux box
 
@@ -5302,6 +5303,16 @@ ONLY: dict[str, Any] = {
 
 
 # -------------------------------------------------------------------- main
+def traced(browser: Any, args: argparse.Namespace) -> Any:
+    """``--traces DIR``: the browser, with a Playwright trace kept of each shot that fails (``shot_traces.py``,
+    #1001). CI's ``frontend`` job passes it, so a shot that hangs there leaves the page in its artifact."""
+    if not args.traces:
+        return browser
+    from shot_traces import TracedBrowser  # beside this file, on the path when it runs as a script
+
+    return TracedBrowser(browser, Path(args.traces).resolve())
+
+
 def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     """``--only NAME``: one browser and one set of pictures from ``ONLY``. ``real_names``,
     ``admin_names``, ``admins``, ``backups`` and ``room_members`` start a hosted broker; the others start the
@@ -5315,7 +5326,7 @@ def run_only(args: argparse.Namespace, pw: Any, name: str) -> None:
     try:
         world.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
-        browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
+        browser = traced(pw.chromium.launch(executable_path=args.chrome or None, env=env), args)
         try:
             ONLY[name](browser, out, world)
         finally:
@@ -5357,7 +5368,7 @@ def run(args: argparse.Namespace, pw: Any) -> None:
         admins.start()
         backups.start()
         env = {**os.environ, "TZ": "UTC", "HOME": REAL_HOME or os.environ["HOME"]}
-        browser = pw.chromium.launch(executable_path=args.chrome or None, env=env)
+        browser = traced(pw.chromium.launch(executable_path=args.chrome or None, env=env), args)
         try:
             shoot(browser, out, world)
             shoot_board(browser, out, world)
@@ -5437,6 +5448,9 @@ def main() -> None:
     )
     ap.add_argument("--keep", action="store_true", help="keep the temp homes")
     ap.add_argument("--only", choices=sorted(ONLY), help="shoot only this set of pictures, not all of them")
+    ap.add_argument(
+        "--traces", help="keep a Playwright trace of each shot that fails, in this directory (#1001)"
+    )
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright
 

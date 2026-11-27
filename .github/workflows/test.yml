@@ -191,8 +191,9 @@ jobs:
 
   # The web UI in headless Chromium (Playwright): tests/e2e against a seeded test-mode broker
   # (marker `e2e`, deselected from the default run above), then docs/media/ui_shots.py into a
-  # temp dir. The screenshots, and any failed test's trace and screenshots, are uploaded as
-  # one artifact, pass or fail. Not part of the coverage figure.
+  # temp dir. The screenshots, any failed test's trace and screenshots, and the trace of any shot
+  # that fails (`--traces`, #1001) are uploaded as one artifact, pass or fail. Not part of the
+  # coverage figure.
   frontend:
     name: frontend (Playwright)
     needs: changes
@@ -219,7 +220,10 @@ jobs:
       - run: uv run --frozen pytest -q -p no:cacheprovider -m e2e tests/e2e --ignore=tests/e2e/test_layout_sweep.py
       - name: Screenshots (docs/media/ui_shots.py, into the artifact rather than the tree)
         if: success() || failure()
-        run: uv run --frozen python docs/media/ui_shots.py --out frontend-artifacts/screenshots
+        # --traces: a shot that hangs keeps the page's trace (console, DOM, screenshots) for the artifact
+        run: >-
+          uv run --frozen python docs/media/ui_shots.py --out frontend-artifacts/screenshots
+          --traces frontend-artifacts/shot-traces
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: always()
         with:
