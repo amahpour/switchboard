@@ -3,7 +3,8 @@
 # test suite (no live agent
 # CLIs, no perf timings) on Linux and macOS, split into three shards per OS, with line coverage
 # combined across all of them (the README badge, which release.yml publishes after the merge),
-# the web UI in a real browser (Playwright, the `frontend` job), and the container image behind
+# the web UI in a real browser (Playwright, the `frontend` job, and its layout sweep, the `layout` job),
+# and the container image behind
 # a TLS proxy (the `image` job). A docs-only PR skips all that and runs the tree
 # scan alone. A release PR runs it all, on its merge commit: main as the release will ship it (#970). Every PR builds the documentation site (`docs site`). `CI`, the last job, sums it up for the ruleset. `gh workflow run test.yml` runs
 # everything on a branch.
@@ -213,7 +214,9 @@ jobs:
       - run: uv sync --frozen
       # the Chromium build that matches the locked playwright, plus its system libraries
       - run: uv run --frozen playwright install --with-deps chromium
-      - run: uv run --frozen pytest -q -p no:cacheprovider -m e2e tests/e2e
+      # the layout sweep (tests/e2e/test_layout_sweep.py) runs in its own job, `layout`, beside this one:
+      # its 105 cases at about 6 s each would take this job past its timeout
+      - run: uv run --frozen pytest -q -p no:cacheprovider -m e2e tests/e2e --ignore=tests/e2e/test_layout_sweep.py
       - name: Screenshots (docs/media/ui_shots.py, into the artifact rather than the tree)
         if: success() || failure()
         run: uv run --frozen python docs/media/ui_shots.py --out frontend-artifacts/screenshots
@@ -231,6 +234,38 @@ jobs:
   # Chromium over https and wss, a clean `docker stop`, the data across a restart, and the
   # volumes Render and Kubernetes mount. The UI's screenshot is uploaded. Not part of coverage.
   # A release publishes the image for both architectures (release.yml's `publish-image`).
+  # The layout sweep (#995, src/switchboard/web/UI.md): every dialog, menu and panel at a desktop and a phone
+  # size and two text sizes, failing on a cut label, a dialog off the window or sideways scroll. In a job of its
+  # own, four at a time, so it adds about 3 minutes beside the frontend job instead of 11 inside it.
+  layout:
+    name: layout sweep (Playwright)
+    needs: changes
+    if: needs.changes.outputs.tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+      SWITCHBOARD_REQUIRE_NODE: "1"
+      SWITCHBOARD_E2E_ARTIFACTS: ${{ github.workspace }}/layout-artifacts/e2e
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-uv-python
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: "22"
+      - run: uv sync --frozen
+      - run: uv run --frozen playwright install --with-deps chromium
+      - run: uv run --frozen pytest -q -p no:cacheprovider -m e2e -n 4 tests/e2e/test_layout_sweep.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        if: failure()
+        with:
+          name: layout-artifacts
+          path: layout-artifacts/
+          if-no-files-found: ignore
+          retention-days: 7
+
   image:
     name: image (behind a TLS proxy)
     needs: changes
@@ -357,7 +392,7 @@ jobs:
   # test job passed or (docs only) the tree scan did.
   ci:
     name: CI
-    needs: [changes, docs, lint, test, frontend, image, coverage, site]
+    needs: [changes, docs, lint, test, frontend, layout, image, coverage, site]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -373,7 +408,7 @@ jobs:
           tests = needs["changes"].get("outputs", {}).get("tests")
           if needs["changes"]["result"] != "success" or tests not in ("true", "false"):
               sys.exit("`what changed` didn't decide whether to run the tests")
-          want = ("lint", "test", "frontend", "image", "coverage", "site") if tests == "true" else ("docs", "site")
+          want = ("lint", "test", "frontend", "layout", "image", "coverage", "site") if tests == "true" else ("docs", "site")
           if failed := [job for job in want if needs[job]["result"] != "success"]:
               sys.exit(f"not passed: {', '.join(failed)}")
           print("tests ran and passed" if tests == "true" else "tests skipped (docs only); tree scan and docs site passed")
