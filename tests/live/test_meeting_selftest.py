@@ -787,11 +787,12 @@ class World:
             if not await until(arrived, HEARD_S):
                 return Outcome(False, f"shared ({started}); no call line with the sentence reached the room")
             heard = " ".join(m["text"] for m in lines)
-            names = sorted({str(m.get("sender_name") or "") for m in lines})
+            # the room's message shape names the sender "from" (service.message_dict); read it strictly, so a
+            # renamed field fails here loudly instead of making every line look nameless (it read
+            # "sender_name" at first, and a correct line came out as '')
+            names = sorted({str(m["from"]) for m in lines})
             ratio = selftest.match_ratio(SHARE_SENTENCE, heard)
-            right = [
-                m for m in lines if str(m.get("sender_name") or "").casefold() == SPEAKER_NAME.casefold()
-            ]
+            right = [m for m in lines if str(m["from"]).casefold() == SPEAKER_NAME.casefold()]
             if not right:
                 return Outcome(
                     False,
