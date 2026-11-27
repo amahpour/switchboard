@@ -2123,8 +2123,9 @@
 
   // ------------------------------------------------------ the phone's More sheet (§29.2)
   // At 760 px and below the header is one row, so the room's icon buttons (whiteboard, past boards, rules,
-  // focus, wake, calls) live in a bottom sheet instead, each with its name in words. A row is not a second
-  // implementation: choosing it clicks the icon button it stands for, so what each does cannot drift.
+  // focus, wake, calls) and the room's menu (Leave) live in a bottom sheet instead, each with its name in
+  // words. A row is not a second implementation: choosing it clicks the icon button it stands for, or for
+  // Leave calls what the menu's own Leave calls, so what each does cannot drift.
   const MORE_ITEMS = [
     { id: 'board-toggle', label: 'Review board' },
     { id: 'whiteboard-toggle', label: 'Whiteboard', hint: 'Draw together' },
@@ -2133,6 +2134,10 @@
     { id: 'focus-toggle', label: 'Focus mode', hint: 'Collapse agent chat not addressed to you', check: true },
     { id: 'room-wake', label: 'Wake settings', hint: wakeHint },
     { id: 'room-calls', label: 'Call settings', hint: callsHint },
+    // the room's own menu (§63) holds one action, Leave, so on a phone it is this row and not a second "more"
+    // button; shown when that menu would be (a member of a public room on a switchboard with people)
+    { id: 'room-menu-wrap', key: 'leave', label: function (r) { return 'Leave ' + r.name; }, glyph: 'logout',
+      danger: true, run: function (r) { leaveRoom(r); } },
   ];
 
   // "60/60 an hour · hops 2/30": what the Budget and Hops chips say, for the limits that are on (#965)
@@ -2163,14 +2168,14 @@
     for (const item of MORE_ITEMS) {
       const source = $(item.id);
       if (!source || source.classList.contains('hidden')) continue;  // shown only when its icon button would be
-      const row = btn('more-item');
+      const row = btn(item.danger ? 'more-item more-danger' : 'more-item');
       row.setAttribute('role', item.check ? 'menuitemcheckbox' : 'menuitem');
-      row.dataset.more = item.id;
-      const art = source.querySelector('svg');
-      row.append(art ? art.cloneNode(true) : el('span', 'more-glyph', source.textContent));
+      row.dataset.more = item.key || item.id;
+      const svg = source.querySelector('svg');
+      row.append(item.glyph ? icon(item.glyph) : svg ? svg.cloneNode(true) : el('span', 'more-glyph', source.textContent));
       const hint = typeof item.hint === 'function' ? item.hint(r) : (item.hint || '');
       const words = el('span', 'more-words');
-      words.append(el('span', 'more-label', item.label));
+      words.append(el('span', 'more-label', typeof item.label === 'function' ? item.label(r) : item.label));
       if (hint) words.append(el('span', 'more-hint', hint));
       row.append(words);
       if (item.check) {
@@ -2183,7 +2188,8 @@
       row.addEventListener('click', function () {
         setMore(false);
         $('room-more').focus();  // a dialog this opens hands focus back here when it closes
-        source.click();
+        if (item.run) item.run(r);
+        else source.click();
       });
       list.append(row);
     }

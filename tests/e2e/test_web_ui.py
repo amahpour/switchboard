@@ -2519,12 +2519,28 @@ FOCUS_RING = """() => {
 }"""
 
 
+TAB_WALK_MARK = (
+    "() => { const e = document.activeElement; if (e && e !== document.body) e.dataset.walkStart = '1'; }"
+)
+TAB_WALK_BACK = "() => !!document.activeElement && document.activeElement.dataset.walkStart === '1'"
+
+
 def test_keyboard_tab_walk_shows_a_focus_ring(ui: UI) -> None:
+    """Tab reaches the message box, the members toggle and a member's name, and each shows a focus ring. The
+    walk is one full cycle of the page, ended when focus is back on the first element it reached: blur()
+    leaves Chromium's starting point at the message box, so the walk begins just past it and has to go round
+    the whole page. A cap of 80 presses broke once earlier tests in this module's world added rooms and
+    messages (#1013): the walk ran out before it came back to the message box. The cap now only stops a page
+    that never cycles."""
     page = ui.open()
     page.evaluate("document.activeElement && document.activeElement.blur()")
     seen: dict[str, dict[str, Any]] = {}
-    for _ in range(80):
+    for step in range(600):
         page.keyboard.press("Tab")
+        if step and page.evaluate(TAB_WALK_BACK):
+            break  # round the whole page
+        if step == 0:
+            page.evaluate(TAB_WALK_MARK)
         f = page.evaluate(FOCUS_RING)
         if not f:
             continue

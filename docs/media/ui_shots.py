@@ -281,6 +281,18 @@ def clear_input(page: Any) -> None:
     page.evaluate("document.getElementById('input').blur()")
 
 
+def head_click(page: Any, button: str) -> None:
+    """Click one of a room's header buttons by its id. At 760 px and narrower they are rows of the More sheet
+    (#995): open it and choose the row, which clicks the same button. Decided by the window's width, not by
+    what is visible yet, so a header still drawing can't send a phone to the desktop's path."""
+    size = page.viewport_size
+    if size and size["width"] <= 760:
+        page.click("#room-more")
+        page.click(f'#more-list [data-more="{button}"]')
+    else:
+        page.click(f"#{button}")
+
+
 def log_clip(page: Any) -> dict[str, float]:
     """The log's box, from its first row to its last (12 px margins)."""
     return page.evaluate(
@@ -913,7 +925,7 @@ def shoot_board(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="Q1"]')
             expect(page.locator("#board .board-detail")).to_be_visible()
             settle(page)
@@ -966,7 +978,7 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="F1"]')
             box = page.locator("#board .board-detail .md-pre").nth(1)
             box.locator("button.md-show-diagram").click()
@@ -992,7 +1004,7 @@ def shoot_review_card(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="Q1"]')
             buttons = page.locator("#board .board-detail button[data-option]")
             expect(buttons.nth(0)).to_have_text("Before tax (claude-1 recommends this)")
@@ -1070,7 +1082,7 @@ def shoot_past_boards(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#past-boards-toggle")
+            head_click(page, "past-boards-toggle")
             expect(page.locator("#board .past-board-row")).to_have_count(3)
             shot(
                 page,
@@ -1106,7 +1118,7 @@ def shoot_review_abstain(browser: Any, out: Path, world: Any) -> None:
         if not tab.is_visible():
             page.click("#rooms-toggle")
         tab.click()
-        page.click("#board-toggle")
+        head_click(page, "board-toggle")
         page.click('#board .board-card[data-item="Q1"]')
         expect(page.locator("#board .board-detail .board-consensus")).to_have_text(
             "Waiting for codex-1 to agree or pick another."
@@ -1134,7 +1146,7 @@ def shoot_review_abstain(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="Q1"]')
             expect(page.locator("#board .board-detail .board-consensus")).to_have_text("abstained: codex-1.")
             if slug == "phone-light":
@@ -1181,7 +1193,7 @@ def shoot_contest_flow(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="F1"]')
             expect(page.locator('#board .lane-working .board-card[data-item="F1"]')).to_be_visible()
             if slug == "phone-light":
@@ -1223,7 +1235,7 @@ def shoot_board_tabs(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             expect(page.locator("#board .board-tab")).to_have_count(2)
             page.locator("#board .board-tab").nth(1).click()
             page.click('#board .board-card[data-item="Q1"]')
@@ -1259,7 +1271,7 @@ def shoot_gitlab_lines(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="F2"]')
             detail = page.locator("#board .board-detail")
             expect(detail.locator("dd a.board-link").first).to_be_visible()
@@ -1322,7 +1334,7 @@ def shoot_outdated_board(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="F3"]')
             detail = page.locator("#board .board-detail")
             expect(detail).to_be_visible()
@@ -1370,7 +1382,7 @@ def shoot_proof_board(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="F3"]')
             expect(page.locator("#board .board-side")).to_have_count(2)
             if slug == "phone-light":
@@ -1435,7 +1447,7 @@ def shoot_confirmed_check(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             waiting = page.locator('#board .lane-working .board-card[data-item="F3"]')
             expect(waiting).to_contain_text("Fixed")
             if slug == "phone-light":
@@ -1495,7 +1507,7 @@ def shoot_handoff_board(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             handoff = page.locator("#board-handoff")
             expect(handoff).to_be_disabled()
             reveal(page, "#board-handoff")
@@ -1558,7 +1570,7 @@ def shoot_review_guide(browser: Any, out: Path, world: Any) -> None:
         if not tab.is_visible():
             page.click("#rooms-toggle")
         tab.click()
-        page.click("#board-toggle")
+        head_click(page, "board-toggle")
 
     # a fixed finding's card, and a contested one's, from the board with an item in every lane
     room = "#guide-cards"
@@ -1888,7 +1900,7 @@ def shoot_focus_mode(browser: Any, out: Path, world: Any) -> None:
             wait_js(
                 page, "() => document.querySelectorAll('#log .line.k-chat').length >= 4", timeout_ms=WAIT_MS
             )
-            page.click("#focus-toggle")
+            head_click(page, "focus-toggle")
             expect(page.locator("#focus-toggle")).to_have_attribute("aria-pressed", "true")
             expect(page.locator(".collapsed-line").first).to_be_visible()
             shot(page, out, name)
@@ -1941,7 +1953,7 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
                 page.click("#rooms-toggle")
             tab.click()
             expect(page.locator("#room-title")).to_have_text("wake-demo", timeout=WAIT_MS)
-            page.click("#room-wake")
+            head_click(page, "room-wake")
             expect(page.locator("#app-dialog")).to_be_visible()
             page.fill("#app-dialog-budget", "300")
             page.fill("#app-dialog-hops", "0")
@@ -2052,7 +2064,7 @@ def shoot_ready_line(browser: Any, out: Path, world: Any) -> None:
             if room != "#ready-none":  # the member list marks it before the picture is taken
                 lead = page.locator('#buddy-list .member[data-name="claude-2"]')
                 expect(lead).to_contain_text("coordinator")
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             expect(page.locator("#board .board-card")).not_to_have_count(0)
             if room == "#ready-none":
                 expect(page.locator("#board-ready")).to_have_count(0)
@@ -3020,7 +3032,7 @@ def shoot_approval(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             for stage, status in (("before", "busy"), ("after", "waiting-approval")):
                 world.set_member_status(room, "codex-1", status, "hook:Notification")
                 pulse = page.locator('#board .board-card[data-item="F4"] .board-pulse')
@@ -4674,7 +4686,7 @@ def shoot_header_commit(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             expect(page.locator("#board .board-head-sha")).to_have_text("9a1b2c3")
             expect(page.locator("#board .board-head-note")).to_have_text("(last fix)")
             shot(page, out, f"board-header-commit-{slug}.png", clip_of(page))
@@ -4710,7 +4722,7 @@ def shoot_report_conflict(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             world.agent_call(room, "codex-1", "review", action="report", state="open", ci="none")
             expect(page.locator("#board-report")).to_contain_text("CI none")
             settle(page)
@@ -4747,7 +4759,7 @@ def shoot_review_edit(browser: Any, out: Path, world: Any) -> None:
             if not tab.is_visible():
                 page.click("#rooms-toggle")
             tab.click()
-            page.click("#board-toggle")
+            head_click(page, "board-toggle")
             page.click('#board .board-card[data-item="F3"]')
             if slug == "light":
                 page.locator("#board .board-history").scroll_into_view_if_needed()
@@ -5140,9 +5152,11 @@ def shoot_room_members(browser: Any, out: Path, world: Any) -> None:
             drawer(page, True)
             page.locator('#tabs .room[data-room="#build"]').click()
             drawer(page, False)
-            if page.locator("#room-menu-btn").is_visible():
-                page.click("#room-menu-btn")
-                page.click("#room-menu-leave")
+            # the room's menu holds Leave; on a phone it is the More sheet's Leave row (#995)
+            leave = page.locator('#more-list [data-more="leave"]' if phone else "#room-menu-leave")
+            if phone or page.locator("#room-menu-btn").is_visible():
+                page.click("#room-more" if phone else "#room-menu-btn")
+                leave.click()
                 expect(page.locator("#app-dialog")).to_be_visible()
                 still(page)
                 shot(page, out, f"room-members-leave-{theme}.png")

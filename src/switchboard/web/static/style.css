@@ -4309,6 +4309,9 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   cursor: pointer;
 }
 .more-item:hover, .more-item:focus-visible { background: var(--accent-tint); }
+.more-item.more-danger { color: var(--danger); }   /* Leave, as the room menu's own item is */
+.more-item.more-danger > .ic { color: inherit; }
+.more-item.more-danger:hover, .more-item.more-danger:focus-visible { background: var(--danger-bg); }
 .more-item > .ic, .more-item > .more-glyph { flex: 0 0 auto; width: var(--sp-5); text-align: center; color: var(--ink-2); }
 .more-item > .ic { height: var(--sp-5); }
 .more-words { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; }

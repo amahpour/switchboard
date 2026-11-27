@@ -18,7 +18,7 @@ Open a room under Other rooms to read it. It says **Preview** by its name, and a
 
 ## Leave a room
 
-Leave from the room's **⋯** menu at the top, or with **Leave** on your own row under **People** in Members. Switchboard asks first. When you leave:
+Leave from the room's **⋯** menu at the top (on a phone, **More** at the top, then **Leave**), or with **Leave** on your own row under **People** in Members. Switchboard asks first. When you leave:
 
 - `@humans`, red counts and notifications from that room stop, and anything of it waiting on you leaves Home.
 - What was unread there is cleared.
