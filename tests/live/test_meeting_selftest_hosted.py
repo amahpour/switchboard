@@ -12,13 +12,13 @@ Two tests:
    joinly and is heard from. A person's End call makes it leave and exit 0 and takes joinly down with it,
    and ``stop`` removes what is left. This is the test to run on any machine with Docker and the joinly
    image.
-2. **Every meetings feature with a hosted bot in a real call.** The same seven steps as
+2. **Every meetings feature with a hosted bot in a real call.** The same eight steps as
    ``test_meeting_selftest.py`` against a real call (``SWITCHBOARD_MEETING_URL_FILE``, mode 0600, as
    there), with one difference in how the bot gets there: step 1 is the host script, not ``/meeting
    <link>``. The scripted agent ``claude-1`` hears the call and answers as before. The hosting person's
    machine is a second agent session and the agent token the script registers with. The broker is
    throwaway, and the second joinly is the test speaker. Step 5 is a snapshot, the same check as the
-   server's bot. In step 6 the containers must also be gone. The meeting-self-test skill makes the
+   server's bot. In step 8 the containers must also be gone. The meeting-self-test skill makes the
    Zoom meeting; **this test never makes or deletes one.**
 
 Where the bot runs (``SWITCHBOARD_SELFTEST_HOSTED``):
@@ -94,7 +94,7 @@ READY_S = 240.0  # joinly's start, in the container
 STOP_S = 60.0
 REMOTE_WAIT_S = 1800.0
 
-# The seven steps as a hosted bot has them: the same, but for where the bot comes from and how it leaves.
+# The eight steps as a hosted bot has them: the same, but for where the bot comes from and how it leaves.
 HOSTED_STEPS = {
     **base.STEPS,
     1: (
@@ -102,7 +102,7 @@ HOSTED_STEPS = {
         "meeting-host start with the link on stdin: the room's call bar is live on the {platform} call,"
         " and shows the fingerprint the script printed",
     ),
-    7: (
+    8: (
         "the bots leave and the containers stop",
         "the bar ends and the speaker no longer sees the bot; the speaker leaves; relay and joinly are gone",
     ),
@@ -299,9 +299,9 @@ async def test_a_hosted_bot_starts_and_stops_cleanly_without_a_call(tmp_home: Pa
         shutil.rmtree(root, ignore_errors=True)
 
 
-# ----------------------------------------------------------------------- 2: a real call, seven steps
+# ----------------------------------------------------------------------- 2: a real call, eight steps
 class HostedWorld(base.World):
-    """``World`` with step 1 done by the host script (or by a person on the other machine), and step 6
+    """``World`` with step 1 done by the host script (or by a person on the other machine), and step 8
     also looking at the containers. Step 5 is the server bot's snapshot check."""
 
     def __init__(self, *a: Any, machine: Machine | None, token_file: Path | None, **kw: Any) -> None:
@@ -416,7 +416,9 @@ class HostedWorld(base.World):
         await self.step(5, self.snapshot, [self.needs_bot])
         if self.voice_patch:
             await self.step(6, self.voices, [self.needs_bot, self.needs_speaker])
-        await self.step(7, self.leave, [self.needs_bot, self.needs_speaker])
+        if self.share_step:
+            await self.step(7, self.share, [self.needs_bot, self.needs_speaker])
+        await self.step(8, self.leave, [self.needs_bot, self.needs_speaker])
         if self.observer is not None:
             with contextlib.suppress(Exception):
                 await self.observer.leave()
@@ -427,6 +429,8 @@ def hosted_specs(link: SecretLink) -> dict[int, tuple[str, str]]:
     specs = selftest.step_specs(HOSTED_STEPS, PLATFORM_LABEL[link.platform])
     if not base.World.voice_patch:
         del specs[6]
+    if not base.World.voice_patch or link.platform != "zoom":
+        del specs[7]  # the share step needs the patch and Zoom
     return specs
 
 
@@ -462,7 +466,7 @@ def speaker_fixes(link: SecretLink, containers: dict[str, base.Joinly], stock: b
 async def test_every_meetings_feature_against_a_real_call_with_a_hosted_bot(
     tmp_home: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The seven steps with the bot hosted: the same words, the same call, but the bot is the script's joinly
+    """The eight steps with the bot hosted: the same words, the same call, but the bot is the script's joinly
     and relay (here, or on another machine in ``remote`` mode). Fails (naming the steps) like the other
     self-test, and also if a container is left behind or any piece of the link is found in the broker's
     database, messages
