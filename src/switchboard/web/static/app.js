@@ -55,7 +55,8 @@
     $('whiteboard-close').addEventListener('click', function () {
       closeWhiteboard();
       noteShown();  // the log is back on screen
-      $('whiteboard-toggle').focus();
+      // the pencil is a row of the More sheet on a phone (§29.2): focus goes to More, which opened it
+      if (!tryFocus($('whiteboard-toggle'))) $('room-more').focus();
     });
   }
   const MAX_LINES = 2000;
@@ -7567,7 +7568,7 @@
         const row = Array.from(document.querySelectorAll('.past-board-link')).find(function (button) {
           return button.dataset.pastBoard === view.selected;
         });
-        tryFocus(row || $('past-boards-toggle'));
+        tryFocus(row) || tryFocus($('past-boards-toggle')) || tryFocus($('room-more'));
       });
     });
     return back;

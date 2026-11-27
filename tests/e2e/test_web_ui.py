@@ -4987,7 +4987,10 @@ def test_past_review_boards_show_outcomes_and_read_only_cards(ui: UI, mode: str)
         color_scheme="dark" if mode == "dark" else "light",
         **(PHONE if mode == "phone" else {}),
     )
-    page.get_by_role("button", name="Past boards", exact=True).click()
+    if mode == "phone":  # the header's icon is a row of the More sheet there
+        tap_more(page, "Past boards")
+    else:
+        page.get_by_role("button", name="Past boards", exact=True).click()
     history = page.get_by_role("list", name="Past boards")
     expect(history.get_by_role("button", name="example/shop #7")).to_be_visible()
     unknown_row = history.get_by_role("listitem").filter(has_text="example/shop #7")

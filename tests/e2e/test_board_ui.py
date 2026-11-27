@@ -105,7 +105,9 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
     no_horizontal_scroll(page)
     page.get_by_role("button", name="Back to chat").click()
     expect(page.locator("#whiteboard-host iframe")).to_have_count(0)
-    expect(page.get_by_role("button", name="Whiteboard", exact=True)).to_be_focused()
+    # a phone has no pencil in the header: focus goes back to More, which opened it
+    opener = "#room-more" if mode == "phone" else '[aria-label="Whiteboard"]'
+    expect(page.locator(opener)).to_be_focused()
 
 
 def test_agent_arrows_bind_to_existing_shapes_without_reconverting_the_targets(
