@@ -1780,7 +1780,9 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .pal-group > :first-child:not(.pal-item) { padding: 6px var(--sp-2) 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
 .pal-item {
   display: grid;
-  grid-template-columns: 76px 118px minmax(0, 1fr) auto;
+  /* the name column fits the longest name, /coordinator (12 monospace characters): at 76 px it ran into its
+     own hint, and the two read as one word */
+  grid-template-columns: calc(var(--fs-md) * 8) 118px minmax(0, 1fr) auto;
   column-gap: var(--sp-2);
   row-gap: var(--sp-1);
   align-items: center;

@@ -119,6 +119,36 @@ def test_a_long_argument_hint_is_whole(
     expect(page.locator("#pal-catchup .pal-args")).to_have_text("<agent> [on …]")
 
 
+CLASHES = """() => {
+  const rects = e => {
+    const r = document.createRange();
+    r.selectNodeContents(e);
+    return Array.from(r.getClientRects());
+  };
+  const meet = (a, b) => a.left < b.right - 0.5 && b.left < a.right - 0.5
+    && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+  return Array.from(document.querySelectorAll('#palette .pal-item')).flatMap(o => {
+    const name = o.querySelector('.pal-cmd'), hint = o.querySelector('.pal-args');
+    if (!name || !hint || !hint.textContent.trim()) return [];
+    return rects(name).some(a => rects(hint).some(b => meet(a, b))) ? [o.id] : [];
+  });
+}"""
+
+
+@pytest.mark.parametrize("device", ["desktop", "phone"])
+@pytest.mark.parametrize("size", ["default", "larger"])
+def test_a_commands_name_never_runs_into_its_hint(
+    ui: UI,  # noqa: F811
+    device: str,
+    size: str,
+) -> None:
+    """/coordinator's name is wider than the 76 px its column had, so its text ran into its own hint and the
+    two read as one word ("/coordinator[<name>"). Fails if any row's name and hint overlap on the page."""
+    page = palette(ui, "/", **(PHONE if device == "phone" else {}))
+    set_size(page, size)
+    assert page.evaluate(CLASHES) == []
+
+
 CARD = ("#board-reassign-owner", "#board-ticket", "#board-reason")
 BUTTONS = ("#board-reassign", "#board-mark-fixed", "#board-defer", "#board-drop")
 BOX = "e => { const r = e.getBoundingClientRect(); return {left: r.left, width: r.width, right: r.right}; }"
