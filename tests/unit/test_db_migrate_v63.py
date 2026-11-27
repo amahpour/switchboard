@@ -22,7 +22,7 @@ def test_every_room_gets_quiet_off_and_no_row_is_lost(tmp_path: Path) -> None:
     with sqlite3.connect(path) as old:
         old.executescript(FIXTURE.read_text())
     with sqlite3.connect(path) as before:
-        counts = db.row_counts(before, db.TABLES)
+        counts = db.row_counts(before, db.tables_of(64))
         rooms = [
             tuple(r) for r in before.execute("SELECT id, name, created_by, rules_text FROM rooms ORDER BY id")
         ]
@@ -30,8 +30,8 @@ def test_every_room_gets_quiet_off_and_no_row_is_lost(tmp_path: Path) -> None:
     con = db.open_db(path)
     backup = db.connect(db.backup_path_for(path, 60), readonly=True)
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
-        assert db.row_counts(con, db.TABLES) == counts
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 65
+        assert db.row_counts(con, db.TABLES) == {**counts, "room_coordinators": 0}  # 65's table (#976), empty
         assert [r[0] for r in con.execute("SELECT quiet FROM rooms")] == [0] * len(rooms)
         assert [
             tuple(r) for r in con.execute("SELECT id, name, created_by, rules_text FROM rooms ORDER BY id")

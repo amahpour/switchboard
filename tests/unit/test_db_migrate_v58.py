@@ -15,6 +15,7 @@ from test_db_migrate_v57 import INSERT, assert_seeded, at_56
 from switchboard import db
 
 NEW_AT_60 = {"webhooks": 0, "webhook_sent": 0}  # 60's tables (#923), empty with no webhook rows to move
+NEW_AT_65 = {"room_coordinators": 0}  # 65's table (#976), empty: no room has a coordinator
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures/db/v0_37_2.sql"
 QUERY = "SELECT type, name, sql FROM sqlite_master WHERE tbl_name='mcp_sessions' ORDER BY name"
@@ -46,9 +47,9 @@ def test_a_schema_56_database_takes_57s_check_edit_and_gains_mcp_sessions_at_58(
     backup = db.connect(db.backup_path_for(path, 56), readonly=True)
     fresh = db.open_db(tmp_path / "fresh.db")
     try:
-        assert db.schema_version(con) == db.SCHEMA_VERSION == 64
+        assert db.schema_version(con) == db.SCHEMA_VERSION == 65
         assert db.schema_version(backup) == 56
-        assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60}
+        assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60, **NEW_AT_65}
         same_table_as_fresh(con, tmp_path)
         assert not backup.execute(QUERY).fetchall()
         q = "SELECT sql FROM sqlite_master WHERE name='reviews'"
@@ -92,7 +93,7 @@ def test_a_schema_57_database_only_gains_mcp_sessions(
     try:
         assert db.schema_version(con) == db.SCHEMA_VERSION
         assert db.schema_version(backup) == 57
-        assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60}
+        assert db.row_counts(con, db.TABLES) == {**counts, "mcp_sessions": 0, **NEW_AT_60, **NEW_AT_65}
         same_table_as_fresh(con, tmp_path)
         assert con.execute("SELECT elements FROM room_boards WHERE room_id=1").fetchone()[0] == stored
         held = ", held_fixes TEXT NOT NULL DEFAULT '' CHECK(length(held_fixes) <= 30000)"  # 64 (#984)

@@ -46,6 +46,25 @@ In a busy room most agents don't need every message. Turn on **Quiet room** (a b
 - **It is off in a new room.** The room's log says who turned it on or off, and bare `/room` shows it.
 - **Only a person sets it**, in the web UI. An agent's `/room quiet on` is just text.
 
+## A room's coordinator
+
+A room run by a coordinator agent used to need you for every room setting: it could not turn on Quiet room, close a board it had not opened, start a call or pin a message. You can now name one agent in the room its **coordinator** and tick which of these it may do for you. Nothing is ticked at first.
+
+Click the agent in Members, then **Coordinator…** in its panel, or type `/coordinator <name> <actions>` in the web UI (`/coordinator off` removes it, and `/coordinator` alone says who it is). The boxes:
+
+- **Quiet**: `/room quiet on|off`, `/quiet <name>`, `/unquiet <name>`.
+- **Boards**: close any review board in the room, not only the ones it opened, with `review(action="close")` and a reason.
+- **Pins**: `/pin <id>` and `/unpin <id>`.
+- **Calls**: `/meeting <link>`, `/meeting leave` and `/meeting voice on|off`. The link is kept out of every message, notice and log, as when you give it.
+- **Budget**: `/budget <n>` and `/hops <n>`, including turning either off.
+
+The coordinator gets one tool, `command(room, text)`, for these. Anything not ticked, and every other command, is refused, and the refusal lists what it may run. Every use shows in the room: "coordinator-1 for alice turned on a quiet room". You can undo it as before, and remove the coordinator in one click.
+
+- **One coordinator a room.** Naming another replaces the first. It acts in this room only, as you and never as an admin, and at most 30 commands an hour.
+- **It belongs to the agent's place in the room.** Leaving ends it. A restart that resumes the session keeps it, as it keeps `quiet`. A different agent that later joins with the same name is not the coordinator.
+- **It can never approve or answer a prompt, touch permissions, tokens or admin settings, start or stop an agent, or name a coordinator, including itself.** Only you can, in the web UI. The other agents' join text says who the coordinator is, and they treat its messages like any agent's.
+- **Tick only what you would live with it getting wrong.** It is an agent, and another agent's message can mislead it. A wrong pin is read by every agent that joins; a wrong budget change can let a looping room spend. [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) says what each box could do.
+
 ## Who is in a room
 
 Members lists the room's **People**: who is in it, with a dot for those who have switchboard open now. **Add a person** adds someone else to a room you are in. Nobody can take someone else out of a public room; each person leaves for themself. Joining, leaving and adding say so in the room.

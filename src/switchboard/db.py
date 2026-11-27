@@ -34,7 +34,7 @@ whose members are in ``room_people`` too (§63); 55 (#890) and 56 (#893) clean w
 a room's whiteboard stored before their text was checked (§37.2, §56.5); 57 (#907) lets a review board's
 reported CI be ``blocked`` (§37.11); 58 (#903) remembers which client opened each MCP session, so a session
 survives a restart (§49.2); 59 (#914) indexes the messages that name someone or reply to one, for a
-room's Mentions filter (§64).
+room's Mentions filter (§64); 65 (#976) adds a room's coordinator (§50.2).
 An older database is migrated once, after a verified 0600 backup (``migrate``), through
 every step up to the current version in one transaction; a newer one is refused.
 """
@@ -60,7 +60,7 @@ from switchboard.redact import redact
 
 log = logging.getLogger("switchboard.db")
 
-SCHEMA_VERSION = 64
+SCHEMA_VERSION = 65
 
 # ``reviews.held_fixes`` (#984, DESIGN.md §37.20): the column's text, which the fresh schema and the step from
 # 63 both use, since an ALTER leaves the table's text as ``..., <column>`` and a fresh one must read the same.
@@ -409,7 +409,8 @@ V45_TABLES = (*V44_TABLES, "home_seen", "home_snoozes")  # before the whiteboard
 V50_TABLES = (*V45_TABLES, "room_boards", "room_board_changes")
 V55_TABLES = (*V50_TABLES, "say_keys")  # schemas 53 through 57, before mcp_sessions (v58)
 V59_TABLES = (*V55_TABLES, "mcp_sessions")  # schemas 58 and 59, before the webhook tables (v60)
-TABLES = (*V59_TABLES, "webhooks", "webhook_sent")
+V64_TABLES = (*V59_TABLES, "webhooks", "webhook_sent")  # schemas 60 through 64
+TABLES = (*V64_TABLES, "room_coordinators")
 
 # v1 -> v2 (DESIGN.md §27.6): one BEGIN IMMEDIATE, after a verified backup. The
 # columns land at the end of their tables, where the fresh schema above puts them too.
@@ -1303,6 +1304,22 @@ V63_TO_V64 = (
     "UPDATE meta SET value='64' WHERE key='schema_version'",
 )
 
+# v64 -> v65 (#976, DESIGN.md §50.2): a room's coordinator, one agent a person named to run the room actions
+# they ticked. One row a room, keyed by the membership, so the role is the membership's and not a name's: it
+# goes with the membership (``end_membership``) and moves to the new one of a resumed join. ``actions`` is a
+# comma list of the fixed keys (``commands.COORDINATOR_ACTIONS``), checked where it is set. No row exists
+# until a person names a coordinator.
+ROOM_COORDINATORS_DDL = (
+    "CREATE TABLE room_coordinators("
+    " room_id INTEGER PRIMARY KEY REFERENCES rooms(id) ON DELETE CASCADE,"
+    " membership_id INTEGER NOT NULL UNIQUE REFERENCES memberships(id) ON DELETE CASCADE,"
+    " actions TEXT NOT NULL DEFAULT '' CHECK(length(actions) <= 100),"
+    " named_by TEXT NOT NULL CHECK(length(named_by) BETWEEN 1 AND 100),"
+    " named_by_person INTEGER,"
+    " named_at REAL NOT NULL)",
+)
+V64_TO_V65 = (*ROOM_COORDINATORS_DDL, "UPDATE meta SET value='65' WHERE key='schema_version'")
+
 # What the cleaning reads: the review board's free text, with each column's length limit in the schema.
 # Names (who raised, owned, answered or closed something) are not text: the room's members' names were
 # checked when they joined, and a pick is keyed by one.
@@ -1738,6 +1755,7 @@ def _steps(frm: int) -> list[MigrationStep]:
         61: MigrationStep(62, V61_TO_V62, ()),
         62: MigrationStep(63, V62_TO_V63, ()),
         63: MigrationStep(64, V63_TO_V64, ()),
+        64: MigrationStep(65, V64_TO_V65, ("room_coordinators",)),
     }
     out = []
     v = frm
@@ -1792,6 +1810,8 @@ def tables_of(version: int) -> tuple[str, ...]:
         return V55_TABLES  # 54 added a column, 55 and 56 clean text, 57 edits a CHECK: no table
     if version <= 59:
         return V59_TABLES  # 59 added an index: no table
+    if version <= 64:
+        return V64_TABLES  # 60 added the webhook tables; 61 to 64 edit a CHECK, rows and columns: no table
     return TABLES
 
 
@@ -1831,6 +1851,7 @@ SCHEMA_STATEMENTS = [
     *MCP_SESSIONS_DDL,
     *ADDRESSED_DDL,
     *WEBHOOKS_DDL,
+    *ROOM_COORDINATORS_DDL,
 ]
 
 

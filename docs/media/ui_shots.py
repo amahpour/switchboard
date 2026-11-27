@@ -1955,6 +1955,51 @@ def shoot_wake_settings(browser: Any, out: Path, world: Any) -> None:
             ctx.close()
 
 
+def shoot_coordinator(browser: Any, out: Path, world: Any) -> None:
+    """A room's coordinator (#976): the member panel's Coordinator… dialog with Quiet and Boards
+    ticked (light, dark, phone), and the room after Save, its member row marked and the notice naming
+    the agent (light). Only the last context saves, so the dialog shots show a first naming."""
+    from playwright.sync_api import expect
+
+    world.create_room("#coord-demo")
+    world.add_agents("#coord-demo", ("claude-1", "codex-1"))
+
+    base = {"timezone_id": "UTC", "locale": "en-US"}
+    for name, ctx_args, save in (
+        ("coordinator-dialog-light.png", {**DESKTOP, "color_scheme": "light"}, False),
+        ("coordinator-dialog-dark.png", {**DESKTOP, "color_scheme": "dark"}, False),
+        ("coordinator-dialog-phone-light.png", {**PHONE, "color_scheme": "light"}, False),
+        ("coordinator-named-light.png", {**DESKTOP, "color_scheme": "light"}, True),
+    ):
+        ctx = browser.new_context(**base, **ctx_args)
+        ctx.set_default_timeout(WAIT_MS)
+        try:
+            page = ctx.new_page()
+            sign_in(page, world.broker)
+            tab = page.locator('#tabs .room[data-room="#coord-demo"]')
+            if not tab.is_visible():
+                page.click("#rooms-toggle")
+            tab.click()
+            expect(page.locator("#room-title")).to_have_text("coord-demo", timeout=WAIT_MS)
+            member = page.locator('#buddy-list .member[data-name="claude-1"]')
+            if ctx_args["viewport"] == PHONE["viewport"]:  # the phone keeps Members in a sheet
+                page.click("#buddy-toggle")
+            member.click()
+            page.click("#insp-coordinator")
+            dialog = page.locator("#app-dialog")
+            expect(dialog).to_be_visible()
+            dialog.get_by_label("Quiet", exact=True).check()
+            dialog.get_by_label("Boards", exact=True).check()
+            page.evaluate("document.activeElement && document.activeElement.blur()")
+            if save:
+                dialog.get_by_role("button", name="Save").click()
+                expect(page.locator("#log")).to_contain_text("named claude-1 the room's coordinator")
+                expect(member).to_contain_text("coordinator")
+            shot(page, out, name)
+        finally:
+            ctx.close()
+
+
 def shoot_room_rename(browser: Any, out: Path, world: Any) -> None:
     """The small title dialog and its result (#316), before and after in light, dark and phone."""
     from playwright.sync_api import expect
@@ -5180,6 +5225,7 @@ ONLY: dict[str, Any] = {
     "header_chips": shoot_header_chips,
     "wake_chips": shoot_wake_chips,
     "wake_settings": shoot_wake_settings,
+    "coordinator": shoot_coordinator,
     "phone_chips": shoot_phone_chips,
     "play_fit": shoot_play_fit,
     "attachments": shoot_attachments_guide,

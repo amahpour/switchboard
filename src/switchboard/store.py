@@ -31,6 +31,7 @@ from switchboard.models import (
     AgentTokenRow,
     Answer,
     Batch,
+    Coordinator,
     Event,
     FileGrant,
     Item,
@@ -74,6 +75,16 @@ STATUS_LINE_STALE_S = 30 * 60
 SAY_KEY_TTL_S = 5 * 60
 # a meeting error is a short phrase. A link or a Zoom passcode never lands in the row (§52).
 _MEETING_SECRET = re.compile(r"https?://\S+|pwd=\S+", re.IGNORECASE)
+
+
+# the endings of a session, not of a person's choice: a restart that resumes the session takes the role back
+# (#304, #974, #976). Every other end (leave, kick, a person leaving, a closed room, a removed device)
+# ends it.
+ROLE_KEPT_ON_END = frozenset({"resumed", "session_end", "not_connected"})
+
+
+def _split_actions(text: str) -> tuple[str, ...]:
+    return tuple(a for a in text.split(",") if a)
 
 
 class StoreError(Exception):
@@ -1314,6 +1325,7 @@ class Store:
             " p.tier_note, p.away,"
             " p.status_line, p.status_line_at,"
             " p.approval_mode, p.host,"
+            " (SELECT rc.actions FROM room_coordinators rc WHERE rc.membership_id=m.id) AS coordinator,"
             # not status_at: a status the broker sets (its restart) is not the session heard (#948)
             " MAX(COALESCE(p.last_seen, 0), COALESCE(p.last_say_at, 0)) AS heard_at,"
             " (SELECT COUNT(*) FROM deliveries d WHERE d.membership_id=m.id"
@@ -1338,6 +1350,7 @@ class Store:
                 approval_mode=r["approval_mode"],
                 held=bool(r["held"]),
                 quiet=bool(r["quiet"]),
+                coordinator=None if r["coordinator"] is None else _split_actions(r["coordinator"]),
                 listen=bool(r["listen"]),
                 call_voice=r["call_voice"],
                 joined_at=r["joined_at"],
@@ -1501,11 +1514,105 @@ class Store:
                 (int(quiet), membership_id),
             )
 
+    # ------------------------------------------------ the room's coordinator (#976, §50.2)
+    def coordinator(self, room_id: int) -> Coordinator | None:
+        """The room's coordinator, if its membership is still in the room: a row whose membership has ended
+        is not one (a resumed join moves it, ``move_coordinator``; any other end removes it)."""
+        r = self.con.execute(
+            "SELECT rc.*, m.screen_name FROM room_coordinators rc JOIN memberships m ON m.id=rc.membership_id"
+            " WHERE rc.room_id=? AND m.left_at IS NULL",
+            (room_id,),
+        ).fetchone()
+        if r is None:
+            return None
+        return Coordinator(
+            room_id=r["room_id"],
+            membership_id=r["membership_id"],
+            name=r["screen_name"],
+            actions=_split_actions(r["actions"]),
+            named_by=r["named_by"],
+            named_by_person=r["named_by_person"],
+            named_at=r["named_at"],
+        )
+
+    def coordinator_of(self, membership_id: int) -> Coordinator | None:
+        """``membership_id``'s coordinator role, in the room it was named in, or None."""
+        r = self.con.execute(
+            "SELECT m.room_id FROM room_coordinators rc JOIN memberships m ON m.id=rc.membership_id"
+            " WHERE rc.membership_id=? AND m.left_at IS NULL",
+            (membership_id,),
+        ).fetchone()
+        if r is None:
+            return None
+        got = self.coordinator(r["room_id"])
+        return got if got is not None and got.membership_id == membership_id else None
+
+    def set_coordinator(
+        self,
+        room_id: int,
+        membership_id: int,
+        actions: Sequence[str],
+        named_by: str,
+        named_by_person: int | None,
+    ) -> None:
+        """Name the room's coordinator, or change its actions; another member replaces the first (one a
+        room). The membership must be this room's and still in it. The keys are the caller's to have checked
+        (``commands``); the table refuses an overlong list."""
+        with db.tx(self.con):
+            ok = self.con.execute(
+                "SELECT 1 FROM memberships WHERE id=? AND room_id=? AND left_at IS NULL",
+                (membership_id, room_id),
+            ).fetchone()
+            if ok is None:
+                raise StoreError("the coordinator must be a member of the room")
+            self.con.execute(
+                "DELETE FROM room_coordinators WHERE room_id=? OR membership_id=?", (room_id, membership_id)
+            )
+            self.con.execute(
+                "INSERT INTO room_coordinators(room_id, membership_id, actions, named_by, named_by_person,"
+                " named_at) VALUES(?,?,?,?,?,?)",
+                (
+                    room_id,
+                    membership_id,
+                    ",".join(actions),
+                    named_by[:100],
+                    named_by_person,
+                    self.clock.now(),
+                ),
+            )
+
+    def clear_coordinator(self, room_id: int) -> bool:
+        """Remove the room's coordinator. True when there was one."""
+        with db.tx(self.con):
+            cur = self.con.execute("DELETE FROM room_coordinators WHERE room_id=?", (room_id,))
+            return cur.rowcount > 0
+
+    def move_coordinator(self, old_membership_id: int, new_membership_id: int) -> None:
+        """A resumed join (#304, #974) takes over its old membership's role, in the transaction that creates
+        the new membership, so the room is never without it between the two."""
+        with db.tx(self.con):
+            self.con.execute(
+                "UPDATE room_coordinators SET membership_id=? WHERE membership_id=?",
+                (new_membership_id, old_membership_id),
+            )
+
+    def coordinator_uses(self, membership_id: int, since: float) -> list[float]:
+        """When this coordinator ran a command since ``since``, oldest first: what its rate limit counts."""
+        rows = self.con.execute(
+            "SELECT ts FROM events WHERE kind='coordinator_command' AND membership_id=? AND ts>? ORDER BY ts",
+            (membership_id, since),
+        ).fetchall()
+        return [r[0] for r in rows]
+
     def end_membership(self, membership_id: int, reason: str, *, kicked: bool = False) -> None:
-        """Leave, kick or session end: revoke the open deliveries and the claims."""
+        """Leave, kick or session end: revoke the open deliveries and the claims. The room's coordinator role
+        goes with the membership, except for the endings a resumed join can take back (``ROLE_KEPT_ON_END``),
+        where it stays until that join moves it (#976)."""
         now = self.clock.now()
         with db.tx(self.con):
             self.con.execute("DELETE FROM claims WHERE membership_id=?", (membership_id,))
+            if reason not in ROLE_KEPT_ON_END:
+                self.con.execute("DELETE FROM room_coordinators WHERE membership_id=?", (membership_id,))
             self.con.execute(
                 "UPDATE memberships SET left_at=?, left_reason=?,"
                 " kicked=MAX(kicked, ?) WHERE id=? AND left_at IS NULL",
@@ -2729,9 +2836,11 @@ class Store:
         screen_name: str,
         join_code_hash: str | None = None,
         quiet: bool = False,
+        takes_role_of: int | None = None,
     ) -> Membership:
         """``quiet`` is a resumed join's old flag, carried over from the membership it replaces (#974, §50),
-        or else the room's own setting (#975, §50.1), written in the same insert."""
+        or else the room's own setting (#975, §50.1), written in the same insert. ``takes_role_of`` is the
+        resumed membership's id: the room's coordinator role moves to this one in the same transaction."""
         now = self.clock.now()
         with db.tx(self.con):
             last = self.last_message_id(room_id)
@@ -2743,6 +2852,8 @@ class Store:
             if cur.lastrowid is None:
                 raise StoreError("membership insert returned no id")
             mid = cur.lastrowid
+            if takes_role_of is not None:  # a resumed join keeps the coordinator role (#976)
+                self.move_coordinator(takes_role_of, mid)
         got = self.get_membership(mid)
         assert got is not None
         return got
