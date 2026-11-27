@@ -2,6 +2,16 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.21.0 (2026-11-27)
+
+### Changed
+
+- **A phone's room header is one row, with a More menu.** A room used to open with three rows before the first message (the room's name, the status chips, and six small icons with no labels), about 200 px of an 844 px screen. Now it is one row: the Rooms button, the room's name with its state and count under it ("● Running · 4 agents"), the approvals warning when there is one, Members, and a new **More** button. More opens a sheet from the bottom with the whiteboard, past boards, room rules, Focus mode, wake settings and call settings (and the review board, when the room has one), each with its name in words, and **Leave**, where the room's **⋯** menu would offer it. The wake budget and hop count are now the second line of **Wake settings**, and Hands-free is the second line of **Call settings**. On a phone, All, Mentions and Files are also one rounded switch instead of three pills. Every button in the header is at least 44 by 44 px. A desktop looks as it did.
+
+### Fixed
+
+- **A line said while someone shares a screen on Zoom keeps the speaker's name (#760).** With Whisper (a call hosted on your own machine, or the server's bot with Whisper turned on), every line said during a share arrived as `call`: the bot reads who is talking from Zoom's video tile, and during a share Zoom moves that tile into its small floating window. The pinned Zoom fix (`zoom.py`) now reads the floating window too. The server's bot with captions, the default, reads the name from the captions and was never affected. The meeting self-test has a new step that shares a picture, speaks, and checks the line's name.
+
 ## 1.20.0 (2026-11-27)
 
 ### Added
