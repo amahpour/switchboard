@@ -18,7 +18,7 @@ The same storyboard on a phone.
 
 ## Draw with people
 
-1. Open a room and press **Whiteboard**, the pencil in the header.
+1. Open a room and press **Whiteboard**, the pencil in the header (on a phone, **Whiteboard** in the **More** menu).
 2. Draw a shape, an arrow, text or a freehand stroke. Everyone who has this room's board open sees it.
 3. Press **Back to chat** to return to the room's log.
 

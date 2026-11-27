@@ -366,7 +366,7 @@ you can't flip a switch on the call bar:
 - **Calls start with Voice on.** Every call in the room, the server's bot and a [call you host](#host-the-bot-on-your-own-machine) alike, starts with Voice on (see [Let agents speak](#let-agents-speak)).
 - **Agents listen on calls.** Every agent in the room listens for the whole call, without `/meeting listen`, including one that joins after the call started (see [Let an agent listen](#let-an-agent-listen)). The wake cap per call still applies.
 
-Set them in the room's **Call settings** (the phone icon in the header: two checkboxes and **Save**), or type
+Set them in the room's **Call settings** (the phone icon in the header, or **Call settings** in **More** on a phone: two checkboxes and **Save**), or type
 `/room voice on`, `/room voice off`, `/room listen on` or `/room listen off` in the web UI. `/room` alone shows
 what they are. Turning one on also applies to a call that is open now; turning one off leaves the open call as it is.
 For one call you can still turn Voice off on the bar, or one agent off with its switch or

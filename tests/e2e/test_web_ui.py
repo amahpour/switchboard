@@ -258,34 +258,21 @@ def no_horizontal_scroll(page: Page) -> None:
     assert widths[0] <= widths[1] and widths[2] <= widths[3], f"horizontal scroll: {widths}"
 
 
-def chips_outside_row(page: Page) -> list[str]:
-    """Header status chips that are shown but not wholly inside the row that holds them."""
-    return page.evaluate(
-        """() => {
-          const row = document.getElementById('status-chips').getBoundingClientRect();
-          return [...document.querySelectorAll('#status-chips .chip')]
-            .filter(c => c.getBoundingClientRect().width > 0)
-            .filter(c => { const b = c.getBoundingClientRect();
-                           return b.left < row.left - 1 || b.right > row.right + 1
-                               || b.top < row.top - 1 || b.bottom > row.bottom + 1; })
-            .map(c => c.id);
-        }"""
-    )
+def tap_more(page: Page, name: str) -> None:
+    """On a phone the room's icon buttons are rows of the More sheet (#995, finding 7): open it and choose
+    the one called ``name``."""
+    page.click("#room-more")
+    sheet = page.locator("#more-sheet")
+    expect(sheet).to_be_visible()
+    sheet.locator(".more-item", has_text=name).click()
 
 
-def chip_row_report(page: Page) -> dict[str, Any]:
-    """Widths of the header's shown chips, for a layout assertion that fails with the numbers."""
-    return page.evaluate(
-        """() => {
-          const row = document.getElementById('status-chips');
-          const chips = [...row.querySelectorAll('.chip')]
-            .filter(c => c.getBoundingClientRect().width > 0)
-            .map(c => ({id: c.id, w: Math.round(c.getBoundingClientRect().width),
-                        t: (c.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40)}));
-          return {clientW: row.clientWidth, scrollW: row.scrollWidth,
-                  clientH: row.clientHeight, scrollH: row.scrollHeight, chips};
-        }"""
-    )
+def show_board(page: Page) -> None:
+    """Click the header's review board button; on a phone it is the first row of the More sheet."""
+    if page.locator("#board-toggle").is_visible():
+        page.click("#board-toggle")
+    else:
+        tap_more(page, "Review board")
 
 
 # Issue #110: where a caret placed after `caretPos` characters of #input's value would sit, found
@@ -660,59 +647,305 @@ def test_focus_mode_collapses_agent_chat_and_restores_on_toggle_off(ui: UI) -> N
     expect(unaddressed.locator(".collapsed-line")).to_have_count(0)
 
 
-def test_the_room_buttons_sit_in_one_row_on_a_phone(ui: UI) -> None:
-    """On a phone the room's buttons (rules, Focus) get a row of their own below the chips, side
-    by side. Before #223 they had no place in the phone header's grid, so each fell into
-    whichever column was next: Focus sat apart from the rules button, under the room's name."""
-    page = ui.open(**PHONE)
-    rules = page.locator("#room-rules")
-    focus = page.locator("#focus-toggle")
-    expect(rules).to_be_visible()
-    expect(focus).to_be_visible()
-    r, f, chips = rules.bounding_box(), focus.bounding_box(), page.locator("#status-chips").bounding_box()
-    assert r and f and chips
-    assert r["y"] == f["y"], (r, f)  # one row
-    assert 0 <= f["x"] - (r["x"] + r["width"]) <= 8, (r, f)  # side by side
-    assert r["y"] >= chips["y"] + chips["height"], (r, chips)  # below the chips
-    no_horizontal_scroll(page)
+SIZES = ["default", "larger"]
 
 
-@pytest.mark.parametrize("scheme", ["light", "dark"])
-def test_a_phones_header_shows_every_chip_without_scrolling(ui: UI, scheme: str) -> None:
-    """#716: on a 390 px phone the header's chip row scrolled sideways. With hands-free on and every
-    chip showing (Hands-free, Running, Budget, Hops, the approvals count) Hops sat
-    past the edge. Whether a room is paused or out of budget is worth seeing without a swipe, so the
-    row wraps and each chip is wholly inside it. Fails if any shown chip is cut by the row, or the
-    row scrolls, at 390x844, including at the larger text size."""
-    room = f"phone-chips-{scheme}"
+def _phone_header_room(ui: UI, name: str, scheme: str = "light") -> Page:
+    """A room on a 390x844 phone with every header signal on: hands-free calls, a budget, a hop limit, and an
+    agent whose approvals are off (the warning badge)."""
     world = ui.world
-    world.create_room("#" + room)
-    world.command(room, "/room voice on")
-    world.add_agents("#" + room, ("ag-1",))
-    world.set_approval_modes("#" + room, {"ag-1": "bypass"})
-    page = ui.open(room=room, color_scheme=scheme, **PHONE)
-    expect(page.locator("#st-handsfree")).to_have_text("Hands-free")
-    expect(page.locator("#st-state")).to_have_text("Running")
-    expect(page.locator("#st-budget")).to_contain_text("60/60")
-    expect(page.locator("#st-hops")).to_contain_text("Hops")
-    expect(page.locator("#st-approvals")).to_be_visible()
-    assert page.locator("#st-approvals").evaluate("el => getComputedStyle(el, '::after').content") == '"1"'
-    report = chip_row_report(page)
-    assert len(report["chips"]) == 5, report
-    assert report["scrollW"] <= report["clientW"] + 1, report
-    assert report["scrollH"] <= report["clientH"] + 1, report
-    assert chips_outside_row(page) == [], report
-    for chip in ("#st-handsfree", "#st-state", "#st-budget", "#st-hops", "#st-approvals"):
-        expect(page.locator(chip)).to_be_in_viewport()
-    rules, chips = page.locator("#room-rules").bounding_box(), page.locator("#status-chips").bounding_box()
-    assert rules and chips and rules["y"] >= chips["y"] + chips["height"] - 1
+    world.create_room("#" + name)
+    world.command(name, "/room voice on")
+    world.add_agents("#" + name, ("ag-1", "ag-2"))
+    world.set_approval_modes("#" + name, {"ag-1": "bypass", "ag-2": "bypass"})
+    return ui.open(room=name, color_scheme=scheme, **PHONE)
+
+
+@pytest.mark.parametrize("size", SIZES)
+def test_a_phones_room_header_is_one_row_and_the_log_starts_near_the_top(ui: UI, size: str) -> None:
+    """#995, finding 7: a phone's room used to open with three rows (back, name and Members; five status
+    chips; six unlabeled icons) and the log's first line sat about 200 px down an 844 px screen. The header
+    is one row now: the Rooms button, the name with its state and count under it, the warning badge, Members
+    and More, each a 44 px target. Fails if the header is taller than 64 px, the log starts more than 120 px
+    below the top of the room, a header control is under 44 px, the chips or the icon buttons show, or the
+    page scrolls sideways, at the default and the larger text size."""
+    page = _phone_header_room(ui, f"hdr-{size}")
+    page.evaluate("s => { document.documentElement.dataset.textSize = s; }", size)
+    head = page.locator(".conv-head").bounding_box()
+    assert head is not None and head["height"] <= 64, head
+    main = page.locator("#main").bounding_box()
+    first = page.locator("#log").bounding_box()  # the log's top: its first line starts there, then fills down
+    assert main is not None and first is not None
+    assert first["y"] - main["y"] <= 120, (first, main)
+    for sel in ("#rooms-toggle", "#room-title-button", "#st-approvals", "#buddy-toggle", "#room-more"):
+        expect(page.locator(sel)).to_be_visible()
+        box = page.locator(sel).bounding_box()
+        assert box is not None and box["width"] >= 43.5 and box["height"] >= 43.5, (sel, box)
+        if sel != "#room-title-button":  # the name's tap box reaches over the padding around it
+            assert box["y"] >= head["y"] - 1 and box["y"] + box["height"] <= head["y"] + head["height"] + 1, (
+                sel
+            )
+    for sel in ("#st-handsfree", "#st-state", "#st-budget", "#st-hops", ".head-tools"):
+        expect(page.locator(sel)).to_be_hidden()
+    for sel in ("#whiteboard-toggle", "#room-rules", "#focus-toggle", "#room-wake", "#room-calls"):
+        expect(page.locator(sel)).to_be_hidden()
+    more = page.locator("#room-more")
+    expect(more).to_have_attribute("aria-label", "More")
+    expect(more).to_have_attribute("title", "More")
+    expect(more).to_have_attribute("aria-haspopup", "menu")
+    expect(more).to_have_attribute("aria-expanded", "false")
     no_horizontal_scroll(page)
-    # the larger text size widens every chip; they still wrap inside the row instead of scrolling
-    page.evaluate("document.documentElement.dataset.textSize = 'larger'")
-    report = chip_row_report(page)
-    assert report["scrollW"] <= report["clientW"] + 1, report
-    assert report["scrollH"] <= report["clientH"] + 1, report
-    assert chips_outside_row(page) == [], report
+
+
+@pytest.mark.parametrize("size", SIZES)
+def test_the_line_under_a_phones_room_name_has_the_state_and_the_count_and_is_never_cut(
+    ui: UI, size: str
+) -> None:
+    """The Running/Paused chip moved under the room's name on a phone: "Running · 2 agents", the dot in the
+    state's colour, and "2 agents" rather than "alice and 2 agents" so the line fits. Fails if the line is
+    missing the state, still starts with the person's name, wraps to a second line or is wider than its box,
+    or if pausing the room does not turn it to Paused."""
+    page = _phone_header_room(ui, f"sub-{size}")
+    page.evaluate("s => { document.documentElement.dataset.textSize = s; }", size)
+    state = page.locator("#room-state")
+    expect(state).to_have_text("Running")
+    expect(page.locator("#room-sub")).to_have_text("2 agents")
+    line = page.locator(".head-sub")
+    box = line.bounding_box()
+    assert box is not None and box["height"] < 24 * (2 if size == "larger" else 1), box
+    assert line.evaluate("el => el.scrollWidth <= el.clientWidth + 1"), "the line is cut"
+    # what does not fit is dropped whole, never cut mid-word: the word "agents" goes before the number does
+    shown = line.evaluate(
+        """el => {
+          const limit = el.getBoundingClientRect().bottom + 2;
+          return [...el.querySelectorAll('.room-state, .sub-n, .sub-word')]
+            .filter(e => e.getBoundingClientRect().bottom <= limit).map(e => e.className.split(' ')[0]);
+        }"""
+    )
+    assert "room-state" in shown and "sub-n" in shown, shown
+    green = state.locator(".dot").evaluate("el => getComputedStyle(el).backgroundColor")
+    ui.world.command(f"sub-{size}", "/pause")
+    expect(state).to_have_text("Paused")
+    amber = state.locator(".dot").evaluate("el => getComputedStyle(el).backgroundColor")
+    assert amber != green, "a paused room's dot keeps the running colour"
+    assert page.locator(".conv-head").bounding_box()["height"] <= 64  # type: ignore[index]
+    ui.world.command(f"sub-{size}", "/resume")
+
+
+def test_the_warning_badge_and_members_are_one_tap_in_a_phones_header(ui: UI) -> None:
+    """With the chips row gone, the approvals warning stays in the header's row and still opens Members at
+    the flagged agent; Members is still one tap. Fails if either needs the More sheet or opens nothing."""
+    page = _phone_header_room(ui, "hdr-tap")
+    badge = page.locator("#st-approvals")
+    expect(badge).to_be_visible()
+    assert badge.evaluate("el => getComputedStyle(el, '::after').content") == '"2"'
+    badge.click()
+    expect(page.locator("#app")).to_have_class(re.compile("sheet-open"))
+    expect(page.locator('#buddy-list .member[data-name="ag-1"]')).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator("#buddy-toggle")).to_be_focused()
+    page.click("#buddy-toggle")
+    expect(page.locator("#members-title")).to_be_visible()
+
+
+@pytest.mark.parametrize("size", SIZES)
+def test_more_opens_a_sheet_that_names_every_room_button_in_words(ui: UI, size: str) -> None:
+    """More is a bottom sheet titled with the room's name: a dialog holding a menu, one row (at least 44 px)
+    for each of the icon buttons the header no longer shows, in order, each with its name written out.
+    Fails if a row is missing or out of order, a name is only an icon, a row is under 44 px or cut, focus does
+    not move into the sheet, or the sheet leaves the window, at both text sizes."""
+    page = _phone_header_room(ui, f"more-{size}")
+    page.evaluate("s => { document.documentElement.dataset.textSize = s; }", size)
+    page.click("#room-more")
+    sheet = page.locator("#more-sheet")
+    expect(sheet).to_be_visible()
+    expect(page.locator("#room-more")).to_have_attribute("aria-expanded", "true")
+    expect(sheet).to_have_attribute("role", "dialog")
+    expect(sheet.locator("#more-list")).to_have_attribute("role", "menu")
+    expect(page.locator("#more-title")).to_have_text(f"#more-{size}")
+    names = sheet.locator(".more-item .more-label").all_inner_texts()
+    assert names == [
+        "Whiteboard",
+        "Past boards",
+        "Room rules",
+        "Focus mode",
+        "Wake settings",
+        "Call settings",
+    ], names
+    for row in sheet.locator(".more-item").all():
+        box = row.bounding_box()
+        assert box is not None and box["height"] >= 43.5 and box["width"] >= 43.5
+        assert row.evaluate("el => el.scrollWidth <= el.clientWidth + 1"), "a row is cut"
+    focus_row = sheet.locator('.more-item[data-more="focus-toggle"]')
+    expect(focus_row).to_have_attribute("role", "menuitemcheckbox")
+    expect(focus_row).to_have_attribute("aria-checked", "false")
+    expect(sheet.locator(".more-item").first).to_be_focused()
+    box = sheet.bounding_box()
+    assert box is not None and box["x"] >= 0 and box["x"] + box["width"] <= 390.5
+    assert box["y"] >= 0 and box["y"] + box["height"] <= 844.5
+    page.keyboard.press("ArrowDown")
+    expect(sheet.locator(".more-item").nth(1)).to_be_focused()
+    page.keyboard.press("End")
+    expect(sheet.locator(".more-item").last).to_be_focused()
+    no_horizontal_scroll(page)
+
+
+def test_each_more_row_does_what_its_icon_button_did_and_closes_the_sheet(ui: UI) -> None:
+    """A More row clicks the icon button it stands for, so the dialogs and toggles are the desktop's own.
+    Fails if a row opens something else, leaves the sheet open, or a dialog it opens does not give focus
+    back to More when it closes."""
+    page = _phone_header_room(ui, "more-do")
+    sheet = page.locator("#more-sheet")
+    dialog = page.locator("#app-dialog")
+    for name, title in (
+        ("Room rules", "Rules for"),
+        ("Wake settings", "Wake settings for"),
+        ("Call settings", "Calls in"),
+    ):
+        tap_more(page, name)
+        expect(sheet).to_be_hidden()
+        expect(dialog).to_be_visible()
+        expect(page.locator("#app-dialog h2").first).to_contain_text(title)
+        page.keyboard.press("Escape")
+        expect(dialog).to_be_hidden()
+        expect(page.locator("#room-more")).to_be_focused()
+    tap_more(page, "Past boards")
+    expect(sheet).to_be_hidden()
+    expect(page.locator("#past-boards-toggle")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#board")).to_be_visible()
+    tap_more(page, "Whiteboard")
+    expect(sheet).to_be_hidden()
+    expect(page.locator("#whiteboard-status")).to_contain_text("Live")
+
+
+def test_the_focus_mode_row_is_a_switch_that_follows_the_icon_buttons_state(ui: UI) -> None:
+    """Focus mode in More is a switch: choosing it toggles focus exactly as the icon button does, closes the
+    sheet, and the next time the sheet opens its switch shows the state. Fails if the row is not a toggle, the
+    state does not reach #focus-toggle, or the switch does not follow it."""
+    page = _phone_header_room(ui, "more-focus")
+    tap_more(page, "Focus mode")
+    expect(page.locator("#more-sheet")).to_be_hidden()
+    expect(page.locator("#focus-toggle")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#room-more")).to_be_focused()
+    page.click("#room-more")
+    row = page.locator('#more-sheet .more-item[data-more="focus-toggle"]')
+    expect(row).to_have_attribute("aria-checked", "true")
+    row.click()
+    expect(page.locator("#focus-toggle")).to_have_attribute("aria-pressed", "false")
+    page.click("#room-more")
+    expect(row).to_have_attribute("aria-checked", "false")
+
+
+def test_a_review_board_row_shows_only_in_a_room_that_has_one(ui: UI) -> None:
+    """Review board is the first row when the room has an open board, and choosing it opens the board as its
+    icon button did. A room without one has no such row. Fails if the row shows without a board, is missing
+    with one, or opens nothing."""
+    page = review_room(ui, "more-board", **PHONE)
+    page.click("#room-more")
+    labels = page.locator("#more-sheet .more-item .more-label").all_inner_texts()
+    assert labels[0] == "Review board", labels
+    page.locator('#more-sheet .more-item[data-more="board-toggle"]').click()
+    expect(page.locator("#more-sheet")).to_be_hidden()
+    expect(page.locator("#board .board-card").first).to_be_visible()
+    plain = _phone_header_room(ui, "more-noboard")
+    plain.click("#room-more")
+    assert "Review board" not in plain.locator("#more-sheet .more-item .more-label").all_inner_texts()
+
+
+def test_wake_settings_row_shows_the_limits_that_are_on_and_nothing_when_they_are_off(ui: UI) -> None:
+    """The Budget and Hops chips are gone on a phone: Wake settings' second line says what they did, for the
+    limits that are on ("60/60 an hour · hops 0/30"), and has no second line at all when both are off (#965).
+    The Call settings row says hands-free when it is on. Fails if a limit that is off shows, an on one does
+    not, or the line is a leftover after the limits change."""
+    page = _phone_header_room(ui, "more-hint")
+    page.click("#room-more")
+    wake = page.locator('#more-sheet .more-item[data-more="room-wake"] .more-hint')
+    expect(wake).to_have_text(re.compile(r"^60/60 an hour · hops \d+/30$"))
+    expect(page.locator('#more-sheet .more-item[data-more="room-calls"] .more-hint')).to_contain_text(
+        "Hands-free"
+    )
+    page.keyboard.press("Escape")
+    ui.world.command("more-hint", "/hops 0")
+    page.click("#room-more")
+    expect(wake).to_have_text("60/60 an hour")
+    page.keyboard.press("Escape")
+    ui.world.command("more-hint", "/budget 0")
+    page.click("#room-more")
+    expect(page.locator('#more-sheet .more-item[data-more="room-wake"]')).to_be_visible()
+    expect(wake).to_have_count(0)
+
+
+def test_escape_and_a_tap_outside_close_more_and_focus_returns_to_its_button(ui: UI) -> None:
+    """The sheet is modal like Members: the page behind it is inert, Escape closes it, a tap on the scrim
+    closes it, and both put the keyboard back on More. Fails if the page behind takes focus, a close leaves
+    focus on the page, or More's aria-expanded stays true."""
+    page = _phone_header_room(ui, "more-esc")
+    more = page.locator("#room-more")
+    more.click()
+    expect(page.locator("#more-sheet")).to_be_visible()
+    assert page.locator("#main").evaluate("el => el.inert")
+    page.keyboard.press("Escape")
+    expect(page.locator("#more-sheet")).to_be_hidden()
+    expect(more).to_be_focused()
+    expect(more).to_have_attribute("aria-expanded", "false")
+    assert not page.locator("#main").evaluate("el => el.inert")
+    more.click()
+    expect(page.locator("#more-sheet")).to_be_visible()
+    page.mouse.click(195, 40)  # the scrim, above the sheet
+    expect(page.locator("#more-sheet")).to_be_hidden()
+    expect(more).to_be_focused()
+
+
+@pytest.mark.parametrize("size", SIZES)
+def test_the_filters_are_a_segmented_control_of_three_44_px_parts_on_a_phone(ui: UI, size: str) -> None:
+    """All, Mentions and Files are one rounded track on a phone, 40 px tall, the chosen part raised, and each
+    part is still at least 44 px wide and tall to tap. Fails if the track is taller than 40 px or the parts
+    are not side by side inside it, a part is under 44 px, or its label is cut, at both text sizes."""
+    page = _phone_header_room(ui, f"seg-{size}")
+    page.evaluate("s => { document.documentElement.dataset.textSize = s; }", size)
+    group = page.locator(".room-filter-group").bounding_box()
+    assert group is not None and 39.5 <= group["height"] <= 40.5, group
+    parts = [page.locator(f"#filter-{n}").bounding_box() for n in ("all", "mentions", "files")]
+    for box in parts:
+        assert box is not None and box["width"] >= 43.5 and box["height"] >= 43.5, box
+        assert box["x"] >= group["x"] - 1 and box["x"] + box["width"] <= group["x"] + group["width"] + 1
+    assert parts[0]["x"] < parts[1]["x"] < parts[2]["x"]  # type: ignore[index]
+    for n in ("all", "mentions", "files"):
+        assert page.locator(f"#filter-{n}").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+    page.click("#filter-mentions")
+    expect(page.locator("#filter-mentions")).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#filter-all")).to_have_attribute("aria-pressed", "false")
+
+
+def test_a_desktop_header_is_unchanged_with_no_more_button(ui: UI) -> None:
+    """The one-row phone header is for 760 px and narrower. At 1440x900 the icon buttons sit in the title's
+    row and the status chips are where they were, and there is no More button or state line. Fails if
+    More, the state line or the sheet show on a desktop, or an icon button or chip is gone."""
+    page = ui.open(viewport={"width": 1440, "height": 900})
+    expect(page.locator("#room-more")).to_be_hidden()
+    expect(page.locator("#room-state")).to_be_hidden()
+    for sel in (
+        "#whiteboard-toggle",
+        "#room-rules",
+        "#focus-toggle",
+        "#room-wake",
+        "#room-calls",
+        "#st-state",
+        "#st-budget",
+        "#st-hops",
+    ):
+        expect(page.locator(sel)).to_be_visible()
+    page.click(
+        "#pane-toggle"
+    )  # Members closed: the header has its whole width (it wraps under 1,100 px, #704)
+    head = page.locator(".conv-head").bounding_box()
+    assert head is not None and head["height"] < 60, head
+    tools = [page.locator(s).bounding_box() for s in ("#room-rules", "#focus-toggle", "#room-wake")]
+    assert all(t is not None and t["width"] <= 32 for t in tools), tools  # the 30 px icon buttons
+    assert len({round(t["y"]) for t in tools if t}) == 1
+    assert page.locator("#room-sub").inner_text().startswith(TEST_HUMAN + " and "), (
+        "the desktop line keeps the name"
+    )
 
 
 def test_approvals_chip_names_one_counts_several_and_includes_unknown(ui: UI) -> None:
@@ -1903,7 +2136,7 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     expect(page.locator('#tabs .room[data-room="#e2e-room-rules"]')).to_have_count(1)
 
     phone = ui.open(room="e2e-room-rules", **PHONE)
-    phone.click("#room-rules")
+    tap_more(phone, "Room rules")
     dialog = phone.locator("#app-dialog")
     expect(dialog).to_be_visible()
     bounds = dialog.bounding_box()
@@ -1917,7 +2150,7 @@ def test_custom_room_rules_copy_from_settings_and_edit_on_a_phone(ui: UI) -> Non
     expect(phone.locator("#log")).to_contain_text(TEST_HUMAN + " updated the room rules")
     with phone.expect_response(lambda r: r.url.endswith("/api/rooms/e2e-room-rules/review")):
         phone.reload()
-    phone.click("#room-rules")
+    tap_more(phone, "Room rules")
     expect(phone.locator("#app-dialog-rules")).to_have_value("Post a PR link.")
     phone.click("#app-dialog-cancel")
     open_settings(page, "rooms")
@@ -2929,7 +3162,7 @@ def test_only_a_confirmed_fix_has_a_green_check_in_its_corner(
     room = "#e2e-board-check-" + theme
     page = review_room(ui, room[1:], **options)
     call = ui.world.agent_call
-    page.click("#board-toggle")
+    show_board(page)
 
     card = page.locator('#board .board-card[data-item="F2"]')
     mark = card.locator(".board-confirmed")
@@ -2976,7 +3209,7 @@ def test_new_review_head_marks_only_unsettled_findings_on_the_open_page(
     slug = "e2e-board-outdated-" + ("phone" if options is PHONE else "desktop")
     room = "#" + slug
     page = review_room(ui, slug, **options)
-    page.click("#board-toggle")
+    show_board(page)
     expect(page.locator("#board .board-outdated")).to_have_count(0)
     # The board can be read through HTTP before the browser's hello subscribes to its live
     # review frames. Wait for that event, so the agent move exercises the live update path.
@@ -3020,7 +3253,7 @@ def test_a_stale_board_fetch_cannot_erase_a_live_head_move(ui: UI) -> None:
         return response;
       };
     }""")
-    page.click("#board-toggle")
+    show_board(page)
     wait_js(page, "() => window.heldBoardFetch === true")
     wait_for(
         lambda: ui.world.broker.on_loop(
@@ -3082,10 +3315,10 @@ def test_the_three_lanes_sit_in_one_row_and_stack_on_a_phone(ui: UI) -> None:
     under another); on a phone they stack, with Needs you first. Each is checked once the board
     is laid out (``lanes_settle``), and fails if it never is."""
     page = review_room(ui, "e2e-board-row")
-    page.click("#board-toggle")
+    show_board(page)
     lanes_settle(page, LANES_IN_A_ROW)
     phone = review_room(ui, "e2e-board-row-phone", **PHONE)
-    phone.click("#board-toggle")
+    show_board(phone)
     lanes_settle(phone, LANES_STACKED)
     no_horizontal_scroll(phone)
 
@@ -3095,7 +3328,7 @@ def test_a_card_links_to_its_lines_and_fix_and_shows_its_history(ui: UI) -> None
     commit, both with GitHub's mark, through the checked link path, and says who did what."""
     pr = "https://github.com/example-org/shop/pull/7"
     page = review_room(ui, "e2e-board-card", pr=pr)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F2"]')
     detail = page.locator("#board .board-detail")
     lines = detail.locator("dd a.board-link").first
@@ -3132,7 +3365,7 @@ def test_a_gitlab_card_links_to_its_lines_at_the_head_and_to_the_file_in_the_mr_
     the label still says "View shop/codes.py:12-19" or the link still opens the MR diff."""
     extra = PHONE if size == "phone" else {}
     page = review_room(ui, f"e2e-board-gitlab-lines-{size}", pr=GITLAB_MR, **extra)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F2"]')
     detail = page.locator("#board .board-detail")
     links = detail.locator(".board-lines-links a.board-link")
@@ -3170,7 +3403,7 @@ def test_a_conceded_fix_shows_proof_without_the_old_contest_reason(ui: UI) -> No
         commit="abc1234",
         proof="tests/test_money.py::test_rounding",
     )
-    page.click("#board-toggle")
+    show_board(page)
     card = page.locator('#board .lane-working .board-card[data-item="F3"]')
     expect(card).to_be_visible()
     card.click()
@@ -3188,7 +3421,7 @@ def test_a_departed_raiser_puts_the_fix_in_needs_you(ui: UI) -> None:
     call = ui.world.agent_call
     call(room, "claude-1", "review", action="concede", item="F3")
     call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234", proof="test_rounding")
-    page.click("#board-toggle")
+    show_board(page)
     expect(page.locator('#board .lane-working .board-card[data-item="F3"]')).to_be_visible()
     call(room, "codex-1", "leave")
     card = page.locator('#board .lane-you .board-card[data-item="F3"]')
@@ -3203,7 +3436,7 @@ def test_a_contested_finding_shows_both_sides(ui: UI) -> None:
     no forge, the lines are text, not a link. The seeded F3 has its raiser's insist too (#424), so
     both sides have made their case and it is the person's."""
     page = review_room(ui, "e2e-board-sides")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F3"]')
     sides = page.locator("#board .board-detail .board-side")
     expect(sides).to_have_count(2)
@@ -3234,7 +3467,7 @@ def test_the_open_card_is_resized_by_its_divider(ui: UI) -> None:
     if the card's width is fixed, if a limit doesn't hold, or if a redraw of the board (every
     click on a card is one) forgets the width."""
     page = review_room(ui, "e2e-board-divider", viewport={"width": 1600, "height": 900})
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F3"]')
     detail, lanes, divider = (
         page.locator("#board " + part) for part in (".board-detail", ".board-lanes", "#board-divider")
@@ -3299,7 +3532,7 @@ def test_a_contested_findings_sides_stack_in_a_narrow_card(ui: UI) -> None:
     width; from 440 px they sit side by side, as #250 drew them. Fails if a narrow card keeps
     two columns."""
     page = review_room(ui, "e2e-board-sides-stack", viewport={"width": 1600, "height": 900})
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F3"]')
     sides = page.locator("#board .board-detail .board-side")
     expect(sides).to_have_count(2)
@@ -3322,7 +3555,7 @@ def test_the_open_card_goes_under_the_lanes_when_both_cannot_fit(ui: UI) -> None
     divider. The rule follows the board's width, not the window's: closing Members puts the
     card back beside the lanes. Fails if the lanes are squeezed beside the card."""
     page = review_room(ui, "e2e-board-under", viewport={"width": 1280, "height": 800})
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     detail, lanes, divider = (
         page.locator("#board " + part) for part in (".board-detail", ".board-lanes", "#board-divider")
@@ -3344,7 +3577,7 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     """Answering Q1 and conceding the contested F3 move their cards at once (the board frame),
     and each is the person's own message in the room, which reaches the agents."""
     page = review_room(ui, "e2e-board-answer")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     detail = page.locator("#board .board-detail")
     expect(detail.locator("h3")).to_have_text("Q1 · Discount before or after tax?")
@@ -3364,7 +3597,7 @@ def test_a_person_answers_a_question_and_rules_on_a_finding(ui: UI) -> None:
     expect(page.locator("#board .lane-you")).to_have_class(re.compile(r"\blane-clear\b"))
     expect(page.locator("#board .lane-you .board-empty")).to_have_text("Nothing needs you")
     expect(page.locator("#board-status")).to_have_text("2 open")
-    page.click("#board-toggle")
+    show_board(page)
     expect(chat_row(page, "Review board: Q1")).to_contain_text("answered with option 1.")
     expect(chat_row(page, "Review board: F3")).to_contain_text("conceded, owner codex-1")
 
@@ -3392,7 +3625,7 @@ def markdown_card(ui: UI, slug: str, **open_args: Any) -> Page:
     )  # fmt: skip
     page = ui.open(room=None, **open_args)
     open_room(page, slug)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F1"]')
     expect(page.locator("#board .board-detail")).to_be_visible()
     return page
@@ -3464,7 +3697,7 @@ def test_a_broken_diagram_in_a_card_shows_its_source_and_why(ui: UI) -> None:
          detail=f"{FENCE}mermaid\nflowchart LR\n  A -->\n{FENCE}")  # fmt: skip
     page = ui.open(room=None)
     open_room(page, "e2e-board-md-broken")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F1"]')
     box = page.locator("#board .board-detail .md-pre")
     box.locator("button.md-show-diagram").click()
@@ -3515,7 +3748,7 @@ def test_a_question_marks_an_option_recommended_only_once_the_agents_agree(ui: U
     slug = "e2e-board-recommend"
     room = "#" + slug
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     detail = page.locator("#board .board-detail")
     buttons = option_buttons(page)
@@ -3549,7 +3782,7 @@ def test_an_abstention_is_named_on_the_card_and_a_later_pick_replaces_it(ui: UI)
     slug = "e2e-board-abstain"
     room = "#" + slug
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     detail = page.locator("#board .board-detail")
     expect(detail.locator(".board-consensus")).to_have_text("Waiting for codex-1 to agree or pick another.")
@@ -3575,7 +3808,7 @@ def test_the_option_the_agents_recommend_is_listed_first(ui: UI) -> None:
         room, "codex-1", "review", action="ask", title="Keep the retry loop?",
         options=["Keep the retry loop", "Cap it at three tries", "Remove it"], recommend=2,
     )  # fmt: skip
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q2"]')
     buttons = option_buttons(page)
     expect(buttons).to_have_text(
@@ -3597,7 +3830,7 @@ def test_a_board_frame_with_a_bad_order_or_note_still_lists_every_option_as_aske
     slug = "e2e-board-bad-consensus"
     room = "#" + slug
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     expect(option_buttons(page)).to_have_text(["Before tax (claude-1 recommends this)", "After tax"])
 
@@ -3627,7 +3860,7 @@ def test_a_finding_lists_its_fix_options_with_who_recommends_them(ui: UI) -> Non
         room, "codex-1", "review", action="raise", title="Retry loop never stops",
         where="shop/retry.py:10-20", options=["Cap the retries", "Remove the loop"], recommend=1,
     )  # fmt: skip
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F5"]')
     options = page.locator("#board .board-detail .board-option-list li")
     expect(page.locator("#board .board-detail .board-fix-options h4")).to_have_text("Fix options")
@@ -3649,7 +3882,7 @@ def test_an_agent_joining_the_room_changes_what_the_board_says_with_no_move(ui: 
     room = "#" + slug
     page = review_room(ui, slug)
     ui.world.agent_call(room, "codex-1", "review", action="concur", item="Q1", recommend=1)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     buttons = option_buttons(page)
     expect(buttons.nth(0)).to_have_text("Before tax (recommended by claude-1 and codex-1)")
@@ -3678,7 +3911,7 @@ def contest_room(ui: UI, slug: str, **open_args: Any) -> tuple[Page, str]:
     call(room, "claude-1", "review", action="contest", item="F1", reason="half-up is what the receipt shows")
     page = ui.open(room=None, **open_args)
     open_room(page, slug)
-    page.click("#board-toggle")
+    show_board(page)
     return page, room
 
 
@@ -3788,7 +4021,7 @@ def test_a_person_reassigns_a_finding_rules_it_fixed_and_the_owner_isnt_its_rais
     ui.world.seed_review("#" + slug)
     page = ui.open(room=None)
     open_room(page, slug)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F3"]')  # raised by codex-1, contested by claude-1
     expect(page.locator("#board-owner")).to_have_value("claude-1")
     page.click("#board-concede")
@@ -3800,7 +4033,7 @@ def test_a_person_reassigns_a_finding_rules_it_fixed_and_the_owner_isnt_its_rais
     expect(card).to_contain_text("owner devin-1")
     page.click("#board-mark-fixed")
     expect(page.locator('#board .lane-settled .board-card[data-item="F3"]')).to_be_visible()
-    page.click("#board-toggle")
+    show_board(page)
     expect(chat_row(page, "Review board: F3 reassigned")).to_contain_text("reassigned to devin-1")
     expect(chat_row(page, "Review board: F3 marked")).to_contain_text("marked fixed")
 
@@ -3810,7 +4043,7 @@ def test_a_person_defers_a_finding_to_a_follow_up_ticket(ui: UI) -> None:
     "Deferred to" (not struck out like a drop). It needs the ticket first. Fails without the
     action, or if the card reads as dropped."""
     page = review_room(ui, "e2e-board-defer")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F3"]')
     page.click("#board-defer")
     expect(page.locator("#board-ticket")).to_be_focused()  # no ticket yet: nothing is sent
@@ -3820,7 +4053,7 @@ def test_a_person_defers_a_finding_to_a_follow_up_ticket(ui: UI) -> None:
     expect(card).to_contain_text("Deferred to SHOP-123")
     expect(card.locator(".board-state")).to_have_text("Deferred")
     expect(card).not_to_have_class(re.compile(r"\bdropped\b"))
-    page.click("#board-toggle")
+    show_board(page)
     expect(chat_row(page, "Review board: F3 deferred")).to_contain_text("deferred to SHOP-123")
 
 
@@ -3829,7 +4062,7 @@ def test_the_board_header_says_what_an_agent_reported_and_whose_it_is(ui: UI) ->
     agent's, so a person sees "settled here, 2 open on the PR". Fails without the line."""
     page = review_room(ui, "e2e-board-report")
     ui.world.agent_call("#e2e-board-report", "claude-1", "review", action="report", threads=2, ci="failing")
-    page.click("#board-toggle")
+    show_board(page)
     report = page.locator("#board-report")
     expect(report).to_have_text(re.compile(r"^2 open on the PR, CI failing \(per claude-1, "))
     expect(report).to_have_attribute("title", re.compile(r"^claude-1 read this off the pull request"))
@@ -3843,7 +4076,7 @@ def test_the_board_header_flags_ci_blocked_by_a_conflict_with_the_base(ui: UI) -
     page = review_room(ui, "e2e-board-conflict")
     room = "#e2e-board-conflict"
     ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked")
-    page.click("#board-toggle")
+    show_board(page)
     report = page.locator("#board-report")
     expect(report).to_have_text(re.compile(r"^CI blocked: conflicts with its base \(per claude-1, "))
     expect(report).to_have_class(re.compile(r"\bconflict\b"))
@@ -3868,7 +4101,7 @@ def test_the_board_header_shows_a_reported_commit_beside_ci_blocked_on_a_phone(u
     page = review_room(ui, "e2e-board-conflict-head", **PHONE)
     room = "#e2e-board-conflict-head"
     ui.world.agent_call(room, "claude-1", "review", action="report", ci="blocked", head="c0ffee0c0ffee0")
-    page.click("#board-toggle")
+    show_board(page)
     expect(page.locator("#board .board-head-sha")).to_have_text("c0ffee0")
     expect(page.locator("#board .board-head-note")).to_have_text("(reported)")
     report = page.locator("#board-report")
@@ -3881,7 +4114,7 @@ def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> Non
     """#786: Edit opens the card's text, Save writes the fields that changed, and the history
     names them. Fails while a card has no edit, so a wrong title stays on the card."""
     page = review_room(ui, "e2e-board-edit")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F3"]')
     detail = page.locator("#board .board-detail")
     expect(detail.locator("h3")).to_have_text("F3 · Rounding drops a cent on $19.99")
@@ -3898,7 +4131,7 @@ def test_a_person_can_edit_a_card_and_the_history_names_the_field(ui: UI) -> Non
 
 def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
     page = review_room(ui, "e2e-board-drop")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F4"]')
     page.click("#board-drop")
     expect(page.locator("#board-reason")).to_be_focused()  # no reason, no drop
@@ -3916,7 +4149,7 @@ def test_dropping_needs_a_reason_and_closing_asks_first(ui: UI) -> None:
 @pytest.mark.parametrize("scheme", ["light", "dark"])
 def test_the_board_fits_a_phone(ui: UI, scheme: str) -> None:
     page = review_room(ui, f"e2e-board-phone-{scheme}", **PHONE, color_scheme=scheme)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q1"]')
     expect(page.locator("#board .board-detail")).to_be_visible()
     no_horizontal_scroll(page)
@@ -3931,7 +4164,7 @@ def test_one_handoff_dialog_previews_the_review_and_chooses_its_agent(ui: UI, si
     call = ui.world.agent_call
     call(room, "claude-1", "review", action="concede", item="F3")
     call(room, "claude-1", "review", action="fix", item="F3", commit="abc1234", proof="test_rounding")
-    page.click("#board-toggle")
+    show_board(page)
     button = page.locator("#board-handoff")
     expect(button).to_be_disabled()  # the raiser has not confirmed F3
     call(room, "codex-1", "review", action="confirm", item="F3")
@@ -3957,7 +4190,7 @@ def test_one_handoff_dialog_previews_the_review_and_chooses_its_agent(ui: UI, si
     page.click("#app-dialog-action")
     expect(page.locator("#board-status")).to_have_text("Handed off to claude-1")
     expect(page.locator("#board-handoff")).to_have_count(0)
-    page.click("#board-toggle")
+    show_board(page)
     expect(chat_row(page, "Hand off")).to_contain_text("@claude-1")
 
 
@@ -3971,7 +4204,7 @@ def test_handoff_unlocks_only_after_every_item_is_settled(ui: UI) -> None:
     call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc", proof="test_rounding")
     call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc", proof="test_case")
     call(room, "codex-1", "review", action="confirm", item="F3")
-    page.click("#board-toggle")
+    show_board(page)
     button = page.locator("#board-handoff")
     expect(button).to_be_disabled()  # Q1 and F4 still need a person
     page.click('#board .board-card[data-item="F4"]')
@@ -3986,7 +4219,7 @@ def test_handoff_unlocks_only_after_every_item_is_settled(ui: UI) -> None:
     page.click("#app-dialog-action")
     expect(page.locator("#board-handoff")).to_have_count(0)
     expect(page.locator("#board-status")).to_have_text("Handed off to codex-1")
-    page.click("#board-toggle")
+    show_board(page)
     expect(chat_row(page, "Hand off")).to_contain_text("@codex-1")
 
 
@@ -4014,7 +4247,7 @@ def test_hand_off_is_in_the_header_and_follows_the_board(ui: UI, size: str, sche
     stale, or if the highlight, the handoff or the focus on the result is missing."""
     slug = f"e2e-board-header-{size}-{scheme}"
     page = review_room(ui, slug, **(PHONE if size == "phone" else {}), color_scheme=scheme)
-    page.click("#board-toggle")
+    show_board(page)
     header = page.locator("#board .board-head")
     button = header.locator("#board-handoff")
     note = header.locator("#board-handoff-status")
@@ -4078,10 +4311,10 @@ def test_a_board_that_opens_ready_has_no_highlight(ui: UI) -> None:
     already settled when the page opens it. Fails if every ready board flashes on open."""
     slug = "e2e-board-header-ready-open"
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     settle_review_board(page, ui, slug)
-    page.click("#board-toggle")  # back to the log
-    page.click("#board-toggle")  # and the board again, already ready
+    show_board(page)  # back to the log
+    show_board(page)  # and the board again, already ready
     button = page.locator("#board .board-head #board-handoff")
     expect(button).to_be_enabled()
     expect(button).not_to_have_class(re.compile(r"\bnudge\b"))
@@ -4100,7 +4333,7 @@ def test_the_header_hand_off_is_reached_by_keyboard_and_keeps_focus_through_redr
     them too (#430, its own test below). The focus checks hold across any number of redraws."""
     slug = "e2e-board-header-focus"
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     settle_review_board(page, ui, slug)
     button = page.locator("#board-handoff")
     stops = page.evaluate(
@@ -4138,7 +4371,7 @@ def test_close_board_keeps_keyboard_focus_through_a_redraw(ui: UI) -> None:
     after it doesn't go back to the header's link."""
     slug = "e2e-board-close-focus"
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     close = page.locator("#board-close")
     close.focus()
     expect(close).to_be_focused()
@@ -4180,7 +4413,7 @@ def test_the_board_header_names_the_forge_repository_and_number(
     phone the number stays whole and nothing scrolls sideways."""
     slug = f"e2e-board-forge-{kind}-{size}"
     page = review_room(ui, slug, pr=pr, **(PHONE if size == "phone" else {}))
-    page.click("#board-toggle")
+    show_board(page)
     link = page.locator("#board .board-head a.board-pr")
     expect(link).to_be_visible()
     expect(link).to_have_attribute("href", pr)
@@ -4209,7 +4442,7 @@ def test_the_board_header_names_the_newest_commit_it_was_told(ui: UI) -> None:
     slug = "e2e-board-header-commit"
     room = "#" + slug
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     sha = page.locator("#board .board-head-sha")
     note = page.locator("#board .board-head-note")
     expect(sha).to_have_text("9a1b2c3")
@@ -4244,7 +4477,7 @@ def test_the_board_header_names_the_newest_commit_it_was_told(ui: UI) -> None:
 def test_a_url_that_names_no_forge_is_shown_as_it_is(ui: UI) -> None:
     """Not GitHub's or GitLab's shape, so no mark: the URL itself, as before (#247)."""
     page = review_room(ui, "e2e-board-forge-none")
-    page.click("#board-toggle")
+    show_board(page)
     link = page.locator("#board .board-url")
     expect(link).to_have_text("https://example.com/shop/pull/7")
     expect(page.locator("#board .board-pr, #board svg.mark")).to_have_count(0)
@@ -4262,7 +4495,7 @@ def test_a_long_option_wraps_inside_the_question_s_detail(ui: UI, size: str) -> 
         "#" + slug, "codex-1", "review", action="ask", title="Should invites support private rooms?",
         options=[long, other], recommend=1,
     )  # fmt: skip
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="Q2"]')
     detail = page.locator("#board .board-detail")
     expect(detail.locator('button[data-option="0"]')).to_have_text(long + " (codex-1 recommends this)")
@@ -4290,7 +4523,7 @@ def test_a_long_pull_request_url_wraps_in_the_board_dialogs(ui: UI, size: str) -
     call(room, "claude-1", "review", action="fix", item="F3", commit="77aa88bb99cc", proof="test_rounding")
     call(room, "codex-1", "review", action="fix", item="F4", commit="11aa22bb33cc", proof="test_case")
     call(room, "codex-1", "review", action="confirm", item="F3")
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F4"]')
     page.click("#board-confirm")
     page.click('#board .board-card[data-item="Q1"]')
@@ -4325,7 +4558,7 @@ def test_a_person_starts_a_review_from_the_composer(ui: UI) -> None:
     status = page.locator("#board-status")
     expect(status).to_have_text("No findings yet")  # empty is waiting, not settled
     expect(status).not_to_have_class(re.compile(r"\bchip-ok\b"))
-    page.click("#board-toggle")
+    show_board(page)
     row = chat_row(page, "together on this room's review board")  # the URL renders as a link
     expect(row).to_contain_text("@claude-1")
     expect(row.locator("a.md-link")).to_have_attribute("href", pr)
@@ -4447,7 +4680,7 @@ def test_a_card_shows_live_whether_the_agent_it_waits_on_is_working(ui: UI) -> N
     slug = "e2e-board-working"
     room = "#" + slug
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     f4 = page.locator('#board .board-card[data-item="F4"] .board-pulse')  # conceded, owner codex-1
     expect(f4).to_have_count(1)
     expect(f4).to_have_attribute("data-member", "codex-1")
@@ -4486,7 +4719,7 @@ def test_a_card_shows_live_whether_the_agent_it_waits_on_is_working(ui: UI) -> N
         st.hub.members_changed(room)
 
     ui.world.broker.on_loop(busy)
-    calm.click("#board-toggle")
+    show_board(calm)
     still = calm.locator('#board .board-card[data-item="F4"] .board-pulse')
     expect(still).to_have_text("working")
     assert still.evaluate("e => getComputedStyle(e, '::before').animationName") == "none"
@@ -4505,7 +4738,7 @@ def test_an_agent_waiting_for_approval_shows_in_members_the_inspector_and_on_its
     def status(name: str, value: str) -> None:
         ui.world.set_member_status(room, name, value, "hook:Notification")
 
-    page.click("#board-toggle")
+    show_board(page)
     pulse = page.locator('#board .board-card[data-item="F4"] .board-pulse')  # conceded, owner codex-1
     expect(pulse).to_have_class(re.compile(r"\bworking\b"))
     status("codex-1", "waiting-approval")
@@ -4535,7 +4768,7 @@ def test_an_agent_waiting_for_approval_shows_in_members_the_inspector_and_on_its
     narrow = ui.open(room=None, viewport={"width": 1280, "height": 800})
     open_room(narrow, slug)
     status("codex-1", "waiting-approval")
-    narrow.click("#board-toggle")
+    show_board(narrow)
     top = narrow.locator('#board .board-card[data-item="F4"] .board-card-top')
     expect(top.locator(".board-pulse")).to_have_text("waiting for approval")
     rows = top.evaluate(
@@ -4549,7 +4782,7 @@ def test_an_agent_waiting_for_approval_shows_in_members_the_inspector_and_on_its
     phone = ui.open(room=None, **PHONE)
     open_room(phone, slug)
     status("codex-1", "waiting-approval")
-    phone.click("#board-toggle")
+    show_board(phone)
     card = phone.locator('#board .board-card[data-item="F4"]')
     word = card.locator(".board-pulse")
     expect(word).to_have_text("waiting for approval")
@@ -4569,7 +4802,7 @@ def test_a_focused_card_keeps_focus_when_an_agent_changes_state(ui: UI) -> None:
     slug = "e2e-board-focus"
     room = "#" + slug
     page = review_room(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     card = page.locator('#board .board-card[data-item="F4"]')
     card.focus()
     assert page.evaluate("document.activeElement.dataset.item") == "F4"
@@ -4610,7 +4843,7 @@ def test_two_boards_in_a_room_are_tabs_and_each_keeps_its_own_lanes(ui: UI) -> N
     a single board grows tabs, a switch shows the old board's cards, or a redraw drops the focus."""
     slug = "e2e-board-tabs"
     page = review_room(ui, slug, PR_ONE)
-    page.click("#board-toggle")
+    show_board(page)
     expect(page.locator("#board .board-tabs")).to_have_count(0)  # one board: as before
     seed_second_board(ui, slug)
     tabs = page.locator("#board .board-tab")
@@ -4658,7 +4891,7 @@ def test_closing_one_of_two_boards_keeps_it_and_an_agent_opening_it_brings_it_ba
     slug = "e2e-board-close-one"
     page = review_room(ui, slug, PR_ONE)
     seed_second_board(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     tabs = page.locator("#board .board-tab")
     expect(tabs).to_have_count(2)
     tabs.nth(1).click()
@@ -4700,7 +4933,7 @@ def test_two_boards_fit_a_phone(ui: UI, scheme: str) -> None:
     slug = f"e2e-board-tabs-phone-{scheme}"
     page = review_room(ui, slug, PR_ONE, **PHONE, color_scheme=scheme)
     seed_second_board(ui, slug)
-    page.click("#board-toggle")
+    show_board(page)
     expect(page.locator("#board .board-tab")).to_have_count(2)
     expect(page.locator("#board .board-head .board-tabs")).to_be_visible()
     no_horizontal_scroll(page)

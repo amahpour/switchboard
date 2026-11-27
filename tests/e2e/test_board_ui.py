@@ -8,14 +8,18 @@ from typing import Any
 
 import pytest
 from playwright.sync_api import Page, expect
-from test_web_ui import PHONE, UI, no_horizontal_scroll, ui, world  # noqa: F401
+from test_web_ui import PHONE, UI, no_horizontal_scroll, tap_more, ui, world  # noqa: F401
 from ui_world import UIWorld, wait_js
 
 pytestmark = pytest.mark.e2e
 
 
 def open_board(page: Page) -> Any:
-    page.get_by_role("button", name="Whiteboard", exact=True).click()
+    icon = page.get_by_role("button", name="Whiteboard", exact=True)
+    if icon.is_visible():
+        icon.click()
+    else:  # a phone: the header's icon is a row of the More sheet
+        tap_more(page, "Whiteboard")
     expect(page.locator("#whiteboard-status")).to_contain_text("Live")
     frame = page.frame_locator("#whiteboard-host iframe")
     expect(frame.locator("canvas").first).to_be_visible()

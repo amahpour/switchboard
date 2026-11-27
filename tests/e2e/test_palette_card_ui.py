@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from playwright.sync_api import Page, expect
 from test_layout_sweep import set_size
-from test_web_ui import PHONE, UI, open_room, review_room, ui, world  # noqa: F401
+from test_web_ui import PHONE, UI, open_room, review_room, show_board, ui, world  # noqa: F401
 
 pytestmark = pytest.mark.e2e
 
@@ -167,7 +167,7 @@ def test_an_open_cards_inputs_share_a_column_and_its_buttons_a_width(
     slug = f"e2e-card-{device}-{size}"
     page = review_room(ui, slug, **(PHONE if device == "phone" else {}))
     set_size(page, size)
-    page.click("#board-toggle")
+    show_board(page)
     page.click('#board .board-card[data-item="F4"]')  # conceded to codex-1
     for sel in (*CARD, *BUTTONS):
         expect(page.locator(sel)).to_be_visible()
