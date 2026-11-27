@@ -341,7 +341,8 @@ span.ic { stroke: none; }
 .bad { color: var(--danger); }
 #settings-webhook-status.bad { color: var(--danger); }
 #settings-webhook-problem { color: var(--danger); }  /* a saved webhook that is not used (#923) */
-.settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
+/* the buttons of one thing that acts at once (a webhook, a backup, a token): one order, size and spacing everywhere (#995) */
+.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-1); }
 .fine { font-size: calc(11.5px * var(--text-scale)); color: var(--muted); line-height: 1.45; }
 .fine code { font-size: calc(11px * var(--text-scale)); }
 #agent-cursor-idle-limit { margin: 8px 0; }  /* Settings → Agents: set apart from Devin's note above it */
@@ -1721,12 +1722,11 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 #input:disabled { cursor: not-allowed; }
 .composer-bar { display: flex; align-items: center; gap: 4px; }
 .drop-target { outline: 2px dashed var(--link); outline-offset: -6px; }
-.settings-files { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.settings-files { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
 .settings-files input { width: 6rem; }
-.settings-links { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
-.settings-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: 8px; align-items: center; }
+.settings-links { display: flex; flex-direction: column; gap: var(--sp-2); }
+.settings-link-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; gap: var(--sp-2); align-items: center; }
 .settings-link-row input { width: 100%; min-width: 0; font-family: var(--mono, monospace); }
-.settings-links-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 640px) {
   .settings-link-row { grid-template-columns: minmax(0, 1fr) auto; }
   .settings-link-row .settings-link-url { grid-column: 1 / -1; grid-row: 2; }
@@ -2986,8 +2986,8 @@ body.login {
    #212's "Close scrolls away") above a desktop rail (a vertical WAI-ARIA tablist) beside the
    one scrolling panel, or a phone list with a page per group. See docs/DESIGN.md §34. */
 .app-dialog-settings {
-  width: min(860px, calc(100vw - 32px));
-  height: min(720px, calc(100vh - 32px));
+  width: min(880px, calc(100vw - 2 * var(--sp-6)));
+  height: min(760px, calc(100vh - 2 * var(--sp-6)));
   overflow: hidden;
 }
 .app-dialog-form.settings-content { height: 100%; min-height: 0; padding: 0; gap: 0; }
@@ -3050,12 +3050,18 @@ body.login {
 .settings-version { margin: 0; }
 .settings-panels { grid-column: 2; grid-row: 1 / span 2; min-height: 0; overflow: hidden; }
 .settings-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.settings-panel-content { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; }
-.settings-savebar { display: flex; align-items: center; gap: 10px; flex-shrink: 0; border-top: 1px solid var(--line); padding: 12px 24px; }
-.settings-savebar-dirty { color: var(--muted); font-size: calc(12px * var(--text-scale)); margin-right: auto; }
+.settings-panel-content { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-5); font-size: var(--fs-md); }
+.settings-panel-content .fine { font-size: var(--fs-sm); margin: 0; }
+.settings-panel-content > h3 { margin: 0; }
+.settings-panel-content > h3:not(:first-child) { margin-top: var(--sp-3); }  /* with the 12 px gap: 24 px between sections */
+.settings-panel-content .settings-label { font-size: var(--fs-sm); }
+/* a field with its hints under it: 4 px from label to hint, 12 px (the panel's gap) to the next field */
+.settings-field { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; }
+.settings-savebar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); flex-shrink: 0; border-top: 1px solid var(--line); padding: var(--sp-3) var(--sp-5); }
+.settings-savebar-dirty { color: var(--muted); font-size: var(--fs-sm); margin-right: auto; }
 .settings-savebar [role="status"] { margin-right: auto; }
 .settings-savebar-dirty:not(.hidden) + [role="status"] { margin-right: 0; }
-.settings-savebar .btn, .settings-savebar .btn-primary { flex-shrink: 0; }
+.settings-savebar .btn, .settings-savebar .btn-primary { flex-shrink: 0; min-height: var(--target); }
 .settings-list { grid-column: 1 / span 2; grid-row: 1; overflow-y: auto; display: flex; flex-direction: column; }
 .settings-row {
   display: flex;
@@ -3214,8 +3220,8 @@ body.login {
   .settings-list { flex: 0 1 auto; min-height: 0; }
   .settings-foot { flex-shrink: 0; border-right: 0; padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); }
   .settings-panels { flex: 1; min-height: 0; }
-  .settings-panel-content { padding: 18px 20px; }
-  .settings-savebar { padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+  .settings-panel-content { padding: var(--sp-4); }
+  .settings-savebar { padding: var(--sp-2) var(--sp-4) calc(var(--sp-2) + env(safe-area-inset-bottom)); }
   .settings-panel-content > h3 { display: none; }  /* the header already names the group */
 }
 
@@ -3652,7 +3658,6 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 /* A completed admin backup stays reachable while browsing rooms or Home (§57.1). */
 .band-backup { background: var(--chip-bg); color: var(--ink-2); flex-wrap: wrap; }
 .band-backup > .backup-notice-text { flex: 1 1 18em; min-width: 0; overflow-wrap: anywhere; }
-.backup-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
 
 /* ==== 18. Search (#724, DESIGN.md §58) ================================================= */
 /* The box at the top of the sidebar, and a page of results in place of the log, as Home is one. On a phone the

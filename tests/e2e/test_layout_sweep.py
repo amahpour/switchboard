@@ -83,8 +83,6 @@ _SMALL_ON_A_PHONE: dict[str, list[str]] = {
     "settings-profile": [
         "button#settings-back",
         "button#settings-close",
-        "button#settings-name-save",
-        "button#settings-profile-discard",
         "button#settings-webhook-quiet-remove",
         "button#settings-webhook-quiet-save",
         "button#settings-webhook-remove",
@@ -132,8 +130,6 @@ _SMALL_ON_A_PHONE: dict[str, list[str]] = {
     "settings-rooms": [
         "button#settings-back",
         "button#settings-close",
-        "button#settings-rules-discard",
-        "button#settings-rules-save",
     ],
     "settings-agents": [
         "button#agent-token-ask-1",
@@ -142,12 +138,11 @@ _SMALL_ON_A_PHONE: dict[str, list[str]] = {
         "button#settings-close",
         "button#settings-nc-save",
     ],
-    "settings-files": ["button#settings-back", "button#settings-close", "button#settings-files-save"],
+    "settings-files": ["button#settings-back", "button#settings-close"],
     "settings-links": [
         "button#settings-back",
         "button#settings-close",
         "button#settings-links-add",
-        "button#settings-links-save",
     ],
     "settings-backups": ["button#backup-start", "button#settings-back", "button#settings-close"],
 }

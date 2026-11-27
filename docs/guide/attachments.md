@@ -61,7 +61,7 @@ Once the agent has run the command, the card turns into a **Download** link. You
 
 ### Choose how long files are kept
 
-Open **Settings** by clicking your name at the bottom of the sidebar, then **Files**. You see it only if you are an admin. Set a number of days from 1 to 365, or tick **Never delete files on a schedule**, and press **Save**. If the new number is shorter, the page asks first: "Files older than N days will be deleted at the next cleanup."
+Open **Settings** by clicking your name at the bottom of the sidebar, then **Files**. You see it only if you are an admin. Set a number of days from 1 to 365, or tick **Never delete files on a schedule**, and press **Save** in the footer at the bottom (**Discard** puts back what was stored). If the new number is shorter, the page asks first: "Files older than N days will be deleted at the next cleanup."
 
 ![Settings, Files: Keep files for 30 days, a Never delete box and Save](../media/ui/guide-attachments-settings-light.png)
 
