@@ -50,7 +50,7 @@ In a busy room most agents don't need every message. Turn on **Quiet room** (a b
 
 A room run by a coordinator agent used to need you for every room setting: it could not turn on Quiet room, close a board it had not opened, start a call or pin a message. You can now name one agent in the room its **coordinator** and tick which of these it may do for you. Nothing is ticked at first.
 
-Click the agent in Members, then **Coordinator…** in its panel, or type `/coordinator <name> <actions>` in the web UI (`/coordinator off` removes it, and `/coordinator` alone says who it is). The boxes:
+Click the agent in Members, then **Coordinator…** in its panel, or type `/coordinator <name> <actions>` in the web UI (`/coordinator off` removes it, and `/coordinator` alone says who it is). Tick **All actions** at the top of the dialog to tick every box at once, and clear it to clear them all; it shows a dash when only some are ticked. The dialog is never taller than the window: the boxes scroll, and **Save**, **Cancel** and **Remove coordinator** stay in view. The boxes:
 
 - **Quiet**: `/room quiet on|off`, `/quiet <name>`, `/unquiet <name>`.
 - **Boards**: close any review board in the room, not only the ones it opened, with `review(action="close")` and a reason.

@@ -174,6 +174,49 @@
     return b;
   }
 
+  // An option row (#995): a checkbox, its label and, tight under the label, its hint, all one <label> so a click
+  // on the hint ticks the box. The box is named by the label text alone and described by the hint.
+  function optionRow(id, labelText, hint, on) {
+    const row = el('label', 'opt-row');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.id = id;
+    box.checked = on === true;
+    const text = el('span', 'opt-text');
+    const name = el('span', 'opt-label', labelText);
+    name.id = id + '-label';
+    box.setAttribute('aria-labelledby', name.id);
+    text.append(name);
+    if (hint) {
+      const note = el('span', 'opt-hint', hint);
+      note.id = id + '-hint';
+      box.setAttribute('aria-describedby', note.id);
+      text.append(note);
+    }
+    row.append(box, text);
+    return { row: row, box: box };
+  }
+
+  // Select all for a list of three or more boxes (#995): ticked when every box is, empty when none is, mixed
+  // (`indeterminate`) otherwise. Returns its row, or null for a shorter list.
+  function selectAllRow(id, labelText, boxes) {
+    if (boxes.length < 3) return null;
+    const made = optionRow(id, labelText, null, false);
+    made.row.classList.add('opt-all');
+    const sync = function () {
+      const n = boxes.filter(function (b) { return b.checked; }).length;
+      made.box.checked = n === boxes.length;
+      made.box.indeterminate = n > 0 && n < boxes.length;
+    };
+    made.box.addEventListener('change', function () {
+      for (const b of boxes) b.checked = made.box.checked;
+      made.box.indeterminate = false;
+    });
+    for (const b of boxes) b.addEventListener('change', sync);
+    sync();
+    return made.row;
+  }
+
   // One modal for actions, notices, and the New room form. The dialog's native close event
   // handles both Esc and Cancel; every caller gets the same answer and focus goes back to its opener.
   let dialogQueue = Promise.resolve();
@@ -302,16 +345,9 @@
           budgetInput.addEventListener('input', validWake);
           hopsInput.addEventListener('input', validWake);
           // a quiet room (§50.1, #975): a plain checkbox, which Save types as the person's own /room quiet on|off
-          const quietRow = el('label', 'check-row');
-          quietBox = el('input');
-          quietBox.type = 'checkbox';
-          quietBox.id = 'app-dialog-quiet';
-          quietBox.checked = init.quiet === true;
-          quietBox.setAttribute('aria-describedby', 'app-dialog-quiet-hint');
-          quietRow.append(quietBox, el('span', null, 'Quiet room'));
-          const quietHint = el('p', 'fine', QUIET_HINT);
-          quietHint.id = 'app-dialog-quiet-hint';
-          form.append(budgetLabel, budgetInput, budgetHint, hopsLabel, hopsInput, hopsHint, quietRow, quietHint,
+          const quiet = optionRow('app-dialog-quiet', 'Quiet room', QUIET_HINT, init.quiet === true);
+          quietBox = quiet.box;
+          form.append(budgetLabel, budgetInput, budgetHint, hopsLabel, hopsInput, hopsHint, quiet.row,
             wakeError);
         }
         let voiceBox = null, listenBox = null;
@@ -320,17 +356,9 @@
           // two plain checkboxes: Save types "/room voice on|off" and "/room listen on|off" for the person, so
           // the broker checks the role as it does for the commands (§52.3)
           const rowFor = function (id, labelText, hint, on) {
-            const row = el('label', 'check-row');
-            const box = el('input');
-            box.type = 'checkbox';
-            box.id = id;
-            box.checked = on === true;
-            box.setAttribute('aria-describedby', id + '-hint');
-            row.append(box, el('span', null, labelText));
-            const note = el('p', 'calls-hint', hint);
-            note.id = id + '-hint';
-            form.append(row, note);
-            return box;
+            const made = optionRow(id, labelText, hint, on);
+            form.append(made.row);
+            return made.box;
           };
           voiceBox = rowFor('app-dialog-call-voice', 'Calls start with Voice on',
             'Agents can speak in every call here, from the first moment. You can still turn Voice off on the call bar.',
@@ -345,19 +373,13 @@
         let removeBtn = null;
         if (options.kind === 'coordinator') {
           const init = options.initial || {};
-          for (const a of options.actions) {
-            const row = el('label', 'check-row');
-            const box = el('input');
-            box.type = 'checkbox';
-            box.id = 'app-dialog-coord-' + a.key;
-            box.checked = (init.actions || []).indexOf(a.key) >= 0;
-            box.setAttribute('aria-describedby', box.id + '-hint');
-            row.append(box, el('span', null, a.label));
-            const note = el('p', 'calls-hint', a.hint);
-            note.id = box.id + '-hint';
-            form.append(row, note);
-            coordBoxes[a.key] = box;
-          }
+          const made = options.actions.map(function (a) {
+            return optionRow('app-dialog-coord-' + a.key, a.label, a.hint, (init.actions || []).indexOf(a.key) >= 0);
+          });
+          options.actions.forEach(function (a, i) { coordBoxes[a.key] = made[i].box; });
+          const all = selectAllRow('app-dialog-coord-all', 'All actions', made.map(function (m) { return m.box; }));
+          if (all) form.append(all);
+          for (const m of made) form.append(m.row);
           if (init.current) {
             removeBtn = btn('btn-danger', 'Remove coordinator');
             removeBtn.id = 'app-dialog-coord-remove';
