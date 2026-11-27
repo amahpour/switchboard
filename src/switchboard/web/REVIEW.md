@@ -10,6 +10,7 @@ Applies to `src/switchboard/web/`, the UI in `static/`. The root [REVIEW.md](../
 - **Wording that does not match what the code does.** Check every user-facing line against the behavior: a count, who a feature reaches, what a button does.
 - **Anything that loosens the CSP.** An inline script or style, an `eval`, a new origin. Any console error, page error or CSP violation fails the e2e tests.
 - **DOM built from text.** `md.js` builds Markdown with `createElement` and `textContent` only. No `innerHTML`, no `insertAdjacentHTML`, no string-built links; a link's scheme is checked.
+- **A dialog whose buttons can leave the window, or a label cut short.** A dialog is never taller than the window, with its middle scrolling and Save in view, and a button's label is never cut at any of the four text sizes, on a phone or at the narrowest desktop pane. Check Larger text at 390×844 (#995).
 - **A change to something a person does with no recording** in the pull request's Verification.
 - **A new image or logo not pinned** by hash in `tests/unit/test_web_static_lint.py`.
 

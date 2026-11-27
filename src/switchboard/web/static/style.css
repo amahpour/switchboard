@@ -468,7 +468,6 @@ button:disabled, .btn:disabled, .btn-primary:disabled { opacity: .5; cursor: def
 .chip-label { color: var(--muted-2); }
 .chip-num { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
 .chip-handsfree { background: var(--amber-bg); color: var(--amber-fg); font-weight: 500; }
-.calls-hint { margin: -4px 0 4px 26px; font-size: calc(12.5px * var(--text-scale)); color: var(--muted); }
 .chip-danger { background: var(--danger-bg); color: var(--danger); font-weight: 500; }
 button.chip-danger { border: 0; cursor: pointer; }
 button.chip-danger:hover { box-shadow: inset 0 0 0 1px var(--danger); }
@@ -2190,8 +2189,10 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
   border-top: 1px solid var(--line);
 }
 .insp-actions > :not(.btn) { grid-column: 1 / -1; }
-.insp-actions > div:not(.menu):not(.confirm):not(.note) { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.insp-actions .btn { width: 100%; min-width: 0; height: 34px; padding: 0 10px; }
+/* two buttons to a row when their labels fit, a whole row for one that does not: no label is cut (#995) */
+.insp-actions > div:not(.menu):not(.confirm):not(.note) { display: flex; flex-wrap: wrap; gap: 8px; }
+.insp-actions > div:not(.menu):not(.confirm):not(.note) > .btn { flex: 1 1 calc(50% - 4px); min-width: max-content; white-space: nowrap; }
+.insp-actions .btn { width: 100%; height: 34px; padding: 0 10px; }
 .insp-actions .btn[aria-pressed="true"] { background: var(--btn-on); }
 /* "Catch up on…" carries two icons in half of 264 px: tighter gap and a smaller chevron keep the
    chevron off the border (Chosen.dc) */
@@ -2913,8 +2914,9 @@ body.login {
 
 /* Action, notice and New room dialogs share the same native modal and page palette. */
 .app-dialog {
+  --dialog-max: calc(100vh - 32px);
   width: min(440px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
+  max-height: var(--dialog-max);
   padding: 0;
   border: 1px solid var(--menu-border);
   border-radius: 12px;
@@ -2923,7 +2925,19 @@ body.login {
   box-shadow: var(--menu-shadow);
 }
 .app-dialog::backdrop { background: rgba(0, 0, 0, .42); }
-.app-dialog-form { display: flex; flex-direction: column; gap: 12px; padding: 22px 24px 20px; }
+.app-dialog-form { display: flex; flex-direction: column; gap: 12px; padding: 22px 24px 0; }
+/* Never taller than the window (#995): the form scrolls and its buttons stay in view at the bottom. Settings
+   has its own layout. */
+.app-dialog:not(.app-dialog-settings) { overflow: hidden; }
+.app-dialog:not(.app-dialog-settings) .app-dialog-form { max-height: calc(var(--dialog-max) - 2px); overflow-y: auto; }
+/* An option row (#995): the box, its label and the hint tight under the label, lined up with it. The rows are
+   the form's 12 px apart. */
+.opt-row { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: start; cursor: pointer; }
+.opt-row input[type="checkbox"] { height: auto; margin: 2px 0 0; padding: 0; }
+.opt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.opt-label { font-size: calc(13px * var(--text-scale)); font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.opt-hint { font-size: calc(12px * var(--text-scale)); font-weight: 400; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
+.opt-all { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 /* a long URL or path in a title or body wraps instead of scrolling the dialog sideways (#246) */
 .app-dialog h2 {
   margin: 0;
@@ -2955,7 +2969,15 @@ body.login {
 .handoff-comments { margin: 0; padding-left: 20px; font-size: calc(12px * var(--text-scale)); overflow-wrap: anywhere; }
 .handoff-comments li + li { margin-top: 8px; }
 .handoff-comments p { margin: 2px 0 0; }
-.app-dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.app-dialog-buttons {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 0 20px;
+  background: var(--bg);
+}
 .app-dialog .btn:disabled, .app-dialog .btn-primary:disabled, .app-dialog .btn-danger:disabled {
   opacity: .5;
   cursor: default;
@@ -3174,15 +3196,15 @@ body.login {
 .rules-count { align-self: flex-end; color: var(--muted); font-size: calc(11px * var(--text-scale)); }
 @media (max-width: 760px) {
   .app-dialog {
+    --dialog-max: calc(100dvh - 24px);
     width: 100%;
     max-width: none;
-    max-height: calc(100dvh - 24px);
     margin: auto 0 0;
     border-radius: 16px 16px 0 0;
     border-bottom: 0;
   }
-  .app-dialog-form { padding: 22px 20px calc(20px + env(safe-area-inset-bottom)); }
-  .app-dialog-buttons { flex-direction: column-reverse; }
+  .app-dialog-form { padding: 22px 20px 0; }
+  .app-dialog-buttons { padding-bottom: calc(20px + env(safe-area-inset-bottom)); flex-direction: column-reverse; }
   .app-dialog-buttons .btn, .app-dialog-buttons .btn-primary, .app-dialog-buttons .btn-danger { width: 100%; height: 40px; }
   .app-dialog-settings { width: 100%; height: calc(100dvh - 24px); }
   .settings-head { padding: 0 12px 0 8px; height: 52px; }
