@@ -455,7 +455,8 @@ def test_a_members_name_keeps_its_tap_without_loosening_its_row(ui: UI) -> None:
           const box = e => li.querySelector(e).getBoundingClientRect();
           const name = document.createRange();
           name.selectNodeContents(li.querySelector('.m-name'));
-          return {tap: box('.m-open').height, gap: box('.m-status').top - name.getBoundingClientRect().bottom};
+          const bottom = name.getBoundingClientRect().bottom;
+          return {tap: box('.m-open').height, gap: box('.m-status').top - bottom};
         }"""
     )
     assert found["tap"] >= 43.5, found
