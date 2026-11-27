@@ -67,11 +67,12 @@ A hint as far from its label as from the next field belongs to neither. The Coor
 - **A menu item is at least `--target` tall.** Secondary text goes on a smaller second line.
 - **A long menu is grouped.** Past eight items, group them under headings, or filter as you type, as the command palette does. Each group is eight items or fewer, a group with no match hides its heading, and the arrow keys skip headings. A note on a row (the palette's "web only") is muted text in the row's own style, not a badge: a badge on a third of the rows is noise. An argument hint wraps, never an ellipsis.
 - **An icon-only button has an `aria-label` and a `title`.** A row of more than five icon buttons is crowded, so move the rarely used ones into a menu.
+- **A crowded phone header gets a More sheet.** The room's header is one row on a phone: the controls a person needs at a glance (the way back, the name, the warning, Members) and a More button (three dots, `aria-haspopup="menu"`, `aria-expanded`). The rest are rows of a bottom sheet, each with its icon, its name in words and an optional muted second line for what a chip used to say. A row clicks the button it stands for, or calls what a menu's item calls (the room's **⋯** menu is one row, Leave), so the action is written once, and it is shown only when that button or menu would be. The sheet is modal like Members: focus moves in, Esc and the scrim close it, and focus goes back to More.
 
 ## Touch
 
 - **A target is at least 44 × 44 px where the pointer is coarse** (`--target`). An icon can stay 20 px while its button grows around it. #995 measured 24 to 30 px targets on a phone.
-- **One rule does it:** the last block of `style.css`, under `@media (pointer: coarse)`, gives every button, tab, menu item, link button and text box `min-height` and `min-width` of `--target`, and the rows of the room and member lists a `min-height`. A new control needs nothing; one that must not grow (a dense row) says why in its own rule. A mouse matches none of it, so a desktop is unchanged. The room header (`.conv-head`) is left out until its redesign (#995).
+- **One rule does it:** the last block of `style.css`, under `@media (pointer: coarse)`, gives every button, tab, menu item, link button and text box `min-height` and `min-width` of `--target`, and the rows of the room and member lists a `min-height`. A new control needs nothing; one that must not grow (a dense row) says why in its own rule. A mouse matches none of it, so a desktop is unchanged. The room header (`.conv-head`) sets its own 44 px targets in the narrow layout (#995, finding 7).
 
 ## Words
 
@@ -80,7 +81,7 @@ A hint as far from its label as from the next field belongs to neither. The Coor
 ## Checking it
 
 - **Previews:** light, dark and the phone, as the repository's CLAUDE.md says, plus the Larger text size when the change has text in a control.
-- **The layout sweep** is `tests/e2e/test_layout_sweep.py`. It opens every dialog and menu at both sizes (1440×900 and a 390×844 phone) and both text sizes (Default and Larger). It fails on a cut or spilling label (the text's own rectangles against the control's padding box, not `scrollWidth`, which counts a corner badge), a dialog taller than the window or with its buttons out of view, or sideways scroll (#995, step 3). A phone button under 44×44 px fails unless `KNOWN_SMALL_TARGETS` lists it: it holds the room header's eight, `KNOWN_CUT` a cut label still on `main`, and both only shrink: fixing one means deleting its line. Run one surface by name:
+- **The layout sweep** is `tests/e2e/test_layout_sweep.py`. It opens every dialog and menu at both sizes (1440×900 and a 390×844 phone) and both text sizes (Default and Larger). It fails on a cut or spilling label (the text's own rectangles against the control's padding box, not `scrollWidth`, which counts a corner badge), a dialog taller than the window or with its buttons out of view, or sideways scroll (#995, step 3). A phone button under 44×44 px fails unless `KNOWN_SMALL_TARGETS` lists it: it is empty now (the room header's last eight went with its redesign), `KNOWN_CUT` holds a cut label still on `main`, and both only shrink: fixing one means deleting its line. Run one surface by name:
 
   ```console
   uv run pytest -m e2e tests/e2e/test_layout_sweep.py -k coordinator

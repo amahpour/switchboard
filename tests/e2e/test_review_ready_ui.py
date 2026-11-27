@@ -11,7 +11,16 @@ import re
 
 import pytest
 from playwright.sync_api import Page, expect
-from test_web_ui import PHONE, UI, no_horizontal_scroll, open_room, review_room, ui, world  # noqa: F401
+from test_web_ui import (  # noqa: F401
+    PHONE,
+    UI,
+    no_horizontal_scroll,
+    open_room,
+    review_room,
+    show_board,
+    ui,
+    world,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -29,7 +38,7 @@ def test_the_ready_line_is_hidden_without_a_coordinator_and_names_what_is_missin
     Fails if the line shows in a room with no coordinator, does not follow the command, or names a card
     that is settled."""
     page = review_room(ui, "e2e-ready-hidden")
-    page.click("#board-toggle")
+    show_board(page)
     expect(page.locator("#board .board-card")).not_to_have_count(0)
     expect(page.locator("#board-ready")).to_have_count(0)
     command(page, "/coordinator claude-1 none")
@@ -65,7 +74,7 @@ def test_the_ready_line_reads_ready_at_the_commit_and_shows_the_verdicts_on_a_ph
     call(room, "claude-1", "review", action="fix", item="F1", commit=FIX, proof="test_cart")
     page = ui.open(room=None, **PHONE)
     open_room(page, slug)
-    page.click("#board-toggle")
+    show_board(page)
     command(page, "/coordinator claude-1 none")
     expect(page.locator("#board-ready")).to_contain_text("F1 awaits its check")
     call(room, "codex-1", "review", action="confirm", item="F1")

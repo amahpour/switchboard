@@ -8,14 +8,18 @@ from typing import Any
 
 import pytest
 from playwright.sync_api import Page, expect
-from test_web_ui import PHONE, UI, no_horizontal_scroll, ui, world  # noqa: F401
+from test_web_ui import PHONE, UI, no_horizontal_scroll, tap_more, ui, world  # noqa: F401
 from ui_world import UIWorld, wait_js
 
 pytestmark = pytest.mark.e2e
 
 
 def open_board(page: Page) -> Any:
-    page.get_by_role("button", name="Whiteboard", exact=True).click()
+    icon = page.get_by_role("button", name="Whiteboard", exact=True)
+    if icon.is_visible():
+        icon.click()
+    else:  # a phone: the header's icon is a row of the More sheet
+        tap_more(page, "Whiteboard")
     expect(page.locator("#whiteboard-status")).to_contain_text("Live")
     frame = page.frame_locator("#whiteboard-host iframe")
     expect(frame.locator("canvas").first).to_be_visible()
@@ -101,7 +105,9 @@ def test_person_draws_and_an_agent_shape_appears_live_in_an_opaque_frame(
     no_horizontal_scroll(page)
     page.get_by_role("button", name="Back to chat").click()
     expect(page.locator("#whiteboard-host iframe")).to_have_count(0)
-    expect(page.get_by_role("button", name="Whiteboard", exact=True)).to_be_focused()
+    # a phone has no pencil in the header: focus goes back to More, which opened it
+    opener = "#room-more" if mode == "phone" else '[aria-label="Whiteboard"]'
+    expect(page.locator(opener)).to_be_focused()
 
 
 def test_agent_arrows_bind_to_existing_shapes_without_reconverting_the_targets(

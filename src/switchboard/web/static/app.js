@@ -55,7 +55,8 @@
     $('whiteboard-close').addEventListener('click', function () {
       closeWhiteboard();
       noteShown();  // the log is back on screen
-      $('whiteboard-toggle').focus();
+      // the pencil is a row of the More sheet on a phone (§29.2): focus goes to More, which opened it
+      if (!tryFocus($('whiteboard-toggle'))) $('room-more').focus();
     });
   }
   const MAX_LINES = 2000;
@@ -1820,7 +1821,13 @@
     // a private room's header shows its lock, as the sidebar does (§44)
     const glyph = typeof document.querySelector === 'function' ? document.querySelector('.head-hash path') : null;
     if (glyph) glyph.setAttribute('d', ICONS[r && r.private ? 'lock' : 'hash']);
-    $('room-sub').textContent = r && state.me ? personShown(state.me.human).text + ' and ' + plural(r.members.length, 'agent', 'agents') : '';
+    // the phone's line is "Running · 4 agents" (§29.2): the person's name goes, so the line never wraps or cuts
+    const sub = $('room-sub');
+    if (!r || !state.me) { sub.textContent = ''; return; }
+    // the count is two parts, so a line too narrow for "2 agents" drops the word and keeps the number (CSS)
+    const n = r.members.length;
+    const parts = [el('span', 'sub-n', n + ' '), el('span', 'sub-word', n === 1 ? 'agent' : 'agents')];
+    sub.replaceChildren(...(phone() ? [] : [document.createTextNode(personShown(state.me.human).text + ' and ')]), ...parts);
   }
 
   // ------------------------------------------------------------- members
@@ -2114,6 +2121,110 @@
     if (!leave) setRoomMenu(false);
   }
 
+  // ------------------------------------------------------ the phone's More sheet (§29.2)
+  // At 760 px and below the header is one row, so the room's icon buttons (whiteboard, past boards, rules,
+  // focus, wake, calls) and the room's menu (Leave) live in a bottom sheet instead, each with its name in
+  // words. A row is not a second implementation: choosing it clicks the icon button it stands for, or for
+  // Leave calls what the menu's own Leave calls, so what each does cannot drift.
+  const MORE_ITEMS = [
+    { id: 'board-toggle', label: 'Review board' },
+    { id: 'whiteboard-toggle', label: 'Whiteboard', hint: 'Draw together' },
+    { id: 'past-boards-toggle', label: 'Past boards' },
+    { id: 'room-rules', label: 'Room rules', hint: 'Edit this room’s rules' },
+    { id: 'focus-toggle', label: 'Focus mode', hint: 'Collapse agent chat not addressed to you', check: true },
+    { id: 'room-wake', label: 'Wake settings', hint: wakeHint },
+    { id: 'room-calls', label: 'Call settings', hint: callsHint },
+    // the room's own menu (§63) holds one action, Leave, so on a phone it is this row and not a second "more"
+    // button; shown when that menu would be (a member of a public room on a switchboard with people)
+    { id: 'room-menu-wrap', key: 'leave', label: function (r) { return 'Leave ' + r.name; }, glyph: 'logout',
+      danger: true, run: function (r) { leaveRoom(r); } },
+  ];
+
+  // "60/60 an hour · hops 2/30": what the Budget and Hops chips say, for the limits that are on (#965)
+  function wakeHint(r) {
+    const s = (r && r.settings) || {};
+    const parts = [];
+    if (Number(s.budget_per_hour) > 0) parts.push((Number(s.budget_remaining) || 0) + '/' + Number(s.budget_per_hour) + ' an hour');
+    if (Number(s.hop_limit) > 0) parts.push('hops ' + (Number(s.hop_count) || 0) + '/' + Number(s.hop_limit));
+    return parts.join(' · ');
+  }
+
+  // what the Hands-free chip says, for a room whose calls start with voice or listening on
+  function callsHint(r) {
+    const hands = r && r.settings && r.settings.hands_free;
+    if (!hands || typeof hands !== 'object') return '';
+    const voice = hands.voice === true, listen = hands.listen === true;
+    if (voice && listen) return 'Hands-free: voice on, agents listen';
+    if (voice) return 'Hands-free: voice on';
+    return listen ? 'Hands-free: agents listen' : '';
+  }
+
+  function moreOpen() { return $('app').classList.contains('more-open'); }
+
+  function renderMore(r) {
+    const list = $('more-list');
+    list.replaceChildren();
+    $('more-title').textContent = r.name;
+    for (const item of MORE_ITEMS) {
+      const source = $(item.id);
+      if (!source || source.classList.contains('hidden')) continue;  // shown only when its icon button would be
+      const row = btn(item.danger ? 'more-item more-danger' : 'more-item');
+      row.setAttribute('role', item.check ? 'menuitemcheckbox' : 'menuitem');
+      row.dataset.more = item.key || item.id;
+      const svg = source.querySelector('svg');
+      row.append(item.glyph ? icon(item.glyph) : svg ? svg.cloneNode(true) : el('span', 'more-glyph', source.textContent));
+      const hint = typeof item.hint === 'function' ? item.hint(r) : (item.hint || '');
+      const words = el('span', 'more-words');
+      words.append(el('span', 'more-label', typeof item.label === 'function' ? item.label(r) : item.label));
+      if (hint) words.append(el('span', 'more-hint', hint));
+      row.append(words);
+      if (item.check) {
+        row.setAttribute('aria-checked', String(state.focusMode === true));
+        const track = el('span', 'switch-track');
+        track.append(el('span', 'switch-knob'));
+        track.setAttribute('aria-hidden', 'true');
+        row.append(track);
+      }
+      row.addEventListener('click', function () {
+        setMore(false);
+        $('room-more').focus();  // a dialog this opens hands focus back here when it closes
+        if (item.run) item.run(r);
+        else source.click();
+      });
+      list.append(row);
+    }
+  }
+
+  function setMore(open) {
+    const r = activeRoom();
+    const on = !!open && !!r && phone();
+    if (on) {
+      renderMore(r);
+      setNav(false);
+      setSheet(false);
+    }
+    $('app').classList.toggle('more-open', on);
+    setOverlay();
+    if (on) {
+      const first = $('more-list').querySelector('.more-item');
+      if (first) first.focus();
+    }
+  }
+
+  // arrow keys move through the menu, as a role=menu promises
+  function moreKey(ev) {
+    const items = Array.from($('more-list').querySelectorAll('.more-item'));
+    const at = items.indexOf(document.activeElement);
+    let to = -1;
+    if (ev.key === 'ArrowDown') to = (at + 1) % items.length;
+    else if (ev.key === 'ArrowUp') to = (at <= 0 ? items.length : at) - 1;
+    else if (ev.key === 'Home') to = 0;
+    else if (ev.key === 'End') to = items.length - 1;
+    if (to < 0 || !items.length) return;
+    ev.preventDefault();
+    items[to].focus();
+  }
+
   function roomMenuOpen() { return !$('room-menu').classList.contains('hidden'); }
 
   function setRoomMenu(open) {
@@ -2230,6 +2341,8 @@
     $('room-rules').classList.toggle('hidden', !r);
     $('room-wake').classList.toggle('hidden', !r);
     $('room-calls').classList.toggle('hidden', !r);
+    $('room-more').classList.toggle('hidden', !r);
+    if (!r && moreOpen()) setMore(false);
 
     const st = $('st-state');
     const paused = $('banner-paused');
@@ -2256,6 +2369,13 @@
     }
     st.classList.toggle('stale', !state.wsOpen);
     if (!state.wsOpen) st.title = 'Reconnecting: this is how the room was when the connection dropped';
+    // the phone shows the same state under the room's name, in place of the chip (§29.2)
+    const rs = $('room-state');
+    rs.classList.toggle('hidden', !r);
+    rs.classList.toggle('bad', !!r && !!s.paused);
+    rs.classList.toggle('stale', !state.wsOpen);
+    rs.title = st.title;
+    $('room-state-text').textContent = r && s.paused ? 'Paused' : 'Running';
     $('banner-offline').classList.toggle('hidden', state.wsOpen || !state.wsEverOpen);
 
     const budget = $('st-budget');
@@ -2545,9 +2665,13 @@
     const isNarrow = narrow();
     if (!isNarrow) app.classList.remove('sheet-open');
     if (!phone()) app.classList.remove('nav-open');
+    if (!phone()) app.classList.remove('more-open');
     const sheet = app.classList.contains('sheet-open');
     const nav = app.classList.contains('nav-open');
-    $('scrim').classList.toggle('hidden', !(sheet || nav));
+    const more = app.classList.contains('more-open');
+    $('scrim').classList.toggle('hidden', !(sheet || nav || more));
+    $('more-sheet').classList.toggle('hidden', !more);
+    $('room-more').setAttribute('aria-expanded', String(more));
     const shown = isNarrow ? sheet : !app.classList.contains('pane-closed');
     const pt = $('pane-toggle');
     pt.setAttribute('aria-pressed', String(shown));
@@ -2556,7 +2680,7 @@
     $('buddy-toggle').setAttribute('aria-expanded', String(sheet));
     $('rooms-toggle').setAttribute('aria-expanded', String(nav));
     const pane = $('pane');
-    const modal = sheet && phone();
+    const modal = (sheet || more) && phone();
     if (modal) {
       pane.setAttribute('role', 'dialog');
       pane.setAttribute('aria-modal', 'true');
@@ -7450,7 +7574,7 @@
         const row = Array.from(document.querySelectorAll('.past-board-link')).find(function (button) {
           return button.dataset.pastBoard === view.selected;
         });
-        tryFocus(row || $('past-boards-toggle'));
+        tryFocus(row) || tryFocus($('past-boards-toggle')) || tryFocus($('room-more'));
       });
     });
     return back;
@@ -9209,6 +9333,11 @@
       searchFocusBack();
       return;
     }
+    if (moreOpen()) {  // the phone's More sheet: closed, and the keyboard back on its button
+      setMore(false);
+      $('room-more').focus();
+      return;
+    }
     if (roomMenuOpen()) {  // the room's menu (§63): closed, and the keyboard back on its button
       setRoomMenu(false);
       $('room-menu-btn').focus();
@@ -9428,6 +9557,8 @@
       submitText('/meeting share stop');
     });
     $('room-rules').addEventListener('click', openRoomRules);
+    $('room-more').addEventListener('click', function () { setMore(!moreOpen()); });
+    $('more-list').addEventListener('keydown', moreKey);
     $('room-menu-btn').addEventListener('click', function () { setRoomMenu(!roomMenuOpen()); });
     $('preview-join').addEventListener('click', joinRoom);
     $('room-wake').addEventListener('click', openRoomWake);
@@ -9477,9 +9608,12 @@
       const app = $('app');
       const nav = app.classList.contains('nav-open');
       const sheet = app.classList.contains('sheet-open');
+      const more = moreOpen();
+      setMore(false);
       setNav(false);
       setSheet(false);
-      if (nav) $('rooms-toggle').focus();
+      if (more) $('room-more').focus();
+      else if (nav) $('rooms-toggle').focus();
       else if (sheet) (phone() ? $('buddy-toggle') : $('pane-toggle')).focus();
     });
     $('insp-back').addEventListener('click', function () { closeInspector(true); });
@@ -9508,6 +9642,13 @@
       renderInspector();
     });
     if (typeof window.addEventListener === 'function') window.addEventListener('resize', setOverlay);
+    // the line under the room's name is shorter on a phone: redraw it when the window crosses 760 px
+    let wasPhone = phone();
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('resize', function () {
+        if (phone() !== wasPhone) { wasPhone = phone(); updateTitle(); }
+      });
+    }
     // the divider's limits follow the window (#343)
     if (typeof window.addEventListener === 'function') window.addEventListener('resize', syncBoardDivider);
     setPaneView(false);

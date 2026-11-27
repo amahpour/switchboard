@@ -120,7 +120,11 @@
         <svg class="ic head-hash" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5 4.8 13.5M11.2 2.5 10 13.5M2.8 6h11M2.2 10h11"/></svg>
         <h1 id="room-title"><button type="button" id="room-title-button" aria-haspopup="dialog"
               aria-controls="app-dialog" title="Rename this room"></button></h1>
-        <span class="room-sub" id="room-sub"></span>
+        <!-- the phone's line under the name: the room's state, then the member count (§29.2, narrow layout) -->
+        <span class="head-sub">
+          <span class="room-state narrow-only hidden" id="room-state"><span class="dot"></span><span id="room-state-text"></span></span>
+          <span class="room-sub" id="room-sub"></span>
+        </span>
         <!-- a public room this person is not a member of, read from Other rooms (§63) -->
         <span class="chip chip-preview hidden" id="room-preview">Preview</span>
       </div>
@@ -192,6 +196,12 @@
         <span id="buddy-count">0</span>
         <span class="badge danger hidden" id="buddy-alert"></span>
       </button>
+
+      <!-- The phone's More: the header's icon buttons, in words, in a sheet (narrow layout only) -->
+      <button type="button" class="icon-btn narrow-only hidden" id="room-more" aria-haspopup="menu"
+              aria-expanded="false" aria-controls="more-sheet" aria-label="More" title="More">
+        <svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h.01M8 8h.01M12.5 8h.01"/></svg>
+      </button>
     </header>
     </div>
 
@@ -222,11 +232,13 @@
     <!-- A room filtered to what was said to you or to its files (#914, DESIGN.md §64). All is the live log;
          Mentions and Files are the broker's answer, older history included. Drawn by app.js. -->
     <div class="room-filters hidden" id="room-filters" role="group" aria-label="Show in this room">
+      <span class="room-filter-group">
       <button type="button" class="room-filter" id="filter-all" data-show="all" aria-pressed="true">All</button>
       <button type="button" class="room-filter" id="filter-mentions" data-show="mentions" aria-pressed="false"
               title="Messages addressed to you: an @mention of you, @humans, or an agent's reply to you">Mentions</button>
       <button type="button" class="room-filter" id="filter-files" data-show="files" aria-pressed="false"
               title="Messages with a file: an attachment or a call's snapshot">Files</button>
+      </span>
       <span class="room-filter-note" id="room-filter-note" role="status" aria-live="polite"></span>
     </div>
 
@@ -491,6 +503,14 @@
   </aside>
 
   <div class="scrim hidden" id="scrim"></div>
+
+  <!-- The room's More sheet on a phone: a dialog (it covers the page and takes focus, as Members does)
+       holding a menu of the header's buttons. Outside <main>, which goes inert while it is open. -->
+  <section class="more-sheet hidden" id="more-sheet" role="dialog" aria-modal="true" aria-labelledby="more-title">
+    <span class="sheet-grip" aria-hidden="true"></span>
+    <h2 class="more-title" id="more-title"></h2>
+    <div class="more-list" id="more-list" role="menu" aria-labelledby="more-title"></div>
+  </section>
 
   <!-- ============ Sheets (floating cards) ============ -->
   <section class="sheet hidden" id="people-panel" role="dialog" aria-modal="false" aria-labelledby="people-panel-title">

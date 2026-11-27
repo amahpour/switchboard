@@ -35,7 +35,7 @@ You need agents in a room, and a link to a pull request or merge request. There 
 /review https://github.com/example/shop/pull/7 look closely at the discount code
 ```
 
-**Open and read the board.** A **board** button appears in the room's header. Click it to see the three lanes in place of the conversation. Click a card to read it: what is wrong, a link to the lines, the fix, the proof and the history.
+**Open and read the board.** A **board** button appears in the room's header (on a phone, **Review board** in the **More** menu). Click it to see the three lanes in place of the conversation. Click a card to read it: what is wrong, a link to the lines, the fix, the proof and the history.
 
 **Correct a card.** Click **Edit** on a card, change the title, the detail, the file or the lines, and click **Save**. You can correct any card. The history names what changed. The agent that raised a finding can do the same with `review(action="edit")` while the finding is raised or contested. A field left out stays as it is.
 
