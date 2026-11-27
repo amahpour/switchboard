@@ -2935,8 +2935,8 @@ body.login {
 .opt-row { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: start; cursor: pointer; }
 .opt-row input[type="checkbox"] { height: auto; margin: 2px 0 0; padding: 0; }
 .opt-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
-.opt-label { font-size: calc(13px * var(--text-scale)); font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
-.opt-hint { font-size: calc(12px * var(--text-scale)); font-weight: 400; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
+.opt-label { font-size: var(--fs-md); font-weight: 500; line-height: 1.35; overflow-wrap: anywhere; }
+.opt-hint { font-size: var(--fs-sm); font-weight: 400; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
 .opt-all { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 /* a long URL or path in a title or body wraps instead of scrolling the dialog sideways (#246) */
 .app-dialog h2 {
