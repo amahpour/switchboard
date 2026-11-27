@@ -31,125 +31,21 @@ from ui_world import wait_js
 
 pytestmark = pytest.mark.e2e
 
-# (surface, element) pairs, written per surface: a button under 44x44 px on the phone, found by #995's
-# sweep. Fixing one means deleting its line; the test fails on a listed target that is no longer small.
+# (surface, element) pairs, written per surface: a button under 44x44 px on the phone. #995's sweep found
+# 113 of them; 8 are left, all in the room header, which gets its own redesign (#995, finding 7), and each
+# is resized there, so its line goes with it. Everything else is 44 px under a coarse pointer (UI.md,
+# "Touch"); a target that is small again fails the sweep. Fixing one means deleting its line.
 _SMALL_ON_A_PHONE: dict[str, list[str]] = {
     "room": [
-        "button#attach-btn",
         "button#buddy-toggle",
-        "button#closed-rooms",
         "button#focus-toggle",
-        "button#home-nav",
-        "button#me-settings",
-        "button#new-room",
         "button#past-boards-toggle",
         "button#room-calls",
         "button#room-rules",
         "button#room-title-button",
         "button#room-wake",
-        "button#send",
         "button#st-approvals",
-        "button#usage-nav",
-        "button.m-open",
-        "button.room",
-        "span.flag-unknown",
     ],
-    "board": ["button#board-close", "button#board-handoff"],
-    "board-card": [
-        "button#board-close",
-        "button#board-defer",
-        "button#board-drop",
-        "button#board-edit",
-        "button#board-handoff",
-        "button#board-mark-fixed",
-        "button#board-reassign",
-    ],
-    "room-rules": ["button#app-dialog-action", "button#app-dialog-cancel"],
-    "wake-settings": ["button#app-dialog-action", "button#app-dialog-cancel"],
-    "calls": ["button#app-dialog-action", "button#app-dialog-cancel"],
-    "rename": ["button#app-dialog-action", "button#app-dialog-cancel"],
-    "new-room": ["button#app-dialog-action", "button#app-dialog-cancel"],
-    "coordinator": ["button#app-dialog-action", "button#app-dialog-cancel"],
-    "members": ["button.m-open", "span.flag-unknown"],
-    "agent-panel": [
-        "button#insp-catchup",
-        "button#insp-coordinator",
-        "button#insp-hold",
-        "button#insp-kick",
-        "button#insp-quiet",
-    ],
-    "home": ["button.agent-room"],
-    "closed-rooms": ["button#closed-close", "button.btn"],
-    "settings-profile": [
-        "button#settings-back",
-        "button#settings-close",
-        "button#settings-name-save",
-        "button#settings-profile-discard",
-        "button#settings-webhook-quiet-remove",
-        "button#settings-webhook-quiet-save",
-        "button#settings-webhook-remove",
-        "button#settings-webhook-save",
-        "button#settings-webhook-second-remove",
-        "button#settings-webhook-second-save",
-        "button#settings-webhook-test",
-    ],
-    "settings-appearance": [
-        "button#agent-icon-reset-claude",
-        "button#agent-icon-reset-codex",
-        "button#agent-icon-reset-cursor",
-        "button#agent-icon-reset-devin",
-        "button#agent-icon-reset-meet",
-        "button#agent-icon-reset-opencode",
-        "button#agent-icon-reset-teams",
-        "button#agent-icon-reset-zoom",
-        "button#agent-icon-upload-claude-dark",
-        "button#agent-icon-upload-claude-light",
-        "button#agent-icon-upload-codex-dark",
-        "button#agent-icon-upload-codex-light",
-        "button#agent-icon-upload-cursor-dark",
-        "button#agent-icon-upload-cursor-light",
-        "button#agent-icon-upload-devin-dark",
-        "button#agent-icon-upload-devin-light",
-        "button#agent-icon-upload-meet-dark",
-        "button#agent-icon-upload-meet-light",
-        "button#agent-icon-upload-opencode-dark",
-        "button#agent-icon-upload-opencode-light",
-        "button#agent-icon-upload-teams-dark",
-        "button#agent-icon-upload-teams-light",
-        "button#agent-icon-upload-zoom-dark",
-        "button#agent-icon-upload-zoom-light",
-        "button#agent-icons-info",
-        "button#settings-back",
-        "button#settings-close",
-        "button#settings-text-default",
-        "button#settings-text-large",
-        "button#settings-text-larger",
-        "button#settings-text-small",
-        "button#settings-theme-dark",
-        "button#settings-theme-light",
-        "button#settings-theme-system",
-    ],
-    "settings-rooms": [
-        "button#settings-back",
-        "button#settings-close",
-        "button#settings-rules-discard",
-        "button#settings-rules-save",
-    ],
-    "settings-agents": [
-        "button#agent-token-ask-1",
-        "button#agent-token-make",
-        "button#settings-back",
-        "button#settings-close",
-        "button#settings-nc-save",
-    ],
-    "settings-files": ["button#settings-back", "button#settings-close", "button#settings-files-save"],
-    "settings-links": [
-        "button#settings-back",
-        "button#settings-close",
-        "button#settings-links-add",
-        "button#settings-links-save",
-    ],
-    "settings-backups": ["button#backup-start", "button#settings-back", "button#settings-close"],
 }
 KNOWN_SMALL_TARGETS: set[tuple[str, str]] = {
     (surface, element) for surface, elements in _SMALL_ON_A_PHONE.items() for element in elements
@@ -514,3 +410,33 @@ def test_the_known_lists_hold_only_what_is_still_there(ui: UI) -> None:  # noqa:
             ui.world.close_extra_agents()
     assert sorted(KNOWN_CUT - cut) == [], "no longer cut: delete from KNOWN_CUT"
     assert sorted(KNOWN_SMALL_TARGETS - small) == [], "no longer small: delete from KNOWN_SMALL_TARGETS"
+
+
+@pytest.mark.parametrize("device", ["phone", "desktop"])
+def test_the_touch_target_is_44_px_on_a_touch_screen_and_32_on_a_desktop(
+    ui: UI,  # noqa: F811
+    device: str,
+) -> None:
+    """``--target`` is 44 px under a coarse pointer (the touch phone context) and 32 px under a fine one, and
+    the agent panel's copy-session button, 24 px on a phone before #995, is at least 44x44 px on the phone and
+    is not stretched on a desktop. Fails if the ``pointer: coarse`` rules stop applying to a control, or start
+    applying to a mouse."""
+    phone = device == "phone"
+    page = ui.open(**(PHONE if phone else {}))
+    if phone:
+        page.click("#buddy-toggle")
+    page.click('#buddy-list .member[data-name="bench"]')  # the seeded agent that has a session
+    expect(page.locator('.copy-btn[data-focus="copy-session"]')).to_be_visible()  # the details load after
+    found = page.evaluate(
+        """() => {
+          const r = document.querySelector('.copy-btn[data-focus="copy-session"]').getBoundingClientRect();
+          return {target: getComputedStyle(document.documentElement).getPropertyValue('--target').trim(),
+                  w: r.width, h: r.height};
+        }"""
+    )
+    if phone:
+        assert found["target"] == "44px"
+        assert found["w"] >= 43.5 and found["h"] >= 43.5, found
+    else:
+        assert found["target"] == "32px"
+        assert found["w"] < 44 and found["h"] < 44, found

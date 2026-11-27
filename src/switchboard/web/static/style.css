@@ -4191,3 +4191,28 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
   .room-filter { height: 44px; padding: 0 16px; border-radius: 22px; }
   .room-filter-note { flex-basis: 100%; }
 }
+
+/* Touch targets (#995, finding 6, UI.md "Touch"). Under a coarse pointer every control is --target (44 px) in
+   both directions: a button grows around its icon, a row of a list a person taps is that tall, a text box too.
+   A fine pointer matches nothing here, so a desktop is as it was. The room header (.conv-head) is left for its
+   own redesign (#995, finding 7). */
+@media (pointer: coarse) {
+  :is(
+    button, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .menu-item, a.btn, summary
+  ):not(.conv-head *, .conv-head) {
+    min-width: var(--target);
+    min-height: var(--target);
+  }
+  :is(
+    input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"], [type="hidden"], [type="color"]),
+    select
+  ) {
+    min-height: var(--target);
+  }
+  [role="button"].approval-flag, .flag-unknown, .flag-approvals {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .member, .room, .agent-room { min-height: var(--target); }
+}
