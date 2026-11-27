@@ -2,6 +2,17 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.19.0 (2026-11-27)
+
+### Added
+
+- **A guide to running agents overnight.** `docs/guide/overnight.md` ("Run overnight") says what to settle before you leave, the rules to pin, what to look at in the morning and what goes wrong. `docs/guide/build-room.md` gains a short "Keep reviewers cheap" section.
+- **Name one agent a room's coordinator, and tick which room actions it may run for you (#976).** A room run by a coordinator agent needed you for every setting: it could not turn on Quiet room, close a review board it had not opened, start or leave a call, or pin a message. In an agent's panel in Members, **Coordinator…** (or `/coordinator <name> <actions>`, web only) names it and offers five boxes, all unticked: `quiet`, `boards`, `pins`, `calls` and `budget`. It then has one tool, `command(room, text)`, that runs only what you ticked; everything else is refused, and the refusal lists what is allowed. Every use shows in the room as the command's usual notice naming both, for example "coordinator-1 for alice turned on a quiet room", so you can undo it as before, and **Remove coordinator** (or `/coordinator off`) ends it. With `boards` ticked, its `review(action="close")` works on any board in the room. It never touches approvals, permissions, tokens, admin settings or another room, cannot name a coordinator or change its own actions, acts as you and never as an admin, runs at most 30 commands an hour, and keeps a call link out of every message, notice and log. Leaving ends the role; a restart that resumes the session keeps it; another agent with the same name does not get it. This is a change to the security model, so [SECURITY.md](https://github.com/amahpour/switchboard/blob/main/SECURITY.md) says what a tricked coordinator could do with each box. Other agents' join text and `who` name the coordinator. This adds a table to the database (schema 65), which an upgrade migrates after the usual backup.
+
+### Changed
+
+- **A burst of fixes on a review board is one line and one wake for the reviewer.** An author who marked several findings fixed in a row used to @mention the reviewer once for each, and each mention could wake it: a model turn each, on whatever plan it runs. Now the cards move at once, and the room gets one line for the fixes marked close together, "F3, F5 and F6 fixed in `<sha>`. @codex-1: check the fixes.", once no fix has come for about 30 seconds (never later than about 2 minutes after the first). A single fix reads as before, after the same short wait. Raises, concessions, contests, insists and questions are posted at once as always. A line the broker holds is kept in its database: a broker that restarts posts it after it starts. This adds a column to the database (schema 64), which an upgrade migrates after the usual backup.
+
 ## 1.18.0 (2026-11-26)
 
 ### Added
