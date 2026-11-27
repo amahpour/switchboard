@@ -48,7 +48,10 @@ HOTWORDS_MAX = 100  # the room's names sent as the transcriber's hotwords, each 
 RESOURCE = "transcript://live/segments"
 CAPTIONS = "captions"  # the token joinly resolves to the captions patch's classes (§52.7)
 STATUS_TOOL = "transcription_status"  # the patched server's answer to "are the captions on?"
-LEAVE_TIMEOUT_S = 5.0
+# joinly's leave presses Leave and then its confirmation, and Zoom's can take a few seconds to open. At 5 s
+# switchboard closed the session while the bot was still leaving, and Zoom kept the bot in the call for
+# minutes (#956). Only a joinly that hangs waits this long.
+LEAVE_TIMEOUT_S = 15.0
 POLL_S = 3.0  # how long to go without reading the transcript when joinly says nothing changed
 SPEAK_TIMEOUT_S = 180.0  # speak_text returns when the speech has ended; 600 characters is under a minute
 INTERRUPTED = "Interrupted"  # how joinly's reply to speak_text starts when someone spoke over it
