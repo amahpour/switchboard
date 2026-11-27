@@ -8,7 +8,7 @@ Two joinly containers are started (published on a free loopback port each, since
 switchboard's, which the throwaway broker's ``[meeting] joinly_url`` names, and a test speaker named
 "switchboard self-test speaker" that this test drives as an MCP client the way the broker drives its own. The
 broker runs in this process in a temp home, with a room and a scripted agent, ``claude-1``. Both bots join
-the call named in the file, and seven steps run in order, each with what it expected, what it saw and how long
+the call named in the file, and eight steps run in order, each with what it expected, what it saw and how long
 it took (``harness/selftest.py`` writes them as JSON and a Markdown table):
 
 1. ``/meeting <link>`` from a person: the bar goes live.
@@ -21,7 +21,11 @@ it took (``harness/selftest.py`` writes them as JSON and a Markdown table):
    voices, and the broker's bot hears both (each reaches the room as a call line). A third line, in a voice
    Kokoro does not have, is answered with the patch's "voice was not found" and still spoken. Not run with
    stock joinly. Whether the two voices *sound* different is for a person to hear on the call.
-7. ``/meeting leave`` and the speaker leaves: the bar ends and no bot is left in the call.
+7. A screen share (#760, Zoom only, with the voice patch): the speaker shares a small picture with
+   ``share_image``, says a known sentence while it is shown, and a call line with most of its words reaches
+   the room under the speaker's name, not ``call``. ``stop_share_image`` ends it whatever happened. If Zoom
+   refuses the share (it lets only the host share by default) the step fails and says so.
+8. ``/meeting leave`` and the speaker leaves: the bar ends and no bot is left in the call.
 
 The link has the call's passcode in it. It is read from the file named by ``SWITCHBOARD_MEETING_URL_FILE``
 (mode 0600, refused otherwise), never from an argument; it is held as a ``SecretLink``; every error that
@@ -29,12 +33,13 @@ might quote it is scrubbed first; and at the end the broker's database, its mess
 for any piece of it. Whatever happens, both bots leave and both containers are removed. A failed step keeps
 both containers' logs in the output folder, scrubbed of the link, and the report names the files; delete
 them after reading. A step that can't start because an earlier one failed is recorded as failed ("not
-attempted"), so a run is green only if all seven passed.
+attempted"), so a run is green only if all eight passed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import inspect
@@ -45,9 +50,11 @@ import secrets
 import shutil
 import signal
 import sqlite3
+import struct
 import subprocess
 import tempfile
 import time
+import zlib
 from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -89,10 +96,10 @@ OUT_ENV = "SWITCHBOARD_SELFTEST_OUT"
 # flags speech late, and the hotwords turn a clipped first word into "Claude". That file is pinned too.
 # SWITCHBOARD_SELFTEST_STOCK_JOINLY=1 runs stock joinly instead, without either fix.
 ZOOM_FIX_URL = (
-    "https://raw.githubusercontent.com/amahpour/joinly/58d5c89848c164f5fb5b20b45876371e0a3b67d6"
+    "https://raw.githubusercontent.com/amahpour/joinly/2ad8075b0087ce0526017b712b30095f4038de67"
     "/joinly/providers/browser/platforms/zoom.py"
 )
-ZOOM_FIX_SHA256 = "084358208c6bc318f8ee03929be7a6cd6f9f84dd57bdb4b470b83ded6a4d8d39"
+ZOOM_FIX_SHA256 = "283c7cbc5d044d6fbb69255ab5ca6a5207a49f1a803347bb579df7b3e6e021b7"
 ZOOM_PY = "/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py"
 PREROLL_FIX_COMMIT = "1fe384d9deba32f38fabd5bfc77fc5975adef6a7"
 PREROLL_FIX_URL = (
@@ -185,6 +192,10 @@ DOCKER_ENV = {
     "HOME": REAL_HOME,  # tests/conftest.py points $HOME at a temp dir, where docker finds no config
 }
 
+SHARE_SENTENCE = "The yellow submarine is delivering the afternoon mail"
+# Step 7's second line, with the observer in the call: the observer shares and the speaker says this, so the
+# one talking is not the one sharing, and the line must not take the sharer's name (#760)
+SHARE_SENTENCE_OTHER = "The silver tractor is parked beside the red barn"
 STEPS = {
     1: (
         "the bar goes live",
@@ -201,7 +212,13 @@ STEPS = {
         "two voices are heard",
         "the speaker says a line in each of two voices and the bot hears both; an unknown voice falls back",
     ),
-    7: ("the bots leave", "the bar ends and the speaker no longer sees the bot; the speaker leaves"),
+    7: (
+        "a line keeps its speaker during a screen share",
+        f"the speaker shares a picture and says: {SHARE_SENTENCE}; a call line with most of its words "
+        "reaches the room under the speaker's name, not 'call'; with the observer, it shares next while the "
+        f"speaker says: {SHARE_SENTENCE_OTHER}, and that line is the speaker's too, not the sharer's",
+    ),
+    8: ("the bots leave", "the bar ends and the speaker no longer sees the bot; the speaker leaves"),
 }
 # Step 6's words: two lines to be heard, in two voices Kokoro v1.0 has (an American man and a British woman),
 # neither of which is switchboard's default (bm_george) or joinly's (af_bella); and a voice no one has.
@@ -302,6 +319,27 @@ def kept_logs(
     return saved
 
 
+def tiny_png(width: int = 320, height: int = 180) -> bytes:
+    """A small PNG, stdlib only: a dark blue picture with a lighter band, so a share has something to show."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    rows = b"".join(
+        b"\x00"
+        + (bytes((200, 200, 40)) if height // 3 < y < 2 * height // 3 else bytes((20, 30, 90))) * width
+        for y in range(height)
+    )
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
 # ------------------------------------------------------------------- the speaker
 def reply_text(result: Any) -> str:
     """The text of a tool result, whatever shape the client library gave it."""
@@ -347,6 +385,14 @@ class Speaker:
         """Speak ``text``; with ``voice``, in that Kokoro voice (the voice patch, #713)."""
         args = {"text": text, **({"voice": voice} if voice else {})}
         return reply_text(await self.call("speak_text", args, timeout=SPEAK_S))
+
+    async def share_image(self, png: bytes) -> str:
+        return reply_text(
+            await self.call("share_image", {"image": base64.b64encode(png).decode()}, timeout=60.0)
+        )
+
+    async def stop_share_image(self) -> str:
+        return reply_text(await self.call("stop_share_image", timeout=30.0))
 
     async def segments(self) -> list[selftest.Segment]:
         return selftest.segments_of(await self.call("get_transcript", {"mode": "full"}))
@@ -405,6 +451,7 @@ class World:
         self.steps = steps  # the test's own list, so a step that finished is kept if a later one blows up
         self.bot_live = False
         self.bot_seen = False  # the speaker has seen the bot in the participant list
+        self.share_step = self.voice_patch and link.platform == "zoom"  # share_image: our patch, Zoom only
 
     # -- reading the room as the person's page does
     def headers(self) -> dict[str, str]:
@@ -713,7 +760,72 @@ class World:
         shown = f"voices {', '.join(VOICES)} accepted; unknown voice fell back; heard: {heard or 'nothing'}"
         return Outcome(bool(ok), shown[:400])
 
-    # -- 7: both bots leave
+    # -- 7: a line keeps its speaker while someone shares a screen (#760)
+    async def share(self) -> Outcome:
+        """The speaker shares a picture and says a sentence. The line must reach the room under the speaker's
+        name (what ``SPEAKER_NAME`` is, which is what the bot reads from Zoom's participant list), not as
+        ``call``, which is what joinly's speaker falls back to when it can't tell who is talking. With the
+        observer in the call, it shares next while the speaker talks: the one talking is not the one sharing,
+        and the line must be the speaker's, not the sharer's."""
+        own = await self.share_and_say(self.speaker, SHARE_SENTENCE)
+        if not own.ok or self.observer is None:
+            return own
+        other = await self.share_and_say(self.observer, SHARE_SENTENCE_OTHER)
+        ratios = [r for r in (own.ratio, other.ratio) if r is not None]
+        seen = f"{own.seen} / the observer shared and the speaker spoke: {other.seen}"
+        return Outcome(other.ok, seen, min(ratios) if ratios else None)
+
+    async def share_and_say(self, sharer: Speaker, sentence: str) -> Outcome:
+        """``sharer`` shares a picture, the speaker says ``sentence``, and the line it makes must be the
+        speaker's. The share always ends."""
+        sharing = False
+        try:
+            try:
+                started = await sharer.share_image(tiny_png())
+                sharing = True
+            except Exception as e:
+                why = self.describe(e)
+                hint = (
+                    " (Zoom lets only the host share by default; the meeting must let participants share)"
+                    if "disabled" in why.lower() or "host" in why.lower()
+                    else ""
+                )
+                return Outcome(False, f"share_image was refused: {why[:200]}{hint}")
+            await asyncio.sleep(3.0)  # the share settles, and the active speaker may change with it
+            cursor = self.last_id()
+            await self.speaker.say(sentence)
+            lines: list[dict[str, Any]] = []
+
+            def arrived() -> bool:
+                nonlocal lines
+                lines = [m for m in self.messages(cursor) if m.get("sender_kind") == "meeting"]
+                return selftest.matches(sentence, " ".join(m["text"] for m in lines))
+
+            if not await until(arrived, HEARD_S):
+                return Outcome(False, f"shared ({started}); no call line with the sentence reached the room")
+            heard = " ".join(m["text"] for m in lines)
+            # the room's message shape names the sender "from" (service.message_dict); read it strictly, so a
+            # renamed field fails here loudly instead of making every line look nameless (it read
+            # "sender_name" at first, and a correct line came out as '')
+            names = sorted({str(m["from"]) for m in lines})
+            ratio = selftest.match_ratio(sentence, heard)
+            right = [m for m in lines if str(m["from"]).casefold() == SPEAKER_NAME.casefold()]
+            if not right:
+                return Outcome(
+                    False,
+                    f"the line came as {', '.join(repr(n) for n in names)} instead of {SPEAKER_NAME!r}"
+                    f" while sharing: {heard}",
+                    ratio,
+                )
+            return Outcome(True, f"shared; the line came as {SPEAKER_NAME!r}: {heard}", ratio)
+        finally:
+            if sharing:
+                try:
+                    await sharer.stop_share_image()
+                except Exception as e:
+                    print(f"stop_share_image failed: {self.describe(e)}")
+
+    # -- 8: both bots leave
     async def leave(self) -> Outcome:
         if not self.bot_seen:  # "the bot is gone" means nothing if the bot was never seen
             self.bot_seen = await self.bot_listed() is True
@@ -771,7 +883,9 @@ class World:
         await self.step(5, self.snapshot, [self.needs_bot])
         if self.voice_patch:
             await self.step(6, self.voices, [self.needs_bot, self.needs_speaker])
-        await self.step(7, self.leave, [self.needs_bot, self.needs_speaker])
+        if self.share_step:
+            await self.step(7, self.share, [self.needs_bot, self.needs_speaker])
+        await self.step(8, self.leave, [self.needs_bot, self.needs_speaker])
         if self.observer is not None:
             with contextlib.suppress(Exception):
                 await self.observer.leave()
@@ -905,6 +1019,8 @@ async def test_every_meetings_feature_against_a_real_call(
             specs = selftest.step_specs(STEPS, PLATFORM_LABEL[link.platform])
             if stock:
                 del specs[6]  # the voices step needs the patch
+            if stock or link.platform != "zoom":
+                del specs[7]  # the share step needs the patch and Zoom
             selftest.fill_unattempted(steps, specs)
             saved = kept_logs(containers, out_dir, pieces, steps)
         finally:

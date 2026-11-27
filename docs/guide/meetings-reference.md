@@ -606,7 +606,7 @@ The link has the call's passcode in it, so the test refuses a file that others c
 SWITCHBOARD_LIVE=meeting uv run pytest -m live tests/live/test_meeting_selftest_hosted.py -s -q
 ```
 
-With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the seven steps with the bot started by `meeting-host`: step 1 is the script, step 5 is a snapshot, the same check as the server's bot, step 6 is two voices (the voice patch, below), and in step 7 both containers must be gone. `SWITCHBOARD_SELFTEST_HOSTED=remote` runs the bot on another machine, such as one with a GPU: the test prints the commands to run there, and the other machine reaches the throwaway broker through an SSH tunnel. The test's own docstring has them.
+With a link file (`SWITCHBOARD_MEETING_URL_FILE`, as above) it runs the eight steps with the bot started by `meeting-host`: step 1 is the script, step 5 is a snapshot, the same check as the server's bot, step 6 is two voices (the voice patch, below), step 7 (Zoom only) is a screen share during which a line must keep its speaker's name, and in step 8 both containers must be gone. `SWITCHBOARD_SELFTEST_HOSTED=remote` runs the bot on another machine, such as one with a GPU: the test prints the commands to run there, and the other machine reaches the throwaway broker through an SSH tunnel. The test's own docstring has them.
 
 ## Reference
 

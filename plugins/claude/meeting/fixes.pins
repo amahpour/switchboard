@@ -7,7 +7,7 @@
 # against the self-test's and DEPLOY.md's.
 #
 # file  sha256  url or plugin:path
-zoom.py 084358208c6bc318f8ee03929be7a6cd6f9f84dd57bdb4b470b83ded6a4d8d39 https://raw.githubusercontent.com/amahpour/joinly/58d5c89848c164f5fb5b20b45876371e0a3b67d6/joinly/providers/browser/platforms/zoom.py
+zoom.py 283c7cbc5d044d6fbb69255ab5ca6a5207a49f1a803347bb579df7b3e6e021b7 https://raw.githubusercontent.com/amahpour/joinly/2ad8075b0087ce0526017b712b30095f4038de67/joinly/providers/browser/platforms/zoom.py
 transcription.py 6053ca7c6b100952c91e14f2552b82eaf92bcde6a809d627f040479dc6d39d97 https://raw.githubusercontent.com/amahpour/joinly/1fe384d9deba32f38fabd5bfc77fc5975adef6a7/joinly/controllers/transcription/default.py
 server.py 7a02d45e7609a207b96bba328d5b9a870fb00d28d28f64ac165c0b4180ee416a plugin:joinly/server.py
 kokoro.py d64834fc3146261df194c8da6e3c392f058b317fa7cc56953a2bb4b553c065b3 plugin:joinly/kokoro.py

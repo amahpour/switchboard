@@ -903,17 +903,18 @@ Without those two lines the bot doesn't start, and `/meeting` says how to set it
 - it finds the control bar's buttons by their labels while the bar is hidden;
 - it dismisses Zoom's notices;
 - it presses Leave from the keyboard, because a pointer press no longer opens Zoom's confirmation and the bot stayed in the call (#956).
+- it reads the speaker from Zoom's floating video window while someone shares a screen, where the tile it reads moves, so a line said during a share keeps its name instead of `call` (#760).
 
 joinly has since marked Zoom as unsupported, so no joinly release will carry these fixes, and the names and a clean leave come only with this file patched into the image. It differs from 0.5.4's `zoom.py` by these fixes alone, so you can mount it over the image's copy, read-only:
 
 ```bash
-curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/58d5c89848c164f5fb5b20b45876371e0a3b67d6/joinly/providers/browser/platforms/zoom.py
+curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/2ad8075b0087ce0526017b712b30095f4038de67/joinly/providers/browser/platforms/zoom.py
 docker run -d --name joinly -p 127.0.0.1:8010:8000 \
   -v "$PWD/zoom.py:/app/.venv/lib/python3.12/site-packages/joinly/providers/browser/platforms/zoom.py:ro" \
   ghcr.io/joinly-ai/joinly:v0.5.4@sha256:d19ca294eb24625d69d8069d0168cb5214af3652fbf721eb07480177eb4b9ea0
 ```
 
-Keep the mount for as long as you call into Zoom: joinly's own releases no longer fix Zoom. The file's sha256 is `084358208c6bc318f8ee03929be7a6cd6f9f84dd57bdb4b470b83ded6a4d8d39`; check it after you download it (`sha256sum zoom.py`), because a mount makes it run inside the bot.
+Keep the mount for as long as you call into Zoom: joinly's own releases no longer fix Zoom. The file's sha256 is `283c7cbc5d044d6fbb69255ab5ca6a5207a49f1a803347bb579df7b3e6e021b7`; check it after you download it (`sha256sum zoom.py`), because a mount makes it run inside the bot.
 
 **First words of a call line.** joinly 0.5.4 starts each piece of speech partway into its first word. Its voice detection flags speech late (a median of 73 ms after it begins in a recorded call, and up to 378 ms) and keeps only 32 ms from before that, so the speech-to-text model gets the first word cut off. The room's agent names are its hotwords, and a clipped "Our" or "Hey" can come out as "Claude". A line then wakes Claude for nothing, or the name that opens a call-out is lost ([#620](https://github.com/amahpour/switchboard/issues/620)). The fix keeps 0.3 s of the audio from before each utterance and passes it on with it. It adds no waiting, since that audio has already arrived. The fix is [joinly-ai/joinly#188](https://github.com/joinly-ai/joinly/pull/188), a change to joinly's transcription controller; until a joinly release has it, the file comes from [our fork](https://github.com/amahpour/joinly/commit/1fe384d9deba32f38fabd5bfc77fc5975adef6a7). On the recorded call of [#617](https://github.com/amahpour/switchboard/issues/617) (24 lines, 17 of them call-outs, `base` on four CPUs, joinly's own code run over the recording), it took the right agent from 14.8 of 17 call-outs to 16, the false wakes from 1 to 0, and the words wrong from 8.8% to 3.5%, for about 0.01 s more delay. The broker also asks joinly for longer pieces of speech (0.35 s of quiet and 1 s of audio before a piece is cut, arguments every joinly 0.5.4 has), and with both every call-out woke the right agent, for about 0.14 s more delay in all. Its file differs from 0.5.4's by the fix alone, so you can mount it over the image's copy, read-only, in the same `docker run` as the Zoom file (use either or both):
 
@@ -1084,7 +1085,7 @@ What the patch does, and why:
 **Speaker names on Zoom.** The Zoom fix described above (joinly-ai/joinly#187) is a second patch, [joinly-zoom-fix.yaml](https://github.com/amahpour/switchboard/blob/main/deploy/kubernetes/meetings/joinly-zoom-fix.yaml), because the pod can't start without its ConfigMap. (`optional: true` doesn't help: the file is mounted with `subPath`, and when the ConfigMap is missing the kubelet makes that path a directory, so the container fails with `not a directory`.) Make the ConfigMap from the same pinned file, then patch:
 
 ```bash
-curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/58d5c89848c164f5fb5b20b45876371e0a3b67d6/joinly/providers/browser/platforms/zoom.py
+curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/2ad8075b0087ce0526017b712b30095f4038de67/joinly/providers/browser/platforms/zoom.py
 kubectl -n switchboard create configmap joinly-zoom-fix --from-file=zoom.py=./zoom.py
 kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-zoom-fix.yaml
 ```
