@@ -89,6 +89,7 @@
     otherOpen: null,   // the sidebar's Other rooms is unfolded (§63); null: open only when they are in no room
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
     usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
+    usagePeriod: storedUsagePeriod(),  // 'today' or 'week': the Usage page's switch, kept in this browser (§61.6)
     usageData: null,   // the last GET /api/usage
     usageError: null,  // a failed refresh keeps usageData and says why
     usageSeq: 0,       // only the newest answer is drawn
@@ -10493,10 +10494,6 @@
     return Math.floor(n);
   }
 
-  function countLine(prefix, wakes, posts) {
-    return prefix + ': ' + plural(wakes, 'wake', 'wakes') + ', ' + plural(posts, 'message', 'messages');
-  }
-
   function usageJump(name) {
     const shown = String(name).replace(/^#/, '');
     if (!state.rooms.has(name)) return el('span', 'usage-name', shown);
@@ -10510,115 +10507,380 @@
     return b;
   }
 
-  function usageCounts(row) {
-    const today = el('span', 'usage-counts', countLine('Today', whole(row.wakes_today), whole(row.posts_today)));
-    const week = el('span', 'usage-counts', countLine('7 days', whole(row.wakes_week), whole(row.posts_week)));
-    return [today, week];
-  }
+  // The page (§61.6, #995): two periods, one switch. The chart is always the last 7 days; everything else is
+  // the period the switch says. Bars are plain elements sized through element.style, never a style attribute.
+  const USAGE_DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const USAGE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  // A span of seconds the way a person reads it: "40 s", "12 min", "3.5 h", "2 d". Anything that is
-  // not a finite, non-negative number is not shown (the broker sends null when there is no data).
-  function usageSpan(v) {
-    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
-    const one = function (n) { return String(Math.round(n * 10) / 10); };
-    if (v < 60) return Math.round(v) + ' s';
-    if (v < 3600) return Math.round(v / 60) + ' min';
-    if (v < 86400) return one(v / 3600) + ' h';
-    return one(v / 86400) + ' d';
-  }
-
-  // The lines of one window of the review figures (#863, §61.5). A window with nothing says so.
-  function reviewLines(w) {
-    w = w || {};
-    const lines = [];
-    const opened = whole(w.opened), settled = whole(w.settled), raised = whole(w.raised);
-    const reopened = whole(w.reopened), merged = whole(w.merged), unknown = whole(w.unknown);
-    if (opened || settled) {
-      let t = 'Boards: ' + opened + ' opened, ' + settled + ' settled';
-      const span = usageSpan(w.settle_s);
-      if (span) t += ', median ' + span + ' to settle';
-      lines.push(t);
+  // Only the two known periods; anything else, or no storage at all, is Today.
+  function storedUsagePeriod() {
+    try {
+      const v = window.localStorage.getItem('switchboard.usagePeriod');
+      return v === 'week' ? 'week' : 'today';
+    } catch (e) {
+      return 'today';
     }
-    if (raised) {
-      let t = 'Findings: ' + raised + ' raised, ' + whole(w.confirmed) + ' confirmed, '
-        + whole(w.contested) + ' contested, ' + whole(w.dropped) + ' dropped';
-      if (typeof w.share_confirmed === 'number' && Number.isFinite(w.share_confirmed)) {
-        t += ' \u00b7 ' + Math.round(w.share_confirmed * 100) + '% confirmed';
+  }
+
+  function rememberUsagePeriod(period) {
+    try {
+      window.localStorage.setItem('switchboard.usagePeriod', period);
+    } catch (e) {
+      // private window or blocked storage: the switch still works for this visit
+    }
+  }
+
+  function pct(part, total) {
+    return total > 0 ? Math.max(0, Math.min(100, (part / total) * 100)) : 0;
+  }
+
+  // The local day a bar stands for, from its local midnight (a unix time) and the page's offset in minutes.
+  function usageDay(start, offsetMin) {
+    const off = Number.isFinite(Number(offsetMin)) ? Math.trunc(Number(offsetMin)) : 0;
+    const d = new Date((whole(start) + off * 60) * 1000);
+    return { short: USAGE_DAY_NAMES[d.getUTCDay()],
+      long: USAGE_DAY_NAMES[d.getUTCDay()] + ' ' + d.getUTCDate() + ' ' + USAGE_MONTH_NAMES[d.getUTCMonth()] };
+  }
+
+  function usageKey(period, kind) {
+    return kind + '_' + (period === 'week' ? 'week' : 'today');
+  }
+
+  // One row per agent, its rooms folded together, for the period; busiest first, and an agent with nothing in
+  // the period is left out.
+  function usageAgentRows(data, period) {
+    const byKey = new Map();
+    for (const a of Array.isArray(data.agents) ? data.agents : []) {
+      const wakes = whole(a[usageKey(period, 'wakes')]), posts = whole(a[usageKey(period, 'posts')]);
+      if (!wakes && !posts) continue;
+      const key = [String(a.name || '').toLowerCase(), a.harness || '', a.host || ''].join('\u0000');
+      let row = byKey.get(key);
+      if (!row) {
+        row = { name: String(a.name || ''), host: a.host || '', harness: a.harness || '', wakes: 0, posts: 0, rooms: [] };
+        byKey.set(key, row);
       }
-      lines.push(t);
+      row.wakes += wakes;
+      row.posts += posts;
+      if (typeof a.room === 'string' && !row.rooms.includes(a.room)) row.rooms.push(a.room);
     }
-    if (reopened || settled) {
-      let t = 'Fixes: ' + reopened + ' reopened';
-      if (typeof w.heads === 'number' && Number.isFinite(w.heads)) {
-        t += ', median ' + (Math.round(w.heads * 10) / 10) + (w.heads === 1 ? ' commit' : ' commits') + ' before settling';
+    return Array.from(byKey.values()).sort(function (x, y) {
+      return (y.wakes - x.wakes) || (y.posts - x.posts) || label(x.name, x.host).localeCompare(label(y.name, y.host));
+    });
+  }
+
+  // One row per reviewer who raised a finding in the period, their rooms folded together.
+  function usageReviewRows(data, period) {
+    const reviews = data.reviews && Array.isArray(data.reviews.agents) ? data.reviews.agents : [];
+    const byKey = new Map();
+    for (const a of reviews) {
+      const w = (a && a[period === 'week' ? 'week' : 'today']) || {};
+      const raised = whole(w.raised);
+      if (!raised) continue;
+      const key = [String(a.name || '').toLowerCase(), a.harness || '', a.host || ''].join('\u0000');
+      let row = byKey.get(key);
+      if (!row) {
+        row = { name: String(a.name || ''), host: a.host || '', harness: a.harness || '', raised: 0, confirmed: 0, dropped: 0 };
+        byKey.set(key, row);
       }
-      lines.push(t);
+      row.raised += raised;
+      row.confirmed += whole(w.confirmed);
+      row.dropped += whole(w.dropped);
     }
-    const stages = [['first finding', w.first_finding_s], ['settled', w.to_settled_s], ['merged', w.to_merged_s]]
-      .map(function (s) { return [s[0], usageSpan(s[1])]; })
-      .filter(function (s) { return s[1]; });
-    if (stages.length) {
-      lines.push('Time to merge: ' + stages.map(function (s) { return s[0] + ' ' + s[1]; }).join(' \u2192 '));
-    }
-    if (merged || unknown) lines.push('Merged: ' + merged + ' reported, ' + unknown + ' unknown');
-    return lines.length ? lines : ['No review activity'];
+    return Array.from(byKey.values()).sort(function (x, y) {
+      return (y.raised - x.raised) || label(x.name, x.host).localeCompare(label(y.name, y.host));
+    });
   }
 
-  function reviewWindow(title, w) {
-    const box = el('div', 'usage-counts usage-review');
-    box.append(el('strong', 'usage-review-h', title));
-    for (const t of reviewLines(w)) box.append(el('span', 'usage-review-line', t));
-    return box;
+  function usageTile(id, name, value, note, extra) {
+    const tile = el('div', 'usage-tile');
+    tile.id = id;
+    tile.append(el('span', 'usage-tile-label', name), el('strong', 'usage-tile-value', value),
+      el('span', 'usage-tile-note', note));
+    tile.append(el('span', 'usage-tile-extra', extra || ' '));
+    return tile;
   }
 
-  function renderReviews(root, reviews) {
-    root.append(el('h2', 'usage-h', 'Reviews'));
-    root.append(el('p', 'usage-note', 'How review boards went. A finding counts in the window it was raised in, '
-      + 'for the agent that raised it. The share confirmed is confirmed over confirmed plus dropped: a rough '
-      + 'measure of a reviewer\u2019s precision. Merged is what an agent reported, so it reads unknown until then.'));
-    const rooms = reviews && Array.isArray(reviews.rooms) ? reviews.rooms : [];
-    const agents = reviews && Array.isArray(reviews.agents) ? reviews.agents : [];
-    if (!rooms.length) {
-      root.append(el('p', 'usage-none', 'No review board moved in the last 7 days.'));
+  // "↑ 12 on yesterday". No change is said in words, not as "↑ 0".
+  function usageChange(now, before, then) {
+    if (!before) return '';
+    const diff = whole(now) - whole(before.n);
+    if (diff === 0) return 'Same as ' + then;
+    return (diff > 0 ? '↑ ' : '↓ ') + Math.abs(diff) + ' on ' + then;
+  }
+
+  // The rooms with a limit that are at or under a quarter of it this hour, tightest first.
+  function usageNearLimit(rooms) {
+    return rooms.filter(function (r) {
+      const per = whole(r.budget_per_hour);
+      return per > 0 && whole(r.budget_remaining) * 4 <= per;
+    }).sort(function (x, y) {
+      return (whole(x.budget_remaining) / whole(x.budget_per_hour)) - (whole(y.budget_remaining) / whole(y.budget_per_hour));
+    });
+  }
+
+  function renderUsageTiles(root, data, period) {
+    const week = period === 'week';
+    const then = week ? 'the 7 days before' : 'yesterday';
+    const totals = data.totals || {};
+    const before = data.before && data.before[period] ? data.before[period] : null;
+    const wakes = whole(totals[usageKey(period, 'wakes')]), posts = whole(totals[usageKey(period, 'posts')]);
+    const tiles = el('div', 'usage-tiles');
+    tiles.append(
+      usageTile('usage-tile-wakes', 'Wake-ups', wakes, 'Each one starts a paid model turn',
+        usageChange(wakes, before && { n: before.wakes }, then)),
+      usageTile('usage-tile-posts', 'Agent messages', posts, 'Posted in your rooms',
+        usageChange(posts, before && { n: before.posts }, then)));
+    const top = usageAgentRows(data, period)[0];
+    if (top) {
+      const shown = top.rooms.slice(0, 3).join(', ') + (top.rooms.length > 3 ? ' +' + (top.rooms.length - 3) + ' more' : '');
+      tiles.append(usageTile('usage-tile-busiest', 'Busiest agent', label(top.name, top.host),
+        plural(top.wakes, 'wake-up', 'wake-ups') + ', ' + plural(top.posts, 'message', 'messages'), shown));
+    } else {
+      tiles.append(usageTile('usage-tile-busiest', 'Busiest agent', 'None yet', 'No agent was woken or posted', ''));
+    }
+    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    const near = usageNearLimit(rooms);
+    if (near.length) {
+      const r = near[0];
+      tiles.append(usageTile('usage-tile-limit', 'Wake limit', plural(near.length, 'room', 'rooms'),
+        'Near its wake limit',
+        r.name + ': ' + whole(r.budget_remaining) + ' of ' + whole(r.budget_per_hour) + ' left this hour'));
+      tiles.lastChild.classList.add('near');
+    } else {
+      const off = rooms.filter(function (r) { return !whole(r.budget_per_hour); }).length;
+      tiles.append(usageTile('usage-tile-limit', 'Wake limit', 'No limit near',
+        off ? 'Limits are off in ' + plural(off, 'room', 'rooms') : 'All rooms under their limits', ''));
+    }
+    root.append(tiles);
+  }
+
+  function renderUsageChart(root, data) {
+    const days = Array.isArray(data.days) ? data.days : [];
+    const section = el('section', 'usage-section');
+    section.append(el('h3', 'usage-h', 'Wake-ups by day'), el('p', 'usage-note', 'The last 7 days, whichever period is chosen.'));
+    if (!days.length) {
+      section.append(el('p', 'usage-none', 'No days to show.'));
+      root.append(section);
       return;
     }
-    for (const [id, title, rows] of [['usage-review-rooms', 'By room', rooms], ['usage-review-agents', 'By agent', agents]]) {
-      root.append(el('h3', 'usage-h3', title));
-      if (!rows.length) {
-        root.append(el('p', 'usage-none', 'No agent held or raised anything.'));
-        continue;
-      }
-      const list = el('ol', 'usage-list');
-      list.id = id;
-      for (const row of rows) {
-        const li = el('li');
-        const line = el('div', 'usage-row usage-review-row');
-        const who = el('div', 'usage-name');
-        if (row.room !== undefined) {
-          who.textContent = label(row.name || '', row.host || '') + ' \u00b7 ' + harnessOf(row.harness)[1];
-          const room = el('div', 'usage-name');
-          room.append(usageJump(typeof row.room === 'string' ? row.room : ''));
-          line.append(who, room);
-        } else {
-          who.append(usageJump(typeof row.name === 'string' ? row.name : ''));
-          line.append(who, el('div'));
-        }
-        line.append(reviewWindow('Today', row.today), reviewWindow('7 days', row.week));
-        li.append(line);
-        list.append(li);
-      }
-      root.append(list);
+    const most = Math.max(1, ...days.map(function (d) { return whole(d.wakes); }));
+    const chart = el('div', 'usage-chart');
+    chart.id = 'usage-chart';
+    const table = el('table', 'sr-only');
+    table.id = 'usage-days-table';
+    table.append(el('caption', '', 'Wake-ups by day, the last 7 days'));
+    const head = el('tr');
+    head.append(el('th', '', 'Day'), el('th', '', 'Wake-ups'));
+    table.append(head);
+    days.forEach(function (d, i) {
+      const n = whole(d.wakes);
+      const isToday = i === days.length - 1;
+      const named = usageDay(d.start, data.offset_min);
+      const day = isToday ? 'Today' : named.long;
+      const text = day + ': ' + plural(n, 'wake-up', 'wake-ups');
+      const col = el('div', 'usage-col');
+      const bar = el('span', 'usage-bar' + (isToday ? ' today' : ''));
+      bar.style.height = pct(n, most) + '%';
+      bar.setAttribute('role', 'img');
+      bar.setAttribute('aria-label', text);
+      bar.title = text;
+      const track = el('span', 'usage-bar-track');
+      track.append(bar);
+      const count = el('span', 'usage-col-count', n);
+      count.setAttribute('aria-hidden', 'true');
+      const name = el('span', 'usage-col-day', isToday ? 'Today' : named.short);
+      name.setAttribute('aria-hidden', 'true');
+      col.append(count, track, name);
+      chart.append(col);
+      const row = el('tr');
+      row.append(el('td', '', day), el('td', '', n));
+      table.append(row);
+    });
+    section.append(chart, table);
+    root.append(section);
+  }
+
+  function usageRoomMeter(room) {
+    const per = whole(room.budget_per_hour), left = whole(room.budget_remaining);
+    const cell = el('span', 'usage-limit');
+    if (!per) {
+      cell.append(el('span', 'usage-limit-text', 'No limit'));
+      return cell;
     }
+    const low = left * 4 <= per;
+    const meter = el('span', 'usage-meter' + (low ? ' low' : ''));
+    meter.setAttribute('aria-hidden', 'true');
+    const fill = el('span', 'usage-meter-fill');
+    fill.style.width = pct(left, per) + '%';
+    meter.append(fill);
+    cell.append(meter, el('span', 'usage-limit-text' + (low ? ' low' : ''), left + ' of ' + per + ' left'));
+    return cell;
+  }
+
+  function renderUsageRooms(root, data, period) {
+    const section = el('section', 'usage-section');
+    section.append(el('h3', 'usage-h', 'Rooms'));
+    const rooms = (Array.isArray(data.rooms) ? data.rooms : []).slice().sort(function (x, y) {
+      return (whole(y[usageKey(period, 'wakes')]) - whole(x[usageKey(period, 'wakes')]))
+        || (whole(y[usageKey(period, 'posts')]) - whole(x[usageKey(period, 'posts')]))
+        || String(x.name).localeCompare(String(y.name));
+    });
+    if (!rooms.length) {
+      section.append(el('p', 'usage-none', 'No open rooms.'));
+      root.append(section);
+      return;
+    }
+    const table = el('table', 'usage-table');
+    table.id = 'usage-rooms';
+    const head = el('tr');
+    for (const t of ['Room', 'Wake-ups', 'Messages', 'Wake limit this hour']) head.append(el('th', '', t));
+    const thead = el('thead');
+    thead.append(head);
+    table.append(thead);
+    const body = el('tbody');
+    for (const room of rooms) {
+      const tr = el('tr');
+      const name = el('th', 'usage-room');
+      name.scope = 'row';
+      name.append(usageJump(typeof room.name === 'string' ? room.name : ''));
+      const wakes = el('td', 'usage-num', whole(room[usageKey(period, 'wakes')]));
+      wakes.setAttribute('data-label', 'Wake-ups');
+      const posts = el('td', 'usage-num', whole(room[usageKey(period, 'posts')]));
+      posts.setAttribute('data-label', 'Messages');
+      const limit = el('td', 'usage-limit-cell');
+      limit.setAttribute('data-label', 'Wake limit this hour');
+      limit.append(usageRoomMeter(room));
+      tr.append(name, wakes, posts, limit);
+      body.append(tr);
+    }
+    table.append(body);
+    section.append(table);
+    root.append(section);
+  }
+
+  function renderUsageAgents(root, data, period) {
+    const section = el('section', 'usage-section');
+    section.append(el('h3', 'usage-h', 'Agents'));
+    const agents = usageAgentRows(data, period);
+    if (!agents.length) {
+      section.append(el('p', 'usage-none', period === 'week'
+        ? 'No agent was woken, and none posted, in the last 7 days.' : 'No agent was woken, and none posted, today.'));
+      root.append(section);
+      return;
+    }
+    const most = Math.max(1, ...agents.map(function (a) { return a.wakes; }));
+    const list = el('ol', 'usage-list');
+    list.id = 'usage-agents';
+    for (const a of agents) {
+      const li = el('li', 'usage-agent');
+      const who = el('div', 'usage-agent-who');
+      const text = el('div', 'usage-agent-text');
+      text.append(el('span', 'usage-agent-name', label(a.name, a.host) + ' · ' + harnessOf(a.harness)[1]));
+      const rooms = el('span', 'usage-agent-rooms');
+      a.rooms.forEach(function (r, i) {
+        if (i) rooms.append(document.createTextNode(' '));
+        rooms.append(usageJump(r));
+      });
+      text.append(rooms);
+      who.append(avatar(a.harness, 'agent', a.name), text);
+      const track = el('span', 'usage-hbar');
+      track.setAttribute('aria-hidden', 'true');
+      const fill = el('span', 'usage-hbar-fill');
+      fill.style.width = pct(a.wakes, most) + '%';
+      track.append(fill);
+      const nums = el('div', 'usage-agent-nums');
+      nums.append(el('strong', '', plural(a.wakes, 'wake-up', 'wake-ups')),
+        el('span', 'usage-muted', plural(a.posts, 'message', 'messages')));
+      li.append(who, track, nums);
+      list.append(li);
+    }
+    section.append(list);
+    root.append(section);
+  }
+
+  function renderUsageReviews(root, data, period) {
+    const section = el('section', 'usage-section');
+    section.append(el('h3', 'usage-h', 'Reviews'));
+    const rows = usageReviewRows(data, period);
+    if (!rows.length) {
+      section.append(el('p', 'usage-none', period === 'week'
+        ? 'No reviewer raised a finding in the last 7 days.' : 'No reviewer raised a finding today.'));
+      root.append(section);
+      return;
+    }
+    const key = el('p', 'usage-key');
+    for (const [cls, text] of [['held', 'Held up'], ['dropped', 'Dropped'], ['open', 'Still open']]) {
+      const item = el('span', 'usage-key-item');
+      const swatch = el('span', 'usage-swatch ' + cls);
+      swatch.setAttribute('aria-hidden', 'true');
+      item.append(swatch, document.createTextNode(text));
+      key.append(item);
+    }
+    section.append(key);
+    const list = el('ol', 'usage-list');
+    list.id = 'usage-reviews';
+    for (const r of rows) {
+      const settled = r.confirmed + r.dropped;
+      const open = Math.max(0, r.raised - settled);
+      const li = el('li', 'usage-review-item');
+      const who = el('div', 'usage-agent-who');
+      const text = el('div', 'usage-agent-text');
+      text.append(el('span', 'usage-agent-name', label(r.name, r.host) + ' · ' + harnessOf(r.harness)[1]),
+        el('span', 'usage-muted', plural(r.raised, 'finding', 'findings')));
+      who.append(avatar(r.harness, 'agent', r.name), text);
+      const stack = el('span', 'usage-stack');
+      const words = r.confirmed + ' held up, ' + r.dropped + ' dropped, ' + open + ' still open';
+      stack.setAttribute('role', 'img');
+      stack.setAttribute('aria-label', words);
+      stack.title = words;
+      for (const [cls, n] of [['held', r.confirmed], ['dropped', r.dropped], ['open', open]]) {
+        if (!n) continue;
+        const seg = el('span', 'usage-seg ' + cls);
+        seg.style.width = pct(n, r.raised) + '%';
+        stack.append(seg);
+      }
+      const nums = el('div', 'usage-agent-nums');
+      if (settled) {
+        nums.append(el('strong', '', Math.round((r.confirmed / settled) * 100) + '% held up'),
+          el('span', 'usage-muted', r.confirmed + ' of ' + settled + ' settled'));
+      } else {
+        nums.append(el('strong', '', 'Nothing settled yet'), el('span', 'usage-muted', '0 of 0 settled'));
+      }
+      li.append(who, stack, nums);
+      list.append(li);
+    }
+    section.append(list);
+    root.append(section);
+  }
+
+  function renderUsageSwitch(period) {
+    const group = el('div', 'usage-switch');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Period');
+    for (const [value, text] of [['today', 'Today'], ['week', 'Last 7 days']]) {
+      const b = btn('usage-switch-btn', text);
+      b.setAttribute('data-period', value);
+      b.setAttribute('aria-pressed', String(value === period));
+      b.addEventListener('click', function () {
+        if (state.usagePeriod === value) return;
+        state.usagePeriod = value;
+        rememberUsagePeriod(value);
+        renderUsage();
+        const again = $('usage').querySelector('.usage-switch-btn[data-period="' + value + '"]');
+        if (again) again.focus();
+      });
+      group.append(b);
+    }
+    return group;
   }
 
   function renderUsage() {
     const root = $('usage');
     root.replaceChildren();
-    const lead = el('p', 'usage-lead');
-    lead.textContent = 'Wakes handed to each agent, and the messages they posted, today and over the last 7 days. '
-      + 'Today is included in the 7 days. The budget, when a room has one, is the wakes it has left this hour. '
-      + 'This page does not measure tokens or dollars.';
-    root.append(lead);
+    const period = state.usagePeriod === 'week' ? 'week' : 'today';
+    const top = el('div', 'usage-top');
+    top.append(el('h2', 'usage-title', 'Usage'), renderUsageSwitch(period));
+    root.append(top);
     const data = state.usageData;
     if (!data) {
       const p = el('p', 'usage-none', state.usageError || 'Loading…');
@@ -10631,56 +10893,13 @@
       p.setAttribute('role', 'status');
       root.append(p);
     }
-    root.append(el('h2', 'usage-h', 'Rooms'));
-    root.append(el('p', 'usage-note', 'Noisiest first. A room with a budget shows what is left this hour.'));
-    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
-    if (!rooms.length) root.append(el('p', 'usage-none', 'No open rooms.'));
-    else {
-      const list = el('ol', 'usage-list');
-      list.id = 'usage-rooms';
-      for (const room of rooms) {
-        const name = typeof room.name === 'string' ? room.name : '';
-        const li = el('li');
-        const row = el('div', 'usage-row');
-        const who = el('div', 'usage-name');
-        who.append(usageJump(name));
-        const budget = el('span', 'usage-budget', whole(room.budget_per_hour) > 0
-          ? whole(room.budget_remaining) + ' of ' + whole(room.budget_per_hour) + ' left this hour'
-          : 'no wake limit');
-        row.append(who, budget, ...usageCounts(room));
-        const ran = whole(room.exhausted_week);
-        if (ran > 0) {
-          row.append(el('p', 'usage-ranout', ran === 1
-            ? 'The budget ran out once in these 7 days.'
-            : 'The budget ran out ' + ran + ' times in these 7 days.'));
-        }
-        li.append(row);
-        list.append(li);
-      }
-      root.append(list);
-    }
-    root.append(el('h2', 'usage-h', 'Agents'));
-    root.append(el('p', 'usage-note', 'Noisiest first. One row per agent in a room.'));
-    const agents = Array.isArray(data.agents) ? data.agents : [];
-    if (!agents.length) {
-      root.append(el('p', 'usage-none', 'No agent was woken, and none posted, in the last 7 days.'));
-    } else {
-      const list = el('ol', 'usage-list');
-      list.id = 'usage-agents';
-      for (const agent of agents) {
-        const li = el('li');
-        const row = el('div', 'usage-row');
-        const who = el('div', 'usage-name', label(agent.name || '', agent.host || '')
-          + ' · ' + harnessOf(agent.harness)[1]);
-        const room = el('div', 'usage-name');
-        room.append(usageJump(typeof agent.room === 'string' ? agent.room : ''));
-        row.append(who, room, ...usageCounts(agent));
-        li.append(row);
-        list.append(li);
-      }
-      root.append(list);
-    }
-    renderReviews(root, data.reviews);
+    renderUsageTiles(root, data, period);
+    renderUsageChart(root, data);
+    renderUsageRooms(root, data, period);
+    renderUsageAgents(root, data, period);
+    renderUsageReviews(root, data, period);
+    root.append(el('p', 'usage-foot', 'Counts come from switchboard’s own records: wake-ups it sent and messages '
+      + 'posted. It doesn’t see tokens or dollars.'));
   }
 
   function showUsage() {

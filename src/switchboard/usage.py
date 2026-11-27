@@ -59,6 +59,34 @@ def window_starts(now: float, offset_min: object) -> tuple[float, float]:
     return today, today - 6 * DAY_S
 
 
+def daily(times: Sequence[tuple[float, int]], week_start: float, days: int = 7) -> list[dict[str, Any]]:
+    """Counts per local day for the ``days`` days from ``week_start`` (a local midnight, §61).
+
+    ``times`` is ``(unix time, how many)`` pairs. A time before the first midnight or from the
+    last day's end on is not in any bar, and a count that is not a whole number is 0, so a bad row
+    cannot move a bar. The offset is fixed for the window, so a day is always 24 hours: the page
+    sends one offset and the broker does not know the zone's daylight saving changes (§61).
+    Each bar is ``{"start": <that day's local midnight>, "wakes": n}``, oldest first, today last.
+    """
+    bars = [0] * days
+    for at, n in times:
+        if isinstance(at, bool) or not isinstance(at, (int, float)) or at != at:
+            continue
+        index = int((float(at) - week_start) // DAY_S) if float(at) >= week_start else -1
+        if 0 <= index < days:
+            bars[index] += _n(n)
+    return [{"start": week_start + i * DAY_S, "wakes": n} for i, n in enumerate(bars)]
+
+
+def earlier(today_start: float, week_start: float) -> tuple[tuple[float, float], tuple[float, float]]:
+    """The two periods the tiles compare with: ``(yesterday, the 7 days before)``, each ``[from, to)``.
+
+    Yesterday is the whole of the day before today, and the 7 days before are the seven local days
+    that end the day before the week starts (§61).
+    """
+    return (today_start - DAY_S, today_start), (week_start - 7 * DAY_S, week_start)
+
+
 def budget_left(per_hour: object, remaining: object, window_start: object, now: float) -> int:
     """What is left this hour, from the stored window, without writing a refill.
 
@@ -140,7 +168,7 @@ def shape(
     """The page: every room the caller passed, then the agents who were woken or who posted.
 
     A count whose room was not passed is dropped, so this function cannot widen what the
-    caller decided was visible. Rooms and agents are noisiest first (wakes in the window,
+    caller decided was visible. Rooms and agents are busiest first (wakes in the window,
     then posts, then the name). An agent with nothing in the window is left out; a room
     is listed anyway, so its budget still shows. Two casings of one name, in one room and
     on one host, are one row.
@@ -229,6 +257,10 @@ def shape(
     return {
         "now": float(now),
         "offset_min": clamp_offset(offset_min),
+        "totals": {
+            key: sum(totals[r.id][key] for r in known)
+            for key in ("wakes_today", "wakes_week", "posts_today", "posts_week")
+        },
         "today_start": float(today_start),
         "week_start": float(week_start),
         "rooms": [room_dict(r) for r in ordered],

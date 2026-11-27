@@ -21,7 +21,7 @@ from switchboard import db, review_stats
 from switchboard.clock import Clock
 from switchboard.models import Room
 from switchboard.store import Store
-from switchboard.usage import parse_offset, shape, window_starts
+from switchboard.usage import daily, earlier, parse_offset, shape, window_starts
 
 
 def counts(
@@ -53,6 +53,13 @@ def counts(
             today_start=today,
             week_start=week,
         )
+        # the chart's seven days, and the two periods before, for the tiles' change (§61.6)
+        page["days"] = daily(store.usage_wake_times(ids, since=week, until=now), week)
+        (y0, y1), (w0, w1) = earlier(today, week)
+        page["before"] = {
+            "today": store.usage_span(ids, since=y0, until=y1),
+            "week": store.usage_span(ids, since=w0, until=w1),
+        }
         boards, items, events = store.usage_reviews(ids, since=week, until=now)
         page["reviews"] = review_stats.shape(
             rooms,
