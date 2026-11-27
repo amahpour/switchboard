@@ -4,6 +4,7 @@ Applies to `src/switchboard/web/`, the UI in `static/`. The root [REVIEW.md](../
 
 ## Flag
 
+- **A raw pixel value where a token fits.** Padding, margin, gap, font size and corner radius come from the tokens in [UI.md](UI.md). A control that holds text has no fixed `height` or `width`, or its label is cut at the Larger text size, as the member panel's was (#995).
 - **A layout not seen on a phone.** The pull request needs the phone preview (light, dark and phone) for anything a person sees. Long room names, wide tables and the composer are what breaks.
 - **Keyboard focus lost.** Where does focus go when a click hides what had it, a sheet closes, or a list re-renders? Walk it by keyboard.
 - **Wording that does not match what the code does.** Check every user-facing line against the behavior: a count, who a feature reaches, what a button does.
