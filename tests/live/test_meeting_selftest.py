@@ -193,6 +193,9 @@ DOCKER_ENV = {
 }
 
 SHARE_SENTENCE = "The yellow submarine is delivering the afternoon mail"
+# Step 7's second line, with the observer in the call: the observer shares and the speaker says this, so the
+# one talking is not the one sharing, and the line must not take the sharer's name (#760)
+SHARE_SENTENCE_OTHER = "The silver tractor is parked beside the red barn"
 STEPS = {
     1: (
         "the bar goes live",
@@ -212,7 +215,8 @@ STEPS = {
     7: (
         "a line keeps its speaker during a screen share",
         f"the speaker shares a picture and says: {SHARE_SENTENCE}; a call line with most of its words "
-        "reaches the room under the speaker's name, not 'call'",
+        "reaches the room under the speaker's name, not 'call'; with the observer, it shares next while the "
+        f"speaker says: {SHARE_SENTENCE_OTHER}, and that line is the speaker's too, not the sharer's",
     ),
     8: ("the bots leave", "the bar ends and the speaker no longer sees the bot; the speaker leaves"),
 }
@@ -756,15 +760,28 @@ class World:
         shown = f"voices {', '.join(VOICES)} accepted; unknown voice fell back; heard: {heard or 'nothing'}"
         return Outcome(bool(ok), shown[:400])
 
-    # -- 7: a line keeps its speaker while the speaker shares a screen (#760)
+    # -- 7: a line keeps its speaker while someone shares a screen (#760)
     async def share(self) -> Outcome:
         """The speaker shares a picture and says a sentence. The line must reach the room under the speaker's
         name (what ``SPEAKER_NAME`` is, which is what the bot reads from Zoom's participant list), not as
-        ``call``, which is what joinly's speaker falls back to when it can't tell who is talking."""
+        ``call``, which is what joinly's speaker falls back to when it can't tell who is talking. With the
+        observer in the call, it shares next while the speaker talks: the one talking is not the one sharing,
+        and the line must be the speaker's, not the sharer's."""
+        own = await self.share_and_say(self.speaker, SHARE_SENTENCE)
+        if not own.ok or self.observer is None:
+            return own
+        other = await self.share_and_say(self.observer, SHARE_SENTENCE_OTHER)
+        ratios = [r for r in (own.ratio, other.ratio) if r is not None]
+        seen = f"{own.seen} / the observer shared and the speaker spoke: {other.seen}"
+        return Outcome(other.ok, seen, min(ratios) if ratios else None)
+
+    async def share_and_say(self, sharer: Speaker, sentence: str) -> Outcome:
+        """``sharer`` shares a picture, the speaker says ``sentence``, and the line it makes must be the
+        speaker's. The share always ends."""
         sharing = False
         try:
             try:
-                started = await self.speaker.share_image(tiny_png())
+                started = await sharer.share_image(tiny_png())
                 sharing = True
             except Exception as e:
                 why = self.describe(e)
@@ -776,13 +793,13 @@ class World:
                 return Outcome(False, f"share_image was refused: {why[:200]}{hint}")
             await asyncio.sleep(3.0)  # the share settles, and the active speaker may change with it
             cursor = self.last_id()
-            await self.speaker.say(SHARE_SENTENCE)
+            await self.speaker.say(sentence)
             lines: list[dict[str, Any]] = []
 
             def arrived() -> bool:
                 nonlocal lines
                 lines = [m for m in self.messages(cursor) if m.get("sender_kind") == "meeting"]
-                return selftest.matches(SHARE_SENTENCE, " ".join(m["text"] for m in lines))
+                return selftest.matches(sentence, " ".join(m["text"] for m in lines))
 
             if not await until(arrived, HEARD_S):
                 return Outcome(False, f"shared ({started}); no call line with the sentence reached the room")
@@ -791,7 +808,7 @@ class World:
             # renamed field fails here loudly instead of making every line look nameless (it read
             # "sender_name" at first, and a correct line came out as '')
             names = sorted({str(m["from"]) for m in lines})
-            ratio = selftest.match_ratio(SHARE_SENTENCE, heard)
+            ratio = selftest.match_ratio(sentence, heard)
             right = [m for m in lines if str(m["from"]).casefold() == SPEAKER_NAME.casefold()]
             if not right:
                 return Outcome(
@@ -804,7 +821,7 @@ class World:
         finally:
             if sharing:
                 try:
-                    await self.speaker.stop_share_image()
+                    await sharer.stop_share_image()
                 except Exception as e:
                     print(f"stop_share_image failed: {self.describe(e)}")
 
