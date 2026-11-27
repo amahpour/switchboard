@@ -10867,7 +10867,7 @@
     root.replaceChildren();
     const period = state.usagePeriod === 'week' ? 'week' : 'today';
     const top = el('div', 'usage-top');
-    top.append(el('h2', 'usage-title', 'Usage'), renderUsageSwitch(period));
+    top.append(renderUsageSwitch(period));  // the page's header already says Usage: no second title
     root.append(top);
     const data = state.usageData;
     if (!data) {

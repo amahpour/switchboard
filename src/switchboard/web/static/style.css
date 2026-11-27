@@ -3861,8 +3861,7 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .usage.hidden { display: none; }
 .usage > * { max-width: 860px; margin-inline: auto; }
 .usage:focus { outline: none; }
-.usage-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-3); }
-.usage-title { font-size: var(--fs-xl); font-weight: 600; }
+.usage-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-3); }
 .usage-none { padding: var(--sp-3) var(--sp-1); color: var(--muted); font-size: var(--fs-md); }
 .usage-note { margin-bottom: var(--sp-2); color: var(--muted); font-size: var(--fs-md); }
 .usage-muted { color: var(--muted); font-size: var(--fs-sm); }
