@@ -6,7 +6,7 @@
 
 ## The switch
 
-At the top right, **Today | Last 7 days** changes every number on the page except the chart, which always shows the last 7 days. The page remembers your choice in this browser. Today is your local calendar day. The 7 days are the seven local days ending today.
+At the top right, **Today | Last 7 days** changes every number on the page except the chart, which always shows the last 7 days. The page keeps your choice while it is open, and starts on Today when you reload it. Today is your local calendar day. The 7 days are the seven local days ending today.
 
 ## The four tiles
 

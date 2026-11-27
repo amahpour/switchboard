@@ -89,7 +89,7 @@
     otherOpen: null,   // the sidebar's Other rooms is unfolded (§63); null: open only when they are in no room
     home: false,       // the home page is shown instead of a room (#626, §55); no room is active then
     usage: false,      // the usage page is shown instead of a room (#818, §61); no room is active then
-    usagePeriod: storedUsagePeriod(),  // 'today' or 'week': the Usage page's switch, kept in this browser (§61.6)
+    usagePeriod: 'today',  // 'today' or 'week': the Usage page's switch, kept until the page is reloaded (§61.6)
     usageData: null,   // the last GET /api/usage
     usageError: null,  // a failed refresh keeps usageData and says why
     usageSeq: 0,       // only the newest answer is drawn
@@ -10508,30 +10508,19 @@
   }
 
   // The page (§61.6, #995): two periods, one switch. The chart is always the last 7 days; everything else is
-  // the period the switch says. Bars are plain elements sized through element.style, never a style attribute.
+  // the period the switch says. Bars are plain elements sized by a pct-N class (style.css): no inline styling, which the CSP and the lint ban.
   const USAGE_DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const USAGE_MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-  // Only the two known periods; anything else, or no storage at all, is Today.
-  function storedUsagePeriod() {
-    try {
-      const v = window.localStorage.getItem('switchboard.usagePeriod');
-      return v === 'week' ? 'week' : 'today';
-    } catch (e) {
-      return 'today';
-    }
-  }
-
-  function rememberUsagePeriod(period) {
-    try {
-      window.localStorage.setItem('switchboard.usagePeriod', period);
-    } catch (e) {
-      // private window or blocked storage: the switch still works for this visit
-    }
-  }
-
+  // The share as a whole percent, 0 to 100; a part that is more than nothing is at least 1, so it shows.
   function pct(part, total) {
-    return total > 0 ? Math.max(0, Math.min(100, (part / total) * 100)) : 0;
+    if (!(total > 0) || !(part > 0)) return 0;
+    return Math.max(1, Math.min(100, Math.round((part / total) * 100)));
+  }
+
+  function sized(node, part, total) {
+    node.classList.add('pct-' + pct(part, total));
+    return node;
   }
 
   // The local day a bar stands for, from its local midnight (a unix time) and the page's offset in minutes.
@@ -10680,7 +10669,7 @@
       const text = day + ': ' + plural(n, 'wake-up', 'wake-ups');
       const col = el('div', 'usage-col');
       const bar = el('span', 'usage-bar' + (isToday ? ' today' : ''));
-      bar.style.height = pct(n, most) + '%';
+      sized(bar, n, most);
       bar.setAttribute('role', 'img');
       bar.setAttribute('aria-label', text);
       bar.title = text;
@@ -10711,7 +10700,7 @@
     const meter = el('span', 'usage-meter' + (low ? ' low' : ''));
     meter.setAttribute('aria-hidden', 'true');
     const fill = el('span', 'usage-meter-fill');
-    fill.style.width = pct(left, per) + '%';
+    sized(fill, left, per);
     meter.append(fill);
     cell.append(meter, el('span', 'usage-limit-text' + (low ? ' low' : ''), left + ' of ' + per + ' left'));
     return cell;
@@ -10786,7 +10775,7 @@
       const track = el('span', 'usage-hbar');
       track.setAttribute('aria-hidden', 'true');
       const fill = el('span', 'usage-hbar-fill');
-      fill.style.width = pct(a.wakes, most) + '%';
+      sized(fill, a.wakes, most);
       track.append(fill);
       const nums = el('div', 'usage-agent-nums');
       nums.append(el('strong', '', plural(a.wakes, 'wake-up', 'wake-ups')),
@@ -10836,7 +10825,7 @@
       for (const [cls, n] of [['held', r.confirmed], ['dropped', r.dropped], ['open', open]]) {
         if (!n) continue;
         const seg = el('span', 'usage-seg ' + cls);
-        seg.style.width = pct(n, r.raised) + '%';
+        sized(seg, n, r.raised);
         stack.append(seg);
       }
       const nums = el('div', 'usage-agent-nums');
@@ -10864,7 +10853,6 @@
       b.addEventListener('click', function () {
         if (state.usagePeriod === value) return;
         state.usagePeriod = value;
-        rememberUsagePeriod(value);
         renderUsage();
         const again = $('usage').querySelector('.usage-switch-btn[data-period="' + value + '"]');
         if (again) again.focus();

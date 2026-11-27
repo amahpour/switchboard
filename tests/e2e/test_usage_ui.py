@@ -1,6 +1,6 @@
 """The usage page in a real browser (#818, #995, DESIGN.md §61): the tiles, the chart of the last 7 days,
 the rooms, the agents and how reviews went, on a phone in the dark theme and on a desktop in the light one.
-The switch changes the numbers and is remembered. A console error, a page error or a CSP violation fails
+The switch changes the numbers. A console error, a page error or a CSP violation fails
 the test."""
 
 from __future__ import annotations
@@ -200,10 +200,10 @@ def test_the_tiles_compare_with_the_period_before_and_the_limit_is_near(ui: UI, 
     expect(page.locator("#usage-tile-wakes")).to_contain_text("↑ 9 on the 7 days before")
 
 
-def test_the_switch_changes_the_numbers_and_is_remembered(ui: UI, weekly: InProcBroker) -> None:
+def test_the_switch_changes_the_numbers_and_stays(ui: UI, weekly: InProcBroker) -> None:
     """Today shows 7 wake-ups and Last 7 days shows 10; the chart is the same either way; after a
-    reload the page opens on the one that was chosen. The bug: a switch that resets on reload, or
-    one that changes the chart."""
+    opening a room and coming back keeps the choice. The bug: a switch that resets when the page is
+    redrawn, or one that changes the chart. (It is not kept over a reload: the lint bans localStorage.)"""
     page = weekly_page(ui, weekly, **DESKTOP)
     today = page.locator('.usage-switch-btn[data-period="today"]')
     week = page.locator('.usage-switch-btn[data-period="week"]')
@@ -215,8 +215,8 @@ def test_the_switch_changes_the_numbers_and_is_remembered(ui: UI, weekly: InProc
     expect(week).to_be_focused()
     expect(page.locator("#usage-tile-wakes .usage-tile-value")).to_have_text("10")
     assert page.locator("#usage-days-table").inner_text() == chart
-    page.reload()
-    expect(page.locator("#st-conn")).to_have_text("Connected")
+    page.locator('#usage-rooms button[data-room="#tight"]').click()
+    expect(page.locator("#room-title")).to_have_text("tight")
     page.locator("#usage-nav").click()
     expect(page.locator('.usage-switch-btn[data-period="week"]')).to_have_attribute("aria-pressed", "true")
     expect(page.locator("#usage-tile-wakes .usage-tile-value")).to_have_text("10")
