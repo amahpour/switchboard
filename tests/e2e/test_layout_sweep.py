@@ -4,7 +4,7 @@ Each surface is opened the way a person opens it, at a desktop (1440x900) and a 
 the Default and the Larger text size, one test id per surface and size. Three things fail it:
 
 1. a control's text cut or spilling: the rectangles of its text nodes (``Range.getClientRects``) against
-   its content box, 1 px of tolerance; not ``scrollWidth``, which counts a corner badge or an absolutely
+   its padding box, 1 px of tolerance; not ``scrollWidth``, which counts a corner badge or an absolutely
    positioned child as overflow (the one-off sweep wrongly reported the phone's Members button that way);
    and an active ``text-overflow: ellipsis`` on a control whose text is wider than its box;
 2. a dialog taller than the window, or its ``.app-dialog-buttons`` out of the viewport;
@@ -162,7 +162,6 @@ KNOWN_CUT: set[tuple[str, str]] = {
     ("palette", 'span.pal-args "[<link> [mine]|leave]"'),
     ("palette", 'span.pal-args "[<name> <actions>|off]"'),
     ("palette", 'span.pal-args "<agent> [on …]"'),
-    ("palette", 'div#pal-coordinator "/coordinator[<name> <actions>|off]Name t"'),
 }
 
 SETTINGS_GROUPS = ("profile", "appearance", "rooms", "agents", "files", "links", "backups")
@@ -187,8 +186,11 @@ MEASURE = """({scope, phone}) => {
     if (e.matches('input[type=file]') || !visible(e)) continue;
     const cs = getComputedStyle(e);
     const box = e.getBoundingClientRect();
-    const left = box.left + parseFloat(cs.borderLeftWidth) + parseFloat(cs.paddingLeft);
-    const right = box.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight);
+    // the padding box, inside the border: text past it is cut or spills out of the control. Text that
+    // only reaches into the padding is still whole on screen, and how far it reaches depends on the
+    // machine's fonts (CI's put "Default" 1.6 px into a phone button's padding where others did not)
+    const left = box.left + parseFloat(cs.borderLeftWidth);
+    const right = box.right - parseFloat(cs.borderRightWidth);
     const walker = document.createTreeWalker(e, NodeFilter.SHOW_TEXT);
     let worst = 0;
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {

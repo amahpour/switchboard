@@ -78,7 +78,7 @@ A hint as far from its label as from the next field belongs to neither. The Coor
 ## Checking it
 
 - **Previews:** light, dark and the phone, as the repository's CLAUDE.md says, plus the Larger text size when the change has text in a control.
-- **The layout sweep** is `tests/e2e/test_layout_sweep.py`. It opens every dialog and menu at both sizes (1440×900 and a 390×844 phone) and both text sizes (Default and Larger). It fails on a cut or spilling label (the text's own rectangles against the control's content box, not `scrollWidth`, which counts a corner badge), a dialog taller than the window or with its buttons out of view, or sideways scroll (#995, step 3). A phone button under 44×44 px is listed, not yet a failure: `KNOWN_SMALL_TARGETS` holds today's, `KNOWN_CUT` a cut label still on `main`, and both only shrink: fixing one means deleting its line. Run one surface by name:
+- **The layout sweep** is `tests/e2e/test_layout_sweep.py`. It opens every dialog and menu at both sizes (1440×900 and a 390×844 phone) and both text sizes (Default and Larger). It fails on a cut or spilling label (the text's own rectangles against the control's padding box, not `scrollWidth`, which counts a corner badge), a dialog taller than the window or with its buttons out of view, or sideways scroll (#995, step 3). A phone button under 44×44 px is listed, not yet a failure: `KNOWN_SMALL_TARGETS` holds today's, `KNOWN_CUT` a cut label still on `main`, and both only shrink: fixing one means deleting its line. Run one surface by name:
 
   ```console
   uv run pytest -m e2e tests/e2e/test_layout_sweep.py -k coordinator
