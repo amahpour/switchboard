@@ -3051,7 +3051,7 @@ body.login {
 .settings-panels { grid-column: 2; grid-row: 1 / span 2; min-height: 0; overflow: hidden; }
 .settings-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .settings-panel-content { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: var(--sp-3); padding: var(--sp-5); font-size: var(--fs-md); }
-.settings-panel-content .fine { font-size: var(--fs-sm); margin: 0; }
+.settings-panel-content .fine { font-size: var(--fs-sm); margin: 0; overflow-wrap: anywhere; }  /* an example address has no spaces */
 .settings-panel-content > h3 { margin: 0; }
 .settings-panel-content > h3:not(:first-child) { margin-top: var(--sp-3); }  /* with the 12 px gap: 24 px between sections */
 .settings-panel-content .settings-label { font-size: var(--fs-sm); }

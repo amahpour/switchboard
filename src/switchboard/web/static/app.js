@@ -5970,7 +5970,11 @@
         status.classList.add('bad');
       } finally { bar.saving(false); }
     });
-    panel.append(list, add, settingsField(el('p', 'fine', 'A rule has a pattern with one group in'
+    // Add a rule acts on the list at once: it sits under the rows like the other immediate actions, never as a
+    // full-width bar (UI.md, "Buttons")
+    const adds = el('div', 'settings-actions');
+    adds.append(add);
+    panel.append(list, adds, settingsField(el('p', 'fine', 'A rule has a pattern with one group in'
       + ' parentheses, and an address that starts with https://, where $1 is what the group matched.'
       + ' For example, the pattern !(\\d+) with https://gitlab.example.com/group/project/-/merge_requests/$1'
       + ' makes !42 a link.')));

@@ -181,3 +181,30 @@ def test_the_dialog_is_the_same_size_on_every_tab(ui: UI) -> None:
     assert len(sizes) == 1, sizes
     width, height = sizes.pop()
     assert (width, height) == (880, 760), (width, height)  # the roomier size of #995, not the old 860 x 720
+
+
+def test_add_a_rule_is_a_button_not_a_banner(ui: UI) -> None:
+    """UI.md: a full-width button belongs only in a phone sheet's footer. Once Save moved to the footer,
+    Links' "Add a rule" stretched across the desktop panel. Fails if it takes half the panel's width."""
+    page = open_panel(ui, DESKTOP, False, "links")
+    add, panel = box(page, "#settings-links-add"), box(page, "#settings-panel-links")
+    assert add["width"] < panel["width"] / 2, (add, panel)
+
+
+@pytest.mark.parametrize("args,phone", DEVICES)
+def test_no_hint_in_links_runs_past_its_panel(ui: UI, args: dict[str, Any], phone: bool) -> None:
+    """Links' hint carries an example address with no spaces in it, which ran past the panel's edge on a
+    phone. Fails if any line of a hint reaches beyond the panel's body."""
+    page = open_panel(ui, args, phone, "links")
+    over = page.evaluate(
+        """() => {
+          const body = document.querySelector('#settings-panel-links .settings-panel-content');
+          const edge = body.getBoundingClientRect().right;
+          return Array.from(body.querySelectorAll('.fine')).filter(e => {
+            const r = document.createRange();
+            r.selectNodeContents(e);
+            return Array.from(r.getClientRects()).some(x => x.right > edge + 0.5);
+          }).map(e => e.textContent.slice(0, 40));
+        }"""
+    )
+    assert over == [], over
