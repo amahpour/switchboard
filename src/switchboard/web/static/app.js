@@ -3360,49 +3360,49 @@
   // The slash palette. Commands take bare screen names (the broker's _screen_name): the UI
   // never writes bench@fpga-pi into a command. The /help reply stays the authority.
   const COMMANDS = [
-    { group: 'Room', cmd: 'pause', args: '', desc: 'Freeze every agent wake in {room}', pill: '', usage: '/pause',
+    { group: 'Wake-ups', cmd: 'pause', args: '', desc: 'Freeze every agent wake in {room}', pill: '', usage: '/pause',
       detail: 'Open wait() calls return “paused”; read() still works.' },
-    { group: 'Room', cmd: 'resume', args: '', desc: 'Unfreeze wakes; also resets the loop guard', pill: 'web only', usage: '/resume',
+    { group: 'Wake-ups', cmd: 'resume', args: '', desc: 'Unfreeze wakes; also resets the loop guard', pill: 'web only', usage: '/resume',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
+    { group: 'Wake-ups', cmd: 'budget', args: '[n]', desc: 'Show or set the wakes an hour', pill: 'raise: web only',
+      usage: '/budget   /budget <n>   (0 means no limit)', detail: 'Lowering works from anywhere; raising it, or 0 for no limit, needs this browser.', live: 'budget' },
+    { group: 'Wake-ups', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
+      usage: '/hops   /hops <n>   (0–1000, 0 means no limit)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
     { group: 'Room', cmd: 'rename', args: '<new-name>', desc: 'Rename this room', pill: 'web only',
       usage: '/rename <new-name>', detail: 'Members stay in the room. Agents can use either name.' },
-    { group: 'Room', cmd: 'budget', args: '[n]', desc: 'Show or set the wakes an hour', pill: 'raise: web only',
-      usage: '/budget   /budget <n>   (0 means no limit)', detail: 'Lowering works from anywhere; raising it, or 0 for no limit, needs this browser.', live: 'budget' },
-    { group: 'Room', cmd: 'hops', args: '[n]', desc: 'Show or set the loop-guard limit', pill: 'raise: web only',
-      usage: '/hops   /hops <n>   (0–1000, 0 means no limit)', detail: 'A new limit never lifts a loop-guard pause: /resume does.', live: 'hops' },
-    { group: 'Room', cmd: 'meeting', args: '[<link> [mine]|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
-      pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   voice <name> <voice>   snapshot   share <file>|stop',
-      detail: 'Add mine to ask your own agent to host it, without a model seeing the link. The link is not kept. Voice lets agents speak with @call; a snapshot posts the shared screen; share shows a PNG or JPEG of this room in a Zoom call.' },
-    { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
-      detail: 'Asks first. Reopen it from Closed rooms.' },
     { group: 'Room', cmd: 'pin', args: '<id>', desc: 'Pin a message for every agent that joins', pill: 'web only',
       usage: '/pin <id>   (the #number on a message)',
       detail: 'Up to five. Agents that join are shown it, and /catchup carries it. Agents can’t pin.' },
     { group: 'Room', cmd: 'unpin', args: '<id>', desc: 'Unpin a message', pill: '', usage: '/unpin <id>',
       detail: 'It stays in the history; agents that join no longer see it first.' },
-    { group: 'Agents', cmd: 'hold', args: '<name>', desc: 'Stop delivery to one agent', pill: '', usage: '/hold <name>',
+    { group: 'Room', cmd: 'meeting', args: '[<link> [mine]|leave]', desc: 'Transcribe a Zoom, Meet or Teams call here',
+      pill: 'web only', usage: '/meeting   /meeting <link> [mine]   leave   voice on|off   voice <name> <voice>   snapshot   share <file>|stop',
+      detail: 'Add mine to ask your own agent to host it, without a model seeing the link. The link is not kept. Voice lets agents speak with @call; a snapshot posts the shared screen; share shows a PNG or JPEG of this room in a Zoom call.' },
+    { group: 'Room', cmd: 'close', args: '', desc: 'Close the room; the history is kept', pill: '', usage: '/close',
+      detail: 'Asks first. Reopen it from Closed rooms.' },
+    { group: 'Delivery', cmd: 'hold', args: '<name>', desc: 'Stop delivery to one agent', pill: '', usage: '/hold <name>',
       detail: 'Nothing is dropped: held messages go out on /release.' },
-    { group: 'Agents', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
+    { group: 'Delivery', cmd: 'release', args: '<name>', desc: 'Resume delivery to a held agent', pill: 'web only', usage: '/release <name>',
       detail: 'Raises agent activity, so it needs this signed-in browser.' },
-    { group: 'Agents', cmd: 'quiet', args: '<name>', desc: 'Wake an agent only for messages addressed to it', pill: '',
+    { group: 'Delivery', cmd: 'quiet', args: '<name>', desc: 'Wake an agent only for messages addressed to it', pill: '',
       usage: '/quiet <name>',
       detail: 'Another agent’s chatter no longer starts a turn. Your messages, an @mention and a reply still do, and that chatter comes along.' },
-    { group: 'Agents', cmd: 'unquiet', args: '<name>', desc: 'Wake that agent for every message again', pill: 'web only',
+    { group: 'Delivery', cmd: 'unquiet', args: '<name>', desc: 'Wake that agent for every message again', pill: 'web only',
       usage: '/unquiet <name>', detail: 'Raises what wakes it, so it needs this signed-in browser.' },
-    { group: 'Agents', cmd: 'coordinator', args: '[<name> <actions>|off]', desc: 'Name the agent that may run room actions for you',
-      pill: 'web only', usage: '/coordinator   /coordinator <name> quiet,boards,pins,calls,budget|none   /coordinator off',
-      detail: 'One a room. It gets a command tool for only the actions you tick, each use shows in the room as “<it> for you”, and it never touches approvals, permissions, tokens, admin settings or another room.' },
-    { group: 'Agents', cmd: 'wake', args: '<name>', desc: 'Wake an agent now for its waiting messages', pill: 'web only',
+    { group: 'Delivery', cmd: 'wake', args: '<name>', desc: 'Wake an agent now for its waiting messages', pill: 'web only',
       usage: '/wake <name>',
       detail: 'Agents’ messages that don’t address it wait a few minutes to arrive together; this sends them now.' },
-    { group: 'Agents', cmd: 'kick', args: '<name>', desc: 'Remove an agent and revoke its membership', pill: '', usage: '/kick <name>',
+    { group: 'Delivery', cmd: 'kick', args: '<name>', desc: 'Remove an agent and revoke its membership', pill: '', usage: '/kick <name>',
       detail: 'Asks first. Removes it from {room} and revokes its membership.' },
-    { group: 'Agents', cmd: 'review', args: '<url> [note]', desc: 'Start a review board for a PR or MR', pill: '',
+    { group: 'Work', cmd: 'review', args: '<url> [note]', desc: 'Start a review board for a PR or MR', pill: '',
       usage: '/review <url> [note]',
       detail: 'Opens the board here, and one message asks each agent in {room} to review it on the board.' },
-    { group: 'Agents', cmd: 'catchup', args: '<agent> [on …]', desc: 'Get one agent up to speed from session history', pill: '',
+    { group: 'Work', cmd: 'catchup', args: '<agent> [on …]', desc: 'Get one agent up to speed from session history', pill: '',
       usage: '/catchup <agent> [on <member> | on "<topic>"] [note]',
       detail: 'e.g. /catchup bench on claude-1 — the member being read is not woken.' },
+    { group: 'Work', cmd: 'coordinator', args: '[<name> <actions>|off]', desc: 'Name the agent that may run room actions for you',
+      pill: 'web only', usage: '/coordinator   /coordinator <name> quiet,boards,pins,calls,budget|none   /coordinator off',
+      detail: 'One a room. It gets a command tool for only the actions you tick, each use shows in the room as “<it> for you”, and it never touches approvals, permissions, tokens, admin settings or another room.' },
     { group: 'Info', cmd: 'who', args: '', desc: 'Members, their sessions and hosts', pill: '', usage: '/who',
       detail: 'Shows session: <id> @ <host> for each member that has one.' },
     { group: 'Info', cmd: 'status', args: '', desc: 'Room status: paused, budget, hops', pill: '', usage: '/status',
@@ -3710,7 +3710,7 @@
     $('send-label').textContent = run ? 'Run' : 'Send';
   }
 
-  // the palette head's legend for the "web only" pills, with the same browser glyph (Composer.dc)
+  // the palette head's legend for the "web only" notes, with the same browser glyph (Composer.dc)
   function webOnlyKey() {
     const k = el('span', 'muted pal-key');
     k.append(icon('browser'), 'web only = needs this signed-in browser');
@@ -3747,9 +3747,10 @@
         o.setAttribute('aria-selected', String(i === p.sel));
         o.append(el('span', 'pal-cmd', '/' + c.cmd), el('span', 'pal-args', c.args), el('span', 'pal-desc', cmdDesc(c)));
         if (c.pill) {
-          const pill = el('span', 'pill');
-          pill.append(icon('browser'), c.pill);
-          o.append(pill);
+          // "web only" is text in the row's own muted style, not a badge: eight rows carried one (#995)
+          const note = el('span', 'pal-web');
+          note.append(icon('browser'), c.pill);
+          o.append(note);
         }
         if (i === p.sel) {
           // the usage line only when it says more than the command itself (/pause has no arguments)
