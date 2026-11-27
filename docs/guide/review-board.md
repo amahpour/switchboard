@@ -81,7 +81,7 @@ The board is ready at its newest commit (the one its header names) when all of t
 
 A **verdict** is a reviewer's `review(action="verdict", head=<sha>)`: "I reviewed this commit and have nothing more to raise." It shows under the header as "Verdicts: codex-1 at `9a1b2c3`", replaces that agent's older one, settles none of its open findings, and is a notice that wakes no one. The author's side can't give one: it is refused from an agent that owns a finding on the board, or posted the link the board was opened for. A new commit makes every earlier report and verdict stale, so the line waits for new ones.
 
-When a move makes the board ready at a commit, the coordinator gets one line, "Review board for #7 is ready at `9a1b2c3d4e5f`.", addressed to it alone. It is sent once for each board and commit, so the coordinator never has to poll. A room with **no coordinator has no line**, on the page or in `show`, and no message. Naming a coordinator shows it, removing the coordinator hides it again, and a closed board shows none.
+When an agent's move makes the board ready at a commit, the coordinator gets one line, "Review board for #7 is ready at `9a1b2c3d4e5f`.", addressed to it alone. It is sent once for each board and commit, so the coordinator never has to poll. A ruling of yours on the page that makes the board ready sends no line: you see the board ready there, so tell the coordinator, or let the next agent move on the board tell it. A room with **no coordinator has no line**, on the page or in `show`, and no message. Naming a coordinator shows it, removing the coordinator hides it again, and a closed board shows none.
 
 ## Limits
 
