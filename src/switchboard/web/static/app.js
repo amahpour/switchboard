@@ -4490,7 +4490,20 @@
     { key: 'security', label: 'Sign-in & security', icon: 'key' },
   ];
 
-  function settingsSaveBar(panel, key, fields, save, status, afterReset) {
+  // The one footer of every Settings panel whose fields are saved together (#995): "Unsaved
+  // changes", the status, Discard, then Save as the one primary action, pinned under the panel's
+  // scrolling body. `fields` are inputs, textareas or checkboxes; a panel whose draft is not a
+  // set of fields (the link rules) passes `opts.read` (the draft as a string), `opts.write` (put
+  // such a string back) and `opts.focus`, and calls `bar.changed()` when its draft moves.
+  // A field and the hint under it, 4 px apart (UI.md, "Spacing says what belongs together"),
+  // so the panel's 12 px between fields doesn't push the hint away from what it explains.
+  function settingsField() {
+    const box = el('div', 'settings-field');
+    box.append.apply(box, arguments);
+    return box;
+  }
+
+  function settingsSaveBar(panel, key, fields, save, status, afterReset, opts) {
     const content = el('div', 'settings-panel-content');
     while (panel.firstChild) content.append(panel.firstChild);
     const bar = el('div', 'settings-savebar');
@@ -4500,25 +4513,34 @@
     discard.id = 'settings-' + key + '-discard';
     bar.append(dirty, status, discard, save);
     panel.append(content, bar);
-    let saved = fields.map(function (field) { return field.value; });
+    const custom = opts || null;
+    const read = function (field) { return field.type === 'checkbox' ? field.checked : field.value; };
+    const snapshot = function () { return custom ? [custom.read()] : fields.map(read); };
+    let saved = snapshot();
     let busy = false;
     let saveWasFocused = false;
     function update() {
-      const changed = fields.some(function (field, i) { return field.value !== saved[i]; });
+      const now = snapshot();
+      const changed = now.some(function (value, i) { return value !== saved[i]; });
       dirty.classList.toggle('hidden', !changed);
       discard.disabled = busy || !changed;
       save.disabled = busy || !changed;
     }
     fields.forEach(function (field) {
-      field.addEventListener('input', function () { status.textContent = ''; update(); });
+      const onEdit = function () { status.textContent = ''; update(); };
+      field.addEventListener('input', onEdit);
+      if (field.type === 'checkbox') field.addEventListener('change', onEdit);
     });
     discard.addEventListener('click', function () {
-      fields.forEach(function (field, i) { field.value = saved[i]; });
+      if (custom) custom.write(saved[0]);
+      else fields.forEach(function (field, i) {
+        if (field.type === 'checkbox') field.checked = saved[i]; else field.value = saved[i];
+      });
       status.textContent = '';
       status.classList.remove('bad');
       if (afterReset) afterReset();
       update();
-      fields[0].focus();
+      (custom ? custom.focus : fields[0]).focus();
     });
     update();
     return {
@@ -4526,10 +4548,12 @@
         if (value) saveWasFocused = document.activeElement === save;
         busy = value;
         update();
-        if (!value && saveWasFocused && save.disabled) fields[0].focus();
+        if (!value && saveWasFocused && save.disabled) (custom ? custom.focus : fields[0]).focus();
         if (!value) saveWasFocused = false;
       },
-      saved: function (values) { saved = values; update(); },
+      // what is on the page now is the saved state; `values` is the old way to say it
+      saved: function (values) { saved = custom || !values ? snapshot() : values; update(); },
+      changed: update,
     };
   }
 
@@ -4600,7 +4624,7 @@
       } finally { bar.saving(false); }
     });
     // Fields belong in the scrolling content; the bar stays at its foot.
-    panel.querySelector('.settings-panel-content').append(names, nameLabel, nameInput, nameNote);
+    panel.querySelector('.settings-panel-content').append(names, settingsField(nameLabel, nameInput, nameNote));
     buildNotifySetting(panel.querySelector('.settings-panel-content'));
   }
 
@@ -4609,8 +4633,7 @@
     box.append(el('h3', null, 'Notifications'),
       el('p', 'fine', 'When switchboard is not the window you are in (another tab, another app, a call), your browser shows a'
         + ' notification when something needs you: a message to you, a review that needs your call, or an agent waiting for'
-        + ' your approval. Clicking it opens the item. Nothing is sent to anyone: the browser draws it.'
-        + ' This is for this browser only.'));
+        + ' your approval. Clicking it opens the item.'));
     const row = el('label', 'check-row');
     const box1 = el('input');
     box1.type = 'checkbox';
@@ -4625,7 +4648,8 @@
     textRow.append(textBox, el('span', null, 'Show message text in notifications'));
     const textNote = el('p', 'fine', 'On: a notification shows the first line of the message. Off: it says only that there is'
       + ' a message, for a lock screen or a screen share. This is yours, in every browser you sign in to.');
-    box.append(row, status, textRow, textNote);
+    const notifyHint = el('p', 'fine', 'The browser draws it and nothing is sent to anyone. This is for this browser only.');
+    box.append(settingsField(row, notifyHint, status), settingsField(textRow, textNote));
     function show() {
       textBox.checked = notifyTextOn();
       if (!notifySupported()) {
@@ -5365,9 +5389,9 @@
     status.id = 'settings-rules-status';
     status.setAttribute('role', 'status');
     panel.append(
-      rulesLabel, rulesInput, count,
-      budgetLabel, budgetInput, budgetHint, budgetSource,
-      hopsLabel, hopsInput, hopsHint, hopsSource
+      settingsField(rulesLabel, rulesInput, count),
+      settingsField(budgetLabel, budgetInput, budgetHint, budgetSource),
+      settingsField(hopsLabel, hopsInput, hopsHint, hopsSource)
     );
     const bar = settingsSaveBar(panel, 'rules', [rulesInput, budgetInput, hopsInput], save, status,
       function () { countRules(); renderWakeSources(); });
@@ -5771,8 +5795,8 @@
   // what is now past the new number. The size limits stay in config.toml.
   function buildSettingsFiles(panel) {
     panel.append(el('h3', null, 'Files'),
-      el('p', 'fine', 'How long switchboard keeps an uploaded file. With “Never delete”, a file stays until'
-        + ' its room is deleted. The largest file and the most a room holds are set in config.toml.'));
+      el('p', 'fine', 'How long switchboard keeps an uploaded file. The largest file and the most a room'
+        + ' holds are set in config.toml.'));
     const row = el('div', 'settings-files');
     const label = el('label', 'settings-label', 'Keep files for');
     label.setAttribute('for', 'settings-files-days');
@@ -5788,12 +5812,16 @@
     never.type = 'checkbox';
     never.id = 'settings-files-never';
     neverRow.append(never, el('span', null, 'Never delete files on a schedule'));
-    const status = el('p', 'fine');
+    const neverHint = el('p', 'fine', 'A file then stays until its room is deleted.');
+    const status = el('span', 'fine');
     status.id = 'settings-files-status';
-    const save = btn('btn btn-primary', 'Save');
+    status.setAttribute('role', 'status');
+    const save = btn('btn-primary', 'Save');
     save.id = 'settings-files-save';
     row.append(label, days, unit);
-    panel.append(row, neverRow, status, save);
+    panel.append(row, settingsField(neverRow, neverHint));
+    const bar = settingsSaveBar(panel, 'files', [days, never], save, status,
+      function () { days.disabled = never.checked; });
     let current = null;
     function apply(n) {
       current = n;
@@ -5801,12 +5829,9 @@
       never.checked = n === 0;
       days.disabled = n === 0;
       if (n !== 0) days.value = String(n);
+      bar.saved();
     }
-    never.addEventListener('change', function () {
-      days.disabled = never.checked;
-      status.textContent = '';
-    });
-    days.addEventListener('input', function () { status.textContent = ''; });
+    never.addEventListener('change', function () { days.disabled = never.checked; });
     api('GET', '/api/settings/files').then(function (res) {
       apply(res.days);
     }, function (e) {
@@ -5828,6 +5853,7 @@
         if (!ok) { openSettings('files'); return; }
       }
       status.classList.remove('bad');
+      bar.saving(true);
       try {
         const res = await api('PUT', '/api/settings/files', { days: next });
         apply(res.days);
@@ -5835,7 +5861,7 @@
       } catch (e) {
         status.textContent = String(e.message || e);
         status.classList.add('bad');
-      }
+      } finally { bar.saving(false); }
       if (shortening && !$('app-dialog').open) openSettings('files');
     });
   }
@@ -5846,18 +5872,23 @@
   // it refuses; the page only collects the text and shows the answer. A save replaces the whole list.
   function buildSettingsLinks(panel) {
     panel.append(el('h3', null, 'Links'),
-      el('p', 'fine', 'Turn references in messages into links. A rule has a pattern with one group in'
-        + ' parentheses, and an address where $1 is what that group matched. For example, the pattern'
-        + ' !(\\d+) with https://gitlab.example.com/group/project/-/merge_requests/$1 makes !42 a link.'
-        + ' The address must start with https://. Only an admin sets these; a message can\u2019t.'));
+      el('p', 'fine', 'Turn references in messages into links. Only an admin sets these; a message can\u2019t.'));
     const list = el('div', 'settings-links');
     list.id = 'settings-links-list';
-    const status = el('p', 'fine');
+    const status = el('span', 'fine');
     status.id = 'settings-links-status';
+    status.setAttribute('role', 'status');
     const add = btn('btn', 'Add a rule');
     add.id = 'settings-links-add';
-    const save = btn('btn btn-primary', 'Save');
+    const save = btn('btn-primary', 'Save');
     save.id = 'settings-links-save';
+    let bar = null;
+    function changed() { if (bar) bar.changed(); }
+    function draft() {
+      return JSON.stringify(rows().map(function (r) {
+        return [r.querySelector('.settings-link-pattern').value, r.querySelector('.settings-link-url').value];
+      }));
+    }
     let max = 8;
     function rows() { return Array.from(list.querySelectorAll('.settings-link-row')); }
     function refresh() {
@@ -5893,10 +5924,11 @@
         row.remove();
         refresh();
         status.textContent = '';
-        (add.disabled ? save : add).focus();
+        changed();
+        add.focus();  // a removed row always leaves room under the limit, so Add is enabled
       });
-      pat.addEventListener('input', function () { status.textContent = ''; });
-      url.addEventListener('input', function () { status.textContent = ''; });
+      pat.addEventListener('input', function () { status.textContent = ''; changed(); });
+      url.addEventListener('input', function () { status.textContent = ''; changed(); });
       row.append(pat, url, del);
       for (const n2 of list.querySelectorAll('.settings-links-none')) n2.remove();
       list.append(row);
@@ -5908,10 +5940,11 @@
       for (const r of rules) addRow(r);
       refresh();
     }
-    add.addEventListener('click', function () { addRow(null).focus(); status.textContent = ''; });
+    add.addEventListener('click', function () { addRow(null).focus(); status.textContent = ''; changed(); });
     api('GET', '/api/settings/links').then(function (res) {
       max = res.max || 8;
       fill(res.rules || []);
+      if (bar) bar.saved();
     }, function (e) {
       status.textContent = String(e.message || e);
       status.classList.add('bad');
@@ -5924,9 +5957,11 @@
         if (pattern || url) rules.push({ pattern: pattern, url: url });
       }
       status.classList.remove('bad');
+      bar.saving(true);
       try {
         const res = await api('PUT', '/api/settings/links', { rules: rules });
         fill(res.rules || []);
+        bar.saved();
         if (state.me) state.me.ref_links = res.rules || [];
         window.SBMarkdown.setRefLinks(res.rules || []);
         renderLog();
@@ -5934,11 +5969,21 @@
       } catch (e) {
         status.textContent = String(e.message || e);
         status.classList.add('bad');
-      }
+      } finally { bar.saving(false); }
     });
-    const actions = el('div', 'settings-links-actions');
-    actions.append(add, save);
-    panel.append(list, status, actions);
+    // Add a rule acts on the list at once: it sits under the rows like the other immediate actions, never as a
+    // full-width bar (UI.md, "Buttons")
+    const adds = el('div', 'settings-actions');
+    adds.append(add);
+    panel.append(list, adds, settingsField(el('p', 'fine', 'A rule has a pattern with one group in'
+      + ' parentheses, and an address that starts with https://, where $1 is what the group matched.'
+      + ' For example, the pattern !(\\d+) with https://gitlab.example.com/group/project/-/merge_requests/$1'
+      + ' makes !42 a link.')));
+    bar = settingsSaveBar(panel, 'links', [], save, status, null, {
+      read: draft,
+      write: function (text) { fill(JSON.parse(text).map(function (r) { return { pattern: r[0], url: r[1] }; })); },
+      focus: add,
+    });
     refresh();
   }
 
@@ -6032,7 +6077,7 @@
       el('p', 'fine', 'A backup runs in the background while rooms and agents carry on. '
         + 'Confirm it’s you first. One backup every five minutes; the last three archives are kept. '
         + 'Restoring an archive needs a restart.'));
-    const actions = el('div', 'backup-actions');
+    const actions = el('div', 'settings-actions');
     const start = btn('btn primary', 'Back up now');
     start.id = 'backup-start';
     start.disabled = true;

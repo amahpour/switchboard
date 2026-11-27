@@ -27,7 +27,7 @@ COVERED = re.compile(
 PX = re.compile(r"(?<![\w.])(\d*\.?\d+)px\b")
 
 # The raw pixel values left in padding, margin, gap, font size and corner radius. Only goes down (UI.md).
-RAW_PX = 1219
+RAW_PX = 1197
 
 
 def _rules(css: str) -> str:

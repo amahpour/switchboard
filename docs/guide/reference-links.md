@@ -10,7 +10,7 @@ An admin sets it once, in **Settings → Links**. With nothing set, nothing in a
 2. Click **Add a rule**. A rule is two boxes:
     - **Pattern.** What to look for, with one group in parentheses. The group is what goes into the address.
     - **Address.** Where the link goes. It starts with `https://`, and `$1` stands for what the group matched.
-3. Click **Save**. If a rule can't be saved, the form says which one and why, and nothing is changed.
+3. Click **Save** in the footer at the bottom (**Discard** puts back the saved rules). If a rule can't be saved, the form says which one and why, and nothing is changed.
 
 Two rules that cover the usual cases:
 
