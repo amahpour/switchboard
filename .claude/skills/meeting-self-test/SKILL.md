@@ -98,6 +98,7 @@ The bots join as guests, in a browser, with no account.
 - **No required sign-in.** A locked setting that only lets authenticated users join overrides `meeting_authentication: false`, and the guests are turned away.
 - **Join before host** must be allowed. If an admin has locked it off, the bots wait for a host who never comes.
 - **Mute upon entry** must not be forced on.
+- **Participants must be allowed to share** for step 7: on zoom.us, Settings, Meeting, In Meeting (Basic), Screen sharing, "Who can share?" set to All Participants. Zoom's default, Host only, refuses the speaker's share, and step 7 fails with "share_image was refused".
 
 Zoom names these differently between releases, and an admin can lock them for the whole account. If the first run fails at step 1 or 2, look here before the code.
 
