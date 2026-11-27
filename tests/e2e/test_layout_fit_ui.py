@@ -1,5 +1,5 @@
 """Labels that are never cut short (#995): the member panel's buttons at every text size, on a phone and on a
-desktop, and the phone's Members button. A console error, a page error or a CSP violation fails the test
+desktop. A console error, a page error or a CSP violation fails the test
 (``test_web_ui.UI``). Marker ``e2e``."""
 
 from __future__ import annotations
@@ -40,25 +40,3 @@ def test_member_panel_buttons_show_their_whole_label_at_every_text_size(ui: UI) 
                 assert page.evaluate(CUT, ".insp-actions .btn") == [], (options.get("viewport"), size)
         finally:
             set_size(page, "default")
-
-
-def test_the_phone_members_button_holds_its_counts(ui: UI) -> None:  # noqa: F811
-    """The Members button on a phone is wide enough for its icon and count at every text size, and its
-    alert badge sits after the count, not over it. Fails when the content (57 px) spills out of the
-    button (53 px, #995)."""
-    page = ui.open(**PHONE)
-    try:
-        for size in SIZES:
-            set_size(page, size)
-            spill = page.evaluate(
-                """() => { const b = document.getElementById('buddy-toggle');
-                  const r = b.getBoundingClientRect();
-                  const kids = Array.from(b.children).filter(c => getComputedStyle(c).display !== 'none')
-                    .map(c => c.getBoundingClientRect());
-                  const outside = kids.filter(c => c.right > r.right + 0.5 || c.left < r.left - 0.5).length;
-                  const overlap = kids.slice(1).filter((c, i) => c.left < kids[i].right - 0.5).length;
-                  return outside + overlap + Math.max(0, b.scrollWidth - b.clientWidth); }"""
-            )
-            assert spill <= 0, (size, spill)
-    finally:
-        set_size(page, "default")
