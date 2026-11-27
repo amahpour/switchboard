@@ -47,7 +47,13 @@ async def test_the_first_sentence_starts_before_the_whole_line_is_made(
 ) -> None:
     """Three sentences are three calls to joinly, in order, and the first starts playing after the time it
     takes to make that sentence, not the whole line. On main the line is one call and its start waits for
-    all of it. Fails if the line is one speak_text, or the first sentence waits on the others."""
+    all of it. Fails if the line is one speak_text, or the first sentence waits on the others.
+
+    The time before the first sound is the fake's model of it: ``synth_s_per_char`` for each character of
+    the first call's text. It was measured on the wall clock (``started[0] - arrived[0]``), but that is
+    only the fake's own sleep plus how late its thread woke: the broker sets nothing in it but the text.
+    On a busy CI runner the thread woke 0.115 s late and the 0.09 s margin failed. The model is checked
+    instead, and the wall clock is printed."""
     broker, _ = timed
     joinly.synth_s_per_char = 0.004
     async with FakeAgent(broker.home, "k1") as agent:
@@ -58,10 +64,11 @@ async def test_the_first_sentence_starts_before_the_whole_line_is_made(
         await wait_until(lambda: len(joinly.started) == 3, timeout=10)
         await wait_until(lambda: speech_finished(broker))
     assert joinly.spoken == SENTENCES
-    first_wait = joinly.started[0] - joinly.arrived[0]
+    first = joinly.synth_s_per_char * len(joinly.received[0])  # made before the first sound
     whole = joinly.synth_s_per_char * len(" ".join(SENTENCES))
-    print(f"\nfirst sentence starts after {first_wait:.2f} s; the whole line made in one call: {whole:.2f} s")
-    assert first_wait < whole / 2
+    waited = joinly.started[0] - joinly.arrived[0]
+    print(f"\nfirst sentence made in {first:.2f} s (waited {waited:.2f} s); the whole line: {whole:.2f} s")
+    assert first < whole / 2
 
 
 async def test_sentences_are_one_turn_for_the_pacing_rules(
