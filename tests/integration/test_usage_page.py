@@ -8,12 +8,13 @@ from collections.abc import Iterator
 
 import httpx
 import pytest
-from conftest import InProcBroker
+from conftest import FakeClock, InProcBroker
 from test_passkeys import hosted_broker, stop
 from test_people import join_as_bob, set_up
 from test_private_rooms import make_private
 
 from switchboard.models import session_key
+from switchboard.usage import window_starts
 
 
 @pytest.fixture
@@ -111,3 +112,62 @@ def test_a_bad_offset_is_read_as_utc(web: httpx.Client) -> None:
     assert web.get("/api/usage?offset=nope").json()["offset_min"] == 0
     assert web.get("/api/usage?offset=99999").json()["offset_min"] == 0
     assert web.get("/api/usage?offset=-480").json()["offset_min"] == -480
+
+
+def test_the_page_carries_seven_days_and_the_periods_before(broker: InProcBroker, web: httpx.Client) -> None:
+    """``days`` is seven bars ending today and ``before`` the counts of yesterday and of the 7 days
+    before the week. Wakes planted in each of those places land in the right one, a wake from
+    earlier still is in neither, and the page's totals add up the rooms. The bug: a chart or a
+    comparison that read the wrong window, or the same window the tiles already show."""
+    # the offset the page sends: an hour west of UTC
+    off = -60
+
+    def plant() -> None:
+        store = broker.state.store
+        real = store.clock
+        now = float(real.now())
+        today, week = window_starts(now, off)
+        room = store.create_room("#days", "alice", 0, 0)
+        person = store.upsert_participant("claude", session_key("claude", "", "days-1"))
+        joined = store.create_membership(room.id, person.id, "days-1")
+        store.set_held(joined.id, True)
+        store.set_status(person.id, "offline", "test")
+        clock = FakeClock(now)
+        store.clock = clock  # type: ignore[assignment]
+        try:
+            # (when, how many): two today, one on the third day, three yesterday, four in the week
+            # before, one older still
+            for when, n in (
+                (min(today + 1, now), 2),
+                (week + 2 * 86_400 + 1, 1),
+                (today - 3600, 3),
+                (week - 3 * 86_400, 4),
+                (week - 20 * 86_400, 1),
+            ):
+                for _ in range(n):
+                    clock.t = when
+                    msg = store.insert_message(
+                        room.id, sender_name="alice", sender_kind="human", via="web", text="x"
+                    )
+                    store.create_batch(
+                        joined.id, path="wait", kind="wake", counted=False, items=[(msg.id, 1)]
+                    )
+            clock.t = week - 2 * 86_400
+            store.insert_message(
+                room.id, sender_name="days-1", sender_kind="agent", via="mcp", text="old",
+                sender_membership_id=joined.id, sender_harness="claude",
+            )  # fmt: skip
+        finally:
+            store.clock = real
+
+    broker.on_loop(plant)
+    page = web.get(f"/api/usage?offset={off}").json()
+    assert len(page["days"]) == 7
+    assert [d["start"] for d in page["days"]] == [page["week_start"] + i * 86_400 for i in range(7)]
+    assert page["days"][6]["start"] == page["today_start"]
+    # yesterday's three wakes fall in the sixth bar, today's two in the seventh, one on the third day
+    assert [d["wakes"] for d in page["days"]] == [0, 0, 1, 0, 0, 3, 2]
+    assert page["before"]["today"] == {"wakes": 3, "posts": 0}
+    assert page["before"]["week"] == {"wakes": 4, "posts": 1}
+    assert page["totals"]["wakes_today"] == 2
+    assert page["totals"]["wakes_week"] == 6

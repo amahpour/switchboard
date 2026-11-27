@@ -16,7 +16,7 @@ from conftest import FakeClock
 from switchboard import db
 from switchboard.models import Room, session_key
 from switchboard.store import Store
-from switchboard.usage import budget_left, clamp_offset, parse_offset, shape, window_starts
+from switchboard.usage import budget_left, clamp_offset, daily, earlier, parse_offset, shape, window_starts
 
 DAY = 86_400.0
 NOW = 1_800_000_000.0  # a fixed instant; the local day is derived, not assumed
@@ -346,3 +346,74 @@ def test_ranking_is_noisiest_first_and_a_room_not_passed_is_dropped() -> None:
     assert len(folded) == 1 and folded[0]["name"].casefold() == "claude-1"
     assert folded[0]["wakes_week"] == 2 and folded[0]["wakes_today"] == 1
     assert {a["host"] for a in page["agents"] if a["room"] == "#ops"} == {"", "laptop"}
+
+
+def test_the_chart_puts_each_wake_in_its_local_day() -> None:
+    """Seven bars, oldest first, today last. A wake one second before local midnight is yesterday's
+    and one at midnight is today's, and the local midnight moves with the offset. The bug: bucketing
+    by UTC day, which would put an evening wake in the west into the next day's bar."""
+    for offset in (0, -480, 330):
+        today, week = window_starts(NOW, offset)
+        bars = daily([(week - 1, 9), (week, 1), (today - 1, 2), (today, 3), (NOW, 4), (today + DAY, 7)], week)
+        assert [b["start"] for b in bars] == [week + i * DAY for i in range(7)]
+        # before the window and from the end of today on are in no bar
+        assert bars[0]["wakes"] == 1
+        assert bars[5]["wakes"] == 2
+        assert bars[6]["wakes"] == 3 + 4
+        assert bars[6]["start"] == today
+    # an offset west of UTC: 23:30 local on the evening before today is yesterday's, not today's
+    today, week = window_starts(NOW, -480)
+    assert daily([(today - 1800, 1)], week)[5]["wakes"] == 1
+    assert daily([(today - 1800, 1)], week)[6]["wakes"] == 0
+
+
+def test_the_chart_ignores_what_is_not_a_time_or_a_count() -> None:
+    """A row that is not a finite time, or whose count is not a whole number, moves no bar."""
+    _, week = window_starts(NOW, 0)
+    bars = daily(
+        [(float("nan"), 5), (True, 5), ("x", 5), (week + 1, True), (week + 1, -3), (week + 1, 2)], week
+    )  # type: ignore[list-item]
+    assert [b["wakes"] for b in bars] == [2, 0, 0, 0, 0, 0, 0]
+    assert daily([], week)[0]["wakes"] == 0
+
+
+def test_the_periods_before_are_yesterday_and_the_seven_days_before_the_week() -> None:
+    """The tiles compare today with the whole of yesterday, and the week with the 7 days that end
+    where it starts. They touch: no day is in both, and none is skipped."""
+    today, week = window_starts(NOW, 0)
+    (y0, y1), (w0, w1) = earlier(today, week)
+    assert (y0, y1) == (today - DAY, today)
+    assert (w0, w1) == (week - 7 * DAY, week)
+
+
+def test_the_counts_before_are_a_half_open_span_of_wakes_and_agent_posts(store: Store) -> None:
+    """``usage_span`` counts wakes and agent chat in ``[since, until)``: a row exactly at ``until`` is the
+    next period's, so no row is in two periods; a person's message and a pull are not in it; the
+    day chart's rows are the same wakes. The bug: an inclusive end counting midnight twice."""
+    room = store.create_room("#build", "alice", 40, 0)
+    other = store.create_room("#other", "alice", 40, 0)
+    mid = _agent(store, room.id, "claude-1")
+    today, week = window_starts(NOW, 0)
+    yesterday = today - DAY
+
+    def wake(t: float) -> None:
+        _at(store, t)
+        msg = store.insert_message(room.id, sender_name="alice", sender_kind="human", via="web", text="x")
+        store.create_batch(mid, path="wait", kind="wake", counted=True, items=[(msg.id, 1)])
+
+    for t in (yesterday, yesterday + 60, today - 1, today):
+        wake(t)
+    _at(store, yesterday + 5)
+    store.insert_message(
+        room.id, sender_name="claude-1", sender_kind="agent", via="mcp", text="p",
+        sender_membership_id=mid, sender_harness="claude",
+    )  # fmt: skip
+    store.insert_message(room.id, sender_name="alice", sender_kind="human", via="web", text="not an agent")
+    _at(store, NOW)
+    got = store.usage_span([room.id], since=yesterday, until=today)
+    assert got == {"wakes": 3, "posts": 1}  # the wake at midnight is today's
+    assert store.usage_span([other.id], since=yesterday, until=today) == {"wakes": 0, "posts": 0}
+    assert store.usage_span([], since=yesterday, until=today) == {"wakes": 0, "posts": 0}
+    times = store.usage_wake_times([room.id], since=week, until=NOW)
+    assert sum(n for _, n in times) == 4
+    assert [b["wakes"] for b in daily(times, week)] == [0, 0, 0, 0, 0, 3, 1]

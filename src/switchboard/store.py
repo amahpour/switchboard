@@ -3857,6 +3857,50 @@ class Store:
             )
         )
 
+    def usage_wake_times(
+        self, room_ids: Sequence[int], *, since: float, until: float
+    ) -> list[tuple[int, int]]:
+        """``(second, wakes)`` for wake batches created in ``[since, until]``, for the day chart.
+
+        Grouped to the second so the rows are few however busy the window was; the pure
+        ``usage.daily`` puts each into its local day. Same rule as ``usage_wakes``: ``kind='wake'``
+        only, served by ``batches_wake_created``.
+        """
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        return [
+            (int(r[0]), int(r[1]))
+            for r in self.con.execute(
+                "SELECT CAST(b.created_at AS INTEGER) AS t, COUNT(*) FROM batches b"
+                " JOIN memberships m ON m.id = b.membership_id"
+                " WHERE b.kind = 'wake' AND b.created_at >= ? AND b.created_at <= ?"
+                f" AND m.room_id IN ({marks}) GROUP BY t",
+                (since, until, *ids),
+            )
+        ]
+
+    def usage_span(self, room_ids: Sequence[int], *, since: float, until: float) -> dict[str, int]:
+        """Wakes and agent messages in ``[since, until)``, over all those rooms: what the tiles
+        compare with. The same two definitions as ``usage_wakes`` and ``usage_posts``."""
+        ids = [i for i in room_ids if isinstance(i, int) and not isinstance(i, bool)]
+        if not ids:
+            return {"wakes": 0, "posts": 0}
+        marks = ",".join("?" * len(ids))
+        wakes = self.con.execute(
+            "SELECT COUNT(*) FROM batches b JOIN memberships m ON m.id = b.membership_id"
+            " WHERE b.kind = 'wake' AND b.created_at >= ? AND b.created_at < ?"
+            f" AND m.room_id IN ({marks})",
+            (since, until, *ids),
+        ).fetchone()[0]
+        posts = self.con.execute(
+            "SELECT COUNT(*) FROM messages WHERE kind = 'chat' AND sender_kind = 'agent'"
+            f" AND ts >= ? AND ts < ? AND room_id IN ({marks})",
+            (since, until, *ids),
+        ).fetchone()[0]
+        return {"wakes": int(wakes), "posts": int(posts)}
+
     def usage_exhausted(self, room_ids: Sequence[int], *, since: float, until: float) -> dict[int, int]:
         """How many times each room recorded ``budget_exhausted`` in ``[since, until]``.
 
