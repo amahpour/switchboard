@@ -7,7 +7,7 @@
 # commit (the same file DEPLOY.md's `docker run` mounts). Create the ConfigMap first, because the
 # pod can't start without it (`kubectl describe pod` says the ConfigMap is not found):
 #
-#   curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/58d5c89848c164f5fb5b20b45876371e0a3b67d6/joinly/providers/browser/platforms/zoom.py
+#   curl -fsSLo zoom.py https://raw.githubusercontent.com/amahpour/joinly/2ad8075b0087ce0526017b712b30095f4038de67/joinly/providers/browser/platforms/zoom.py
 #   kubectl -n switchboard create configmap joinly-zoom-fix --from-file=zoom.py=./zoom.py
 #   kubectl -n switchboard patch statefulset switchboard --patch-file deploy/kubernetes/meetings/joinly-zoom-fix.yaml
 #
