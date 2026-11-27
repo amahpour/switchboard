@@ -3227,6 +3227,9 @@ body.login {
 .board-report { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); min-width: 0; overflow-wrap: anywhere; }
 /* CI blocked by a conflict with the base (#907): the author has to act, so it isn't muted */
 .board-report.conflict { color: var(--danger); font-weight: 600; }
+/* The ready line under the board's header (#985): information only, calm when something is missing */
+.board-ready, .board-verdicts { font-size: calc(12px * var(--text-scale)); color: var(--muted-2); overflow-wrap: anywhere; padding: 4px 2px 0; }
+.board-ready.ok { color: var(--green); font-weight: 600; }
 .chip.chip-ok { background: var(--accent-tint); color: var(--green); }
 /* The open card beside the lanes (#343). The card was a fixed 340 px: cramped on a wide window,
    and on a narrower one it left the lanes about 110 px each. Now it takes a share of the board,

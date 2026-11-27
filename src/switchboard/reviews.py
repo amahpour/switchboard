@@ -991,6 +991,22 @@ SIDE_MOVES = frozenset({"conceded", "reassigned", "contested"})
 SIDE_OPENS = frozenset({"opened", "reopened", "moved"})
 
 
+def sure_side(items: Sequence[Item], events: Sequence[dict[str, Any]]) -> frozenset[str]:
+    """The agents the board always records on the author's side (§37.17): every owner of one of its
+    findings, and the agent that posted the link switchboard opened the board for (its ``open``
+    event's ``author``). Not the guesses ``author_side`` adds (the opener, a conceder, a claimant). A
+    verdict from one of these does not count (§37.21). ``events`` as in ``author_side``."""
+    sure = {i.owner for i in items if i.kind == "finding" and i.owner}
+    for event in events:
+        data = event.get("data", event) if isinstance(event, dict) else {}
+        if not isinstance(data, dict) or data.get("person") or "open" not in data:
+            continue
+        author = data.get("author")
+        if isinstance(author, str) and author and isinstance(data.get("by"), str) and data["by"]:
+            sure.add(author)
+    return frozenset(sure)
+
+
 def author_side(
     holder: str,
     items: Sequence[Item],
@@ -1012,9 +1028,8 @@ def author_side(
     an author does before writing to it (§8.1). Empty when nothing says: then a raise asks every other
     agent, as it always did (``acts_next``). ``events`` are the board's, as ``{"data": {...}}`` or the
     data alone; ``claims`` are the room's live ones."""
-    owners = {i.owner for i in items if i.kind == "finding" and i.owner}
     raisers = {i.raised_by for i in items if i.kind == "finding" and i.raised_by}
-    sure = set(owners)
+    sure = set(sure_side(items, events))
     maybe = {holder} if holder else set()
     for event in events:
         data = event.get("data", event) if isinstance(event, dict) else {}
@@ -1025,12 +1040,8 @@ def author_side(
             continue
         if data.get("to") in SIDE_MOVES:
             maybe.add(by)
-        if "open" in data:
-            if data.get("how") in SIDE_OPENS:
-                maybe.add(by)
-            author = data.get("author")
-            if isinstance(author, str) and author:
-                sure.add(author)
+        if "open" in data and data.get("how") in SIDE_OPENS:
+            maybe.add(by)
     side = sure | (maybe - raisers)
     gone = set(offline)
     found = tuple(a for a in dict.fromkeys(agents) if a in side and a not in gone)
@@ -1634,6 +1645,119 @@ def header_phrase(
     return f" at {sha[:12]}" + (f" ({note})" if note else "")
 
 
+# ------------------------------------------------- ready to merge (#985, §37.21)
+MAX_NAMED = 4  # cards or agents the ready line names before it says "and N more"
+
+
+def same_commit(a: str, b: str) -> bool:
+    """Whether two told commits are one: equal, or one the abbreviation of the other (a verdict at 7
+    characters and a report at 40). Both must be commits (``_told_sha``); an empty one matches nothing.
+    The way ``header_commit`` and the outdated mark take a commit: by what was written, never asked of
+    a forge."""
+    a, b = _told_sha(a), _told_sha(b)
+    return bool(a and b and (a.startswith(b) or b.startswith(a)))
+
+
+def verdicts(events: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each agent's latest verdict (``review(action="verdict", head=...)``), oldest first: ``by``,
+    ``head`` and the time. A newer one from the same agent replaces its older one. An event that is
+    not an agent's verdict at a commit is skipped."""
+    latest: dict[str, dict[str, Any]] = {}
+    for index, event in enumerate(events):
+        data = event.get("data") if isinstance(event, dict) else None
+        if not isinstance(data, dict) or "verdict" not in data or data.get("person"):
+            continue
+        by, sha = data.get("by"), _told_sha(data.get("verdict"))
+        if not isinstance(by, str) or not by or not sha:
+            continue
+        latest.pop(by, None)  # a replaced verdict moves to the end: the list stays in the order told
+        latest[by] = {"by": by, "head": sha, "ts": _event_time(event, index)[0]}
+    return list(latest.values())
+
+
+@dataclass(frozen=True)
+class Ready:
+    """Whether a board is ready at its latest commit (§37.21): ``sha`` that commit, ``missing`` what is
+    not there yet, ``notes`` what is worth knowing though it blocks nothing (a reviewer that left)."""
+
+    sha: str
+    missing: tuple[str, ...]
+    notes: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.missing
+
+    @property
+    def line(self) -> str:
+        notes = f" ({'; '.join(self.notes)})" if self.notes else ""
+        if self.ok:
+            return f"Ready at {self.sha[:12]}{notes}"
+        return f"Not ready: {'; '.join(self.missing)}{notes}"
+
+
+def _more(words: Sequence[str]) -> list[str]:
+    return list(words[:MAX_NAMED]) + (
+        [f"and {len(words) - MAX_NAMED} more"] if len(words) > MAX_NAMED else []
+    )
+
+
+def ready(
+    review: dict[str, Any],
+    items: Sequence[Item],
+    events: Sequence[dict[str, Any]],
+    coordinator: tuple[int, str] | None,
+    agents: Collection[str],
+) -> Ready | None:
+    """The ready line's facts, or None when there is no line: the room has no ``coordinator`` (its
+    membership id and screen name), or the board is closed. Information only, never a gate.
+
+    Ready at the board's latest commit (``header_commit``) means all of: the coordinator's own latest
+    report that carries ``ci`` says ``passing`` with a ``head`` at that commit (matched by membership,
+    which the report event records, so another agent with the name never counts, and a report from
+    before the event recorded it does not either); every card settled (``open_items`` is empty); and a
+    verdict at that commit from at least one agent, plus one from each agent that raised a finding or
+    asked a question and is still in ``agents``. A verdict from the author's side (``sure_side``) never
+    counts, and its agent is not asked for one. A reviewer that has left is named in ``notes`` and holds
+    nothing back. A commit is matched with ``same_commit``."""
+    if coordinator is None or review.get("closed_at") is not None:
+        return None
+    sha, _ = header_commit(review, items, events)
+    if not sha:
+        return Ready("", ("the board was told no commit: open it with head=<sha>",))
+    short = sha[:12]
+    missing: list[str] = []
+    notes: list[str] = []
+    member, name = coordinator
+    ci_report: dict[str, Any] | None = None
+    for event in events:
+        data = event.get("data") if isinstance(event, dict) else None
+        body = data.get("report") if isinstance(data, dict) else None
+        if isinstance(data, dict) and data.get("membership") == member and isinstance(body, dict):
+            if "pr_ci" in body:
+                ci_report = data
+    if not (
+        ci_report is not None
+        and ci_report["report"].get("pr_ci") == "passing"
+        and same_commit(str(ci_report.get("head") or ""), sha)
+    ):
+        missing.append(f"CI not reported passing at {short} by {name}")
+    unsettled = [
+        f"{i.label} awaits its check" if i.state == "fixed" else f"{i.label} is {i.state}"
+        for i in sorted(open_items(list(items)), key=lambda i: (i.kind, i.n))
+    ]
+    missing.extend(_more(unsettled))
+    side = sure_side(items, events)
+    here = {v["by"] for v in verdicts(events) if same_commit(v["head"], sha) and v["by"] not in side}
+    asked = [a for a in dict.fromkeys(i.raised_by for i in items if i.raised_by) if a not in side]
+    waiting = [f"{a} has no verdict at {short}" for a in asked if a not in here and a in agents]
+    missing.extend(_more(waiting))
+    notes.extend(f"{a} left without a verdict" for a in asked if a not in here and a not in agents)
+    if not here and not waiting:
+        missing.append(f"no verdict at {short}")
+    return Ready(sha, tuple(missing), tuple(notes))
+
+
 def render(
     review: dict[str, Any],
     items: list[Item],
@@ -1659,6 +1783,10 @@ def render(
     line = report_line(review, now if now is not None else float(review.get("reported_at") or 0))
     if line:
         out.append(f"The {'merge' if gitlab(review) else 'pull'} request: {line}")
+    if review.get("verdicts"):
+        out.append("Verdicts: " + ", ".join(f"{v['by']} at {v['head'][:12]}" for v in review["verdicts"]))
+    if review.get("ready"):  # only a room with a coordinator has one (§37.21)
+        out.append(str(review["ready"]))
     order = {
         s: n
         for n, s in enumerate(("contested", "open", "raised", "conceded", "answered", "fixed", "dropped"))

@@ -303,8 +303,8 @@ def build_server(st: ToolBackend) -> FastMCP:
     @mcp.tool(
         annotations=RW,
         description=(
-            "PRs and MRs: open, list, show, raise, ask, edit, concur, abstain, concede, contest, insist, "
-            "fix, confirm, reopen, take, drop, defer, report, close, reset."
+            "PRs and MRs: open,list,show,raise,ask,edit,concur,abstain,concede,contest,insist,fix,confirm,"
+            "verdict,reopen,take,drop,defer,report,close,reset."
         ),
     )
     async def review(

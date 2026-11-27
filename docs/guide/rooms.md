@@ -60,6 +60,7 @@ Click the agent in Members, then **Coordinator…** in its panel, or type `/coor
 
 The coordinator gets one tool, `command(room, text)`, for these. Anything not ticked, and every other command, is refused, and the refusal lists what it may run. Every use shows in the room: "coordinator-1 for alice turned on a quiet room". You can undo it as before, and remove the coordinator in one click.
 
+- **A board's ready line is the coordinator's.** In a room with a coordinator, each review board shows whether it is ready to merge, from the coordinator's CI reports and the reviewers' verdicts, and tells the coordinator once when it is. A room without one shows nothing. See [Ready to merge](review-board.md#ready-to-merge).
 - **One coordinator a room.** Naming another replaces the first. It acts in this room only, as you and never as an admin, and at most 30 commands an hour.
 - **It belongs to the agent's place in the room.** Leaving ends it. A restart that resumes the session keeps it, as it keeps `quiet`. A different agent that later joins with the same name is not the coordinator.
 - **It can never approve or answer a prompt, touch permissions, tokens or admin settings, start or stop an agent, or name a coordinator, including itself.** Only you can, in the web UI. The other agents' join text says who the coordinator is, and they treat its messages like any agent's.

@@ -39,6 +39,7 @@ ACTIONS = (
     "insist",
     "fix",
     "confirm",
+    "verdict",
     "take",
     "reopen",
     "drop",
@@ -135,7 +136,14 @@ class Boards:
             "offline": sorted(m.name for m in members if m.status == "offline"),
             "now": self.state.clock.now(),
             "ever": self.store.room_agent_names_ever(room.id),
+            # the one agent the person named (#976): without it a board has no ready line (§37.21)
+            "coordinator": self._coordinator(room),
         }
+
+    def _coordinator(self, room: Room) -> tuple[int, str] | None:
+        """The room's coordinator as its membership id and screen name, or None."""
+        named = self.store.coordinator(room.id)
+        return None if named is None else (named.membership_id, named.name)
 
     def _board(self, room: Room, rv: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         items = self.store.review_items(rv["id"])
@@ -148,6 +156,7 @@ class Boards:
         # the newest commit an open, a fix or a report named (#906). ``head`` stays the one the
         # board was opened or moved to: history, list, the outdated mark and line links keep it.
         head_sha, head_note = reviews.header_commit(rv, items, events)
+        ready = reviews.ready(rv, items, events, ctx["coordinator"], agents)
         return {
             "id": rv["id"],
             "url": rv["url"],
@@ -178,6 +187,10 @@ class Boards:
             "reported_by": rv["reported_by"],
             "reported_at": rv["reported_at"],
             "report": reviews.report_line(rv, now),
+            # each agent's latest verdict (#985), and the ready line: "" in a room with no coordinator
+            "verdicts": reviews.verdicts(events),
+            "ready": ready.line if ready else "",
+            "ready_ok": bool(ready and ready.ok),
         }
 
     def _publish(self, room: Room) -> list[dict[str, Any]]:
@@ -268,12 +281,14 @@ class Boards:
             return self._close(room, rv, actor, params)
         if action == "report":  # a merge may be reported after handoff or close
             self._remember(room, actor, rv)
-            return self._report(room, rv, actor, params)
+            return self._report(room, rv, actor, params, poster)
         if rv["closed_at"] is not None:
             raise ReviewError(f'the board for {rv["url"]} is closed: open it again with action="open" first')
         self._remember(room, actor, rv)
         if rv["posted_at"] is not None:
             raise ReviewError("this board was already handed off: no more moves")
+        if action == "verdict":
+            return self._verdict(room, rv, actor, params, poster)
         if action in ("raise", "ask"):
             self._guard_slot(room, rv)
             item = self._add(rv, actor, action, params)
@@ -511,7 +526,9 @@ class Boards:
             said = f"{actor} abstained on {item.label}"
         return self._told(room, rv, moved, actor, said, wake=False)
 
-    def _report(self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any]) -> dict[str, Any]:
+    def _report(
+        self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any], poster: Poster
+    ) -> dict[str, Any]:
         """What ``actor`` read off the pull request with its own gh or glab (#291, §37.11): stored
         as its claim, with its name and the time. A merge or a close ends the board, and a new CI
         result is said in the room, each in one line naming who reported it, so agents cite the
@@ -535,7 +552,9 @@ class Boards:
         now = self.state.clock.now()
         closure = {"closed_at": now, "closed_by": actor} if ended and not was_closed else {}
         self.store.set_review(rv["id"], **fields, **closure, reported_by=actor, reported_at=now)
-        self._event(room, rv, report=fields, by=actor, **({"head": named} if named else {}))
+        # the reporter's membership: the ready line counts only the coordinator's own CI report (§37.21)
+        who = {"membership": poster["sender_membership_id"]} if poster.get("sender_membership_id") else {}
+        self._event(room, rv, report=fields, by=actor, **who, **({"head": named} if named else {}))
         if fields.get("pr_ci") and fields["pr_ci"] != rv["pr_ci"]:
             if fields["pr_ci"] == "blocked":
                 self._notice(room, f"{actor} reports CI blocked on {url}: it conflicts with its base")
@@ -551,6 +570,7 @@ class Boards:
             self._settle(room, rv, closed=True)  # a closed board takes no moves: nobody owes its lines
             self._publish(room)
             return result
+        self._tell_ready(room, rv, actor, poster)
         return self._shown(room, rv)
 
     def _reported_head_is_current(self, room: Room, rv: dict[str, Any], named: str) -> bool:
@@ -729,7 +749,69 @@ class Boards:
             else:
                 self._say(room, rv, poster, line)
         self._settle(room, rv)
+        if poster is not None:
+            self._tell_ready(room, rv, actor, poster)
         return out
+
+    # ------------------------------------------- a verdict and the ready line (#985, §37.21)
+    def _verdict(
+        self, room: Room, rv: dict[str, Any], actor: str, params: dict[str, Any], poster: Poster
+    ) -> dict[str, Any]:
+        """``actor``'s verdict: it reviewed commit ``head`` and has nothing more to raise. A notice, and
+        it wakes no one. It settles none of the agent's open findings, and a newer verdict of the same
+        agent replaces it. Refused without a head, and from the author's side as the board always
+        records it (``reviews.sure_side``): its verdict would count for nothing."""
+        sha = reviews.head(params.get("head"))
+        if not sha:
+            raise ReviewError("verdict needs head: the commit you reviewed")
+        events = [e.data for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])]
+        if actor in reviews.sure_side(self.store.review_items(rv["id"]), events):
+            raise ReviewError(
+                "a verdict is a reviewer's: you own a finding on this board or posted its link,"
+                " so you are on the author's side"
+            )
+        self._event(room, rv, verdict=sha, by=actor)
+        notice = f"{actor} reviewed {sha[:12]}: nothing more to raise"
+        self._notice(room, f"{self._ref(rv)}: {notice}" if self._several(room) else notice)
+        self._tell_ready(room, rv, actor, poster)
+        return self._shown(room, rv)
+
+    def _ready(self, room: Room, rv: dict[str, Any]) -> reviews.Ready | None:
+        ctx = self._context(room)
+        events = [
+            {"ts": e.ts, "data": e.data} for e in self.store.review_events(room.id, rv["id"], rv["opened_at"])
+        ]
+        return reviews.ready(rv, self.store.review_items(rv["id"]), events, ctx["coordinator"], ctx["agents"])
+
+    def _tell_ready(self, room: Room, rv: dict[str, Any], actor: str, poster: Poster) -> None:
+        """When the board is ready at its latest commit and the coordinator has not been told for that
+        commit, tell it, once: one line addressed to it alone, as a board's lines are (§37.17). What was
+        told is a ``ready`` event of the board, so a restart does not say it again. The coordinator's own
+        move that made it ready is answered with the board, so it gets no line of its own."""
+        coordinator = self.store.coordinator(room.id)
+        if coordinator is None:  # no coordinator, no line: nothing else is read
+            return
+        rv = self.store.review_for_url(room.id, rv["url"]) or rv
+        got = self._ready(room, rv)
+        if got is None or not got.ok:
+            return
+        for event in self.store.review_events(room.id, rv["id"], rv["opened_at"]):
+            if "ready" in event.data and reviews.same_commit(str(event.data["ready"]), got.sha):
+                return
+        self._event(room, rv, ready=got.sha, to=coordinator.name)
+        if coordinator.name == actor:
+            return
+        pass_url = f', url="{rv["url"]}"' if self._several(room) else ""
+        line = reviews.Told(
+            (coordinator.name,),
+            "",
+            "",
+            "",
+            f"@{coordinator.name}:",
+            f"Review board for {self._ref(rv)} is ready at {got.sha[:12]}.",
+            f'review(action="show"{pass_url}) shows the board.',
+        )
+        self._say(room, rv, poster, line)
 
     # ---------------------------------------------- one line for a burst of fixes (#984, §37.20)
     def _hold_fix(self, room: Room, rv: dict[str, Any], line: reviews.Told, poster: Poster) -> None:

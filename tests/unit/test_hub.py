@@ -223,7 +223,7 @@ def test_a_room_with_no_board_gets_no_review_frame_and_a_dropped_room_forgets_it
     h.add(s)
     h.members_changed("#a")
     assert [f["t"] for f in drained(s)] == ["members"]
-    assert h._member_names == {"#a": (("claude-1",), ())}
+    assert h._member_names == {"#a": (("claude-1",), (), ())}
     h.drop_room("#a")
     assert h._member_names == {}
 
