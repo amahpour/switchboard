@@ -52,6 +52,7 @@ A hint as far from its label as from the next field belongs to neither. The Coor
 - **One primary action** per dialog or panel. It is the rightmost button of the footer, with Cancel to its left. A destructive action (Remove, Kick, Delete) sits apart on the left, in the danger style. Then the same place always means the same thing.
 - **A label is a verb, or what the button opens:** "Save", "Create room", "Coordinator…". "…" means the button opens a dialog that asks for more before anything happens. A button that opens a menu has a chevron and no "…", since two cues for one thing read as a cut label.
 - **Full-width buttons only in a phone sheet's footer.** On a desktop form they read as a banner.
+- **A field and its button share columns.** Where a card has several field-and-button pairs (the review card's Owner, ticket and reason), the fields share one left edge and width and the buttons one width: one grid, not one flex row each.
 
 ## Dialogs
 
@@ -64,12 +65,13 @@ A hint as far from its label as from the next field belongs to neither. The Coor
 ## Menus and toolbars
 
 - **A menu item is at least `--target` tall.** Secondary text goes on a smaller second line.
-- **A long menu is grouped.** Past eight items, group them under headings, or filter as you type, as the command palette does.
+- **A long menu is grouped.** Past eight items, group them under headings, or filter as you type, as the command palette does. Each group is eight items or fewer, a group with no match hides its heading, and the arrow keys skip headings. A note on a row (the palette's "web only") is muted text in the row's own style, not a badge: a badge on a third of the rows is noise. An argument hint wraps, never an ellipsis.
 - **An icon-only button has an `aria-label` and a `title`.** A row of more than five icon buttons is crowded, so move the rarely used ones into a menu.
 
 ## Touch
 
 - **A target is at least 44 × 44 px where the pointer is coarse** (`--target`). An icon can stay 20 px while its button grows around it. #995 measured 24 to 30 px targets on a phone.
+- **One rule does it:** the last block of `style.css`, under `@media (pointer: coarse)`, gives every button, tab, menu item, link button and text box `min-height` and `min-width` of `--target`, and the rows of the room and member lists a `min-height`. A new control needs nothing; one that must not grow (a dense row) says why in its own rule. A mouse matches none of it, so a desktop is unchanged. The room header (`.conv-head`) is left out until its redesign (#995).
 
 ## Words
 
@@ -78,7 +80,7 @@ A hint as far from its label as from the next field belongs to neither. The Coor
 ## Checking it
 
 - **Previews:** light, dark and the phone, as the repository's CLAUDE.md says, plus the Larger text size when the change has text in a control.
-- **The layout sweep** is `tests/e2e/test_layout_sweep.py`. It opens every dialog and menu at both sizes (1440×900 and a 390×844 phone) and both text sizes (Default and Larger). It fails on a cut or spilling label (the text's own rectangles against the control's padding box, not `scrollWidth`, which counts a corner badge), a dialog taller than the window or with its buttons out of view, or sideways scroll (#995, step 3). A phone button under 44×44 px is listed, not yet a failure: `KNOWN_SMALL_TARGETS` holds today's, `KNOWN_CUT` a cut label still on `main`, and both only shrink: fixing one means deleting its line. Run one surface by name:
+- **The layout sweep** is `tests/e2e/test_layout_sweep.py`. It opens every dialog and menu at both sizes (1440×900 and a 390×844 phone) and both text sizes (Default and Larger). It fails on a cut or spilling label (the text's own rectangles against the control's padding box, not `scrollWidth`, which counts a corner badge), a dialog taller than the window or with its buttons out of view, or sideways scroll (#995, step 3). A phone button under 44×44 px fails unless `KNOWN_SMALL_TARGETS` lists it: it holds the room header's eight, `KNOWN_CUT` a cut label still on `main`, and both only shrink: fixing one means deleting its line. Run one surface by name:
 
   ```console
   uv run pytest -m e2e tests/e2e/test_layout_sweep.py -k coordinator
