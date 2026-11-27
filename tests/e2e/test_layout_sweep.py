@@ -156,13 +156,7 @@ KNOWN_SMALL_TARGETS: set[tuple[str, str]] = {
 }
 
 # (surface, element): a label cut at some size that is still on main (#995). Same rule: fix it, delete it.
-KNOWN_CUT: set[tuple[str, str]] = {
-    # the palette's argument hints are cut by an ellipsis in a narrow popup: /meeting's, /coordinator's, and
-    # the one of the command that takes "<agent> [on …]" (#995)
-    ("palette", 'span.pal-args "[<link> [mine]|leave]"'),
-    ("palette", 'span.pal-args "[<name> <actions>|off]"'),
-    ("palette", 'span.pal-args "<agent> [on …]"'),
-}
+KNOWN_CUT: set[tuple[str, str]] = set()
 
 SETTINGS_GROUPS = ("profile", "appearance", "rooms", "agents", "files", "links", "backups")
 

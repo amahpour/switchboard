@@ -1776,26 +1776,33 @@ button.nick:hover { text-decoration: underline; text-underline-offset: 2px; }
 .pal-key { display: inline-flex; align-items: center; gap: 5px; }
 .pal-key .ic { width: 13px; height: 13px; }
 #mentions .pal-head > :last-child { margin-left: auto; }
-.pal-group { display: flex; flex-direction: column; gap: 1px; padding: 4px 6px; }
-.pal-group > :first-child:not(.pal-item) { padding: 6px 8px 2px; font-size: calc(11.5px * var(--text-scale)); font-weight: 600; color: var(--muted); }
+.pal-group { display: flex; flex-direction: column; gap: 1px; padding: var(--sp-1) 6px; }
+.pal-group > :first-child:not(.pal-item) { padding: 6px var(--sp-2) 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
 .pal-item {
   display: grid;
-  grid-template-columns: 76px 118px minmax(0, 1fr) auto;
-  column-gap: 8px;
-  row-gap: 4px;
+  /* the name column fits the longest name, /coordinator (12 monospace characters): at 76 px it ran into its
+     own hint, and the two read as one word */
+  grid-template-columns: calc(var(--fs-md) * 8) 118px minmax(0, 1fr) auto;
+  column-gap: var(--sp-2);
+  row-gap: var(--sp-1);
   align-items: center;
-  padding: 6px 8px;
+  min-height: var(--target);
+  padding: var(--sp-1) var(--sp-2);
   border-radius: 7px;
-  font-size: calc(13px * var(--text-scale));
+  font-size: var(--fs-md);
   cursor: pointer;
 }
 .pal-item:hover { background: var(--row-sel); }
 .pal-item[aria-selected="true"] { background: var(--accent-tint); }
-.pal-cmd { font: 600 calc(13px * var(--text-scale)) var(--mono); color: var(--fg); white-space: nowrap; }
+.pal-cmd { font: 600 var(--fs-md) var(--mono); color: var(--fg); white-space: nowrap; }
 .pal-item[aria-selected="true"] .pal-cmd { color: var(--link); }
-.pal-args { font: calc(12.5px * var(--text-scale)) var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* an argument hint is read whole: a long one wraps under its command, never an ellipsis (#995) */
+.pal-args { min-width: 0; font: var(--fs-sm) var(--mono); color: var(--muted); overflow-wrap: anywhere; }
 .pal-desc { min-width: 0; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pal-item > .pill { grid-column: 4; }
+/* "web only": real information, said in the muted description style rather than as a badge */
+.pal-web { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--muted-2); white-space: nowrap; }
+.pal-web .ic { width: 12px; height: 12px; }
+.pal-item > .pal-web { grid-column: 4; }
 .pal-usage {
   grid-column: 1 / -1;
   justify-self: start;
@@ -2774,7 +2781,7 @@ body.login {
   }
   .palette { left: 10px; right: 10px; }
   .pal-item { grid-template-columns: max-content minmax(0, 1fr) auto; }
-  .pal-item > .pill { grid-column: 3; grid-row: 1; }
+  .pal-item > .pal-web { grid-column: 3; grid-row: 1; }
   .pal-desc { grid-column: 1 / -1; white-space: normal; }
 
   /* The right pane becomes a bottom sheet; #app.sheet-open shows it. */
@@ -3402,12 +3409,25 @@ html.board-resizing { cursor: col-resize; user-select: none; -webkit-user-select
 .board-answer { margin: 0; font-weight: 600; }
 .board-detail-state, .board-reason { margin: 0; color: var(--muted-2); font-size: calc(12.5px * var(--text-scale)); }
 .board-where { align-self: flex-start; }
-.board-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; padding-top: 4px; border-top: 1px solid var(--line); }
+/* The card's controls are one grid: every field in the first column, every button in the second, so the
+   fields share a left edge and a width and the buttons a width (#995). A set is only a grouping for the
+   code; here its children are grid items. Under 300 px of card there is one column. */
+.board-actions { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: var(--sp-2); align-items: end; padding-top: var(--sp-1); border-top: 1px solid var(--line); }
+.board-actions > *, .board-action-set > * { min-width: 0; }
+.board-actions > .board-field, .board-action-set > .board-field { grid-column: 1; }
+.board-actions > .btn, .board-actions > .btn-primary, .board-actions > .btn-danger-ghost,
+.board-action-set > .btn, .board-action-set > .btn-primary, .board-action-set > .btn-danger-ghost { grid-column: 2; justify-content: center; }
+.board-actions > .board-consensus, .board-actions > .board-edit-wrap { grid-column: 1 / -1; }
+@container card (max-width: 299px) {
+  .board-actions { grid-template-columns: minmax(0, 1fr); }
+  .board-actions > .btn, .board-actions > .btn-primary, .board-actions > .btn-danger-ghost,
+  .board-action-set > .btn, .board-action-set > .btn-primary, .board-action-set > .btn-danger-ghost { grid-column: 1; }
+}
 /* a question's options are sentences, not button labels: each takes the row and wraps inside the
    detail (a long one ran past it and was cut off) */
-.board-actions button[data-option] { flex: 1 1 100%; max-width: 100%; height: auto; min-height: 32px; padding: 7px 12px; line-height: 1.3; white-space: normal; text-align: left; justify-content: flex-start; overflow-wrap: anywhere; }
-.board-action-set { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; flex: 1 1 100%; min-width: 0; }
-.board-field { display: flex; flex-direction: column; gap: 4px; font-size: calc(12px * var(--text-scale)); color: var(--muted-2); flex: 1 1 160px; }
+.board-actions button[data-option] { grid-column: 1 / -1; flex: 1 1 100%; max-width: 100%; height: auto; min-height: 32px; padding: 7px 12px; line-height: 1.3; white-space: normal; text-align: left; justify-content: flex-start; overflow-wrap: anywhere; }
+.board-action-set { display: contents; }
+.board-field { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-sm); color: var(--muted-2); }
 .board-field input, .board-field select, .board-field textarea { font: inherit; color: var(--fg); background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px; padding: 6px 8px; min-width: 0; }
 .board-field textarea { min-height: 4.5em; resize: vertical; }
 .board-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; min-width: 0; }
