@@ -440,3 +440,23 @@ def test_the_touch_target_is_44_px_on_a_touch_screen_and_32_on_a_desktop(
     else:
         assert found["target"] == "32px"
         assert found["w"] < 44 and found["h"] < 44, found
+
+
+def test_a_members_name_keeps_its_tap_without_loosening_its_row(ui: UI) -> None:  # noqa: F811
+    """On a touch screen a member's name is a 44 px tap, but the box reaches into the row instead of pushing
+    the status line down: before that, a 12 px gap opened under every name in Members and a flag sat apart
+    from its name. Fails if the name's box shrinks under 44 px, or the status line drifts from the name."""
+    page = ui.open(**PHONE)
+    page.click("#buddy-toggle")
+    row = page.locator('#buddy-list .member[data-name="claude-1"]')
+    expect(row).to_be_visible()
+    found = row.evaluate(
+        """li => {
+          const box = e => li.querySelector(e).getBoundingClientRect();
+          const name = document.createRange();
+          name.selectNodeContents(li.querySelector('.m-name'));
+          return {tap: box('.m-open').height, gap: box('.m-status').top - name.getBoundingClientRect().bottom};
+        }"""
+    )
+    assert found["tap"] >= 43.5, found
+    assert found["gap"] <= 6, found
