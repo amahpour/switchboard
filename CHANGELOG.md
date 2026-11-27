@@ -2,6 +2,22 @@
 
 Notes for what's merged but not released yet are in [changes/](changes/README.md), one file per pull request. Each release gathers them into a section here.
 
+## 1.20.0 (2026-11-27)
+
+### Added
+
+- **A review board says when it is ready to merge, in a room with a coordinator.** A reviewer gives its verdict on the board with `review(action="verdict", head=<sha>)`: it reviewed that commit and has nothing more to raise. Under the board's header, and in `show`, one line reads **Ready at `<sha>`** when the coordinator reported CI passing at the board's newest commit, every card is settled, and each agent that raised a finding or asked a question, and at least one reviewer, has a verdict there. Otherwise it names what is missing ("CI not reported passing at `<sha>` by coordinator-1", "codex-1 has no verdict at `<sha>`", "F4 is open"). When an agent's move makes a board ready at a commit, the coordinator is told once, in one line to it alone. A person's ruling on the page that makes it ready sends no line: the page shows it. The line is information only and blocks nothing. A report from another agent, or anything at an older commit, doesn't count, and the author's side can't give a verdict. A room with no coordinator has no line and no message. It takes no change to the database. The `review` tool lists its actions without a space after each comma, so the tool list is a little shorter, not longer.
+- **A Select all box in Coordinator….** **All actions** ticks every action, clears them all, and shows a dash when only some are ticked.
+
+### Changed
+
+- **The Usage page reads at a glance.** It opens with four tiles: wake-ups and agent messages, each with the change on the period before (yesterday, or the 7 days before), the busiest agent, and whether a room is near its wake limit. A **Today | Last 7 days** switch changes the numbers. Below are a chart of wake-ups for each of the last 7 days, the rooms with a meter for the wake limit left this hour, the agents with a bar each, and one row for each reviewer with a bar of findings held up, dropped and still open. "Wakes" is now "wake-ups", and the share of a reviewer's findings that were confirmed is now "held up" (the same figure). The board timings and the by-room review figures are no longer on the page. `GET /api/usage` gains `days`, `before` and `totals`.
+
+### Fixed
+
+- **Dialogs with ticked options are tighter, and always fit the window (#995).** In **Coordinator…**, **Calls in #room** and **Wake settings**, each option's hint now sits right under its label, and the rows are evenly spaced; clicking the hint ticks the box. A dialog is never taller than the window: its middle scrolls, and **Save**, **Cancel** and **Remove coordinator** stay in view at the bottom, including on a phone at Larger text. In an agent's panel in Members, every button shows its whole label at every text size, taking a row of its own when it needs the room.
+- **The meeting bot leaves a Zoom call again (#956).** Zoom's web client now opens its Leave confirmation only when Leave is activated from the keyboard, and a pointer press opens nothing, so the bot stayed in the call: it kept the meeting alive, and on an account that allows one meeting at a time, a new one couldn't start. The pinned Zoom fix (`zoom.py`) now presses Leave from the keyboard first, and switchboard waits up to 15 seconds for the leave instead of 5, so it no longer cuts the bot off halfway out.
+
 ## 1.19.0 (2026-11-27)
 
 ### Added
